@@ -26,7 +26,7 @@ data class LiveTelemetry(
     val rsrp: Int? = null,
     /** 最近 1Hz 无线样本的 ssSinr/rssnr（dB）；无小区/权限缺失＝null */
     val sinr: Int? = null,
-    /** 承载制式显示标签（5G SA / 5G NSA / LTE / 3G ...）；无小区／降级样本＝null */
+    /** 设备报告制式标签；仅多源一致时确定，冲突/缺证据显式标注；降级样本＝null */
     val rat: String? = null,
     /** 最近一次 upload_burst goodput（Mbps，终点=2xx 头，与 U1 同终点）；无上传＝null */
     val upMbps: Double? = null,
@@ -80,14 +80,7 @@ data class LiveTelemetry(
 
             // ---- 网络层：无线（最近 1Hz 样本；降级样本字段自身即 null）----
             val radio = s.latestRadio
-            val rat = radio?.let { r ->
-                when (r.rat) {
-                    "NR" -> "5G SA"
-                    "LTE" -> if (r.nrState == "connected") "5G NSA" else "LTE"
-                    null -> null // 无注册 LTE/NR 小区或降级样本：不出制式（R-10）
-                    else -> r.rat
-                }
-            }
+            val rat = radio?.let(::deviceReportedRat)
 
             // ---- AI 业务层：ITL 滑窗 / stall / token 速率 ----
             val window = if (s.itlAllMs.size > ITL_WINDOW) s.itlAllMs.takeLast(ITL_WINDOW) else s.itlAllMs
@@ -120,6 +113,22 @@ data class LiveTelemetry(
             val n = sorted.size
             return if (n % 2 == 1) sorted[n / 2] else (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
         }
+
+        /**
+         * R-15 展示口径：dataNetworkType、display override、registered CellInfo 分列判断。
+         * 公开 API 无法可靠证明 NSA/SA，故 UI 不再把 NR 小区或 5G 图标直接翻译成 SA/NSA。
+         */
+        private fun deviceReportedRat(r: RadioSample): String? = when {
+            r.networkType == "NR" && r.rat == "NR" && r.nrState == "connected" -> "设备报告 NR"
+            r.networkType == "LTE" && r.rat == "LTE" && r.nrState == "none" -> "设备报告 LTE"
+            r.networkType == "LTE" && r.overrideType in NR_DISPLAY_OVERRIDES -> "LTE / 5G 图标不一致"
+            r.networkType in setOf("3G", "2G") -> "设备报告 ${r.networkType}"
+            r.networkType in setOf("NR", "LTE") && r.rat == r.networkType -> "制式证据不足"
+            r.networkType in setOf("NR", "LTE") || r.rat != null -> "制式证据不一致"
+            else -> null
+        }
+
+        private val NR_DISPLAY_OVERRIDES = setOf("nr_nsa", "nr_nsa_mmwave", "nr_advanced")
     }
 }
 

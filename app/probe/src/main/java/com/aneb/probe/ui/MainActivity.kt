@@ -1,8 +1,12 @@
 package com.aneb.probe.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.net.ConnectivityManager
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,6 +47,7 @@ import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.AbRunner
 import com.aneb.probe.engine.ContinuityRunner
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.radio.RadioCollector
 import com.aneb.probe.ui.components.AnebTabBar
@@ -50,6 +55,7 @@ import com.aneb.probe.ui.components.MainTab
 import com.aneb.probe.ui.theme.AnebTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -76,13 +82,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var abRunner: AbRunner
     private lateinit var radioCollector: RadioCollector
     private lateinit var db: AnebDatabase
+    private lateinit var settingsStore: ProbeSettingsStore
 
     private var intentServer: String? = null
     private var intentAutorun: Boolean = false
-    private var intentMode: TestEngine.Mode = TestEngine.Mode.QUICK
-    private var intentTransport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO
+    private var intentModeOverride: TestEngine.Mode? = null
+    private var intentTransportOverride: TestEngine.TransportMode? = null
     private var intentInject: String? = null
-    private var intentDriveTest: Boolean = false
+    private var intentDriveTestOverride: Boolean? = null
 
     private var intentContinuity: Boolean = false
     private var intentCTokens: Int = ContinuityRunner.DEFAULT_TOKENS
@@ -92,8 +99,44 @@ class MainActivity : ComponentActivity() {
     private var intentAbPairs: Int = AbRunner.DEFAULT_PAIRS
     private var intentAbNetlog: Boolean = false
 
+    private var radioPermissionResultCallback: ((RadioPermissionState) -> Unit)? = null
     private val radioPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            val callback = radioPermissionResultCallback
+            radioPermissionResultCallback = null
+            callback?.invoke(radioPermissionState())
+        }
+
+    private fun radioPermissionState() = RadioPermissionState(
+        phoneStateGranted = hasPermission(Manifest.permission.READ_PHONE_STATE),
+        coarseLocationGranted = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
+        fineLocationGranted = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION),
+    )
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasActiveNetwork(): Boolean =
+        getSystemService(ConnectivityManager::class.java)?.activeNetwork != null
+
+    private fun requestRadioPermissions(onResult: (RadioPermissionState) -> Unit) {
+        radioPermissionResultCallback = onResult
+        radioPermissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            ),
+        )
+    }
+
+    private fun openAppPermissionSettings() {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+            },
+        )
+    }
 
     /**
      * 下钻子状态机（SpeedTest 式外壳）：Home=当前 tab 的根哨兵（此时显底栏 [AnebTabBar]），
@@ -107,6 +150,7 @@ class MainActivity : ComponentActivity() {
         data class Result(val runId: String, val fromHistory: Boolean) : Screen
         data object ApiProbe : Screen
         data object ReachBoard : Screen
+        data object Servers : Screen
         data object Report : Screen
     }
 
@@ -117,11 +161,13 @@ class MainActivity : ComponentActivity() {
         abRunner = AbRunner(applicationContext)
         radioCollector = RadioCollector(this)
         db = AnebDatabase.get(applicationContext)
+        settingsStore = ProbeSettingsStore(applicationContext)
         intentServer = intent?.getStringExtra("server")
         intentAutorun = intent?.getBooleanExtra("autorun", false) == true
-        intentMode = when (intent?.getStringExtra("mode")?.lowercase()) {
+        intentModeOverride = when (intent?.getStringExtra("mode")?.lowercase()) {
+            "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
-            else -> TestEngine.Mode.QUICK
+            else -> null
         }
         intentContinuity = intent?.getStringExtra("mode")?.lowercase() == "continuity"
         intentCTokens = intent?.getIntExtra("c_tokens", ContinuityRunner.DEFAULT_TOKENS)
@@ -133,14 +179,31 @@ class MainActivity : ComponentActivity() {
         intentAbPairs = intent?.getIntExtra("ab_pairs", AbRunner.DEFAULT_PAIRS)
             ?.takeIf { it > 0 } ?: AbRunner.DEFAULT_PAIRS
         intentAbNetlog = BuildConfig.DEBUG && intent?.getBooleanExtra("ab_netlog", false) == true
-        intentTransport = when (intent?.getStringExtra("transport")?.lowercase()) {
+        intentTransportOverride = when (intent?.getStringExtra("transport")?.lowercase()) {
+            "auto" -> TestEngine.TransportMode.AUTO
             "wifi" -> TestEngine.TransportMode.WIFI
             "cellular" -> TestEngine.TransportMode.CELLULAR
-            else -> TestEngine.TransportMode.AUTO
+            else -> null
         }
         intentInject = if (BuildConfig.DEBUG) intent?.getStringExtra("inject") else null
-        intentDriveTest = intent?.getBooleanExtra("drive_test", false) == true
+        intentDriveTestOverride = if (intent?.hasExtra("drive_test") == true) {
+            intent.getBooleanExtra("drive_test", false)
+        } else {
+            null
+        }
         maybeApiProbeAutorun()
+
+        val launchSettings = resolveLaunchSettings(
+            saved = settingsStore.load(),
+            overrides = ProbeLaunchOverrides(
+                serverUrl = intentServer,
+                mode = intentModeOverride,
+                transport = intentTransportOverride,
+                driveTest = intentDriveTestOverride,
+            ),
+            autorun = intentAutorun,
+            hasFullRadioEvidence = radioPermissionState().hasFullRadioEvidence,
+        )
 
         setContent {
             AnebTheme {
@@ -155,13 +218,20 @@ class MainActivity : ComponentActivity() {
                     // 故切 tab 只发生在各 tab 根（切换前后 screen 均为 Home），子状态天然互不串扰。
                     var tab by rememberSaveable { mutableStateOf(MainTab.Test) }
                     var serverUrl by rememberSaveable {
-                        mutableStateOf(intentServer ?: "https://120-79-148-0.sslip.io:8443")
+                        mutableStateOf(launchSettings.serverUrl)
                     }
-                    var mode by rememberSaveable { mutableStateOf(intentMode) }
-                    var transport by rememberSaveable { mutableStateOf(intentTransport) }
-                    var driveTest by rememberSaveable { mutableStateOf(intentDriveTest) }
+                    var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
+                    var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
+                    var driveTest by rememberSaveable { mutableStateOf(launchSettings.driveTest) }
                     var running by remember { mutableStateOf(false) }
                     val logs = remember { mutableStateListOf<String>() }
+                    var runJob by remember { mutableStateOf<Job?>(null) }
+                    var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
+                    var radioEvidenceLimited by remember { mutableStateOf(false) }
+                    var permissionPrompt by remember { mutableStateOf<RadioPermissionPrompt?>(null) }
+                    var nodeReach by remember { mutableStateOf<ReachabilityProbe.DualReach?>(null) }
+                    var nodeReachRefreshing by remember { mutableStateOf(false) }
+                    var nodeReachError by remember { mutableStateOf<String?>(null) }
 
                     fun addLog(line: String) {
                         android.util.Log.i("AnebProbe", line)
@@ -171,10 +241,13 @@ class MainActivity : ComponentActivity() {
                     // ---- run 编排（与阶段 1 逐字一致；仅把导航接到新界面）----
                     fun startRun(fromAutorun: Boolean) {
                         if (running) return
+                        logs.clear()
+                        homeNotice = null
+                        radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
                         running = true
                         if (!fromAutorun) screen = Screen.Testing
                         addLog(">>> RUN mode=${mode.name.lowercase()} transport=${transport.name.lowercase()} -> $serverUrl")
-                        lifecycleScope.launch {
+                        runJob = lifecycleScope.launch {
                             var runId: String? = null
                             var navigated = false
                             fun jumpToResult() {
@@ -205,11 +278,67 @@ class MainActivity : ComponentActivity() {
                                 throw e
                             } catch (e: Exception) {
                                 addLog("RUN_FAILED error=$e")
-                                if (!fromAutorun) screen = Screen.Home
+                                if (!fromAutorun) {
+                                    homeNotice = RunFailureMessage.forError(e)
+                                    screen = Screen.Home
+                                }
                             } finally {
                                 running = false
+                                runJob = null
                             }
                         }
+                    }
+
+                    fun requestManualRun() {
+                        if (!hasActiveNetwork()) {
+                            homeNotice = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                            return
+                        }
+                        val state = radioPermissionState()
+                        if (state.hasFullRadioEvidence) {
+                            startRun(fromAutorun = false)
+                        } else {
+                            permissionPrompt = RadioPermissionPrompt(
+                                purpose = RadioPermissionPurpose.START_TEST,
+                                stage = RadioPermissionStage.RATIONALE,
+                                state = state,
+                            )
+                        }
+                    }
+
+                    fun cancelManualRun() {
+                        if (!running) return
+                        homeNotice = "测试已取消，未生成成绩。"
+                        screen = Screen.Home
+                        runJob?.cancel(CancellationException("user_cancelled"))
+                    }
+
+                    fun refreshNodeReachability() {
+                        if (nodeReachRefreshing) return
+                        val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                        if (pair == null) {
+                            nodeReach = null
+                            nodeReachError = "自定义节点将在正式测试开始时验证；双通道检测仅适用于 E-01。"
+                            return
+                        }
+                        nodeReachRefreshing = true
+                        nodeReachError = null
+                        lifecycleScope.launch {
+                            try {
+                                nodeReach = ReachabilityProbe().probeDual(pair.first, pair.second)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                nodeReachError = "检测失败，请检查当前网络后重试。"
+                            } finally {
+                                nodeReachRefreshing = false
+                            }
+                        }
+                    }
+
+                    fun openServerScreen() {
+                        screen = Screen.Servers
+                        refreshNodeReachability()
                     }
 
                     fun startContinuityRun() {
@@ -291,8 +420,15 @@ class MainActivity : ComponentActivity() {
                                 is Screen.Home -> when (tab) {
                                     MainTab.Test -> HomeRoute(
                                         running = running,
-                                        onStart = { startRun(fromAutorun = false) },
-                                        onOpenSettings = { tab = MainTab.Settings },
+                                        notice = homeNotice,
+                                        connectionLabel = when (transport) {
+                                            TestEngine.TransportMode.AUTO -> "自动选择网络"
+                                            TestEngine.TransportMode.WIFI -> "WiFi 网络"
+                                            TestEngine.TransportMode.CELLULAR -> "蜂窝网络"
+                                        },
+                                        nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                        onStart = ::requestManualRun,
+                                        onOpenServer = ::openServerScreen,
                                         onOpenResult = { runId ->
                                             screen = Screen.Result(runId, fromHistory = false)
                                         },
@@ -306,29 +442,44 @@ class MainActivity : ComponentActivity() {
                                     )
                                     MainTab.Settings -> SettingsScreen(
                                         serverUrl = serverUrl,
-                                        onServerUrlChange = { serverUrl = it },
+                                        onServerUrlChange = {
+                                            serverUrl = it
+                                            settingsStore.saveServerUrl(it)
+                                        },
                                         mode = mode,
-                                        onModeChange = { mode = it },
+                                        onModeChange = {
+                                            mode = it
+                                            settingsStore.saveMode(it)
+                                        },
                                         transport = transport,
-                                        onTransportChange = { transport = it },
+                                        onTransportChange = {
+                                            transport = it
+                                            settingsStore.saveTransport(it)
+                                        },
                                         driveTest = driveTest,
                                         onDriveTestChange = { turningOn ->
-                                            driveTest = turningOn
-                                            if (turningOn &&
-                                                ContextCompat.checkSelfPermission(
-                                                    this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION,
-                                                ) != PackageManager.PERMISSION_GRANTED
-                                            ) {
-                                                radioPermissionLauncher.launch(
-                                                    arrayOf(
-                                                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                                    ),
-                                                )
+                                            if (!turningOn) {
+                                                driveTest = false
+                                                settingsStore.saveDriveTest(false)
+                                            } else {
+                                                val state = radioPermissionState()
+                                                if (state.hasFullRadioEvidence) {
+                                                    driveTest = true
+                                                    settingsStore.saveDriveTest(true)
+                                                } else {
+                                                    driveTest = false
+                                                    settingsStore.saveDriveTest(false)
+                                                    permissionPrompt = RadioPermissionPrompt(
+                                                        purpose = RadioPermissionPurpose.DRIVE_TEST,
+                                                        stage = RadioPermissionStage.RATIONALE,
+                                                        state = state,
+                                                    )
+                                                }
                                             }
-                                            android.util.Log.i("AnebProbe", "DRIVE_TEST_TOGGLE enabled=$turningOn")
+                                            android.util.Log.i("AnebProbe", "DRIVE_TEST_TOGGLE enabled=$driveTest")
                                         },
                                         injectActive = intentInject,
+                                        onOpenServer = ::openServerScreen,
                                         onOpenApiProbe = { screen = Screen.ApiProbe },
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
@@ -340,7 +491,13 @@ class MainActivity : ComponentActivity() {
                                     // TestEngine.telemetry 只读观测通道 → collectAsStateWithLifecycle（后台自动停收，
                                     // 绝不回压测量热路径；StateFlow 有初值，无闪烁）。
                                     val telemetry by engine.telemetry.collectAsStateWithLifecycle()
-                                    TestingScreen(logs = logs, telemetry = telemetry)
+                                    TestingScreen(
+                                        logs = logs,
+                                        telemetry = telemetry,
+                                        nodeLabel = ProbeNodeCatalog.nodeForUrl(serverUrl)?.id ?: "自定义",
+                                        radioEvidenceLimited = radioEvidenceLimited,
+                                        onCancel = ::cancelManualRun,
+                                    )
                                 }
                                 is Screen.Report -> ReportRoute(onBack = { screen = Screen.Home })
                                 is Screen.Result -> ResultRoute(
@@ -355,8 +512,61 @@ class MainActivity : ComponentActivity() {
                                     onOpenReachBoard = { screen = Screen.ReachBoard },
                                 )
                                 is Screen.ReachBoard -> ReachBoardRoute(onBack = { screen = Screen.Home })
+                                is Screen.Servers -> ServerScreen(
+                                    currentUrl = serverUrl,
+                                    reach = nodeReach,
+                                    refreshing = nodeReachRefreshing,
+                                    error = nodeReachError,
+                                    onSelectE01 = {
+                                        serverUrl = ProbeSettings.DEFAULT_SERVER_URL
+                                        settingsStore.saveServerUrl(serverUrl)
+                                        refreshNodeReachability()
+                                    },
+                                    onRefresh = ::refreshNodeReachability,
+                                    onOpenSettings = {
+                                        screen = Screen.Home
+                                        tab = MainTab.Settings
+                                    },
+                                    onBack = { screen = Screen.Home },
+                                )
                             }
                         }
+                    }
+
+                    permissionPrompt?.let { prompt ->
+                        RadioPermissionDialog(
+                            prompt = prompt,
+                            onRequest = {
+                                requestRadioPermissions { state ->
+                                    if (state.hasFullRadioEvidence) {
+                                        permissionPrompt = null
+                                        when (prompt.purpose) {
+                                            RadioPermissionPurpose.START_TEST -> startRun(fromAutorun = false)
+                                            RadioPermissionPurpose.DRIVE_TEST -> {
+                                                driveTest = true
+                                                settingsStore.saveDriveTest(true)
+                                            }
+                                        }
+                                    } else {
+                                        permissionPrompt = prompt.copy(
+                                            stage = RadioPermissionStage.DENIED,
+                                            state = state,
+                                        )
+                                    }
+                                }
+                            },
+                            onContinueLimited = {
+                                permissionPrompt = null
+                                if (prompt.purpose == RadioPermissionPurpose.START_TEST) {
+                                    startRun(fromAutorun = false)
+                                }
+                            },
+                            onOpenSettings = {
+                                permissionPrompt = null
+                                openAppPermissionSettings()
+                            },
+                            onDismiss = { permissionPrompt = null },
+                        )
                     }
                 }
             }
@@ -370,8 +580,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun HomeRoute(
         running: Boolean,
+        notice: String?,
+        connectionLabel: String,
+        nodeLabel: String,
         onStart: () -> Unit,
-        onOpenSettings: () -> Unit,
+        onOpenServer: () -> Unit,
         onOpenResult: (String) -> Unit,
     ) {
         // 最近一次 run（run 结束 running→false 时刷新，带出上次结果 chip）
@@ -383,8 +596,11 @@ class MainActivity : ComponentActivity() {
         HomeScreen(
             lastRun = lastRun,
             running = running,
+            notice = notice,
+            connectionLabel = connectionLabel,
+            nodeLabel = nodeLabel,
             onStart = onStart,
-            onOpenSettings = onOpenSettings,
+            onOpenServer = onOpenServer,
             onOpenLastResult = onOpenResult,
         )
     }

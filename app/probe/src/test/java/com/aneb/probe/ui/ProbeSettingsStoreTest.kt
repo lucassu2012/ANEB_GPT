@@ -1,0 +1,85 @@
+package com.aneb.probe.ui
+
+import com.aneb.probe.engine.TestEngine
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ProbeSettingsStoreTest {
+    @Test
+    fun `decode restores valid settings and trims server`() {
+        val decoded = ProbeSettingsCodec.decode(
+            serverUrl = "  http://10.0.2.2:8443/  ",
+            mode = "FORENSIC",
+            transport = "CELLULAR",
+            driveTest = true,
+        )
+
+        assertEquals("http://10.0.2.2:8443/", decoded.serverUrl)
+        assertEquals(TestEngine.Mode.FORENSIC, decoded.mode)
+        assertEquals(TestEngine.TransportMode.CELLULAR, decoded.transport)
+        assertTrue(decoded.driveTest)
+    }
+
+    @Test
+    fun `decode safely falls back after unknown or empty persisted values`() {
+        val decoded = ProbeSettingsCodec.decode("   ", "FUTURE", "SATELLITE", false)
+
+        assertEquals(ProbeSettings.DEFAULT_SERVER_URL, decoded.serverUrl)
+        assertEquals(TestEngine.Mode.QUICK, decoded.mode)
+        assertEquals(TestEngine.TransportMode.AUTO, decoded.transport)
+        assertFalse(decoded.driveTest)
+    }
+
+    @Test
+    fun `manual launch restores saved values`() {
+        val saved = ProbeSettings(
+            serverUrl = "https://node.example:8443",
+            mode = TestEngine.Mode.FORENSIC,
+            transport = TestEngine.TransportMode.WIFI,
+            driveTest = true,
+        )
+
+        assertEquals(
+            saved,
+            resolveLaunchSettings(saved, ProbeLaunchOverrides(), autorun = false, hasFullRadioEvidence = true),
+        )
+    }
+
+    @Test
+    fun `autorun is deterministic and explicit overrides win`() {
+        val saved = ProbeSettings(
+            serverUrl = "https://stale.example",
+            mode = TestEngine.Mode.FORENSIC,
+            transport = TestEngine.TransportMode.WIFI,
+            driveTest = true,
+        )
+        val resolved = resolveLaunchSettings(
+            saved = saved,
+            overrides = ProbeLaunchOverrides(
+                serverUrl = "https://automation.example",
+                transport = TestEngine.TransportMode.CELLULAR,
+            ),
+            autorun = true,
+            hasFullRadioEvidence = true,
+        )
+
+        assertEquals("https://automation.example", resolved.serverUrl)
+        assertEquals(TestEngine.Mode.QUICK, resolved.mode)
+        assertEquals(TestEngine.TransportMode.CELLULAR, resolved.transport)
+        assertFalse(resolved.driveTest)
+    }
+
+    @Test
+    fun `drive test never restores without full permission evidence`() {
+        val resolved = resolveLaunchSettings(
+            saved = ProbeSettings(driveTest = true),
+            overrides = ProbeLaunchOverrides(driveTest = true),
+            autorun = false,
+            hasFullRadioEvidence = false,
+        )
+
+        assertFalse(resolved.driveTest)
+    }
+}

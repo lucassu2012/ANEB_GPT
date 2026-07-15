@@ -50,6 +50,7 @@ import com.aneb.probe.ui.components.StGraph
 import com.aneb.probe.ui.components.StLink
 import com.aneb.probe.ui.components.StStep
 import com.aneb.probe.ui.components.StepState
+import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebTheme
 import com.aneb.probe.ui.theme.AnebType
 import com.aneb.probe.ui.theme.Grade
@@ -67,12 +68,18 @@ import kotlin.math.roundToInt
  *
  * @param logs run 日志（append-only，MainActivity 提供）——驱动进度环与阶段名（既有解析）
  * @param telemetry 实时分层遥测（TestEngine.telemetry StateFlow 的最新投影）——驱动仪表/折线/两层实时区。
+ * @param nodeLabel 当前真实 Probe 节点短标签。
+ * @param radioEvidenceLimited 无线权限不完整时为 true；只影响归因提示，不改变 AQS 测量。
+ * @param onCancel 用户主动取消当前 run。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TestingScreen(
     logs: List<String>,
     telemetry: LiveTelemetry,
+    nodeLabel: String,
+    radioEvidenceLimited: Boolean,
+    onCancel: () -> Unit,
 ) {
     val colors = AnebTheme.colors
     // logs 为 append-only SnapshotStateList，每新增一行都会重组；按行数记忆化避免逐帧全量重扫（O(n²)）
@@ -119,19 +126,35 @@ fun TestingScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
     ) {
-        Column(modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)) {
-            Text("测试中", fontSize = 17.sp, fontWeight = FontWeight.Black, color = colors.ink)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("测试中", fontSize = 17.sp, fontWeight = FontWeight.Black, color = colors.ink)
+                Text(
+                    "${progress.scenarioIndex + 1} / ${progress.totalScenarios} · ${progress.phaseName}",
+                    fontSize = 10.5.sp,
+                    color = colors.muted,
+                )
+            }
             Text(
-                "${progress.scenarioIndex + 1} / ${progress.totalScenarios} · ${progress.phaseName}",
-                fontSize = 10.5.sp,
-                color = colors.muted,
+                "取消",
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.brand2,
+                modifier = Modifier.pressable(onClick = onCancel).padding(horizontal = 8.dp, vertical = 7.dp),
             )
         }
 
         // ---- 连接横幅（承载制式；测量进行中）----
         StBanner(
             isp = telemetry.rat ?: "自动选择网络",
-            sub = "测量进行中 · ${progress.phaseName}",
+            sub = if (radioEvidenceLimited) {
+                "无线归因低置信 · ${progress.phaseName}"
+            } else {
+                "测量进行中 · ${progress.phaseName}"
+            },
             action = "",
             onAction = {},
             dotColor = band,
@@ -149,7 +172,7 @@ fun TestingScreen(
         Spacer(Modifier.height(16.dp))
 
         // ---- 你 ↔ 节点 ----
-        StLink(deviceLabel = "你", nodeLabel = "节点", band = band)
+        StLink(deviceLabel = "你", nodeLabel = nodeLabel, band = band)
 
         Spacer(Modifier.height(16.dp))
 
@@ -209,7 +232,10 @@ fun TestingScreen(
         }
 
         // ---------------- 移动网络层（承载质量） ----------------
-        SectionLabel("移动网络层", trailing = telemetry.rat ?: "…")
+        SectionLabel(
+            "移动网络层",
+            trailing = telemetry.rat ?: if (radioEvidenceLimited) "权限未完整授予" else "…",
+        )
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

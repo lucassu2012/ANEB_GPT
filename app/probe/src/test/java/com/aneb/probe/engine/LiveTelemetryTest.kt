@@ -16,6 +16,7 @@ class LiveTelemetryTest {
         networkType: String = "NR",
         rat: String? = "NR",
         nrState: String = "connected",
+        overrideType: String? = null,
         rsrp: Int? = -85,
         sinr: Int? = 12,
     ) = RadioSample(
@@ -25,7 +26,7 @@ class LiveTelemetryTest {
         subId = 1,
         subSwitched = false,
         networkType = networkType,
-        overrideType = null,
+        overrideType = overrideType,
         nrState = nrState,
         rat = rat,
         pci = 100,
@@ -50,16 +51,40 @@ class LiveTelemetryTest {
         assertEquals(15.0, t.jitterMs!!, 1e-9)       // 到达序差 |30-10|=20,|20-30|=10 → median 15
         assertEquals(-85, t.rsrp)
         assertEquals(12, t.sinr)
-        assertEquals("5G SA", t.rat)                 // networkType/rat NR → SA
+        assertEquals("设备报告 NR", t.rat)            // 多源一致，只陈述设备报告 NR，不猜 SA
         assertEquals(42.5, t.upMbps!!, 1e-9)
     }
 
     @Test
-    fun `网络层：LTE 且 nrState connected 记 5G NSA，纯 LTE 记 LTE`() {
-        val nsa = LiveTelemetry.derive(TelemetrySnapshot(latestRadio = radio(rat = "LTE", nrState = "connected")))
-        assertEquals("5G NSA", nsa.rat)
-        val lte = LiveTelemetry.derive(TelemetrySnapshot(latestRadio = radio(rat = "LTE", nrState = "not_restricted")))
-        assertEquals("LTE", lte.rat)
+    fun `网络层：5G 图标不当承载证据且一致 LTE 才确定`() {
+        val iconOnly = LiveTelemetry.derive(
+            TelemetrySnapshot(
+                latestRadio = radio(
+                    networkType = "LTE",
+                    rat = "LTE",
+                    nrState = "nsa_unknown",
+                    overrideType = "nr_nsa",
+                ),
+            ),
+        )
+        assertEquals("LTE / 5G 图标不一致", iconOnly.rat)
+
+        val lte = LiveTelemetry.derive(
+            TelemetrySnapshot(
+                latestRadio = radio(
+                    networkType = "LTE",
+                    rat = "LTE",
+                    nrState = "none",
+                    overrideType = "none",
+                ),
+            ),
+        )
+        assertEquals("设备报告 LTE", lte.rat)
+
+        val mismatch = LiveTelemetry.derive(
+            TelemetrySnapshot(latestRadio = radio(networkType = "LTE", rat = "NR", nrState = "nsa_unknown")),
+        )
+        assertEquals("制式证据不一致", mismatch.rat)
     }
 
     @Test

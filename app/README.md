@@ -37,7 +37,9 @@ app/                          Gradle 工程根（rootProject.name = "aneb-probe"
 1. 安装 JDK 17、Android SDK（platform 35 + build-tools），`local.properties` 写 `sdk.dir=...`。
 2. 补齐 wrapper（见上）。
 3. `.\gradlew :probe:assembleDebug`
-4. 装到模拟器：`adb install probe\build\outputs\apk\debug\probe-debug.apk`；
+4. 装到模拟器：`adb install probe\build\outputs\apk\debug\probe-debug.apk`；Debug 包名为
+   `com.aneb.probe.codex`，可与正式/对比版 `com.aneb.probe` 并存。启动组件为
+   `com.aneb.probe.codex/com.aneb.probe.ui.MainActivity`。
    服务器地址默认 `http://10.0.2.2:8443`（模拟器指向宿主机）；真机改填宿主机局域网 IP。
    明文 HTTP 仅 debug 变体允许（`src/debug/res/xml/network_security_config.xml`），release 禁明文。
 

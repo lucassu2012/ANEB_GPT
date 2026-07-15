@@ -56,14 +56,17 @@ import kotlin.math.roundToInt
  *
  * 纯 UI 层：数据经参数注入（[lastRun] 由 MainActivity 查 Room），[onStart] 触发既有 startRun
  * 编排（测量语义不动）。历史/设置导航已由底部 [com.aneb.probe.ui.components.AnebTabBar] 承载，
- * 顶栏不再挂副入口；横幅右侧动作透传至 [onOpenSettings]（就近入设置切服务器）。
+ * 顶栏不再挂副入口；横幅右侧动作透传至 [onOpenServer]（进入真实节点页）。
  */
 @Composable
 fun HomeScreen(
     lastRun: TestRun?,
     running: Boolean,
+    notice: String? = null,
+    connectionLabel: String,
+    nodeLabel: String,
     onStart: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenServer: () -> Unit,
     onOpenLastResult: (String) -> Unit,
 ) {
     val colors = AnebTheme.colors
@@ -96,14 +99,31 @@ fun HomeScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 连接横幅（就绪态；动作入设置切服务器）----
+        // ---- 连接横幅（当前传输偏好 + 真实节点；动作进入节点页）----
         StBanner(
-            isp = homeNetworkLabel(lastRun),
-            sub = "轻触 GO 开始测试 · 约 90 秒",
-            action = "设置",
-            onAction = onOpenSettings,
+            isp = connectionLabel,
+            sub = "$nodeLabel · 轻触 GO 开始测试",
+            action = "节点",
+            onAction = onOpenServer,
             dotColor = if (lastRun != null) colors.excellent else colors.neutral,
         )
+
+        if (notice != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.fairSoft)
+                    .border(1.dp, colors.fair.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(colors.fair))
+                Spacer(Modifier.width(9.dp))
+                Text(notice, fontSize = 11.5.sp, color = colors.ink, modifier = Modifier.weight(1f))
+            }
+        }
 
         Spacer(Modifier.weight(1f))
 
@@ -217,13 +237,6 @@ private fun LastResultChip(run: TestRun, detailed: Boolean, onClick: () -> Unit)
     }
 }
 
-/** 首页横幅网络标签（无实时 ISP，用上次 run 的传输通道近似；无历史 run → 自动）。 */
-private fun homeNetworkLabel(run: TestRun?): String = when (run?.transport?.lowercase()) {
-    "wifi" -> "WiFi 网络"
-    "cellular" -> "蜂窝网络"
-    else -> "自动选择网络"
-}
-
 /** run 网络/时间副标题（"电信 5G SA · 深圳 · 昨天"占位口径；无地理信息只显 transport+时间）。 */
 internal object NetworkLabel {
     private val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.US)
@@ -234,6 +247,7 @@ internal object NetworkLabel {
             "cellular" -> "蜂窝"
             else -> "自动"
         }
-        return "$transport · ${run.mode} · ${fmt.format(Date(run.startedAtEpochMs))}"
+        return "$transport · ${ProbeNodeCatalog.labelForUrl(run.serverBase)} · ${run.mode} · " +
+            fmt.format(Date(run.startedAtEpochMs))
     }
 }

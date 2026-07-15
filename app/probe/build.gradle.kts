@@ -29,6 +29,9 @@ android {
             )
         }
         debug {
+            // Codex 与 Claude 并行验收：debug 独立安装，release 仍保留正式包名 com.aneb.probe。
+            applicationIdSuffix = ".codex"
+            versionNameSuffix = "-codex"
             // 明文流量仅经 src/debug/res/xml/network_security_config.xml 允许（仿真服务器联调）
             // release 变体不带该配置，targetSdk>=28 默认禁明文
         }

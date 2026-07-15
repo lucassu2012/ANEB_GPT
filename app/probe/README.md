@@ -1,4 +1,4 @@
-# :probe 模块（com.aneb.probe）
+# :probe 模块（Release: com.aneb.probe；Debug: com.aneb.probe.codex）
 
 阶段 0 实现范围：S1 单场景（clock_sync ×20 → upload_burst 2KB → token_stream 600/100 token），
 全部时间戳经 `TestEngine` 的 `Flow<String>` 打到屏幕日志。

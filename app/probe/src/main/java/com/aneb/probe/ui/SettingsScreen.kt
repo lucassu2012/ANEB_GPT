@@ -48,7 +48,7 @@ import com.aneb.probe.ui.theme.AnebTheme
 import com.aneb.probe.ui.theme.AnebType
 
 /**
- * 设置页（设计稿 §设置，iOS 化）：服务器（bare-IP 默认 / sslip.io / 自定义）、模式（快测/取证）、
+ * 设置页（设计稿 §设置，iOS 化）：服务器（sslip.io 默认 / bare-IP 旁路 / 自定义）、模式（快测/取证）、
  * 传输（自动/WiFi/蜂窝）、Kimi/LLM API 探针入口、路测开关（危险项二次确认）、debug 注入提示。
  *
  * iOS 材质：毛玻璃顶栏（[GlassHeader]）、inset-grouped 分组卡（#1C1C1E 连续圆角 + hairline 分隔）、
@@ -67,6 +67,7 @@ fun SettingsScreen(
     driveTest: Boolean,
     onDriveTestChange: (Boolean) -> Unit,
     injectActive: String?,
+    onOpenServer: () -> Unit,
     onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onBack: () -> Unit,
@@ -86,9 +87,19 @@ fun SettingsScreen(
 
         // ---- 服务器 ----
         SectionLabel("测量服务器")
+        GroupedCard {
+            OptionRow(
+                title = "测试节点",
+                subtitle = ProbeNodeCatalog.labelForUrl(serverUrl),
+                selected = false,
+                showChevron = true,
+                onClick = onOpenServer,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         val presets = listOf(
-            ServerPreset("bare-IP（默认）", "https://120.79.148.0:8443"),
-            ServerPreset("sslip.io（公网 TLS）", "https://120-79-148-0.sslip.io:8443"),
+            ServerPreset("sslip.io（默认，自动旁路）", ProbeSettings.DEFAULT_SERVER_URL),
+            ServerPreset("bare-IP（运营商 SNI 旁路）", "https://120.79.148.0:8443"),
         )
         GroupedCard {
             presets.forEachIndexed { i, p ->
