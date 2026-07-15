@@ -57,7 +57,9 @@ internal fun RadioPermissionDialog(
         prompt.stage == RadioPermissionStage.DENIED ->
             "${prompt.state.deniedSummary}。路测坐标不会启动；请在系统设置中授予电话与精确位置权限。"
         isTest ->
-            "ANEB 使用电话与精确位置权限读取当前数据卡、小区和信号。不会读取通话、联系人或 IMSI；拒绝后仍可用低置信无线归因继续测试。"
+            "ANEB 使用电话与精确位置权限读取当前数据卡、小区和信号。不会读取通话、联系人或 IMSI；" +
+                "拒绝后仍可用低置信无线归因继续测试。开测前还会单独请求通知权限，用于后台显示进度和取消按钮；" +
+                "拒绝通知不会阻止测试。"
         else ->
             "路测会以 1Hz 记录坐标到本机 Room，并仅随本地导出使用；坐标不会进入 /results 上报体。"
     }

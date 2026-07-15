@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -24,8 +25,12 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="true">
 
-        <!-- 阶段 0：测试直接跑在 Activity 的 lifecycleScope；
-             TODO 阶段 1：迁到 dataSync 前台 Service（防息屏/切后台被杀，设计文档 §5） -->
+        <service
+            android:name=".engine.ProbeRunService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">

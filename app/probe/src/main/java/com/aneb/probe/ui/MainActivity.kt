@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.ConnectivityManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -46,6 +47,8 @@ import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.AbRunner
 import com.aneb.probe.engine.ContinuityRunner
+import com.aneb.probe.engine.ProbeRunService
+import com.aneb.probe.engine.ProbeRunSession
 import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.radio.GeoTrack
@@ -55,7 +58,6 @@ import com.aneb.probe.ui.components.MainTab
 import com.aneb.probe.ui.theme.AnebTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -67,8 +69,8 @@ import java.util.Locale
  *   Home（GO 大按钮 + 上次结果）/ Testing（脉冲环实时进度）/ Result（双视图）/
  *   History / Settings / ApiProbe。
  *
- * 测量语义、adb 自动化、logcat 合同全部不动——run 编排（engine.run 收集、autorun、
- * 各 KEY 日志）与阶段 1 逐字一致，仅展示层从"日志控制台"重构为设计稿界面。
+ * 测量语义、adb 自动化、logcat 合同全部不动——主 run 由 [ProbeRunService] 持有，
+ * Activity 负责配置、导航与投影；continuity/AB 专项仍保留原自动化入口。
  *
  * adb 自动化（不改测量语义）：
  *   am start ... --es server <url> --ez autorun true [--es mode quick|forensic|continuity|ab]
@@ -77,7 +79,6 @@ import java.util.Locale
  */
 class MainActivity : ComponentActivity() {
 
-    private lateinit var engine: TestEngine
     private lateinit var continuityRunner: ContinuityRunner
     private lateinit var abRunner: AbRunner
     private lateinit var radioCollector: RadioCollector
@@ -130,6 +131,15 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun requestRunNotificationPermission(onComplete: () -> Unit) {
+        if (Build.VERSION.SDK_INT < 33 || hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+            onComplete()
+            return
+        }
+        radioPermissionResultCallback = { onComplete() }
+        radioPermissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+    }
+
     private fun openAppPermissionSettings() {
         startActivity(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -156,7 +166,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        engine = TestEngine(applicationContext)
         continuityRunner = ContinuityRunner(applicationContext)
         abRunner = AbRunner(applicationContext)
         radioCollector = RadioCollector(this)
@@ -204,6 +213,7 @@ class MainActivity : ComponentActivity() {
             autorun = intentAutorun,
             hasFullRadioEvidence = radioPermissionState().hasFullRadioEvidence,
         )
+        val launchRequestedAutorun = intentAutorun
 
         setContent {
             AnebTheme {
@@ -223,9 +233,13 @@ class MainActivity : ComponentActivity() {
                     var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
                     var driveTest by rememberSaveable { mutableStateOf(launchSettings.driveTest) }
-                    var running by remember { mutableStateOf(false) }
-                    val logs = remember { mutableStateListOf<String>() }
-                    var runJob by remember { mutableStateOf<Job?>(null) }
+                    val runSession by ProbeRunService.session.collectAsStateWithLifecycle()
+                    val serviceLogs by ProbeRunService.logs.collectAsStateWithLifecycle()
+                    val serviceTelemetry by ProbeRunService.telemetry.collectAsStateWithLifecycle()
+                    var auxiliaryRunning by remember { mutableStateOf(false) }
+                    val running = runSession is ProbeRunSession.Running || auxiliaryRunning
+                    val auxiliaryLogs = remember { mutableStateListOf<String>() }
+                    var acceptManualSessions by remember { mutableStateOf(!launchRequestedAutorun) }
                     var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
                     var radioEvidenceLimited by remember { mutableStateOf(false) }
                     var permissionPrompt by remember { mutableStateOf<RadioPermissionPrompt?>(null) }
@@ -235,58 +249,29 @@ class MainActivity : ComponentActivity() {
 
                     fun addLog(line: String) {
                         android.util.Log.i("AnebProbe", line)
-                        logs.add(line)
+                        auxiliaryLogs.add(line)
                     }
 
-                    // ---- run 编排（与阶段 1 逐字一致；仅把导航接到新界面）----
+                    // ---- 主 run 由前台 Service 持有；Activity 只发配置并观察状态 ----
                     fun startRun(fromAutorun: Boolean) {
                         if (running) return
-                        logs.clear()
                         homeNotice = null
                         radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
-                        running = true
-                        if (!fromAutorun) screen = Screen.Testing
-                        addLog(">>> RUN mode=${mode.name.lowercase()} transport=${transport.name.lowercase()} -> $serverUrl")
-                        runJob = lifecycleScope.launch {
-                            var runId: String? = null
-                            var navigated = false
-                            fun jumpToResult() {
-                                val id = runId
-                                if (!fromAutorun && !navigated && id != null) {
-                                    navigated = true
-                                    screen = Screen.Result(id, fromHistory = false)
-                                }
-                            }
-                            try {
-                                engine.run(
-                                    TestEngine.RunConfig(
-                                        serverBase = serverUrl,
-                                        mode = mode,
-                                        transport = transport,
-                                        inject = intentInject,
-                                        driveTest = driveTest,
-                                    )
-                                ).collect { line ->
-                                    addLog(line)
-                                    if (runId == null && line.startsWith("RUN_START ")) {
-                                        runId = Regex("run_id=(\\S+)").find(line)?.groupValues?.get(1)
-                                    }
-                                    if (line.startsWith("RUN_END ")) jumpToResult()
-                                }
-                                jumpToResult()
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                addLog("RUN_FAILED error=$e")
-                                if (!fromAutorun) {
-                                    homeNotice = RunFailureMessage.forError(e)
-                                    screen = Screen.Home
-                                }
-                            } finally {
-                                running = false
-                                runJob = null
-                            }
+                        if (!fromAutorun) {
+                            acceptManualSessions = true
+                            screen = Screen.Testing
                         }
+                        ProbeRunService.start(
+                            context = applicationContext,
+                            config = ProbeRunService.Config(
+                                serverBase = serverUrl,
+                                mode = mode,
+                                transport = transport,
+                                inject = intentInject,
+                                driveTest = driveTest,
+                            ),
+                            autorun = fromAutorun,
+                        )
                     }
 
                     fun requestManualRun() {
@@ -296,7 +281,7 @@ class MainActivity : ComponentActivity() {
                         }
                         val state = radioPermissionState()
                         if (state.hasFullRadioEvidence) {
-                            startRun(fromAutorun = false)
+                            requestRunNotificationPermission { startRun(fromAutorun = false) }
                         } else {
                             permissionPrompt = RadioPermissionPrompt(
                                 purpose = RadioPermissionPurpose.START_TEST,
@@ -307,10 +292,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     fun cancelManualRun() {
-                        if (!running) return
+                        if (runSession !is ProbeRunSession.Running) return
                         homeNotice = "测试已取消，未生成成绩。"
                         screen = Screen.Home
-                        runJob?.cancel(CancellationException("user_cancelled"))
+                        ProbeRunService.cancel(applicationContext)
                     }
 
                     fun refreshNodeReachability() {
@@ -343,7 +328,7 @@ class MainActivity : ComponentActivity() {
 
                     fun startContinuityRun() {
                         if (running) return
-                        running = true
+                        auxiliaryRunning = true
                         addLog(">>> CONTINUITY transport=${transport.name.lowercase()} -> $serverUrl")
                         lifecycleScope.launch {
                             try {
@@ -360,14 +345,14 @@ class MainActivity : ComponentActivity() {
                             } catch (e: Exception) {
                                 addLog("CONTINUITY_FAILED error=$e")
                             } finally {
-                                running = false
+                                auxiliaryRunning = false
                             }
                         }
                     }
 
                     fun startAbRun() {
                         if (running) return
-                        running = true
+                        auxiliaryRunning = true
                         addLog(">>> AB pairs=$intentAbPairs -> $serverUrl")
                         lifecycleScope.launch {
                             try {
@@ -383,7 +368,36 @@ class MainActivity : ComponentActivity() {
                             } catch (e: Exception) {
                                 addLog("AB_FAILED error=$e")
                             } finally {
-                                running = false
+                                auxiliaryRunning = false
+                            }
+                        }
+                    }
+
+                    LaunchedEffect(runSession) {
+                        when (val session = runSession) {
+                            ProbeRunSession.Idle -> Unit
+                            is ProbeRunSession.Running -> {
+                                if (acceptManualSessions && !session.autorun) {
+                                    radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
+                                    screen = Screen.Testing
+                                }
+                            }
+                            is ProbeRunSession.Completed -> {
+                                if (acceptManualSessions && !session.autorun) {
+                                    screen = Screen.Result(session.runId, fromHistory = false)
+                                }
+                            }
+                            is ProbeRunSession.Failed -> {
+                                if (acceptManualSessions && !session.autorun) {
+                                    homeNotice = session.message
+                                    screen = Screen.Home
+                                }
+                            }
+                            is ProbeRunSession.Cancelled -> {
+                                if (acceptManualSessions && !session.autorun) {
+                                    homeNotice = "测试已取消，未生成成绩。"
+                                    screen = Screen.Home
+                                }
                             }
                         }
                     }
@@ -488,12 +502,9 @@ class MainActivity : ComponentActivity() {
                                 }
                                 // ---- 下钻屏（隐底栏；各自返回键回当前 tab 根）----
                                 is Screen.Testing -> {
-                                    // TestEngine.telemetry 只读观测通道 → collectAsStateWithLifecycle（后台自动停收，
-                                    // 绝不回压测量热路径；StateFlow 有初值，无闪烁）。
-                                    val telemetry by engine.telemetry.collectAsStateWithLifecycle()
                                     TestingScreen(
-                                        logs = logs,
-                                        telemetry = telemetry,
+                                        logs = serviceLogs,
+                                        telemetry = serviceTelemetry,
                                         nodeLabel = ProbeNodeCatalog.nodeForUrl(serverUrl)?.id ?: "自定义",
                                         radioEvidenceLimited = radioEvidenceLimited,
                                         onCancel = ::cancelManualRun,
@@ -541,7 +552,8 @@ class MainActivity : ComponentActivity() {
                                     if (state.hasFullRadioEvidence) {
                                         permissionPrompt = null
                                         when (prompt.purpose) {
-                                            RadioPermissionPurpose.START_TEST -> startRun(fromAutorun = false)
+                                            RadioPermissionPurpose.START_TEST ->
+                                                requestRunNotificationPermission { startRun(fromAutorun = false) }
                                             RadioPermissionPurpose.DRIVE_TEST -> {
                                                 driveTest = true
                                                 settingsStore.saveDriveTest(true)
@@ -558,7 +570,7 @@ class MainActivity : ComponentActivity() {
                             onContinueLimited = {
                                 permissionPrompt = null
                                 if (prompt.purpose == RadioPermissionPurpose.START_TEST) {
-                                    startRun(fromAutorun = false)
+                                    requestRunNotificationPermission { startRun(fromAutorun = false) }
                                 }
                             },
                             onOpenSettings = {

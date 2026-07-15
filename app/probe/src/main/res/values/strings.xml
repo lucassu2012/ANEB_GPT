@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ANEB 网络测试</string>
+    <string name="probe_run_channel_name">网络测试进度</string>
+    <string name="probe_run_channel_description">ANEB 测试在后台继续运行时显示进度</string>
+    <string name="probe_run_notification_title">ANEB 正在测试网络</string>
+    <string name="probe_run_cancel">取消测试</string>
     <color name="ic_launcher_background">#0A0E17</color>
 </resources>
