@@ -320,7 +320,10 @@ class MainActivity : ComponentActivity() {
                                                 ) != PackageManager.PERMISSION_GRANTED
                                             ) {
                                                 radioPermissionLauncher.launch(
-                                                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                                                    arrayOf(
+                                                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                                    ),
                                                 )
                                             }
                                             android.util.Log.i("AnebProbe", "DRIVE_TEST_TOGGLE enabled=$turningOn")

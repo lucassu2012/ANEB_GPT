@@ -449,7 +449,7 @@ data class RadioSampleEntity(
     val networkType: String,
     /** TelephonyDisplayInfo override 名称（运营商图标显示策略；API<31 记 unavailable_below_api31） */
     val overrideType: String?,
-    /** ServiceState nrState（反射/toString 兜底；失败静默降级记 nsa_unknown） */
+    /** 公开协商态与注册小区的一致性结果；冲突/证据不足记 nsa_unknown（R-15） */
     val nrState: String,
     // ---- registered cell 快照（LTE 或 NR；无小区全 null，禁 0/哨兵值 R-10） ----
     /** "LTE" / "NR"；无 LTE/NR registered cell 记 null */

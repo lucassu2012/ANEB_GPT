@@ -45,7 +45,7 @@ import kotlin.coroutines.resume
  *   >2s 亦标 stale。
  * - 制式三元组（R-15）：network_type（dataNetworkType，协商态）/ override_type
  *   （TelephonyDisplayInfo，运营商图标显示策略，API 31+ 监听、以下记 unavailable）/
- *   nr_state（ServiceState 反射 + toString 兜底，失败静默降级 nsa_unknown）三列
+ *   nr_state（仅由公开的协商态与注册小区一致性保守推导，冲突记 nsa_unknown）三列
  *   显式分开——5G 图标 ≠ 数据承载，禁止合并为单值。
  * - 双卡（R-13）：绑定 SubscriptionManager.getDefaultDataSubscriptionId 对应的
  *   TelephonyManager（createForSubscriptionId）；每 tick 复查 subId，变化即记
@@ -248,7 +248,6 @@ class RadioCollector(
                 TelephonyManager.NETWORK_TYPE_UNKNOWN
             },
         )
-        val nrState = readNrState(tm)
         val operator = try {
             tm.networkOperatorName?.takeIf { it.isNotBlank() }
         } catch (t: Throwable) {
@@ -295,6 +294,14 @@ class RadioCollector(
             }
         }
 
+        val overrideLabel = overrideType ?: defaultOverrideLabel()
+        val registeredCellRat = rat.takeIf { reg?.isRegistered == true }
+        val nrState = PublicNrEvidence.derive(
+            networkType = networkType,
+            overrideType = overrideLabel,
+            registeredCellRat = registeredCellRat,
+        )
+
         return RadioSample(
             tsNanos = nowNs,
             cellTsNanos = cellTs,
@@ -302,7 +309,7 @@ class RadioCollector(
             subId = subId,
             subSwitched = subSwitched,
             networkType = networkType,
-            overrideType = overrideType ?: defaultOverrideLabel(),
+            overrideType = overrideLabel,
             nrState = nrState,
             rat = rat,
             pci = pci,
@@ -351,43 +358,6 @@ class RadioCollector(
     /** CellInfo.UNAVAILABLE（Int.MAX_VALUE）等哨兵值一律转 null（R-10：禁哨兵值入库） */
     private fun clean(v: Int): Int? =
         v.takeIf { it != CellInfo.UNAVAILABLE && it != Int.MAX_VALUE && it != Int.MIN_VALUE }
-
-    // ------------------------------------------------------------------
-    // R-15：nrState 反射兜底（隐藏 API，失败静默降级 nsa_unknown）
-    // ------------------------------------------------------------------
-
-    @SuppressLint("MissingPermission")
-    private fun readNrState(tm: TelephonyManager): String {
-        val ss = try {
-            tm.serviceState
-        } catch (t: Throwable) {
-            null
-        } ?: return "nsa_unknown"
-        // 1) 反射隐藏 API ServiceState#getNrState（greylist/blocklist 随版本变化，失败即降级）
-        try {
-            val m = ss.javaClass.getDeclaredMethod("getNrState")
-            m.isAccessible = true
-            (m.invoke(ss) as? Int)?.let { return nrStateName(it) }
-        } catch (t: Throwable) {
-            // 静默降级 → toString 兜底
-        }
-        // 2) toString 解析兜底（NetworkRegistrationInfo dump 含 nrState=XXX）
-        return try {
-            Regex("nrState=([A-Z_]+)").find(ss.toString())
-                ?.groupValues?.get(1)?.lowercase()
-                ?: "nsa_unknown"
-        } catch (t: Throwable) {
-            "nsa_unknown"
-        }
-    }
-
-    private fun nrStateName(v: Int): String = when (v) {
-        0 -> "none"           // NetworkRegistrationInfo.NR_STATE_NONE
-        1 -> "restricted"
-        2 -> "not_restricted" // NSA 锚定但 SCG 未必激活——图标可显 5G，数据仍可能全走 LTE
-        3 -> "connected"      // NR SCG 已连接
-        else -> "nsa_unknown"
-    }
 
     // ------------------------------------------------------------------
     // R-15：TelephonyDisplayInfo override 监听（API 31+；以下保守降级）
@@ -481,8 +451,17 @@ class RadioCollector(
     private fun readSnapshot(tm: TelephonyManager): String {
         val networkType = networkTypeName(tm.dataNetworkType)
         val operator = tm.networkOperatorName?.takeIf { it.isNotBlank() } ?: "unknown"
-        val nrState = readNrState(tm)
         val cellInfos: List<CellInfo> = tm.allCellInfo ?: emptyList()
+        val registeredCellRat = when (val cell = pickCell(cellInfos)) {
+            is CellInfoNr -> "NR".takeIf { cell.isRegistered }
+            is CellInfoLte -> "LTE".takeIf { cell.isRegistered }
+            else -> null
+        }
+        val nrState = PublicNrEvidence.derive(
+            networkType = networkType,
+            overrideType = defaultOverrideLabel(),
+            registeredCellRat = registeredCellRat,
+        )
         val cellPart = describeFirstCell(cellInfos)
         return "radio: type=$networkType nrState=$nrState operator=$operator $cellPart"
     }
