@@ -1,0 +1,121 @@
+﻿ANEB Phase-0 server provisioning evidence
+Date: 2026-07-12 (local)
+Target: root@120.79.148.0 (Aliyun lightweight E-01, shared host - Ubuntu 22.04, kernel 5.15.0-142)
+Operator: Claude Code (SSH key auth only, key: %USERPROFILE%\.ssh\aneb_e01; no passwords used or stored)
+Deployed via: E:\C Project\ANEB\scripts\deploy_server.ps1 (repeatable)
+Unit file source: E:\C Project\ANEB\server\aneb-server.service
+
+=== 0. BASELINE (before deploy) ===
+ss -tln showed listeners: 9100/8080/53/8765/8090/22/80/3100/3080 (no 8443)
+Existing co-tenant processes: python(www-data,699), python(root,1427), mongod(admin,1460)
+Disk: /dev/vda3 40G used 23G (62%); Mem: 3495M total, 1348M used
+
+=== 1. CROSS-COMPILE + DEPLOY RUN (deploy_server.ps1 output) ===
+== [1/3] cross-compile linux/amd64 ==
+built: C:\Users\lucas\AppData\Local\Temp\aneb-server-linux (9495656 bytes)
+== [2/3] scp artifacts to /tmp ==
+== [3/3] remote install ==
+created system user aneb
+* Applying /etc/sysctl.d/99-aneb.conf ...
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_slow_start_after_idle = 0
+active
+--- smoke: /api/v1/profiles ---
+{"profiles":[{"profile_id":"s1_chat","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"对话流（对照组）：小 prompt 上行 + 稳态 token 流下行，对标普通 chat 应用","est_duration_s":60,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":2048,"chunk_kb":2},{"type":"token_stream","tokens":600,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":1001},{"type":"clock_sync","samples":20}]},{"profile_id":"s2_coding_agent","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"编码 Agent 流（主场景）：大 prompt 上行突发 + 思考停顿 + 工具循环往返 + 突发簇代码流，对标 Claude Code / Kimi Claw","est_duration_s":90,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":524288,"chunk_kb":64},{"type":"think_pause","duration_ms":3000},{"type":"token_stream","tokens":300,"rate_tps":60,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"burst":{"cluster_tps":100,"pause_ms":[300,800],"cluster_geom_p":0.05},"seed":2001},{"type":"tool_loop","rounds":8,"up_bytes":8192,"down_bytes":2048,"server_proc_ms":200},{"type":"think_pause","duration_ms":2000},{"type":"token_stream","tokens":800,"rate_tps":60,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"burst":{"cluster_tps":100,"pause_ms":[300,800],"cluster_geom_p":0.05},"seed":2002},{"type":"clock_sync","samples":20}]},{"profile_id":"s3_multimodal","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"多模态流：周期性大图上行 + token 流下行交替，对标截图转代码类视觉 agentic","est_duration_s":75,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":1048576,"chunk_kb":64},{"type":"think_pause","duration_ms":2500},{"type":"token_stream","tokens":200,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":3001},{"type":"upload_burst","bytes":1048576,"chunk_kb":64},{"type":"think_pause","duration_ms":2500},{"type":"token_stream","tokens":200,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":3002},{"type":"clock_sync","samples":20}]}],"server_version":"aneb-server/0.1.0"}
+
+--- smoke: /api/v1/echo ---
+{"t1_us":979541,"anchor_wall_unix_ns":1783843344665294456,"observed":"127.0.0.1:37332","t2_us":979562}
+DEPLOY_OK
+== deploy complete ==
+
+
+=== 2. TCPDUMP INSTALL ===
+apt-get update -o Acquire::ForceIPv4=true: OK
+tcpdump is already the newest version (4.99.1-3ubuntu0.2); tcpdump set to manually installed.
+/usr/bin/tcpdump present.
+
+=== 3. SERVER-SIDE ACCEPTANCE (verify script output) ===
+===== 4.1 systemctl is-active =====
+active
+===== 4.2 GET /api/v1/profiles (count) =====
+profile_count: 3
+ids: ['s1_chat', 's2_coding_agent', 's3_multimodal']
+===== 4.3 POST /api/v1/echo =====
+{"t1_us":100245049,"anchor_wall_unix_ns":1783843344665294456,"observed":"127.0.0.1:37326","t2_us":100245064}
+===== 4.4 GET /api/v1/stream?tokens=3&rate_tps=20 =====
+: prelude {"srv_ts_us":100252125,"anchor_wall_unix_ns":1783843344665294456,"observed":"127.0.0.1:37338"}
+
+event: token
+data: {"seq":0,"sched_us":100252219,"pre_flush_us":100252234,"payload":"gAa/bYs4QrTHssak6S9gPBmVal8faXU+INi8+aIke7ys2kHw3wxpxciLq0GPLpFdsxpFm520TMhx"}
+
+event: token
+data: {"seq":1,"sched_us":100302219,"pre_flush_us":100302436,"payload":"kXVUA2qGdhFetz5YnLRRBPlUC3zL1ul3gyycnl3k75CBTTERgbG9cihjr/MZzexYJnJO8dfXcUUp1doP8FrLLb7cokDMaBsYYFDtmppEmkXumi69IF4F7jP2NnZlCPtdj2Ti8go+VyObrajXKhc3"}
+
+event: token
+data: {"seq":2,"sched_us":100352219,"pre_flush_us":100352705,"payload":"kicLAnLJaZFUhspyUgWYgdhUOw/MLHxAZ2UK5F8EJKKwOZMlVdDUDZjea7U+QZM7qch/Hp2K1qpM8YjLQyqwYhPMlGTddcc/9Sgqn/ApyoNTeT5guWQURg=="}
+
+event: summary
+data: {"tokens":3,"stream_start_us":100252219,"flush_return_us":[100252247,100302515,100352783],"timer_late_us":[0,214,482],"flush_block_us":[11,76,75],"carryover_us":[9,0,0]}
+
+
+===== 4.5 ss -tln (8443 + existing ports) =====
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      511        127.0.0.1:9100      0.0.0.0:*          
+LISTEN 0      511          0.0.0.0:8080      0.0.0.0:*          
+LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*          
+LISTEN 0      5          127.0.0.1:8765      0.0.0.0:*          
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*          
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*          
+LISTEN 0      511          0.0.0.0:80        0.0.0.0:*          
+LISTEN 0      4096       127.0.0.1:3100      0.0.0.0:*          
+LISTEN 0      4096       127.0.0.1:3080      0.0.0.0:*          
+LISTEN 0      4096               *:8443            *:*          
+LISTEN 0      128             [::]:22           [::]:*          
+LISTEN 0      511             [::]:80           [::]:*          
+===== 4.6 resource limits =====
+MemoryMax=402653184
+TasksMax=256
+User=aneb
+NoNewPrivileges=yes
+===== 4.7 existing services untouched =====
+www-data     699  1-22:30:00 python
+root        1427  1-22:29:56 python
+admin       1460  1-22:29:56 mongod
+===== 4.8 sysctl in effect =====
+net.ipv4.tcp_slow_start_after_idle = 0
+# ANEB: do not collapse the congestion window after idle; the probe server
+# streams tokens with deliberate gaps and slow-start-after-idle would distort
+# observed pacing. Safe for co-tenant services (affects only idle-restart cwnd).
+net.ipv4.tcp_slow_start_after_idle=0
+===== 4.9 chrony untouched (mtime check only) =====
+total 16
+-rw-r--r-- 1 root root 1507 Jun 25  2025 chrony.conf
+-rw-r----- 1 root root  481 Feb  8  2022 chrony.keys
+drwxr-xr-x 2 root root 4096 Jun 25  2025 conf.d
+drwxr-xr-x 2 root root 4096 Jun 25  2025 sources.d
+===== 4.10 aneb service unit + process =====
+USER         PID COMMAND
+aneb      358028 aneb-server
+VERIFY_DONE
+
+
+=== 4. RESOURCE LIMITS (additional) ===
+CPUQuotaPerSecUSec=1.200000s   (= CPUQuota=120%)
+MemoryMax=402653184            (= 384M)
+systemctl is-enabled aneb-server: enabled
+
+=== 5. EXTERNAL REACHABILITY (from Windows workstation) ===
+Net.Sockets.TcpClient 120.79.148.0:8443, 3s timeout -> TIMEOUT/BLOCKED
+Expected: Aliyun console firewall does not yet allow 8443 (user action pending). Recorded BLOCKED_EXTERNAL.
+
+=== 6. SAFETY RED LINES - COMPLIANCE ===
+- /etc/chrony/* untouched (mtimes Jun 25 2025 / Feb 8 2022, listed read-only in section 3, step 4.9).
+  Shared server: global clock discipline left alone; srv_ts monotonic anchor is immune to clock stepping.
+- ufw/iptables: not touched.
+- No non-aneb service killed/restarted; co-tenant processes (python x2, mongod) show uninterrupted etime 1-22:29+ after deploy (step 4.7).
+- Only global change: /etc/sysctl.d/99-aneb.conf with net.ipv4.tcp_slow_start_after_idle=0 (commented, applied via sysctl --system).
+- Only package touched: tcpdump (already newest; no new install needed).
+- aneb-server runs as system user aneb with NoNewPrivileges/ProtectSystem=strict/ProtectHome/PrivateTmp, MemoryMax=384M, CPUQuota=120%, TasksMax=256.
+- All auth via SSH key; no password written anywhere.
+END OF LOG

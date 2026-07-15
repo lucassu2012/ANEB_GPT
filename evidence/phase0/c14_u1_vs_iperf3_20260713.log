@@ -1,0 +1,365 @@
+﻿P0-C14: App U1 (2xx 口径) vs iperf3 同路径吞吐对照
+====================================================
+日期: 2026-07-13
+路径: emulator guest (AVD aneb, x86_64, Android 15) -> 10.0.2.2 NAT -> Windows host 127.0.0.1
+两端 iperf 版本一致: host iperf 3.21 (E:\tools\iperf3\iperf3.exe) / guest iperf 3.21
+  (userdocs/iperf3-static release 3.21 iperf3-amd64, push 至 /data/local/tmp/iperf3)
+服务端: aneb-server/0.1.0 现编 (go1.26.5, -addr 127.0.0.1:8443, profiles=E:/C Project/ANEB/profiles)
+App: probe-debug.apk (2026-07-13 02:10 构建, 含修复), am start autorun quick,
+     server=http://10.0.2.2:8443, 测量直连(模拟器启动进程已清空全部 proxy 环境变量)
+
+结果汇总
+--------
+iperf3 (guest->host, -t 8, receiver Mbps): 102 / 150 / 129  -> 中位 129 Mbps
+  复核(App run 窗口后再测一次 -t 8): 150 Mbps; run 间变异 102~150 (约±19%)
+App U1 主口径 (S3 SCENARIO_KPI u1_mbps, 三次 run): 88.7473 / 69.8854 / 84.9348 -> 中位 84.93 Mbps
+App U1 excl 口径 (u1_excl_mbps): null / null / 80.4186 -> 仅 1/3 run 出值, 无中位数
+  (excl 口径依赖服务端 serverView 慢启动估计, 估计不成立时按 fail-closed 不出值)
+
+判定
+----
+|84.93 - 129| / 129 = 34.2%  >= 20%  -> 按字面门限判 FAIL
+excl 口径单点偏差 = |80.42 - 129| / 129 = 37.7% (不升反降, "excl 更接近"预期未成立, 归因见下)
+
+归因分析
+--------
+1) 慢启动已排除: iperf3 -t 3 -i 0.1 显示 0.00-0.10s 区间即 271 Mbits/sec (socket buffer
+   充填效应), 其后每 0.1s 稳定 135~148 Mbits/sec, Cwnd 恒 22.8 KBytes, Retr=0 —
+   本路径 RTT 亚毫秒, TCP 无爬坡期. 故 excl(剔慢启动)口径不可能显著抬升, 实测反而略降
+   (窗口收窄+估计噪声), 与机理一致.
+2) 口径本质差异: U1 2xx 口径 = 1MiB HTTP POST, 计时窗 [请求发起, 收到响应头], 含请求头、
+   服务端逐 MTU(~693 块)打戳读取、serverView JSON 编码与响应回程; 且客户端 OkHttp 每
+   64KB write+flush(JVM 用户态), 对比 iperf3 C 语言 128KB 紧循环裸 TCP. 纯线上时间
+   1MiB@145Mbps=57.9ms, App 实测 dur=87.6~120.0ms, 多出的 30~62ms 即 HTTP 信封+写模式
+   +虚拟网卡对小批量写的敏感开销. run3 的 excl(基于服务端到达序列)≈80.4 与客户端口径
+   ≈84.9 接近, 证明时间确实花在传输过程本身(服务端看到块跨 ~95ms 到达), 不是响应编码.
+3) 参考基线自身不稳: emulator NAT 吞吐受 host CPU 调度影响, iperf3 三次 102/150/129,
+   跨度已 ±19%, 单一 20% 门限在本路径先天偏紧.
+4) 单流因素无差异: iperf3 默认即 -P 1 单流, App 上传亦单连接, 非偏差来源.
+
+结论与建议门限
+--------------
+如实判: FAIL(按"与 iperf3 原始 TCP 稳态中位偏差<20%"字面门限).
+但偏差为口径系统差而非测量错误: U1/iperf3 稳态比值 0.66 (单次上传 goodput 区间
+69.9~95.8 对 iperf3 区间 102~150). App 声称的是"应用层 1MiB HTTP 上传 goodput",
+本来就应低于裸 TCP 稳态.
+建议后续门限(择一):
+  a) 尺寸匹配 HTTP 基线对照: 用非 App 客户端对同一 /api/v1/upload POST 1MiB, 与 U1
+     偏差 <20% (对照物口径一致, 最干净);
+  b) 保留 iperf3 对照但改比值带: U1 中位 ∈ [0.5, 1.0] x iperf3 稳态中位
+     (覆盖本次 0.66 及 iperf3 自身 ±19% 变异);
+  c) 若坚持 <20%: 需将对照 payload 加大到 >=16MiB 使传输时间 >> 信封开销, 且以
+     excl 口径对照 —— 但这偏离 S3 profile 的 1MiB 突发语义, 不建议.
+
+原始输出
+--------
+
+### iperf3 guest->host -t 8 x3 ###
+=== iperf3 guest run 1 ===
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 47962 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  12.2 MBytes   103 Mbits/sec    0   22.8 KBytes       
+[  5]   1.00-2.00   sec  12.4 MBytes   104 Mbits/sec    0   22.8 KBytes       
+[  5]   2.00-3.00   sec  11.9 MBytes  99.6 Mbits/sec    0   22.8 KBytes       
+[  5]   3.00-4.00   sec  10.6 MBytes  89.3 Mbits/sec    0   22.8 KBytes       
+[  5]   4.00-5.00   sec  11.9 MBytes  99.5 Mbits/sec    0   22.8 KBytes       
+[  5]   5.00-6.00   sec  12.2 MBytes   103 Mbits/sec    0   22.8 KBytes       
+[  5]   6.00-7.00   sec  12.4 MBytes   104 Mbits/sec    0   22.8 KBytes       
+[  5]   7.00-8.00   sec  14.6 MBytes   123 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-8.00   sec  98.2 MBytes   103 Mbits/sec    0            sender
+[  5]   0.00-8.00   sec  97.0 MBytes   102 Mbits/sec                  receiver
+
+iperf Done.
+=== iperf3 guest run 2 ===
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 56346 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  19.0 MBytes   159 Mbits/sec    0   22.8 KBytes       
+[  5]   1.00-2.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+[  5]   2.00-3.00   sec  19.1 MBytes   160 Mbits/sec    0   22.8 KBytes       
+[  5]   3.00-4.00   sec  18.4 MBytes   154 Mbits/sec    0   22.8 KBytes       
+[  5]   4.00-5.00   sec  18.5 MBytes   155 Mbits/sec    0   22.8 KBytes       
+[  5]   5.00-6.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+[  5]   6.00-7.00   sec  16.5 MBytes   138 Mbits/sec    0   22.8 KBytes       
+[  5]   7.00-8.00   sec  17.4 MBytes   146 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-8.00   sec   145 MBytes   152 Mbits/sec    0            sender
+[  5]   0.00-8.00   sec   143 MBytes   150 Mbits/sec                  receiver
+
+iperf Done.
+=== iperf3 guest run 3 ===
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 57884 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  10.6 MBytes  88.8 Mbits/sec    0   22.8 KBytes       
+[  5]   1.00-2.00   sec  13.5 MBytes   114 Mbits/sec    0   22.8 KBytes       
+[  5]   2.00-3.00   sec  16.9 MBytes   142 Mbits/sec    0   22.8 KBytes       
+[  5]   3.00-4.00   sec  16.8 MBytes   140 Mbits/sec    0   22.8 KBytes       
+[  5]   4.00-5.00   sec  15.8 MBytes   132 Mbits/sec    0   22.8 KBytes       
+[  5]   5.00-6.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+[  5]   6.00-7.00   sec  16.2 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   7.00-8.00   sec  16.9 MBytes   142 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-8.00   sec   124 MBytes   131 Mbits/sec    0            sender
+[  5]   0.00-8.00   sec   123 MBytes   129 Mbits/sec                  receiver
+
+iperf Done.
+### iperf3 diagnostics (-n 1M x3, -t 8 recheck, -t 3 -i 0.1 ramp) ###
+=== diagnostic: iperf3 -n 1M (size-matched to S3 upload burst) x3 ===
+--- -n 1M run 1 ---
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 59290 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  1.00 MBytes  8.35 Mbits/sec    0   17.1 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-1.00   sec  1.00 MBytes  8.35 Mbits/sec    0            sender
+[  5]   0.00-1.01   sec  1.00 MBytes  8.34 Mbits/sec                  receiver
+
+iperf Done.
+--- -n 1M run 2 ---
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 59320 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  1.00 MBytes  8.36 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-1.00   sec  1.00 MBytes  8.36 Mbits/sec    0            sender
+[  5]   0.00-1.00   sec  1.00 MBytes  8.35 Mbits/sec                  receiver
+
+iperf Done.
+--- -n 1M run 3 ---
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 59336 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  1.00 MBytes  8.35 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-1.00   sec  1.00 MBytes  8.35 Mbits/sec    0            sender
+[  5]   0.00-1.01   sec  1.00 MBytes  8.35 Mbits/sec                  receiver
+
+iperf Done.
+--- -t 8 recheck (same window as app runs) ---
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 59360 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  18.4 MBytes   154 Mbits/sec    0   22.8 KBytes       
+[  5]   1.00-2.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+[  5]   2.00-3.00   sec  16.9 MBytes   142 Mbits/sec    0   22.8 KBytes       
+[  5]   3.00-4.00   sec  18.0 MBytes   151 Mbits/sec    0   22.8 KBytes       
+[  5]   4.00-5.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+[  5]   5.00-6.00   sec  18.5 MBytes   155 Mbits/sec    0   22.8 KBytes       
+[  5]   6.00-7.00   sec  18.6 MBytes   156 Mbits/sec    0   22.8 KBytes       
+[  5]   7.00-8.00   sec  17.9 MBytes   150 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-8.00   sec   144 MBytes   151 Mbits/sec    0            sender
+[  5]   0.00-8.00   sec   143 MBytes   150 Mbits/sec                  receiver
+
+iperf Done.
+
+--- -t 3 -i 0.1 ramp inspection (first intervals = slow-start window) ---
+Connecting to host 10.0.2.2, port 5201
+[  5] local 10.0.2.15 port 59958 connected to 10.0.2.2 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-0.10   sec  3.25 MBytes   271 Mbits/sec    0   22.8 KBytes       
+[  5]   0.10-0.20   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   0.20-0.30   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   0.30-0.40   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   0.40-0.50   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   0.50-0.60   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   0.60-0.70   sec  1.62 MBytes   135 Mbits/sec    0   22.8 KBytes       
+[  5]   0.70-0.80   sec  1.75 MBytes   148 Mbits/sec    0   22.8 KBytes       
+[  5]   0.80-0.90   sec  1.62 MBytes   135 Mbits/sec    0   22.8 KBytes       
+[  5]   0.90-1.00   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   1.00-1.10   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   1.10-1.20   sec  1.75 MBytes   146 Mbits/sec    0   22.8 KBytes       
+[  5]   1.20-1.30   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   1.30-1.40   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   1.40-1.50   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   1.50-1.60   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   1.60-1.70   sec  1.75 MBytes   145 Mbits/sec    0   22.8 KBytes       
+[  5]   1.70-1.80   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   1.80-1.90   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   1.90-2.00   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   2.00-2.10   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   2.10-2.20   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   2.20-2.30   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   2.30-2.40   sec  1.75 MBytes   146 Mbits/sec    0   22.8 KBytes       
+[  5]   2.40-2.50   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   2.50-2.60   sec  1.75 MBytes   146 Mbits/sec    0   22.8 KBytes       
+[  5]   2.60-2.70   sec  1.62 MBytes   137 Mbits/sec    0   22.8 KBytes       
+[  5]   2.70-2.80   sec  1.62 MBytes   136 Mbits/sec    0   22.8 KBytes       
+[  5]   2.80-2.90   sec  1.75 MBytes   147 Mbits/sec    0   22.8 KBytes       
+[  5]   2.90-3.00   sec  1.75 MBytes   146 Mbits/sec    0   22.8 KBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-3.00   sec  52.0 MBytes   145 Mbits/sec    0            sender
+[  5]   0.00-3.00   sec  50.4 MBytes   141 Mbits/sec                  receiver
+
+iperf Done.
+### App autorun quick logcat (AnebProbe) x3 ###
+--- app run 1 ---
+--------- beginning of main
+07-12 18:25:24.641  3334  3334 I AnebProbe: >>> RUN mode=quick transport=auto -> http://10.0.2.2:8443
+07-12 18:25:25.068  3334  3334 I AnebProbe: RUN_START run_id=019f5793-b1ce-758d-a302-24cb656d1992 mode=quick transport=auto server=http://10.0.2.2:8443 inject=none
+07-12 18:25:25.252  3334  3334 I AnebProbe: GUARD_OK metadata=private_dns_active=false;active_transports=cellular;active_validated=false;checked_at_nanos=541634217000
+07-12 18:25:25.450  3334  3334 I AnebProbe: PROFILES source=server versions=s1_chat@0.2.0;s2_coding_agent@0.2.0;s3_multimodal@0.2.0
+07-12 18:25:25.525  3334  3334 I AnebProbe: ORDER round=0 order=s1_chat,s2_coding_agent,s3_multimodal
+07-12 18:25:25.526  3334  3334 I AnebProbe: SCENARIO_START scenario=s1_chat#0 round=0 order_index=0
+07-12 18:25:30.088  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=start phase=0 offset_us=49726312 err_us=974 valid_n=17 total_n=20 warmup_n=3
+07-12 18:25:30.155  3334  3334 I AnebProbe: UPLOAD scenario=s1_chat#0 idx=0 bytes=2048 chunk=2048 http=200 dur_ms=13.75 goodput_mbps=1.191 server_chunks=2 error=none
+07-12 18:25:45.228  3334  3334 I AnebProbe: STREAM scenario=s1_chat#0 stream=0 expected=600 events=600 reads=603 bytes=183400 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.45 error=none
+07-12 18:25:45.229  3334  3334 I AnebProbe: PARSE scenario=s1_chat#0 stream=0 parse_dur_us=89277 per_event_parse_us=148.80 events=600
+07-12 18:25:49.622  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=end phase=3 offset_us=49726306 err_us=785 valid_n=17 total_n=20 warmup_n=3
+07-12 18:25:49.711  3334  3334 I AnebProbe: SKEW scenario=s1_chat#0 start_offset_us=49726312 end_offset_us=49726306 drift_ppm=-0.29 offset_suspect=false
+07-12 18:25:49.869  3334  3334 I AnebProbe: SCENARIO_KPI scenario=s1_chat#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=1.4531(lowconf) t2_ms=25.4572 t2_incl_ms=25.4572 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=3.1360 n2_ms=3.1200 u1_mbps=1.1912(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-12 18:25:49.869  3334  3334 I AnebProbe: SCENARIO_START scenario=s2_coding_agent#0 round=0 order_index=1
+07-12 18:25:54.199  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=start phase=0 offset_us=49726089 err_us=623 valid_n=17 total_n=20 warmup_n=3
+07-12 18:25:54.312  3334  3334 I AnebProbe: UPLOAD scenario=s2_coding_agent#0 idx=0 bytes=524288 chunk=65536 http=200 dur_ms=35.86 goodput_mbps=116.969 server_chunks=345 error=none
+07-12 18:25:54.312  3334  3334 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=3000
+07-12 18:26:06.356  3334  3334 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=0 expected=300 events=300 reads=302 bytes=88835 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.21 error=none
+07-12 18:26:06.356  3334  3334 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=0 parse_dur_us=17465 per_event_parse_us=58.22 events=300
+07-12 18:26:06.574  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=0 up_bytes=8192 total_ms=217.76 proc_nominal_ms=200 proc_actual_us=200462 http=200 error=none
+07-12 18:26:06.794  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=1 up_bytes=8192 total_ms=203.12 proc_nominal_ms=200 proc_actual_us=200547 http=200 error=none
+07-12 18:26:07.002  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=2 up_bytes=8192 total_ms=206.33 proc_nominal_ms=200 proc_actual_us=200269 http=200 error=none
+07-12 18:26:07.209  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=3 up_bytes=8192 total_ms=205.69 proc_nominal_ms=200 proc_actual_us=200928 http=200 error=none
+07-12 18:26:07.417  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=4 up_bytes=8192 total_ms=204.34 proc_nominal_ms=200 proc_actual_us=200688 http=200 error=none
+07-12 18:26:07.624  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=5 up_bytes=8192 total_ms=205.33 proc_nominal_ms=200 proc_actual_us=200579 http=200 error=none
+07-12 18:26:07.831  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=6 up_bytes=8192 total_ms=205.85 proc_nominal_ms=200 proc_actual_us=200548 http=200 error=none
+07-12 18:26:08.039  3334  3334 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=7 up_bytes=8192 total_ms=204.40 proc_nominal_ms=200 proc_actual_us=200363 http=200 error=none
+07-12 18:26:08.039  3334  3334 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=2000
+07-12 18:26:44.419  3334  3334 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=1 expected=800 events=800 reads=803 bytes=241073 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.92 error=none
+07-12 18:26:44.420  3334  3334 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=1 parse_dur_us=52361 per_event_parse_us=65.45 events=800
+07-12 18:26:48.498  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=end phase=7 offset_us=49726025 err_us=852 valid_n=17 total_n=20 warmup_n=3
+07-12 18:26:48.562  3334  3334 I AnebProbe: SKEW scenario=s2_coding_agent#0 start_offset_us=49726089 end_offset_us=49726025 drift_ppm=-1.14 offset_suspect=false
+07-12 18:26:48.736  3334  3334 I AnebProbe: SCENARIO_KPI scenario=s2_coding_agent#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=1.2106(lowconf) t2_ms=10.6155 t2_incl_ms=10.6155 t3=0.0000 t3_incl=0.0565 t4=0.0000 t5_ms=747.8008 n1_ms=2.3430 n2_ms=1.6010 u1_mbps=116.9690(lowconf) u1_excl_mbps=16.2146(lowconf) u2_ms=17.2965 gaps=0 dup=0
+07-12 18:26:48.738  3334  3334 I AnebProbe: SCENARIO_START scenario=s3_multimodal#0 round=0 order_index=2
+07-12 18:26:52.760  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=start phase=0 offset_us=49725627 err_us=802 valid_n=17 total_n=20 warmup_n=3
+07-12 18:26:52.882  3334  3334 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=0 bytes=1048576 chunk=65536 http=200 dur_ms=94.52 goodput_mbps=88.747 server_chunks=693 error=none
+07-12 18:26:52.882  3334  3334 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:27:00.374  3334  3334 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=0 expected=200 events=200 reads=202 bytes=59144 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.35 error=none
+07-12 18:27:00.375  3334  3334 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=0 parse_dur_us=10104 per_event_parse_us=50.52 events=200
+07-12 18:27:00.490  3334  3334 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=1 bytes=1048576 chunk=65536 http=200 dur_ms=93.08 goodput_mbps=90.126 server_chunks=691 error=none
+07-12 18:27:00.491  3334  3334 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:27:07.985  3334  3334 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=1 expected=200 events=200 reads=202 bytes=60195 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.54 error=none
+07-12 18:27:07.987  3334  3334 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=1 parse_dur_us=8272 per_event_parse_us=41.36 events=200
+07-12 18:27:12.581  3334  3334 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=end phase=7 offset_us=49726126 err_us=745 valid_n=17 total_n=20 warmup_n=3
+07-12 18:27:12.587  3334  3334 I AnebProbe: SKEW scenario=s3_multimodal#0 start_offset_us=49725627 end_offset_us=49726126 drift_ppm=26.04 offset_suspect=false
+07-12 18:27:12.637  3334  3334 I AnebProbe: SCENARIO_KPI scenario=s3_multimodal#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=1.3505(lowconf) t2_ms=25.4943 t2_incl_ms=25.4943 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=1.7680 n2_ms=1.4440 u1_mbps=88.7473(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-12 18:27:12.639  3334  3334 I AnebProbe: AQS_INPUT_MAP map=N1,N2<-S1.first_clock_sync;T1,T2,T3,T4,T5<-S2;U1<-S3.1MB_upload(incl_slow_start_into_AQS);U2<-S2.tool_loop
+07-12 18:27:12.640  3334  3334 I AnebProbe: AQS run_id=019f5793-b1ce-758d-a302-24cb656d1992 score=98.6 low_confidence=true veto=false reason=none subs=T1:99.9,T2:98.4,T3:100.0,U1:97.9,U2:98.3,N1:98.4,N2:95.3
+07-12 18:27:12.689  3334  3334 I AnebProbe: REPORT http=200 bytes=5814 error=none
+07-12 18:27:12.715  3334  3334 I AnebProbe: DB_WRITE run_id=019f5793-b1ce-758d-a302-24cb656d1992 scenarios=3 env_events_pending=0 radio_samples_pending=0
+07-12 18:27:12.722  3334  3334 I AnebProbe: RUN_END run_id=019f5793-b1ce-758d-a302-24cb656d1992 status=completed
+--- app run 2 ---
+--------- beginning of main
+07-12 18:27:17.706  3465  3465 I AnebProbe: >>> RUN mode=quick transport=auto -> http://10.0.2.2:8443
+07-12 18:27:18.103  3465  3465 I AnebProbe: RUN_START run_id=019f5795-6b91-760d-b555-1ee3cc678b64 mode=quick transport=auto server=http://10.0.2.2:8443 inject=none
+07-12 18:27:18.308  3465  3465 I AnebProbe: GUARD_OK metadata=private_dns_active=false;active_transports=cellular;active_validated=false;checked_at_nanos=654755814265
+07-12 18:27:18.561  3465  3465 I AnebProbe: PROFILES source=server versions=s1_chat@0.2.0;s2_coding_agent@0.2.0;s3_multimodal@0.2.0
+07-12 18:27:18.639  3465  3465 I AnebProbe: ORDER round=0 order=s1_chat,s2_coding_agent,s3_multimodal
+07-12 18:27:18.639  3465  3465 I AnebProbe: SCENARIO_START scenario=s1_chat#0 round=0 order_index=0
+07-12 18:27:22.800  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=start phase=0 offset_us=49726065 err_us=967 valid_n=17 total_n=20 warmup_n=3
+07-12 18:27:22.829  3465  3465 I AnebProbe: UPLOAD scenario=s1_chat#0 idx=0 bytes=2048 chunk=2048 http=200 dur_ms=5.50 goodput_mbps=2.981 server_chunks=2 error=none
+07-12 18:27:37.890  3465  3465 I AnebProbe: STREAM scenario=s1_chat#0 stream=0 expected=600 events=600 reads=603 bytes=183232 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=19.98 error=none
+07-12 18:27:37.891  3465  3465 I AnebProbe: PARSE scenario=s1_chat#0 stream=0 parse_dur_us=83973 per_event_parse_us=139.96 events=600
+07-12 18:27:42.278  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=end phase=3 offset_us=49726213 err_us=969 valid_n=17 total_n=20 warmup_n=3
+07-12 18:27:42.310  3465  3465 I AnebProbe: SKEW scenario=s1_chat#0 start_offset_us=49726065 end_offset_us=49726213 drift_ppm=8.62 offset_suspect=false
+07-12 18:27:42.488  3465  3465 I AnebProbe: SCENARIO_KPI scenario=s1_chat#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=19.9785(lowconf) t2_ms=25.4916 t2_incl_ms=25.4916 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=3.0700 n2_ms=3.2190 u1_mbps=2.9806(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-12 18:27:42.488  3465  3465 I AnebProbe: SCENARIO_START scenario=s2_coding_agent#0 round=0 order_index=1
+07-12 18:27:46.766  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=start phase=0 offset_us=49726190 err_us=923 valid_n=17 total_n=20 warmup_n=3
+07-12 18:27:46.882  3465  3465 I AnebProbe: UPLOAD scenario=s2_coding_agent#0 idx=0 bytes=524288 chunk=65536 http=200 dur_ms=35.49 goodput_mbps=118.175 server_chunks=349 error=none
+07-12 18:27:46.883  3465  3465 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=3000
+07-12 18:27:58.933  3465  3465 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=0 expected=300 events=300 reads=302 bytes=88858 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.36 error=none
+07-12 18:27:58.934  3465  3465 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=0 parse_dur_us=23714 per_event_parse_us=79.05 events=300
+07-12 18:27:59.138  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=0 up_bytes=8192 total_ms=204.60 proc_nominal_ms=200 proc_actual_us=200922 http=200 error=none
+07-12 18:27:59.380  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=1 up_bytes=8192 total_ms=222.23 proc_nominal_ms=200 proc_actual_us=200406 http=200 error=none
+07-12 18:27:59.586  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=2 up_bytes=8192 total_ms=206.02 proc_nominal_ms=200 proc_actual_us=200214 http=200 error=none
+07-12 18:27:59.794  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=3 up_bytes=8192 total_ms=203.37 proc_nominal_ms=200 proc_actual_us=200562 http=200 error=none
+07-12 18:28:00.006  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=4 up_bytes=8192 total_ms=207.22 proc_nominal_ms=200 proc_actual_us=200062 http=200 error=none
+07-12 18:28:00.239  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=5 up_bytes=8192 total_ms=232.49 proc_nominal_ms=200 proc_actual_us=200489 http=200 error=none
+07-12 18:28:00.459  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=6 up_bytes=8192 total_ms=218.50 proc_nominal_ms=200 proc_actual_us=200261 http=200 error=none
+07-12 18:28:00.664  3465  3465 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=7 up_bytes=8192 total_ms=203.08 proc_nominal_ms=200 proc_actual_us=200630 http=200 error=none
+07-12 18:28:00.664  3465  3465 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=2000
+07-12 18:28:37.035  3465  3465 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=1 expected=800 events=800 reads=803 bytes=241132 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=0.78 error=none
+07-12 18:28:37.035  3465  3465 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=1 parse_dur_us=41795 per_event_parse_us=52.24 events=800
+07-12 18:28:40.940  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=end phase=7 offset_us=49726357 err_us=852 valid_n=17 total_n=20 warmup_n=3
+07-12 18:28:41.014  3465  3465 I AnebProbe: SKEW scenario=s2_coding_agent#0 start_offset_us=49726190 end_offset_us=49726357 drift_ppm=3.11 offset_suspect=false
+07-12 18:28:41.163  3465  3465 I AnebProbe: SCENARIO_KPI scenario=s2_coding_agent#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=0.7834(lowconf) t2_ms=10.5825 t2_incl_ms=10.5825 t3=0.0000 t3_incl=0.0565 t4=0.0000 t5_ms=748.1311 n1_ms=2.2560 n2_ms=2.6590 u1_mbps=118.1750(lowconf) u1_excl_mbps=90.7483(lowconf) u2_ms=32.0028 gaps=0 dup=0
+07-12 18:28:41.165  3465  3465 I AnebProbe: SCENARIO_START scenario=s3_multimodal#0 round=0 order_index=2
+07-12 18:28:45.753  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=start phase=0 offset_us=49726113 err_us=789 valid_n=17 total_n=20 warmup_n=3
+07-12 18:28:45.889  3465  3465 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=0 bytes=1048576 chunk=65536 http=200 dur_ms=107.66 goodput_mbps=77.915 server_chunks=650 error=none
+07-12 18:28:45.889  3465  3465 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:28:53.380  3465  3465 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=0 expected=200 events=200 reads=202 bytes=59237 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.44 error=none
+07-12 18:28:53.380  3465  3465 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=0 parse_dur_us=8439 per_event_parse_us=42.20 events=200
+07-12 18:28:53.552  3465  3465 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=1 bytes=1048576 chunk=65536 http=200 dur_ms=120.03 goodput_mbps=69.885 server_chunks=683 error=none
+07-12 18:28:53.557  3465  3465 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:29:01.085  3465  3465 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=1 expected=200 events=200 reads=202 bytes=60203 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=0.74 error=none
+07-12 18:29:01.087  3465  3465 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=1 parse_dur_us=11585 per_event_parse_us=57.93 events=200
+07-12 18:29:05.131  3465  3465 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=end phase=7 offset_us=49725547 err_us=795 valid_n=17 total_n=20 warmup_n=3
+07-12 18:29:05.132  3465  3465 I AnebProbe: SKEW scenario=s3_multimodal#0 start_offset_us=49726113 end_offset_us=49725547 drift_ppm=-29.86 offset_suspect=false
+07-12 18:29:05.190  3465  3465 I AnebProbe: SCENARIO_KPI scenario=s3_multimodal#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=0.7388(lowconf) t2_ms=25.5169 t2_incl_ms=25.5169 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=2.0150 n2_ms=1.3850 u1_mbps=69.8854(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-12 18:29:05.212  3465  3465 I AnebProbe: AQS_INPUT_MAP map=N1,N2<-S1.first_clock_sync;T1,T2,T3,T4,T5<-S2;U1<-S3.1MB_upload(incl_slow_start_into_AQS);U2<-S2.tool_loop
+07-12 18:29:05.213  3465  3465 I AnebProbe: AQS run_id=019f5795-6b91-760d-b555-1ee3cc678b64 score=97.9 low_confidence=true veto=false reason=none subs=T1:99.9,T2:98.4,T3:100.0,U1:94.4,U2:96.8,N1:98.5,N2:95.2
+07-12 18:29:05.251  3465  3465 I AnebProbe: REPORT http=200 bytes=5863 error=none
+07-12 18:29:05.255  3465  3465 I AnebProbe: DB_WRITE run_id=019f5795-6b91-760d-b555-1ee3cc678b64 scenarios=3 env_events_pending=0 radio_samples_pending=0
+07-12 18:29:05.255  3465  3465 I AnebProbe: RUN_END run_id=019f5795-6b91-760d-b555-1ee3cc678b64 status=completed
+--- app run 3 ---
+--------- beginning of main
+07-12 18:29:09.217  3630  3630 I AnebProbe: >>> RUN mode=quick transport=auto -> http://10.0.2.2:8443
+07-12 18:29:09.796  3630  3630 I AnebProbe: RUN_START run_id=019f5797-2006-7147-bc95-14c08091c72a mode=quick transport=auto server=http://10.0.2.2:8443 inject=none
+07-12 18:29:09.808  3630  3630 I AnebProbe: GUARD_OK metadata=private_dns_active=false;active_transports=cellular;active_validated=false;checked_at_nanos=766290126321
+07-12 18:29:10.085  3630  3630 I AnebProbe: PROFILES source=server versions=s1_chat@0.2.0;s2_coding_agent@0.2.0;s3_multimodal@0.2.0
+07-12 18:29:10.169  3630  3630 I AnebProbe: ORDER round=0 order=s1_chat,s2_coding_agent,s3_multimodal
+07-12 18:29:10.170  3630  3630 I AnebProbe: SCENARIO_START scenario=s1_chat#0 round=0 order_index=0
+07-12 18:29:14.992  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=start phase=0 offset_us=49726042 err_us=709 valid_n=17 total_n=20 warmup_n=3
+07-12 18:29:15.002  3630  3630 I AnebProbe: UPLOAD scenario=s1_chat#0 idx=0 bytes=2048 chunk=2048 http=200 dur_ms=2.22 goodput_mbps=7.365 server_chunks=2 error=none
+07-12 18:29:30.110  3630  3630 I AnebProbe: STREAM scenario=s1_chat#0 stream=0 expected=600 events=600 reads=603 bytes=183342 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=0.97 error=none
+07-12 18:29:30.114  3630  3630 I AnebProbe: PARSE scenario=s1_chat#0 stream=0 parse_dur_us=122658 per_event_parse_us=204.43 events=600
+07-12 18:29:33.954  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=end phase=3 offset_us=49726379 err_us=1334 valid_n=17 total_n=20 warmup_n=3
+07-12 18:29:34.046  3630  3630 I AnebProbe: SKEW scenario=s1_chat#0 start_offset_us=49726042 end_offset_us=49726379 drift_ppm=17.26 offset_suspect=false
+07-12 18:29:34.192  3630  3630 I AnebProbe: SCENARIO_KPI scenario=s1_chat#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=0.9701(lowconf) t2_ms=25.6019 t2_incl_ms=25.6019 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=2.2470 n2_ms=1.2910 u1_mbps=7.3653(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-12 18:29:34.194  3630  3630 I AnebProbe: SCENARIO_START scenario=s2_coding_agent#0 round=0 order_index=1
+07-12 18:29:38.313  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=start phase=0 offset_us=49726177 err_us=961 valid_n=17 total_n=20 warmup_n=3
+07-12 18:29:38.475  3630  3630 I AnebProbe: UPLOAD scenario=s2_coding_agent#0 idx=0 bytes=524288 chunk=65536 http=200 dur_ms=34.07 goodput_mbps=123.123 server_chunks=354 error=none
+07-12 18:29:38.476  3630  3630 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=3000
+07-12 18:29:50.521  3630  3630 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=0 expected=300 events=300 reads=302 bytes=88793 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=1.40 error=none
+07-12 18:29:50.522  3630  3630 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=0 parse_dur_us=18407 per_event_parse_us=61.36 events=300
+07-12 18:29:50.727  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=0 up_bytes=8192 total_ms=205.40 proc_nominal_ms=200 proc_actual_us=200361 http=200 error=none
+07-12 18:29:50.934  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=1 up_bytes=8192 total_ms=203.26 proc_nominal_ms=200 proc_actual_us=200488 http=200 error=none
+07-12 18:29:51.141  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=2 up_bytes=8192 total_ms=204.27 proc_nominal_ms=200 proc_actual_us=200603 http=200 error=none
+07-12 18:29:51.361  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=3 up_bytes=8192 total_ms=204.07 proc_nominal_ms=200 proc_actual_us=200626 http=200 error=none
+07-12 18:29:51.568  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=4 up_bytes=8192 total_ms=205.30 proc_nominal_ms=200 proc_actual_us=200214 http=200 error=none
+07-12 18:29:51.773  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=5 up_bytes=8192 total_ms=204.38 proc_nominal_ms=200 proc_actual_us=200203 http=200 error=none
+07-12 18:29:51.991  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=6 up_bytes=8192 total_ms=216.24 proc_nominal_ms=200 proc_actual_us=200578 http=200 error=none
+07-12 18:29:52.197  3630  3630 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=7 up_bytes=8192 total_ms=205.68 proc_nominal_ms=200 proc_actual_us=200870 http=200 error=none
+07-12 18:29:52.197  3630  3630 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=2000
+07-12 18:30:28.568  3630  3630 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=1 expected=800 events=800 reads=803 bytes=241005 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=0.94 error=none
+07-12 18:30:28.569  3630  3630 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=1 parse_dur_us=46147 per_event_parse_us=57.68 events=800
+07-12 18:30:32.984  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=end phase=7 offset_us=49725581 err_us=799 valid_n=17 total_n=20 warmup_n=3
+07-12 18:30:33.039  3630  3630 I AnebProbe: SKEW scenario=s2_coding_agent#0 start_offset_us=49726177 end_offset_us=49725581 drift_ppm=-11.02 offset_suspect=false
+07-12 18:30:33.178  3630  3630 I AnebProbe: SCENARIO_KPI scenario=s2_coding_agent#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=0.9394(lowconf) t2_ms=10.7017 t2_incl_ms=10.7017 t3=0.0000 t3_incl=0.0565 t4=0.0000 t5_ms=747.9851 n1_ms=2.6410 n2_ms=2.8540 u1_mbps=123.1234(lowconf) u1_excl_mbps=110.1649(lowconf) u2_ms=15.6597 gaps=0 dup=0
+07-12 18:30:33.179  3630  3630 I AnebProbe: SCENARIO_START scenario=s3_multimodal#0 round=0 order_index=2
+07-12 18:30:37.745  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=start phase=0 offset_us=49725391 err_us=856 valid_n=17 total_n=20 warmup_n=3
+07-12 18:30:37.854  3630  3630 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=0 bytes=1048576 chunk=65536 http=200 dur_ms=87.57 goodput_mbps=95.788 server_chunks=670 error=none
+07-12 18:30:37.855  3630  3630 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:30:45.347  3630  3630 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=0 expected=200 events=200 reads=202 bytes=59246 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.30 error=none
+07-12 18:30:45.349  3630  3630 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=0 parse_dur_us=8487 per_event_parse_us=42.44 events=200
+07-12 18:30:45.501  3630  3630 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=1 bytes=1048576 chunk=65536 http=200 dur_ms=98.77 goodput_mbps=84.935 server_chunks=671 error=none
+07-12 18:30:45.502  3630  3630 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-12 18:30:52.992  3630  3630 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=1 expected=200 events=200 reads=202 bytes=60189 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.06 error=none
+07-12 18:30:52.994  3630  3630 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=1 parse_dur_us=9311 per_event_parse_us=46.56 events=200
+07-12 18:30:57.287  3630  3630 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=end phase=7 offset_us=49726267 err_us=827 valid_n=17 total_n=20 warmup_n=3
+07-12 18:30:57.292  3630  3630 I AnebProbe: SKEW scenario=s3_multimodal#0 start_offset_us=49725391 end_offset_us=49726267 drift_ppm=40.18 offset_suspect=false
+07-12 18:30:57.380  3630  3630 I AnebProbe: SCENARIO_KPI scenario=s3_multimodal#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=2.0636(lowconf) t2_ms=25.5097 t2_incl_ms=25.5097 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=1.9860 n2_ms=2.3700 u1_mbps=84.9348(lowconf) u1_excl_mbps=80.4186(lowconf) u2_ms=null gaps=0 dup=0
+07-12 18:30:57.382  3630  3630 I AnebProbe: AQS_INPUT_MAP map=N1,N2<-S1.first_clock_sync;T1,T2,T3,T4,T5<-S2;U1<-S3.1MB_upload(incl_slow_start_into_AQS);U2<-S2.tool_loop
+07-12 18:30:57.383  3630  3630 I AnebProbe: AQS run_id=019f5797-2006-7147-bc95-14c08091c72a score=98.9 low_confidence=true veto=false reason=none subs=T1:99.9,T2:98.4,T3:100.0,U1:97.2,U2:98.4,N1:98.9,N2:98.1
+07-12 18:30:57.407  3630  3630 I AnebProbe: REPORT http=200 bytes=5842 error=none
+07-12 18:30:57.434  3630  3630 I AnebProbe: DB_WRITE run_id=019f5797-2006-7147-bc95-14c08091c72a scenarios=3 env_events_pending=0 radio_samples_pending=0
+07-12 18:30:57.435  3630  3630 I AnebProbe: RUN_END run_id=019f5797-2006-7147-bc95-14c08091c72a status=completed

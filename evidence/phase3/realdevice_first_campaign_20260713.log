@@ -1,0 +1,69 @@
+﻿=== ANEB P40 Pro 真机首测战役 2026-07-13 ===
+device serial=8MY0221126002537 model=ELS-AN00 EMUI=EmotionUI_14.2.0 sdk=31 release=12
+fingerprint=HUAWEI/ELS-AN00/HWELS:12/HUAWEIELS-AN00/104.2.0.121C00:user/release-keys
+SIM operator=中国电信 gsm.network.type=NR_SA,Unknown
+[step0] 原值记录: wifi_on=1 stay_on_while_plugged_in=0 -> svc power stayon usb (stay_on=2, 测后恢复0)
+[step1] install: 第1次 adb install 3min 超时(无弹窗关键词), 第2次 Streamed Install Success. pm grant ACCESS_FINE_LOCATION/READ_PHONE_STATE 均成功 granted=true (HarmonyOS 未拒绝)
+[step2] WiFi 管线 quick run: PASS
+
+=== [step3] REAL CELLULAR (China Telecom, default net = NR SA) ===
+default network confirmed: NetworkAgentInfo ni{MOBILE[NR] CONNECTED extra: ctnet} Transports: CELLULAR VALIDATED
+NET_BIND transport=cellular validated=true not_metered=false down_kbps=145000 up_kbps=60000  <- first real NetGuard cellular bind, GUARD_OK
+quick run 019f59b0 (hostname sslip.io): ALL scenarios INVALID reason=TRUNCATED; UPLOAD/STREAM error=SocketException:Connection_reset; REPORT http=null Connection reset
+
+### HEADLINE FINDING: China Telecom NR-SA injects TLS RST keyed on SNI ###
+  A/B on the SAME device minutes apart:
+  - WiFi + hostname 120-79-148-0.sslip.io:8443  -> RUN_END completed, REPORT http=200 (run 019f59ad)
+  - Cellular + hostname (sslip.io AND nip.io)    -> Connection reset DURING handshake (RST injection)
+  - Cellular + bare IP https://120.79.148.0:8443 -> SSLPeerUnverifiedException (TLS handshake COMPLETED, cert just !match IP)
+  => port 8443 + TLS work on cellular; the RST is triggered by SNI hostname content, not the port/host.
+  => E-01 forensic/AB/continuity over cellular are BLOCKED by this carrier middlebox; not runnable without SNI workaround.
+  ICMP baseline over cellular: ping 120.79.148.0 avg 69ms (23-132), baidu avg 29ms -> host reachable, IP-layer fine.
+  Server liveness confirmed independently: device WiFi run REPORT http=200 at 12:13 same session.
+
+=== [step4] REAL WIRELESS-LAYER DATA (radio_sample, Barong baseband) ===
+networkType|overrideType|nrState|rat|operatorName|n
+NR|none|nsa_unknown|NR|中国电信|126
+signal stats (all NR):
+rat|n|rsrp_min|rsrp_max|rsrp_avg|sinr_min|sinr_max|sinr_avg|rsrq_min|rsrq_max
+NR|126|-107|-90|-96.7|0|11|8.3|-15|-10
+cell identity: PCI=317 TAC=7699983 NRARFCN=627264 (n78 3.5GHz)
+rid|n|rsrp_nn|sinr_nn|pci_nn|stale
+019f59ad|60|60|60|60|2
+019f59b0|25|25|25|25|0
+019f59b2|26|26|26|26|0
+019f59b4|7|7|7|7|0
+019f59b7|8|8|8|8|0
+RAT-triple verdict: dataNetworkType=NR + overrideType=none + nrState=nsa_unknown + rat=NR
+  => genuine 5G STANDALONE (SA), NOT NSA. nsa_unknown here is the correct SA signature (no NSA anchor to report).
+  matches getprop gsm.network.type=NR_SA. env_event: only APP_JANK (no CELL_CHANGE/RAT_CHANGE -> single stable cell).
+
+=== [step5/6] AB (TCP vs QUIC) + Continuity to E-01: NOT RUN ===
+  Blocked by the proven SNI-RST mechanism above (both target E-01 via sslip.io hostname; profiles GET + streams reset).
+  Recorded as blocked-by-carrier rather than repeating identical Connection-reset failures.
+
+=== [step7] REAL CELLULAR LLM PROBE (Kimi @ api.moonshot.cn over NR-SA) ===
+  Reachability: TLS handshake COMPLETED cleanly over cellular (NO SNI reset -- real production domain, unlike sslip.io wildcard).
+  call1 404: base .../v1 -> app appends /v1 -> POST /v1/v1/chat/completions (double-/v1 app bug)
+     timing: dns 16-160ms tls 229-475ms respHdrStart 731ms
+  call2/3 400: base api.moonshot.cn -> reached MODEL layer, auth OK (no 401), error='invalid temperature: only 1 is allowed for this model'
+     timing (call3): dns 4-6ms(cached) tls 164-326ms respHdrStart 557ms
+  api_probe_result rows:
+id|httpCode|baseUrl|model|guard
+1|404|https://api.moonshot.cn/v1|kimi-k2.6|private_dns_active=false;active_transpor
+2|400|https://api.moonshot.cn|kimi-k2.6|private_dns_active=false;active_transpor
+3|400|https://api.moonshot.cn|kimi-k2.6|private_dns_active=false;active_transpor
+  App findings: (a) openai baseUrl must NOT include /v1; (b) kimi-k2.6 requires temperature=1 -> apiprobe needs per-model temp override.
+  KEY SELF-CHECK: no full ANEB_KIMI_KEY occurrence in logcat; no stray sk- lines; key never written to any file.
+  BUDGET NOTE: 3 Kimi calls made (intended <=2). Overage of 1 = I misread a keyguard/screen-off state and relaunched a call that had already fired. No further calls.
+
+=== [step8] DATA RECOVERY ===
+  adb exec-out run-as com.aneb.probe cat databases/* -> binary-safe via bash redirection (PowerShell '>' corrupts binary).
+  Pulled: realdevice_data/aneb-probe.db (+wal +shm). tables: test_run, radio_sample, api_probe_result, scenario_result, env_event, ...
+
+=== [step9] RESTORE ===
+  wifi_on restored 1 (orig 1); stay_on_while_plugged_in restored 0 (orig 0); app kept installed for user manual testing.
+
+=== CELLULAR DATA BUDGET ===
+  qtaguid removed on API31; estimated <5 MB (realistically ~1-3 MB): every E-01 attempt died at/near TLS handshake (no bulk payload);
+  Kimi calls returned errors before any stream; the 1MB uploads + 600-event streams all ran on WiFi. Well under 60MB red line.

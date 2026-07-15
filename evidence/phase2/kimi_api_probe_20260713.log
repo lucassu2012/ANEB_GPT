@@ -1,0 +1,40 @@
+# E-03 Kimi 真实 LLM API 探针实测 — 证据日志
+日期: 2026-07-13
+状态: BLOCKED — 账户余额不足（HTTP 429, exceeded_current_quota_error），实测未能进入 KPI 测量阶段
+
+## 1. 端点确认（platform.kimi.com 官方文档，WebFetch 于 2026-07-13）
+- Base URL: https://api.moonshot.cn/v1（文档确认，与历史端点一致）
+- 端点: POST /v1/chat/completions
+- 鉴权: Authorization: Bearer <key>
+- 兼容性: OpenAI Chat Completions 兼容（匹配 App 侧 OpenAiSseAdapter / provider=openai）
+- 流式: "stream": true → SSE "data: " 块 + "data: [DONE]" 终止符
+- 可用模型（文档）: kimi-k2.6 / kimi-k2.5 / kimi-k2.7-code(-highspeed) / moonshot-v1-8k|32k|128k|auto
+- 输出限长参数: max_completion_tokens（OpenAI 兼容 max_tokens 亦被网关接受，见下方请求未报参数错误）
+
+## 2. PC 侧最小验证（直连，无代理，curl --noproxy '*'，key 经临时 header 文件注入，用后已删）
+共 2 次调用（预算 ≤6，实际用 2）：
+
+### 调用 1
+- 请求: model=kimi-k2.6, messages=[{user:"用一句话介绍你自己"}], max_tokens=64, stream=true
+- 结果: HTTP 429, TTFB=0.332s（连接级首字节，非 TTFT）
+- 响应体 (error.type=exceeded_current_quota_error):
+  "Your account org-b840****fd9d <ak-f9y4****(已截断)> is suspended due to
+   insufficient balance, please recharge your account or check your plan
+   and billing details"
+
+### 调用 2（换模型排除模型级配额）
+- 请求: model=moonshot-v1-8k, max_tokens=16, stream=true
+- 结果: HTTP 429，同一账户级错误 → 确认为账户余额问题，非模型/参数问题
+
+## 3. 结论
+- key 有效性: 有效（sk- 前缀，服务端完成鉴权并返回了归属组织标识；非 401）
+- 阻塞原因: Kimi/Moonshot 账户余额不足被暂停，需用户充值后重测
+- App 侧探针（AVD aneb-kimi）未执行: 在账户恢复前所有调用必然 429，
+  为控制花费与保留调用预算（≤6 次）主动中止；充值后按原步骤 3-4 复测即可
+- TTFT/ITL: 无有效数据（未获得 200 流式响应）
+
+## 4. key 卫生自查
+- key 未出现在本文件、任何日志、git 文件中（落盘前程序化比对 resp_contains_full_key=False）
+- 服务端返回的 ak- 标识经比对不是 key 子串，本文件中仍作截断处理
+- curl 鉴权经 scratchpad 临时 header 文件注入（非命令行、非环境回显），用后即删
+- App intent (--es apiprobe_key) 未使用（App 阶段未执行）

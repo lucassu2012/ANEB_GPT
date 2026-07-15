@@ -1,0 +1,61 @@
+# ANEB Probe — 版本目录（供应链钉死：全部精确版本，禁止 +/动态版本/区间）
+# 兼容性矩阵：AGP 8.5.2 需 Gradle 8.7+（wrapper 已钉 8.7）；Kotlin 2.0.21 配套
+# Compose 编译器插件（org.jetbrains.kotlin.plugin.compose，与 Kotlin 同版本）；
+# KSP 2.0.21-1.0.28 与 Kotlin 2.0.21 严格对应；Room 2.6.1 支持 KSP2。
+
+[versions]
+agp = "8.5.2"
+kotlin = "2.0.21"
+ksp = "2.0.21-1.0.28"
+coreKtx = "1.13.1"
+lifecycleRuntimeKtx = "2.8.6"
+activityCompose = "1.9.2"
+composeBom = "2024.09.03"
+okhttp = "4.12.0"
+room = "2.6.1"
+kotlinxSerializationJson = "1.7.3"
+kotlinxCoroutines = "1.8.1"
+junit = "4.13.2"
+# 阶段 2 API 探针：key 存储（EncryptedSharedPreferences）。1.1.0-alpha06 为该库最新
+# 发布线（1.0.0 stable 依赖过旧 Tink 且缺 MasterKey API）；精确钉死，禁动态版本。
+securityCrypto = "1.1.0-alpha06"
+# 阶段 2 P2-C05 A/B（D-17/D-19）：Cronet 全量内嵌版（含 QUIC/h3 网络栈）。
+# 143.7445.0 为 Google Maven org.chromium.net 组当前最新发布（2025 恢复发布线，
+# 上一版 141.7340.3）；精确钉死。APK 每 ABI 增大数 MB 属预期（参考项目 ADR-001
+# 同款取舍：可复现的自带网络栈 > 体积）。
+cronetEmbedded = "143.7445.0"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+
+room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+
+junit = { module = "junit:junit", version.ref = "junit" }
+
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
+
+cronet-embedded = { module = "org.chromium.net:cronet-embedded", version.ref = "cronetEmbedded" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

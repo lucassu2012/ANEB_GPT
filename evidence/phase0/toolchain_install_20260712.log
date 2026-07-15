@@ -1,0 +1,53 @@
+﻿=== ANEB Phase0 toolchain install evidence (2026-07-12 17:04:14) ===
+
+--- [1] JDK 17 (Temurin zip -> E:\tools\jdk-17.0.19+10) ---
+openjdk version "17.0.19" 2026-04-21
+OpenJDK Runtime Environment Temurin-17.0.19+10 (build 17.0.19+10)
+OpenJDK 64-Bit Server VM Temurin-17.0.19+10 (build 17.0.19+10, mixed mode, sharing)
+
+--- [2] Gradle 8.7 zip supply-chain check ---
+actual  = 544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d
+pinned  = 544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d (app/gradle/wrapper/gradle-wrapper.properties distributionSha256Sum)
+match   = True
+
+--- [3] sdkmanager --list_installed ---
+Loading package information...                                                  
+Loading local repository...                                                     
+
+Installed packages:
+  Path                 | Version | Description                | Location            
+  -------              | ------- | -------                    | -------             
+  build-tools;34.0.0   | 34.0.0  | Android SDK Build-Tools 34 | build-tools\34.0.0  
+  build-tools;35.0.0   | 35.0.0  | Android SDK Build-Tools 35 | build-tools\35.0.0  
+  platform-tools       | 37.0.0  | Android SDK Platform-Tools | platform-tools      
+  platforms;android-35 | 2       | Android SDK Platform 35    | platforms\android-35
+
+
+--- [4] :probe:assembleDebug re-verification (2026-07-12, this session) ---
+Command: .\gradlew.bat :probe:assembleDebug --no-daemon
+Tail:
+> Task :probe:packageDebug UP-TO-DATE
+> Task :probe:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :probe:assembleDebug UP-TO-DATE
+BUILD SUCCESSFUL in 19s
+38 actionable tasks: 38 up-to-date
+(首次完整构建见 build_attempt3.log: BUILD SUCCESSFUL in 3m 13s, 38 executed)
+
+APK: E:\C Project\ANEB\app\probe\build\outputs\apk\debug\probe-debug.apk
+Size: 26478554 bytes (25.25 MB)
+Built: 07/12/2026 17:02:33
+
+--- [5] Env vars (User scope, verified) ---
+JAVA_HOME=E:\tools\jdk-17.0.19+10
+ANDROID_HOME=E:\tools\android-sdk
+User PATH (REG_EXPAND_SZ) appended: %JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\cmdline-tools\latest\bin
+
+--- [6] Emulator + system image (IN PROGRESS at session cutoff) ---
+sdkmanager "emulator" "system-images;android-35;google_apis;x86_64" restarted this session
+(prior session interrupted at ~14%); at forced finalization download was at ~11%.
+emulator.exe NOT yet present; system-images\ NOT yet present.
+AVDs from prior session exist but lack system image: aneb-api35, aneb-api36.
+AVD "aneb" (pixel_7) NOT created — requires system image install to complete.
+Re-run to finish:
+  sdkmanager "emulator" "system-images;android-35;google_apis;x86_64"
+  avdmanager create avd -n aneb -k "system-images;android-35;google_apis;x86_64" --device pixel_7 --force

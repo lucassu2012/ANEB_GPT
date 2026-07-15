@@ -1,0 +1,15 @@
+﻿verify_all run at 20260712-103217
+repo: E:\C Project\ANEB
+go: C:\Program Files\Go\bin\go.exe
+--- server-vet (exit 0) ---
+
+PASS  server-vet  go vet ./...
+--- server-build (exit 0) ---
+
+PASS  server-build  go build ./...
+--- server-test (exit 0) ---
+ok  	aneb-server	1.664s
+
+PASS  server-test  go test -count=1 ./...
+PASS  profiles-valid  3 profiles ok
+NOT_EXECUTED  app-assembleDebug  missing: JDK, AndroidSDK, gradle-wrapper.jar

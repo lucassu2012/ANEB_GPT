@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 权限边界见设计文档 §9.1：研究自用工具，R 组无线层归因需要
+         READ_PHONE_STATE + ACCESS_FINE_LOCATION；不采集 IMSI/用户内容。
+         GPS 坐标仅在路测开关（默认关）显式开启时以 1Hz 采集，且只入本地 Room 与
+         本地导出——绝不进 /results 上报体（阶段3 路测模式，单测锚定） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- NetGuard.acquireNetwork 的 ConnectivityManager.requestNetwork 需要（normal 权限，R-01/R-14） -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:supportsRtl="true">
+
+        <!-- 阶段 0：测试直接跑在 Activity 的 lifecycleScope；
+             TODO 阶段 1：迁到 dataSync 前台 Service（防息屏/切后台被杀，设计文档 §5） -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

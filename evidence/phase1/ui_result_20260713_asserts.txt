@@ -1,0 +1,53 @@
+P1-C07 结果页/历史页/导出 — 模拟器截图验收记录（2026-07-13）
+=================================================================
+
+环境
+----
+- AVD: aneb（Android emulator，transport=AUTO）
+- 服务端: 本机 aneb-server.exe :8444（8443 被另一会话的 aneb-server-cal 占用，未触碰）
+- APK: :probe:assembleDebug（debug，明文经 debug network_security_config）
+- 单测: :probe:testDebugUnitTest 全绿（123 tests / 0 failures，含新增 ui.ResultFormatTest 11 项）
+
+验收 run
+--------
+- 手动 quick run: run_id=019f57ce-63d1-7cda-980b-df47279617de
+  AQS score=98.3→98.4 low_confidence=true veto=false status=completed REPORT http=200
+- autorun quick run: run_id=019f57dd-a06c-7258-a13c-4df901ddbd0c status=completed
+
+uiautomator dump 断言（全部 True）
+---------------------------------
+结果页（run 结束自动跳转 + 从历史页进入两条路径均验证）:
+- '测试结果' / '98.4'（AQS 头条大数字）/ 'AQS 优'（分级）
+- '低置信 low_confidence'（AQS 头条低置信标注 + per-KPI 标注，5.4 展示边界）
+- 'KPI 总表'（AQS 输入映射 N←S1 / T,U2←S2 / U1←S3）
+- '[S2] T2_incl_coalesced'（T2 双口径并列）/ '[S3] U1'（U1 含/剔慢启动并列）
+- 页脚: '测量对象为终端至指定仿真节点的应用层路径，非无线层/运营商全网结论'
+- 页脚版本: 'kpi_set=agent-qoe-kpi-v0.2 aqs=aqs-v0.1'
+历史页:
+- '测试历史' / '98.4' + '98.3' 两条记录 / '低置信' / 'status=completed' / 'quick/auto'
+- 点击记录 → 结果页按 runId 渲染 → '← 返回' 回历史页
+
+导出（Downloads / MediaStore，无存储权限）
+------------------------------------------
+- EXPORT run_id=019f57ce-... format=json file=aneb_019f57ce_20260712_193457.json bytes=5818 status=ok
+- EXPORT run_id=019f57ce-... format=csv  file=aneb_019f57ce_20260712_193501.csv  bytes=5889 status=ok
+- JSON 与上报体严格同构（report_body 原样落盘）：含 claim_scope=application_end_to_end_to_probe_node、
+  kpi_set/aqs_version/profile_versions/schema_version、3 scenarios 全量 KPI + itl_histogram
+- CSV 场景×KPI 展平：37 行 = 表头 + 3 场景 × 12 KPI（含双口径并列项），null 值空串（绝不 0）
+
+autorun 不跳结果页（要求 4）
+----------------------------
+- autorun run 结束后 dump: still_on_home=True，Run 按钮复位（logcat 自动化流程不受影响）
+
+截图
+----
+- ui_result_20260713_result_top.png     结果页头部（AQS 大数字+低置信+KPI 总表）
+- ui_result_20260713_result_footer.png  结果页尾部（场景卡片+导出+claim scope 页脚）
+- ui_result_20260713_history.png        历史页列表
+
+附带修复（联调发现，非测量语义）
+--------------------------------
+- TestEngine: RadioCollector.shareIn 的共享协程挂在 channelFlow scope 导致 run flow
+  永不完成（collect 端挂死、Run 按钮永远 Running）——收进可取消的 SupervisorJob，
+  finally 收尸；日志 KEY 与测量逻辑不变。
+- MainActivity: 内容避让系统栏（safeDrawingPadding），否则顶部按钮压状态栏点击被系统吃掉。

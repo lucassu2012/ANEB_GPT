@@ -1,0 +1,118 @@
+# P3-C05 检测器缺陷修复取证：丢包重传批化误报 middlebox_suspect → TCP_INFO retrans 共变量
+
+日期: 2026-07-13（宿主 09:4x–09:5x；guest logcat 时间轴 07-13 01:51–01:57，guest 时区不同不影响相对时序）
+执行: Claude Code（P3-C05 修复子代理）
+缺陷来源: evidence/phase3/netem_experiments_20260713.md 断言 3——netem 100ms/1%（纯时延+丢包，
+无任何缓冲中间盒）下 3/6 场景 BUFFERING attribution=middlebox_suspect 误报；根因为丢包重传
+造成的到达批化与 nginx proxy_buffering 批化残差签名同形。账本迭代方向：引入 TCP_INFO
+重传共变量。R-05 红线不变：归因只作标注，affects_validity=false，不进 validity/分数。
+
+## 1. 修复内容
+
+服务端（Go，仅标准库，无新第三方依赖——手写 getsockopt syscall，不引 x/sys，
+故无需 DECISION_LOG 依赖条目）:
+- server/tcpinfo.go：http.Server.ConnContext 把底层连接塞进每请求 context；
+  connTotalRetrans() 解包（tls.Conn→NetConn）后读 TCP_INFO。
+- server/tcpinfo_linux.go：getsockopt(IPPROTO_TCP, TCP_INFO) 取 tcpi_total_retrans
+  （struct tcp_info 稳定前缀布局，ss/iproute2 同款兼容用法）。
+- server/tcpinfo_other.go：非 Linux 恒 n/a（ok=false）。
+- server/handlers_stream.go：summary event 增 "retrans_total":N（additive）；n/a 时
+  字段整体缺省，绝不写 0 顶替。
+- server/main.go：srv.ConnContext=connContext（h3/QUIC 无 TCP_INFO，天然 n/a）。
+- 单测 server/tcpinfo_test.go ×4：无 ConnContext→n/a、平台合同（linux 有字段/非 linux
+  必缺省）、httptest 环境零回归锚点、非 syscall.Conn 防御。
+
+客户端（Kotlin）:
+- SseReader.kt：SseStreamResult.summaryRetransTotal 透传 summary 的 retrans_total
+  （缺失→null，R-10）。
+- BufferingWiring.kt：retransRate(streams) = max(各流 retrans_total) / Σ(带数据流事件数)
+  （tcpi_total_retrans 为连接累计值，场景内多流复用同连接时 max=连接累计真值；
+  换连接时低估→保守回退 MIDDLEBOX 现状，绝不高估重传）；无数据→null。
+- BufferingDetector.kt：analyze 新可选参数 retransRate（缺省 null=行为与引入前完全
+  一致，零回归合同）；新枚举 RETRANS_SUSPECT（additive）；归因逻辑只改写"原判
+  MIDDLEBOX_SUSPECT"的两个分支（radioGood / enoughBatches），retransRate >
+  RETRANS_RATE_SIGNIFICANT 时改判 RETRANS_SUSPECT；R-05 弱信号红线 / 空口网格 /
+  DEVICE_SIDE / INDETERMINATE / NONE 分支一律不触碰；retransRate 原始值随
+  BufferingReport 透出（供标定重加权）。
+- TestEngine.kt：analyzeBuffering 接线 retransRate；BUFFERING 日志行增 retrans_rate=。
+- DB/上报体不动（attribution 走既有字符串列，additive 枚举值直接流通）。
+
+## 2. 显著线标定（账本先验 0.02 → 实测校准 0.002）
+
+账本先验建议 >0.02。落地前预检（本容器 netem 100ms/1%，宿主 curl 直拉
+/stream?tokens=600&rate_tps=60，均匀 pacing ≈ 1 event/段）:
+- 实测 retrans_total=5 / 600 events ≈ 0.008——loss 1% 的事件级重传率量级为
+  ~0.005–0.012（见 §4 六场景实测 0.0025–0.0117），账本先验 0.02 会漏放行**全部**
+  真实丢包批化样本（复验必然仍判 middlebox，修复失效）。
+- 区分对象是物理零点：无丢包干净路径 / 纯中间盒缓冲路径（nginx 夹具）retrans ≡ 0。
+  显著线只需压过零星散粒重传（quick 场景 ~600 事件下 0.002 ≈ 至少 2 个重传段）。
+- 取 RETRANS_RATE_SIGNIFICANT=0.002（experimental），居"干净零点"与"1% loss 实测
+  0.0025–0.0117"之间；S3 实测下界 0.0025 距线较近，真实弱网样本回流后与其余阈值
+  一并重标定。
+
+## 3. 复验环境（与原实验同构隔离方案，共用资源红线合规）
+
+- 容器: docker run -d --name aneb-netem2 --cap-add NET_ADMIN -p 127.0.0.1:18447:8443
+  alpine:latest；apk add iproute2 curl；netem 仅存在于容器自身 netns eth0（egress），
+  宿主与其他容器零影响。
+- 服务端: 修复后代码 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build（11,959,740 bytes，
+  产物在 %TEMP% 随清理删除）；/aneb-server -addr :8443 -profiles /profiles -data /data
+  （plaintext dev 模式，与原实验同口径）；profiles s1/s2/s3 @0.2.0 加载一致。
+- netem: tc qdisc replace dev eth0 root netem delay 100ms loss 1%（qdisc 8003，
+  与原实验一注入组同参数；两次 run 之间与结束时核对 qdisc 均在位）。
+- 冒烟: 宿主 curl 30 token → summary 出现 "retrans_total":0（Linux 正向路径打通）。
+- 客户端: 专属 AVD aneb-p3d（android-35 google_apis x86_64, pixel_6, port 5596,
+  emulator-5596）；启动前清空全部 proxy 环境变量 + settings put global http_proxy :0
+  （D-16 直连红线）；probe-debug.apk 以修复后代码 assembleDebug。
+- 驱动: am start -S -n com.aneb.probe/.ui.MainActivity --es server "http://10.0.2.2:18447"
+  --ez autorun true --es mode quick。
+
+## 4. 复验结果（quick run ×2，六场景）
+
+run1 = 019f592c-4c0a-73ed-8e99-e8affe66cece（AQS 86.1, REPORT http=200 bytes=9003）
+run2 = 019f592e-fde8-764c-bd9c-ed48636fbc85（AQS 86.9, REPORT http=200 bytes=8990）
+服务端 /data/results/20260713.jsonl 共 2 行，与两 run 一一对应（本容器端口无并行干扰）。
+
+BUFFERING 逐场景原文（logcat）:
+run1:
+  BUFFERING scenario=s1_chat#0 score=0.239 attribution=none samples=599 sawtooth=0.090 near_zero=0.065 lag1=-0.063 batch_count=13 best_grid_us=null jank_overlap=0.000 retrans_rate=0.0117 affects_validity=false
+  BUFFERING scenario=s2_coding_agent#0 score=0.190 attribution=none samples=1098 sawtooth=0.148 near_zero=0.119 lag1=-0.299 batch_count=43 best_grid_us=null jank_overlap=0.023 retrans_rate=0.0082 affects_validity=false
+  BUFFERING scenario=s3_multimodal#0 score=0.213 attribution=none samples=398 sawtooth=0.035 near_zero=0.025 lag1=-0.029 batch_count=2 best_grid_us=null jank_overlap=0.000 retrans_rate=0.0050 affects_validity=false
+run2:
+  BUFFERING scenario=s1_chat#0 score=0.222 attribution=none samples=599 sawtooth=0.047 near_zero=0.040 lag1=-0.034 batch_count=6 best_grid_us=null jank_overlap=0.000 retrans_rate=0.0067 affects_validity=false
+  BUFFERING scenario=s2_coding_agent#0 score=0.338 attribution=retrans_suspect samples=1098 sawtooth=0.202 near_zero=0.153 lag1=-0.023 batch_count=57 best_grid_us=null jank_overlap=0.000 retrans_rate=0.0109 affects_validity=false
+  BUFFERING scenario=s3_multimodal#0 score=0.194 attribution=none samples=398 sawtooth=0.015 near_zero=0.013 lag1=-0.044 batch_count=1 best_grid_us=null jank_overlap=0.000 retrans_rate=0.0025 affects_validity=false
+
+**断言（BUFFERING attribution 不再是 middlebox_suspect）——判定: PASS**
+- 6/6 场景 0 个 middlebox_suspect（原实验同参数下为 3/6 误报）。
+- 5 场景 score 低于活跃线（0.190–0.239）→ none；1 场景（run2 S2，score=0.338、
+  batch_count=57，与原误报 S2r1 0.410/batch 75 同形态）过活跃线且 retrans_rate=0.0109
+  显著 → **retrans_suspect**——误报分支被共变量正确改写（正向证据，非仅侥幸低分）。
+- retrans 共变量全部有值（0.0025–0.0117，服务端 Linux TCP_INFO 正向路径全程工作）；
+  若按账本先验 0.02，run2 S2（0.0109）仍会误判 middlebox——证实 §2 校准必要。
+- 弱网幸存核对: 6/6 场景 validity=VALID_LOW_CONFIDENCE，invalid_reasons=none，
+  0 INVALID；REPORT 2/2 http=200（R-05/R-06 不变，快测样本量门槛的既定 lc 语义）。
+- 附带观测: 6/6 场景 SKEW offset_suspect=true（drift +129～+141ppm）——本 AVD 实例
+  时钟漂移特性（同向恒定），与原实验 aneb-p3b（−37～+68ppm）个体差异；守卫如实
+  标注、不影响 validity，与本修复无关。
+
+**对照（真实中间盒签名不受影响）——判定: PASS**
+- CalibrationFixtureTest（真实 nginx proxy_buffering+gzip 夹具，无 retrans 数据）:
+  nginx_run1 score=0.9008 / nginx_run2 score=0.9007，attribution 均 MIDDLEBOX_SUSPECT
+  （夹具无共变量→null→行为与引入前逐位一致）。
+- 中间盒场景带干净 retrans（0/0.001/恰 0.002）单测：仍判 MIDDLEBOX_SUSPECT。
+
+## 5. 测试与构建
+
+- :probe:testDebugUnitTest 全绿（含新增 17 个：RetransCovariateTest ×9、
+  BufferingWiringTest retrans 聚合 ×4、SseSummaryRetransTest ×4；既有
+  BufferingDetectorTest 25 / CalibrationFixtureTest 2 零改动零回归）。
+- go vet ./... + go test ./... -count=1 全绿（Windows 走 n/a 分支）；
+  GOOS=linux go vet + build 通过；Linux 正向语义由本容器复验覆盖
+  （冒烟 retrans_total:0 + 六场景 retrans_rate 全有值）。
+
+## 6. 清理
+
+- docker rm -f aneb-netem2（容器连同 netns/qdisc/数据整体销毁；宿主 18447 释放）
+- adb -s emulator-5596 emu kill + avdmanager delete avd -n aneb-p3d
+- 无 E-01 触碰、无宿主/其他容器网络配置变更；Linux 二进制与 logcat 临时件在 %TEMP%。

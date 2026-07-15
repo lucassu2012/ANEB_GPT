@@ -1,0 +1,16 @@
+{
+  "profile_id": "s1_chat",
+  "version": "0.2.0",
+  "kpi_set": "agent-qoe-kpi-v0.2",
+  "description": "对话流（对照组）：小 prompt 上行 + 稳态 token 流下行，对标普通 chat 应用",
+  "est_duration_s": 60,
+  "phases": [
+    { "type": "clock_sync", "samples": 20 },
+    { "type": "upload_burst", "bytes": 2048, "chunk_kb": 2 },
+    { "type": "token_stream", "tokens": 600, "rate_tps": 40,
+      "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
+      "burst": null,
+      "seed": 1001 },
+    { "type": "clock_sync", "samples": 20 }
+  ]
+}

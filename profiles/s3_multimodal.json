@@ -1,0 +1,23 @@
+{
+  "profile_id": "s3_multimodal",
+  "version": "0.2.0",
+  "kpi_set": "agent-qoe-kpi-v0.2",
+  "description": "多模态流：周期性大图上行 + token 流下行交替，对标截图转代码类视觉 agentic",
+  "est_duration_s": 75,
+  "phases": [
+    { "type": "clock_sync", "samples": 20 },
+    { "type": "upload_burst", "bytes": 1048576, "chunk_kb": 64 },
+    { "type": "think_pause", "duration_ms": 2500 },
+    { "type": "token_stream", "tokens": 200, "rate_tps": 40,
+      "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
+      "burst": null,
+      "seed": 3001 },
+    { "type": "upload_burst", "bytes": 1048576, "chunk_kb": 64 },
+    { "type": "think_pause", "duration_ms": 2500 },
+    { "type": "token_stream", "tokens": 200, "rate_tps": 40,
+      "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
+      "burst": null,
+      "seed": 3002 },
+    { "type": "clock_sync", "samples": 20 }
+  ]
+}

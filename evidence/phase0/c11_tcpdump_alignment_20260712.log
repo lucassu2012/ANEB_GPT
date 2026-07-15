@@ -1,0 +1,104 @@
+====================================================================
+P0-C11  tcpdump-timestamp vs srv_ts per-event alignment acceptance
+E-01 server 120.79.148.0:8443  aneb-server/0.1.0
+Run date: 2026-07-12 (UTC)  Operator: automated (c11)
+Acceptance: per-group P95 |pcap_ts - event_wall| < 2ms ; crosspkt/parse-fail < 5%
+====================================================================
+
+METHOD
+------
+- Capture on server, bounded filter 'tcp port 8443 and src port 8443',
+  src port 8443 only (server->client direction):
+    tcpdump -i any -tt -A -l -s 0 'tcp port 8443 and src port 8443'
+  Link type: LINUX_SLL2 (Linux cooked v2, from -i any). Text mode (-tt -A),
+  no binary pcap parsing. Capture bounded (manual stop right after stream),
+  temp files in /tmp, deleted after analysis. aneb-server systemd unit
+  untouched (never restarted); no other service touched.
+- Client load generated from Windows host, DIRECT (proxy bypassed):
+    curl.exe --noproxy '*' -sN <url>
+  (system proxy 127.0.0.1:33210/7897 bypassed per D-16; measuring RTT/timestamps
+   through the proxy would inflate them ~54x.)
+- Event wall-clock mapping (per analyzer /tmp/c11_analyze.py):
+    event_wall_ns = anchor_wall_unix_ns + pre_flush_us * 1000
+  KEY FINDING on the mapping: anchor_wall_unix_ns is a CONSTANT across every
+  request (1783843344665294456 in both groups, and identical in a probe hours
+  earlier) = the process-start wall-clock. pre_flush_us (and the prelude's
+  srv_ts_us) are MONOTONIC microseconds SINCE process start, so pre_flush_us is
+  added directly to the anchor -- do NOT subtract srv_ts_us. Verified on
+  uniform seq0: anchor/1000 + pre_flush_us = 1783866384901447 us vs pcap
+  1783866384.901453 -> 6 us. This matches the task's stated formula
+  (anchor + pre_flush*1000); srv_ts_us is only the prelude's own monotonic
+  stamp, not part of the mapping.
+- diff_us = pcap_packet_ts_us - event_wall_us. Reported |diff| percentiles.
+- One data-event per packet (each event flushed individually). Events whose
+  'data:{"seq"...}' opens in a packet but whose JSON does not close in that same
+  packet are counted as cross-packet and dropped. Duplicate seqs (TCP
+  retransmit / any-iface double capture) deduped keeping earliest packet ts.
+
+--------------------------------------------------------------------
+GROUP 1  UNIFORM  (steady stream)
+  URL: /api/v1/stream?tokens=200&rate_tps=40&run=c11u
+  wall elapsed ~5.53 s, 200 events @ 40 tps (25 ms spacing)
+--------------------------------------------------------------------
+anchor_wall_unix_ns=1783843344665294456  srv_ts_us=23040236053
+samples=200  crosspkt=0  parsefail=0  dup_seq_dropped=3  crosspkt_ratio=0.00%
+abs_diff_us  : P50=45.8   P95=79.9   max=2804.8
+signed_diff_us: P50=45.8  P95=79.9   min=5.8  max=2804.8  mean=83.4
+seq_range=0..199  distinct=200
+  -> P95 79.9 us < 2000 us : PASS ; crosspkt 0.00% < 5% : PASS
+  (single tail outlier max=2.80 ms, well inside P95 budget)
+
+Representative raw lines:
+  : prelude {"srv_ts_us":23040236053,"anchor_wall_unix_ns":1783843344665294456,"observed":"210.21.11.228:59125"}
+  data: {"seq":0,"sched_us":23040236127,"pre_flush_us":23040236153,"payload":"gAa/bYs4QrTHssak6S9gPBmVal8faXU+..."}
+  data: {"seq":1,"sched_us":23040261127,"pre_flush_us":23040261382,"payload":"kXVUA2qGdhFetz5YnLRRBPlUC3zL1ul3..."}
+  (pcap hdr for seq0 packet: 1783866384.901453 eth0 Out IP ...8443 > ...59125 Flags [P.] seq318:493 len175)
+
+--------------------------------------------------------------------
+GROUP 2  BURST  (s2 coding-agent, first token_stream, burst clusters)
+  URL: /api/v1/stream?profile=s2_coding_agent&phase=0&run=c11b
+  NOTE: endpoint 'phase' indexes token_stream phases only (probe: "index 3 not
+  found (has 2)"). phase=0 => first token_stream of s2 = 300 tokens @ rate 60
+  with burst{cluster_tps:100, pause_ms:[300,800], cluster_geom_p:0.05}. This is
+  the intended burst group.
+  wall elapsed ~9.65 s, 300 events
+--------------------------------------------------------------------
+anchor_wall_unix_ns=1783843344665294456  srv_ts_us=23386721868
+samples=300  crosspkt=0  parsefail=0  dup_seq_dropped=0  crosspkt_ratio=0.00%
+abs_diff_us  : P50=41.8   P95=61.9   max=251.8
+signed_diff_us: P50=41.8  P95=61.9   min=24.8  max=251.8  mean=45.1
+seq_range=0..299  distinct=300
+  -> P95 61.9 us < 2000 us : PASS ; crosspkt 0.00% < 5% : PASS
+
+Representative raw lines:
+  : prelude {"srv_ts_us":23386721868,"anchor_wall_unix_ns":1783843344665294456,"observed":"210.21.11.228:59243"}
+  data: {"seq":0,"sched_us":23386721929,"pre_flush_us":23386721942,"payload":"MgwKYvDMYP9zdq41pujGLKbUOObzgyDU..."}
+  data: {"seq":1,"sched_us":23386731929,"pre_flush_us":23386732231,"payload":"HJz8YDWrU/2HX2nUVyk2pVAtcCFR+TR2..."}
+
+====================================================================
+VERDICT:  PASS (both groups)
+  uniform P95=79.9 us , burst P95=61.9 us  (budget 2000 us)
+  cross-packet / parse-fail ratio = 0.00% both groups (budget <5%)
+
+Caveat on the anchor mapping bias (as required):
+  event_wall is derived from a one-shot process-start wall<->monotonic anchor
+  (anchor_wall_unix_ns). Any systematic offset in that single anchor mapping
+  shifts ALL events by the same constant, so it lands in the SIGNED mean
+  (uniform +83 us, burst +45 us) but does not widen the per-event spread that
+  P95 |diff| measures. chrony holds the E-01 system clock to ~86 us RMS, so the
+  anchor's contribution is at the ~0.1 ms level -- negligible vs the 2 ms budget
+  and consistent with the small positive signed bias observed.
+
+Cleanup: /tmp/cap_uniform.* , /tmp/cap_burst.* , /tmp/c11_analyze.py deleted;
+  no tcpdump processes left (pgrep: none); aneb-server systemd unit still active,
+  never restarted.
+
+--------------------------------------------------------------------
+P0-C15  wall-clock step immunity : NOT_EXECUTED
+  Reason: local `wsl -l -v` lists only 'docker-desktop' (a minimal
+  special-purpose WSL distro for Docker; no build toolchain, not a
+  sudo-capable general Linux dev environment) -- no Ubuntu/Debian-class distro.
+  Additionally no linux aneb-server source is available on this host to compile
+  on the spot. Stepping docker-desktop's clock is unsafe (shared with Docker).
+  Per the task's fallback ("no WSL or sudo unavailable -> NOT_EXECUTED").
+====================================================================

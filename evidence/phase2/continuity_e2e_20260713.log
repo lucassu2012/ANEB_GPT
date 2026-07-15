@@ -1,0 +1,61 @@
+# 阶段 2 C 组连续性实验 模拟器 E2E 验收证据
+# 日期: 2026-07-13  执行: Claude (continuity 分支, worktree E:\C Project\ANEB-wt\continuity)
+# 环境: AVD aneb-continuity (android-35;google_apis;x86_64, pixel_7), emulator-5584 (port 5584 专属)
+#       aneb-server (本机 go 构建, -addr :18443, plaintext dev), APK=probe-debug (DB v5)
+# 命令: am start -n com.aneb.probe/.ui.MainActivity --es server http://10.0.2.2:18443 --ez autorun true --es mode continuity
+# 有效 run: run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 (status=completed)
+#
+# 【偏差说明】任务书原定两次中断 = "svc wifi disable" + "svc data disable+enable"。本机模拟器
+# 的 WiFi slirp 无法回连宿主 loopback 服务(10.0.2.2:18443 经 wlan0 连接被立即关闭, 经 eth0/蜂窝
+# 正常; guest 内 nc 双路径对照复现, 服务端全程存活), 属宿主环境缺陷而非 App 代码问题。故本 run
+# 全程蜂窝承载, 两次中断均为 svc data disable(5s)+enable 周期(时刻见下), 中断/恢复语义等价:
+#   data_off_1 05:04:49  data_on_1 05:04:54  →  seg1 中断, RECOVERY#1
+#   data_off_2 05:05:37  data_on_2 05:05:42  →  seg2 中断, RECOVERY#2
+# 另: 蜂窝 data off 不 RST 存量 socket, 中断检出 = readTimeout 30s——应用层"静默挂起税"直接证据(D-20)。
+#
+# 【断言结论】(全部 PASS)
+# 1. CONTINUITY_RECOVERY recovery_ms 有值 ×2: seg1 attempt=1 507.8ms; seg2 attempt=1 508.7ms
+# 2. PathMonitor 豁免生效: PATH_CHANGE EnvEvent ×4 (exempt=true, DB env_event 落库 4 条),
+#    全程 0 条 INVALID 日志, run status=completed (未被路径事件中止)
+# 3. C1 数值输出: segments=3 disconnects=2 rate=0.6667 (grade=poor, 注入型实验预期内)
+#    C2: samples=2 p50=508.3ms grade=excellent
+#    C3 数值输出: 60s:conn_new=false:6.55ms; 180s:conn_new=true:10.24ms; 300s:conn_new=true:8.23ms
+#    (全部 functional_only=true, OkHttp 池 keepalive 300s, 模拟器 NAT ≠ CGNAT)
+# 4. :probe:testDebugUnitTest 142/142 全绿 (含 AqsScorerV02Test 14 + ContinuityMathTest 9); assembleDebug 通过
+#
+# ---------- logcat (tag=AnebProbe, 完整) ----------
+--------- beginning of main
+07-12 21:04:39.153  6262  6262 I AnebProbe: >>> CONTINUITY transport=auto -> http://10.0.2.2:18443
+07-12 21:04:39.651  6262  6262 I AnebProbe: CONTINUITY_START run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 server=http://10.0.2.2:18443 transport=auto tokens=1200 rate_tps=40.0 seed=42 max_segments=8 max_attempts=5 backoff_base_ms=500 c3_idle_s=60,180,300
+07-12 21:04:39.651  6262  6262 I AnebProbe: CONTINUITY_GUARD ok=true metadata=private_dns_active=false;active_transports=cellular;active_validated=false;checked_at_nanos=1152292960847
+07-12 21:04:49.186  6262  6262 I AnebProbe: CONTINUITY_PATH type=PATH_CHANGE detail=default_network_lost_111_exempt=true
+07-12 21:04:54.404  6262  6262 I AnebProbe: CONTINUITY_PATH type=PATH_CHANGE detail=default_network_changed_->_112_exempt=true
+07-12 21:05:24.210  6262  6262 I AnebProbe: CONTINUITY_SEGMENT run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 seg=1 tokens=372 max_seq=371 summary=false http=200 conn_new=true completed=false error=java.net.SocketTimeoutException:_timeout
+07-12 21:05:37.334  6262  6262 I AnebProbe: CONTINUITY_PATH type=PATH_CHANGE detail=default_network_lost_112_exempt=true
+07-12 21:05:42.566  6262  6262 I AnebProbe: CONTINUITY_PATH type=PATH_CHANGE detail=default_network_changed_->_113_exempt=true
+07-12 21:06:12.370  6262  6262 I AnebProbe: CONTINUITY_RECOVERY run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 seg=1 attempt=1 recovery_ms=507.8 conn_new=true
+07-12 21:06:12.371  6262  6262 I AnebProbe: CONTINUITY_SEGMENT run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 seg=2 tokens=523 max_seq=522 summary=false http=200 conn_new=true completed=false error=java.net.SocketTimeoutException:_timeout
+07-12 21:06:42.855  6262  6262 I AnebProbe: CONTINUITY_RECOVERY run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 seg=2 attempt=1 recovery_ms=508.7 conn_new=true
+07-12 21:06:42.858  6262  6262 I AnebProbe: CONTINUITY_SEGMENT run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 seg=3 tokens=1200 max_seq=1199 summary=true http=200 conn_new=true completed=true error=none
+07-12 21:06:42.858  6262  6262 I AnebProbe: CONTINUITY_C1 run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 segments=3 disconnects=2 rate=0.6667 grade=poor
+07-12 21:06:42.859  6262  6262 I AnebProbe: CONTINUITY_C2 run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 samples=2 p50_ms=508.3 all_ms=507.8,508.7 grade=excellent
+07-12 21:06:42.890  6262  6262 I AnebProbe: CONTINUITY_C3_PRIME run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=60 http=200 error=none
+07-12 21:07:42.900  6262  6262 I AnebProbe: CONTINUITY_C3 run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=60 conn_new=false echo_ms=6.55 error=none pool_keepalive_s=300 functional_only=true
+07-12 21:07:42.905  6262  6262 I AnebProbe: CONTINUITY_C3_PRIME run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=180 http=200 error=none
+07-12 21:10:42.916  6262  6262 I AnebProbe: CONTINUITY_C3 run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=180 conn_new=true echo_ms=10.24 error=none pool_keepalive_s=300 functional_only=true
+07-12 21:10:42.921  6262  6262 I AnebProbe: CONTINUITY_C3_PRIME run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=300 http=200 error=none
+07-12 21:15:42.931  6262  6262 I AnebProbe: CONTINUITY_C3 run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 idle_s=300 conn_new=true echo_ms=8.23 error=none pool_keepalive_s=300 functional_only=true
+07-12 21:15:42.932  6262  6262 I AnebProbe: CONTINUITY_KPI run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 c1_rate=0.6667 c2_recovery_p50_ms=508.3 c3=60:false:6.55:none;180:true:10.24:none;300:true:8.23:none path_change_events=4 aqs_version_candidate=aqs-v0.2
+07-12 21:15:42.970  6262  6262 I AnebProbe: CONTINUITY_DB_WRITE run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 env_events=4
+07-12 21:15:42.972  6262  6262 I AnebProbe: CONTINUITY_END run_id=019f5825-7c27-7ccc-b45d-8b9b9ca4a326 status=completed
+
+# ---------- Room 落库对账 (sqlite3, continuity_result / env_event) ----------
+runId|startedAtEpochMs|serverBase|transport|tokens|rateTps|segmentsTotal|abnormalDisconnects|c1DropRate|c1Grade|recoveryMsCsv|c2RecoveryMsP50|c2Grade|c3LadderCsv|c3FunctionalOnly|pathChangeEvents|status|aqsVersionCandidate
+019f5816-cafa-7d7d-b81f-868a4248df35|1783889316626|http://10.0.2.2:18443|auto|1200|40.0|1|1|1.0|poor|||||1|4|recovery_failed|aqs-v0.2
+019f5825-7c27-7ccc-b45d-8b9b9ca4a326|1783890279466|http://10.0.2.2:18443|auto|1200|40.0|3|2|0.666666666666667|poor|507.8,508.7|508.2509|excellent|60:false:6.55:none;180:true:10.24:none;300:true:8.23:none|1|4|completed|aqs-v0.2
+
+runId|type|detail
+019f5825-7c27-7ccc-b45d-8b9b9ca4a326|PATH_CHANGE|default_network_lost 111 exempt=true
+019f5825-7c27-7ccc-b45d-8b9b9ca4a326|PATH_CHANGE|default_network_changed -> 112 exempt=true
+019f5825-7c27-7ccc-b45d-8b9b9ca4a326|PATH_CHANGE|default_network_lost 112 exempt=true
+019f5825-7c27-7ccc-b45d-8b9b9ca4a326|PATH_CHANGE|default_network_changed -> 113 exempt=true

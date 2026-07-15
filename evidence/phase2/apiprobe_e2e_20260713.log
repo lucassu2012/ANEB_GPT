@@ -1,0 +1,63 @@
+# 阶段 2 任务 #7 —— 真实 LLM API 探针 模拟器 E2E 证据
+# 日期: 2026-07-13
+# 分支: p2/apiprobe worktree (E:\C Project\ANEB-wt\apiprobe)
+# 结论: PASS —— 无 key（E-03 未就绪）用本机 OpenAI 兼容 mock 跑通探针全链路，
+#       APIPROBE_RESULT 的 ttft/itl 有值且与 mock pacing（20tps=50ms）吻合。
+
+## 环境
+- 模拟器: 专属 AVD aneb-apiprobe (system-images;android-35;google_apis;x86_64, pixel_7)，
+  emulator -port 5586（与 continuity 分支 5584 错开），headless
+- 设备: Android 15 (API 35), adb 一律 -s emulator-5586 定向
+- mock: server/tools/mockllm (go build 通过, go vet ./... 通过)，
+  OpenAI 兼容 SSE，固定 20 token @20tps，-addr :18081
+- APK: :probe:assembleDebug (debug 变体, cleartext 仅 10.0.2.2/127.0.0.1)
+- JVM 单测: :probe:testDebugUnitTest 全绿 158/158（apiprobe 新增 34:
+  AnthropicAdapterTest 9 + OpenAiAdapterTest 10 + ApiProbeKpiTest 9 + KeyRedactionTest 6）
+
+## mock 冒烟（宿主直连 127.0.0.1:18081）
+POST /v1/chat/completions (Authorization: Bearer sk-test) -> HTTP 200,
+首帧 role 帧 delta={"role":"assistant"}（无 content，探针不计 token），
+随后 20 个 content chunk，尾帧 finish_reason=stop + usage，data: [DONE] 收尾。
+
+## 过程记录（含一次预期内失败）
+1) 第一次尝试 --es apiprobe_server http://10.0.2.2:18081：
+   APIPROBE_RESULT http_code=null error=java.io.IOException:_unexpected_end_of_stream
+   —— 响应头都未收到：宿主系统代理全局开启（127.0.0.1:7897），模拟器把 guest 出站
+   TCP 透传给宿主代理，10.0.2.2 在代理进程视角不可路由，连接被断。
+   这本身是"探针走系统默认网络（含代理路径）"口径的一次真实演示；失败样本按
+   R-10 语义全 null 落库，不产生伪值。
+2) 改用 adb reverse tcp:18081 tcp:18081 + --es apiprobe_server http://127.0.0.1:18081
+   绕开模拟器 NAT/宿主代理 -> 全链路成功（下方 logcat）。
+
+## 启动命令
+adb -s emulator-5586 reverse tcp:18081 tcp:18081
+adb -s emulator-5586 shell am force-stop com.aneb.probe
+adb -s emulator-5586 shell am start -n com.aneb.probe/.ui.MainActivity \
+  --ez apiprobe_autorun true --es apiprobe_server "http://127.0.0.1:18081" \
+  --es apiprobe_key "sk-test-e2e-dummy" --es apiprobe_provider openai_compat \
+  --es apiprobe_model mock-llm
+（apiprobe_autorun 仅 BuildConfig.DEBUG 生效；key 为无意义 dummy，mock 只校验
+ Authorization: Bearer 非空——验证探针 key header 路径，不校验值）
+
+## logcat（tag=AnebProbe，逐字；终版 run——APIPROBE_TIMING 修复后重装重跑）
+07-12 21:02:00.817  4930  4930 I AnebProbe: APIPROBE_GUARD proxy_detected=false vpn_detected=false note=recorded_not_rejected(probe_exemption)
+07-12 21:02:00.821  4930  4930 I AnebProbe: APIPROBE_START provider=openai_compat protocol=openai_chat model=mock-llm
+07-12 21:02:02.663  4930  4930 I AnebProbe: APIPROBE_TIMING timing(rel_callStart):_dnsStart=null_dnsEnd=null_connStart=10.64ms_tlsStart=null_tlsEnd=null_connEnd=57.61ms_reqHdrEnd=64.97ms_reqBodyEnd=65.17ms_respHdrStart=68.80ms_respHdrEnd=68.93ms
+07-12 21:02:02.778  4930  4930 I AnebProbe: APIPROBE_RESULT provider=openai_compat protocol=openai_chat http_code=200 ttft_ms=120.18 itl_median_ms=51.45 itl_p95_ms=90.18 itl_samples=19 tokens=20 total_ms=1184.64 out_tokens=20 stop=stop parse_errors=0 proxy_detected=false vpn_detected=false claim_scope=application_end_to_end_to_llm_api error=none
+
+（首次成功 run 20:58:49：ttft_ms=247.71 itl_median_ms=48.94 itl_p95_ms=83.17，同样全 PASS；
+ 终版增加 APIPROBE_TIMING 行——TimingEventListener 记录取走防泄漏 + 传输层分量诊断）
+
+## 断言核对
+- http_code=200, error=none                          -> PASS
+- ttft_ms=120.18 (有值; role 帧后首 content delta)     -> PASS
+- itl_median_ms=51.45 ≈ 50ms (mock 20tps 时刻表)      -> PASS
+- itl_p95_ms=90.18 (有值; 尾帧与调度抖动)              -> PASS
+- APIPROBE_TIMING 传输层计时点齐全（IP 直连故 dns=null；明文故 tls=null）-> PASS
+- tokens=20 = mock -tokens 20（role 帧/尾帧/[DONE] 未误计）-> PASS
+- itl_samples=19 = 20 token 的 19 个间隔（无伪 0 混入）  -> PASS
+- out_tokens=20 stop=stop（尾帧 usage/finish_reason 提取）-> PASS
+- parse_errors=0                                      -> PASS
+- claim_scope=application_end_to_end_to_llm_api（独立口径，不进 AQS）-> PASS
+- 全部日志行不含 key 字符串 "sk-test-e2e-dummy"        -> PASS（另有 JVM 单测锚定
+  ResultReporter 与 ApiProbeReport 导出不含 key）

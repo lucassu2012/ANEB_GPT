@@ -1,0 +1,122 @@
+# 阶段 3 GPS 路测模式 模拟器 E2E 验收证据
+# 日期: 2026-07-13  执行: Claude (p3:gps 代理, 主工作树 E:\C Project\ANEB)
+# 环境: AVD aneb-p3c (system-images;android-35;google_apis;x86_64, pixel_7), emulator-5594 (port 5594 专属)
+#       aneb-server 本机 go 构建 (%TEMP%\aneb-server-gps.exe, -addr :18446, plaintext dev,
+#       data=%TEMP%\aneb-gps-data; 监听 PID 与本代理启动进程一致已核验——首次尝试的 :18445
+#       被 Docker backend 端口代理占用, 该端口上的 run 019f58f1-* 证据作废不采信, 改用 :18446 重跑)
+#       APK=probe-debug (DB v9: radio_sample 新增 lat/lon/accuracyM 可空列, Migration(8,9) additive)
+# 命令: am start -n com.aneb.probe/.ui.MainActivity --es server http://10.0.2.2:18446
+#         --ez autorun true --es mode quick --ez drive_test true
+#       GPS mock: adb emu geo fix ×5, 模拟移动轨迹 (上海市区, 每步 ~0.001° lat/lon ≈ 146m):
+#         (121.4737,31.2304) 起点(启动前注入) → (121.4747,31.2314) → (121.4757,31.2324)
+#         → (121.4767,31.2334) → (121.4777,31.2344) 终点, 间隔 ~10s
+# 有效 run: run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 (status=completed, REPORT http=200)
+# 对照 run(默认关): run_id=019f5900-002b-7995-9b67-01961bb331fb (无 --ez drive_test)
+#
+# 【断言结论】(全部 PASS)
+# 1. RadioSample 落库 lat/lon 非空 ≥3 行:
+#      SELECT COUNT(*), SUM(lat IS NOT NULL AND lon IS NOT NULL) FROM radio_sample
+#        WHERE runId='019f58fd-...';  →  109|104  (104 行非空, 远超 ≥3)
+#      DISTINCT (lat,lon,accuracyM) 恰为注入的 5 个坐标 (accuracy 恒 5.0m, 模拟器 GPS 固定值):
+#        31.2303983333333|121.473698333333|5.0
+#        31.2314|121.474698333333|5.0
+#        31.2323983333333|121.4757|5.0
+#        31.2333983333333|121.476698333333|5.0
+#        31.2344|121.477698333333|5.0
+#      场景窗口内轨迹点 (scenario_result JOIN radio_sample, 结果页轨迹行同源数据):
+#        s1_chat=20 点 / s2_coding_agent=59 点 / s3_multimodal=24 点
+#      全轨迹起终点 Haversine ≈ 585m (0.004°lat + 0.004°lon @31.23°N; GeoTrack 纯函数 9 个单测覆盖)
+# 2. 上报体确无坐标 (§9.1 隐私边界, 服务端落盘行 grep):
+#      文件 %TEMP%\aneb-gps-data\results\20260713.jsonl, run 行 len=8855 (与 REPORT bytes=8855 一致)
+#      正则 "(lat|lon|latitude|longitude|gps|accuracy*|location|geo*)"\s*: 键级匹配 = 0 处
+#      坐标值子串 121.47 / 31.23 均不存在; claim_scope=application_end_to_end_to_probe_node 完好
+#      (JVM 侧另有 ReportBodyNoGpsTest 锚定 ResultReporter 输出无坐标类键)
+# 3. 路测开关默认关 (对照 run 019f5900-*, 不带 --ez drive_test):
+#      RUN_START ... drive_test=false; radio_sample 110 行中 lat/lon/accuracyM 非空 = 0 行
+#      (GPS provider 此时仍有 fix 可用——未开开关即不创建 LocationTagger, 不采集)
+# 4. DB v9 迁移生效: PRAGMA user_version=9; .schema radio_sample 含 `lat` REAL,`lon` REAL,
+#      `accuracyM` REAL (Migration(8,9) 3 条 ALTER TABLE ADD COLUMN, additive-only,
+#      MigrationV9Test 4 个单测锚定); 同库 v8 历史 run 数据未受损 (对照 run 正常读写)
+# 5. :probe:testDebugUnitTest 全绿 (含新增 GeoTrackTest 9 + MigrationV9Test 4 +
+#      ReportBodyNoGpsTest 1, gradle exit 0); assembleDebug 通过
+#
+# 【实现要点】LocationTagger: android.location.LocationManager GPS_PROVIDER 1Hz (无 GMS 依赖);
+#   权限缺失/定位关闭/无 fix/失锁(>30s) 一律 null (R-10); RadioCollector 可选 locationProvider
+#   接点, 坐标随 1Hz RadioSample 入库; UI "GPS路测" 开关默认关, 开启时 Home 屏红字显著提示;
+#   结果页场景卡片显示轨迹点数+起终点 Haversine 距离, "导出轨迹" 仅本地 CSV (Downloads)。
+#
+# ---------- logcat (tag=AnebProbe, 路测 run 完整) ----------
+--------- beginning of main
+07-13 01:00:19.029  4677  4677 I AnebProbe: >>> RUN mode=quick transport=auto -> http://10.0.2.2:18446
+07-13 01:00:19.514  4677  4677 I AnebProbe: RUN_START run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 mode=quick transport=auto server=http://10.0.2.2:18446 inject=none drive_test=true
+07-13 01:00:19.518  4677  4677 I AnebProbe: GUARD_OK metadata=private_dns_active=false;active_transports=wifi;active_validated=false;checked_at_nanos=977015773713
+07-13 01:00:20.670  4677  4677 I AnebProbe: PROFILES source=server versions=s1_chat@0.2.0;s2_coding_agent@0.2.0;s3_multimodal@0.2.0
+07-13 01:00:20.731  4677  4677 I AnebProbe: DRIVE_TEST enabled=true gps_active=true
+07-13 01:00:20.777  4677  4677 I AnebProbe: ORDER round=0 order=s1_chat,s2_coding_agent,s3_multimodal
+07-13 01:00:20.777  4677  4677 I AnebProbe: SCENARIO_START scenario=s1_chat#0 round=0 order_index=0
+07-13 01:00:26.088  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=start phase=0 offset_us=-539943529 err_us=1365 valid_n=17 total_n=20 warmup_n=3
+07-13 01:00:26.142  4677  4677 I AnebProbe: UPLOAD scenario=s1_chat#0 idx=0 bytes=2048 chunk=2048 http=200 dur_ms=10.70 goodput_mbps=1.532 server_chunks=2 error=none
+07-13 01:00:41.298  4677  4677 I AnebProbe: STREAM scenario=s1_chat#0 stream=0 expected=600 events=600 reads=604 bytes=183477 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=20.32 error=none
+07-13 01:00:41.299  4677  4677 I AnebProbe: PARSE scenario=s1_chat#0 stream=0 parse_dur_us=154728 per_event_parse_us=257.88 events=600
+07-13 01:00:45.663  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s1_chat#0 edge=end phase=3 offset_us=-539943232 err_us=1280 valid_n=17 total_n=20 warmup_n=3
+07-13 01:00:45.703  4677  4677 I AnebProbe: SKEW scenario=s1_chat#0 start_offset_us=-539943529 end_offset_us=-539943232 drift_ppm=14.38 offset_suspect=false
+07-13 01:00:45.841  4677  4677 I AnebProbe: SCENARIO_KPI scenario=s1_chat#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=20.3226(lowconf) t2_ms=25.5714 t2_incl_ms=25.5714 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=3.1980 n2_ms=3.4220 u1_mbps=1.5317(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-13 01:00:45.841  4677  4677 I AnebProbe: BUFFERING scenario=s1_chat#0 score=0.081 attribution=none samples=599 sawtooth=0.000 near_zero=0.000 lag1=-0.298 batch_count=0 best_grid_us=null jank_overlap=0.000 affects_validity=false
+07-13 01:00:45.841  4677  4677 I AnebProbe: SCENARIO_START scenario=s2_coding_agent#0 round=0 order_index=1
+07-13 01:00:50.321  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=start phase=0 offset_us=-539943521 err_us=1205 valid_n=17 total_n=20 warmup_n=3
+07-13 01:00:50.544  4677  4677 I AnebProbe: UPLOAD scenario=s2_coding_agent#0 idx=0 bytes=524288 chunk=65536 http=200 dur_ms=143.92 goodput_mbps=29.144 server_chunks=360 error=none
+07-13 01:00:50.545  4677  4677 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=3000
+07-13 01:01:02.589  4677  4677 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=0 expected=300 events=300 reads=303 bytes=88816 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.19 error=none
+07-13 01:01:02.590  4677  4677 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=0 parse_dur_us=14672 per_event_parse_us=48.91 events=300
+07-13 01:01:02.807  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=0 up_bytes=8192 total_ms=215.58 proc_nominal_ms=200 proc_actual_us=200885 http=200 error=none
+07-13 01:01:03.026  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=1 up_bytes=8192 total_ms=218.22 proc_nominal_ms=200 proc_actual_us=200347 http=200 error=none
+07-13 01:01:03.244  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=2 up_bytes=8192 total_ms=206.20 proc_nominal_ms=200 proc_actual_us=201057 http=200 error=none
+07-13 01:01:03.454  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=3 up_bytes=8192 total_ms=205.62 proc_nominal_ms=200 proc_actual_us=200414 http=200 error=none
+07-13 01:01:03.663  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=4 up_bytes=8192 total_ms=206.93 proc_nominal_ms=200 proc_actual_us=200484 http=200 error=none
+07-13 01:01:03.868  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=5 up_bytes=8192 total_ms=205.29 proc_nominal_ms=200 proc_actual_us=200142 http=200 error=none
+07-13 01:01:04.078  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=6 up_bytes=8192 total_ms=205.34 proc_nominal_ms=200 proc_actual_us=200174 http=200 error=none
+07-13 01:01:04.287  4677  4677 I AnebProbe: TOOLLOOP scenario=s2_coding_agent#0 round=7 up_bytes=8192 total_ms=209.06 proc_nominal_ms=200 proc_actual_us=200501 http=200 error=none
+07-13 01:01:04.288  4677  4677 I AnebProbe: THINK_PAUSE scenario=s2_coding_agent#0 duration_ms=2000
+07-13 01:01:40.658  4677  4677 I AnebProbe: STREAM scenario=s2_coding_agent#0 stream=1 expected=800 events=800 reads=803 bytes=240950 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=3.01 error=none
+07-13 01:01:40.658  4677  4677 I AnebProbe: PARSE scenario=s2_coding_agent#0 stream=1 parse_dur_us=38519 per_event_parse_us=48.15 events=800
+07-13 01:01:44.983  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s2_coding_agent#0 edge=end phase=7 offset_us=-539943738 err_us=1273 valid_n=17 total_n=20 warmup_n=3
+07-13 01:01:45.052  4677  4677 I AnebProbe: SKEW scenario=s2_coding_agent#0 start_offset_us=-539943521 end_offset_us=-539943738 drift_ppm=-4.09 offset_suspect=false
+07-13 01:01:45.185  4677  4677 I AnebProbe: SCENARIO_KPI scenario=s2_coding_agent#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=2.1852(lowconf) t2_ms=10.5094 t2_incl_ms=10.5094 t3=0.0000 t3_incl=0.0565 t4=0.0000 t5_ms=747.9933 n1_ms=3.0750 n2_ms=4.7320 u1_mbps=29.1436(lowconf) u1_excl_mbps=null u2_ms=17.8713 gaps=0 dup=0
+07-13 01:01:45.185  4677  4677 I AnebProbe: BUFFERING scenario=s2_coding_agent#0 score=0.006 attribution=none samples=1098 sawtooth=0.002 near_zero=0.000 lag1=-0.487 batch_count=0 best_grid_us=null jank_overlap=0.000 affects_validity=false
+07-13 01:01:45.185  4677  4677 I AnebProbe: SCENARIO_START scenario=s3_multimodal#0 round=0 order_index=2
+07-13 01:01:49.563  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=start phase=0 offset_us=-539943576 err_us=1258 valid_n=17 total_n=20 warmup_n=3
+07-13 01:01:49.866  4677  4677 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=0 bytes=1048576 chunk=65536 http=200 dur_ms=296.13 goodput_mbps=28.328 server_chunks=709 error=none
+07-13 01:01:49.868  4677  4677 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-13 01:01:57.358  4677  4677 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=0 expected=200 events=200 reads=203 bytes=59154 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.39 error=none
+07-13 01:01:57.358  4677  4677 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=0 parse_dur_us=6967 per_event_parse_us=34.84 events=200
+07-13 01:01:57.666  4677  4677 I AnebProbe: UPLOAD scenario=s3_multimodal#0 idx=1 bytes=1048576 chunk=65536 http=200 dur_ms=302.95 goodput_mbps=27.690 server_chunks=707 error=none
+07-13 01:01:57.666  4677  4677 I AnebProbe: THINK_PAUSE scenario=s3_multimodal#0 duration_ms=2500
+07-13 01:02:05.156  4677  4677 I AnebProbe: STREAM scenario=s3_multimodal#0 stream=1 expected=200 events=200 reads=203 bytes=60203 gaps=0 dup=0 parse_errors=0 truncated_early=false truncated_tail=false ttft_ms=2.21 error=none
+07-13 01:02:05.157  4677  4677 I AnebProbe: PARSE scenario=s3_multimodal#0 stream=1 parse_dur_us=6646 per_event_parse_us=33.23 events=200
+07-13 01:02:09.022  4677  4677 I AnebProbe: CLOCK_SYNC scenario=s3_multimodal#0 edge=end phase=7 offset_us=-539944242 err_us=736 valid_n=17 total_n=20 warmup_n=3
+07-13 01:02:09.028  4677  4677 I AnebProbe: SKEW scenario=s3_multimodal#0 start_offset_us=-539943576 end_offset_us=-539944242 drift_ppm=-36.52 offset_suspect=false
+07-13 01:02:09.118  4677  4677 I AnebProbe: SCENARIO_KPI scenario=s3_multimodal#0 validity=VALID_LOW_CONFIDENCE reasons=none t1_ms=2.2078(lowconf) t2_ms=25.5081 t2_incl_ms=25.5081 t3=0.0000 t3_incl=0.0000 t4=0.0000 t5_ms=null n1_ms=2.9970 n2_ms=1.2300 u1_mbps=27.6899(lowconf) u1_excl_mbps=null u2_ms=null gaps=0 dup=0
+07-13 01:02:09.120  4677  4677 I AnebProbe: BUFFERING scenario=s3_multimodal#0 score=0.039 attribution=none samples=398 sawtooth=0.000 near_zero=0.000 lag1=-0.598 batch_count=0 best_grid_us=null jank_overlap=0.000 affects_validity=false
+07-13 01:02:09.122  4677  4677 I AnebProbe: AQS_INPUT_MAP map=N1,N2<-S1.first_clock_sync;T1,T2,T3,T4,T5<-S2;U1<-S3.1MB_upload(incl_slow_start_into_AQS);U2<-S2.tool_loop
+07-13 01:02:09.122  4677  4677 I AnebProbe: AQS run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 score=96.8 low_confidence=true veto=false reason=none subs=T1:99.8,T2:98.4,T3:100.0,U1:86.4,U2:98.2,N1:98.4,N2:94.9
+07-13 01:02:09.126  4677  4677 I AnebProbe: AQS_V02 run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 available=false reason=no_usable_continuity_in_24h
+07-13 01:02:09.157  4677  4677 I AnebProbe: REPORT http=200 bytes=8855 error=none
+07-13 01:02:09.171  4677  4677 I AnebProbe: DB_WRITE run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 scenarios=3 env_events_pending=0 radio_samples_pending=0
+07-13 01:02:09.171  4677  4677 I AnebProbe: RUN_END run_id=019f58fd-3df7-7153-a2d8-8c1d3c391941 status=completed
+
+# ---------- Room 落库对账 (sqlite3 via run-as, radio_sample / scenario_result) ----------
+# COUNT(*) | SUM(lat IS NOT NULL AND lon IS NOT NULL)  [路测 run 019f58fd-*]
+109|104
+# DISTINCT lat|lon|accuracyM  [恰为 5 个注入坐标]
+31.2303983333333|121.473698333333|5.0
+31.2314|121.474698333333|5.0
+31.2323983333333|121.4757|5.0
+31.2333983333333|121.476698333333|5.0
+31.2344|121.477698333333|5.0
+# 场景窗口轨迹点: profileId|count|min(lat,lon)|max(lat,lon)
+s1_chat|20|31.2303983333333,121.473698333333|31.2323983333333,121.4757
+s2_coding_agent|59|31.2333983333333,121.476698333333|31.2344,121.477698333333
+s3_multimodal|24|31.2344,121.477698333333|31.2344,121.477698333333
+# PRAGMA user_version → 9; .schema radio_sample 尾段: ... `operatorName` TEXT, `lat` REAL, `lon` REAL, `accuracyM` REAL
+# 对照 run (drive_test=false, 019f5900-002b-7995-9b67-01961bb331fb):
+# COUNT(*) | SUM(lat/lon/accuracyM 任一非空) → 110|0

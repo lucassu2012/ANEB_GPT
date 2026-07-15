@@ -1,0 +1,23 @@
+{
+  "profile_id": "s2_coding_agent",
+  "version": "0.2.0",
+  "kpi_set": "agent-qoe-kpi-v0.2",
+  "description": "编码 Agent 流（主场景）：大 prompt 上行突发 + 思考停顿 + 工具循环往返 + 突发簇代码流，对标 Claude Code / Kimi Claw",
+  "est_duration_s": 90,
+  "phases": [
+    { "type": "clock_sync", "samples": 20 },
+    { "type": "upload_burst", "bytes": 524288, "chunk_kb": 64 },
+    { "type": "think_pause", "duration_ms": 3000 },
+    { "type": "token_stream", "tokens": 300, "rate_tps": 60,
+      "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
+      "burst": { "cluster_tps": 100, "pause_ms": [300, 800], "cluster_geom_p": 0.05 },
+      "seed": 2001 },
+    { "type": "tool_loop", "rounds": 8, "up_bytes": 8192, "down_bytes": 2048, "server_proc_ms": 200 },
+    { "type": "think_pause", "duration_ms": 2000 },
+    { "type": "token_stream", "tokens": 800, "rate_tps": 60,
+      "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
+      "burst": { "cluster_tps": 100, "pause_ms": [300, 800], "cluster_geom_p": 0.05 },
+      "seed": 2002 },
+    { "type": "clock_sync", "samples": 20 }
+  ]
+}

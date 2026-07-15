@@ -1,0 +1,16 @@
+﻿C14 preparation log (2026-07-13)
+================================
+Both ends ready for U1-vs-iperf3 comparison (P0-C14):
+- E-01: iperf 3.9 installed via apt (server started only during test windows, -1 one-shot)
+- Windows: iperf 3.21 at E:\tools\iperf3\iperf3.exe (github ar51an win64 build)
+
+Fixed-line uplink baseline (Windows host -> Shenzhen E-01, direct, proxy env cleared):
+  iperf3 -c 120.79.148.0 -p 8443 -t 5 -P 1
+  sender:   13.4 MBytes  22.4 Mbits/sec
+  receiver: 13.4 MBytes  21.2 Mbits/sec
+  NOTE: aneb-server stopped for ~15s test window then restored (verified active + /serverinfo 200).
+  NOTE: this is the HOST path baseline; the C14 acceptance compares EMULATOR U1 (2xx) vs iperf3
+        on the same host path (emulator NAT adds its own overhead - measure both on emulator or
+        accept host-path iperf3 as reference with documented caveat).
+
+Pending: emulator U1 run (blocked while wiring-verify workflow owns the emulator).

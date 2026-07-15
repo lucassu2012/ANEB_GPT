@@ -1,0 +1,118 @@
+# ANEB Phase3 证据：E-01 公共信任链 TLS 证书获取（sslip.io + acme.sh + Let's Encrypt TLS-ALPN-01）
+# 日期: 2026-07-13 (E-01 本地时间 CST)
+# 执行方式: 本机 Windows PowerShell 经 ssh -i ~/.ssh/aneb_e01 root@120.79.148.0 远程执行
+# 目标: E-06 免费替代路径（D-21 后续），域名 120-79-148-0.sslip.io（sslip.io 魔法 DNS，无账号注册）
+
+=========================================================
+[1] 预检：DNS 解析 + 443 端口空闲确认
+=========================================================
+本机默认 DNS（运营商）: 无响应（本地 DNS 问题，不影响 LE 验证）
+  *** UnKnown can't find 120-79-148-0.sslip.io: No response from server
+
+8.8.8.8 (Google):
+  Name:    120-79-148-0.sslip.io
+  Address:  120.79.148.0
+
+223.5.5.5 (AliDNS):
+  Name:    120-79-148-0.sslip.io
+  Address:  120.79.148.0
+
+E-01 本机解析 (getent hosts):
+  120.79.148.0    120-79-148-0.sslip.io
+
+E-01 443 端口预检: ss -tln | grep :443 → 无输出, exit=1（无监听，空闲，符合共用服务器红线）
+
+Let's Encrypt API 可达性（E-01 → acme-v02.api.letsencrypt.org/directory）: HTTP 200
+
+=========================================================
+[2] 安装 acme.sh（仅 /root/.acme.sh 用户目录，不装系统包）
+=========================================================
+注: curl https://get.acme.sh 在 E-01（阿里云国内）超时 >3min（GitHub 源不可达），
+改为本机下载官方 release tarball（acme.sh-3.1.1.tar.gz, 316344 bytes,
+https://github.com/acmesh-official/acme.sh/archive/refs/tags/3.1.1.tar.gz）
+scp 至 E-01 /tmp 后离线安装，效果等同、零全局影响。
+
+安装回显（关键行）:
+[Mon Jul 13 09:35:16 AM CST 2026] Installing to /root/.acme.sh
+[Mon Jul 13 09:35:16 AM CST 2026] Installed to /root/.acme.sh/acme.sh
+[Mon Jul 13 09:35:16 AM CST 2026] Installing alias to '/root/.bashrc'
+[Mon Jul 13 09:35:16 AM CST 2026] Installing cron job
+no crontab for root        ← 安装前 root 无任何 crontab
+[Mon Jul 13 09:35:17 AM CST 2026] OK
+INSTALL_OK
+版本: v3.1.1
+账号邮箱: sissi.w.xie@outlook.com（--install -m 指定）
+提示 "It is recommended to install socat"（standalone HTTP 模式才需要）——ALPN 模式内置 TLS server，未安装任何系统包。
+
+=========================================================
+[3] 签发：TLS-ALPN-01（443 仅挑战窗口占用，首次尝试成功，未触发重试）
+=========================================================
+命令: /root/.acme.sh/acme.sh --issue --alpn -d 120-79-148-0.sslip.io --server letsencrypt
+
+回显（关键行）:
+[Mon Jul 13 09:36:05 AM CST 2026] Using CA: https://acme-v02.api.letsencrypt.org/directory
+[Mon Jul 13 09:36:05 AM CST 2026] Standalone alpn mode.
+[Mon Jul 13 09:36:05 AM CST 2026] Account key creation OK.
+[Mon Jul 13 09:36:07 AM CST 2026] Registered
+[Mon Jul 13 09:36:08 AM CST 2026] Creating domain key
+[Mon Jul 13 09:36:08 AM CST 2026] The domain key is here: /root/.acme.sh/120-79-148-0.sslip.io_ecc/120-79-148-0.sslip.io.key
+[Mon Jul 13 09:36:11 AM CST 2026] Verifying: 120-79-148-0.sslip.io
+[Mon Jul 13 09:36:11 AM CST 2026] Starting tls server.
+[Mon Jul 13 09:36:13 AM CST 2026] Pending. The CA is processing your order, please wait. (1/30)
+[Mon Jul 13 09:36:17 AM CST 2026] Success
+[Mon Jul 13 09:36:17 AM CST 2026] Verification finished, beginning signing.
+[Mon Jul 13 09:36:19 AM CST 2026] Downloading cert.
+[Mon Jul 13 09:36:20 AM CST 2026] Cert success.
+Your cert is in:              /root/.acme.sh/120-79-148-0.sslip.io_ecc/120-79-148-0.sslip.io.cer
+Your cert key is in:          /root/.acme.sh/120-79-148-0.sslip.io_ecc/120-79-148-0.sslip.io.key
+The intermediate CA cert is in: /root/.acme.sh/120-79-148-0.sslip.io_ecc/ca.cer
+And the full-chain cert is in:  /root/.acme.sh/120-79-148-0.sslip.io_ecc/fullchain.cer
+ISSUE_EXIT=0
+签发后即时复检: ss -tln | grep :443 → 无输出, exit=1（443 已释放，挑战窗口约 09:36:11–09:36:17，约 6 秒）
+
+=========================================================
+[4] 安装证书到 /opt/aneb/tls/public/（原自签目录不动）
+=========================================================
+命令: acme.sh --install-cert -d 120-79-148-0.sslip.io --ecc \
+        --fullchain-file /opt/aneb/tls/public/cert.pem \
+        --key-file       /opt/aneb/tls/public/key.pem
+     + chown -R aneb:aneb /opt/aneb/tls/public
+     + chmod 600 key.pem; chmod 644 cert.pem
+
+安装后目录状态:
+/opt/aneb/tls/:
+  -rw-r--r-- 1 aneb aneb  599 Jul 13 01:34 cert.pem   ← 原自签证书，时间戳未变，未动
+  -rw------- 1 aneb aneb  241 Jul 13 01:34 key.pem    ← 原自签私钥，时间戳未变，未动
+  drwxr-xr-x 2 aneb aneb 4096 Jul 13 09:36 public
+/opt/aneb/tls/public/:
+  -rw-r--r-- 1 aneb aneb 4832 Jul 13 09:36 cert.pem   ← LE fullchain
+  -rw------- 1 aneb aneb  227 Jul 13 09:36 key.pem    ← EC-256 私钥, 600, 未离开服务器
+
+=========================================================
+[5] 最终验证
+=========================================================
+openssl x509 -in /opt/aneb/tls/public/cert.pem -noout -subject -issuer -enddate:
+  subject=CN = 120-79-148-0.sslip.io
+  issuer=C = US, O = Let's Encrypt, CN = YE2
+  notAfter=Oct 11 00:37:47 2026 GMT        （90 天有效期）
+
+crontab -l（root，全部内容，仅 acme.sh 自动续期一行，无其他改动）:
+  16 23 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null
+
+acme.sh --list:
+  Main_Domain            KeyLength  SAN_Domains  CA               Created               Renew
+  120-79-148-0.sslip.io  "ec-256"   no           LetsEncrypt.org  2026-07-13T01:36:20Z  2026-09-10T01:36:20Z
+  （自动续期日 2026-09-10，续期同样走 --alpn 短占 443）
+
+443 最终状态: ss -tln | grep :443 → 无输出, exit=1（空闲）
+
+=========================================================
+[6] 红线遵守情况
+=========================================================
+- 443 仅挑战窗口占用（约 6 秒），签发前/后均确认空闲 ✔
+- 失败重试次数: 0（首次成功）✔
+- 私钥全程未离开服务器（acme.sh 在 E-01 本地生成 domain key）✔
+- 未安装任何系统包，acme.sh 仅在 /root/.acme.sh ✔
+- 未改任何服务配置，原自签证书目录未动（服务切换留待下一阶段）✔
+- 端口 80/8080 等另一项目资源未触碰 ✔
+- zerossl 备选未启用（LE 首发成功，无需触及 EAB 账号类操作）✔

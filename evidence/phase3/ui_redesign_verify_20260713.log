@@ -1,0 +1,54 @@
+ANEB Phase3 UI Redesign 真机验证日志
+日期: 2026-07-13
+设备: 8MY0221126002537 (Huawei P40 Pro, ELS-AN00 / HWELS)
+目标: 验证 UI 重设计 (HEAD cff2faf) 在华为真机渲染无崩溃/无严重错位
+
+时间线:
+1. [OK] adb devices -l 确认在线: device product:ELS-AN00 model:ELS_AN00 transport_id:21
+2. [OK] git 状态: 分支 main, 工作树干净, HEAD=cff2faf "UI 重设计: SpeedTest 式双模式 + token 脉冲环(纯 UI 层)"
+       既有 APK (15:47) 早于 HEAD 提交 (15:51), 故重新构建。
+3. [OK] assembleDebug 构建成功 (app/gradlew :probe:assembleDebug), BUILD SUCCESSFUL in 4s
+       产物: app/probe/build/outputs/apk/debug/probe-debug.apk
+4. [部分] 记录设备初始状态: wifi_on=1, stay_on_while_plugged_in=0 (未做任何修改)
+5. [FAIL] adb install -r 执行中设备掉线 (2 分钟超时). 包 com.aneb.probe 仍在列表, 但版本未核实(可能旧版)。
+6. [FAIL] 设备无法重连: kill-server/start-server + 约 70s 轮询(2 轮)均无设备。
+       adb devices 持续为空。属物理层掉线(USB/锁屏断 ADB/授权失效), 需人工插拔/解锁/重新授权。
+
+结论: ok=false。设备在安装阶段物理掉线且软件无法恢复, 无法完成截图与 uiautomator 断言。
+
+设备红线核查: 全程未修改 WiFi (保持 wifi_on=1) 或 stay-awake (保持 0), 未跑蜂窝测量, 流量≈0。
+无需恢复操作(未改动任何设备设置)。
+
+后续建议: 人工重新连接并解锁设备/确认 USB 调试授权后, 重跑本验证脚本
+(assembleDebug 已就绪, 可直接 install -r 后逐屏取证)。
+
+========================================================================
+第二轮 (17:49-17:54, HEAD=528e6ec "UI 重设计评审修复") — 设备已恢复连接
+========================================================================
+设备: 8MY0221126002537 (ELS-AN00, API31, 电量100%, 5G)
+初始状态记录: night mode=no (浅色), stay_on_while_plugged_in=2 (全程未改动)
+
+1. [OK] adb devices -l 在线: device product:ELS-AN00 model:ELS_AN00
+2. [OK] git 工作树干净, HEAD=528e6ec; assembleDebug 构建成功 (BUILD SUCCESSFUL in 24s)
+3. [OK] install -r 成功 (Streamed Install / Success), 未掉线
+4. [OK] 逐屏取证 (先 cmd uimode night yes 切深色, 与设计基线一致):
+   ① home_dark.png     — 断言通过: ANEB / 智能体网络测试 / 历史 / 设置 / "轻触开始 · 约 90 秒" / 上次结果 chip
+                          品牌行避开状态栏, chip 避开导航栏, 无裁切
+   ② result_simple.png — 断言通过: 简洁/专业分段控件 / 93 / 优秀 / Agent 体验分 / 人话解释(整段换行不截断)
+                          / 三张 stat tile(响应速度 20ms 优, 卡顿 0 优, 上传 19.4 良) / 查看详细数据 / 分享成绩
+                          (数据源: 复用历史中已完成的 WiFi run 93分 07-13 13:26, 零新增流量)
+   ③ result_dev.png    — 断言通过: AQS 92.6 优 / ⚠ 低置信 low_confidence 横幅 / AQS 子分与权重(T1-N2 权重条)
+                          / 连接可达性 REACH(SNI 域名 RST / bare-IP OK 91ms) / 连接信息 / 逐场景 KPI 双口径表
+                          页脚 claim scope 声明在位(滚动至底): "测量对象为终端至指定仿真节点的应用层路径,
+                          非无线层/运营商全网结论" + AQS 免责声明 + kpi_set=agent-qoe-kpi-v0.2 aqs=aqs-v0.1
+   ④ history.png       — 断言通过: ← 返回 / 测试历史 (7) / grade 徽章(91/89/93 优秀绿, 未完成灰)
+                          长 status 串(aborted:default_network_changed)换行显示不截断
+   ⑤ settings.png      — 断言通过: 测量服务器(bare-IP 默认 / sslip.io ✓选中) / 自定义地址输入框
+                          / 测量模式(快测/取证) / 传输通道(自动/WiFi/蜂窝) / LLM API 探针卡 / GPS 路测
+   ⑥ home_light.png    — 断言通过: 浅色 Home 全要素在位, 文本在浅底对比充足可读, 无裁切/无重叠
+5. [OK] 崩溃扫描: 全 logcat 缓冲无 FATAL EXCEPTION / ANR / AndroidRuntime(aneb) — 零崩溃
+6. [OK] 设备状态恢复: night mode 复位 no (与初始一致); WiFi/stay-awake 全程未改动(stay_on=2 原值)
+        未跑蜂窝测量, 仅 UI 渲染核查, 流量≈0 (result 复用已落库 run)
+
+第二轮结论: ok=true。装上且跑通, 6 屏全渲染正常, 无崩溃/无严重错位/中文无截断/状态栏避让正确, 未发现功能性缺陷。
+未做任何 UI 修复 (无功能性问题需修)。

@@ -1,0 +1,139 @@
+================================================================================
+P0-C15 墙钟步进免疫实验 (Wall-clock Step Immunity)
+日期: 2026-07-13 (host local, UTC+8)   执行: Claude (自主阶段任务)
+判定: PASS
+================================================================================
+
+【原理】
+Android 模拟器 (AVD aneb, x86_64, google_apis) 是独立内核时钟的完整 VM。
+aneb-server 为 CGO_ENABLED=0 静态二进制, 直接运行于 emulator guest 内。
+流式过程中用 root 步进 guest 墙钟 ±2s, 验证 SSE 服务端时间戳序列
+(sched_us / pre_flush_us, 单调锚点) 与 summary 数组完全无跳变。
+
+--------------------------------------------------------------------------------
+[1] 交叉编译 (host)
+--------------------------------------------------------------------------------
+cd E:\C Project\ANEB\server
+$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+& 'C:\Program Files\Go\bin\go.exe' build -o "$env:TEMP\aneb-server-linux" .
+→ build exit=0, 产物 9,516,784 bytes (2026/7/13 2:01:26)
+构建后环境变量已置回 $null。
+
+--------------------------------------------------------------------------------
+[2] 模拟器与部署
+--------------------------------------------------------------------------------
+emulator -avd aneb -no-window -no-audio -no-boot-anim -no-snapshot
+(启动进程环境已清空 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY 等全部 proxy 变量, 遵循 D-16)
+sys.boot_completed=1 → emulator-5554 device
+
+adb root → "restarting adbd as root"; adb shell id → uid=0(root) ✓
+adb push aneb-server-linux → /data/local/tmp/aneb-server (chmod 755)
+adb push s1_chat.json s2_coding_agent.json s3_multimodal.json → /data/local/tmp/profiles/
+
+--------------------------------------------------------------------------------
+[3] guest 内启动 + 冒烟
+--------------------------------------------------------------------------------
+adb shell: nohup /data/local/tmp/aneb-server -addr 127.0.0.1:18443 \
+  -profiles /data/local/tmp/profiles -data /data/local/tmp/data &
+server.log:
+  2026/07/12 18:03:39 profile loaded: s1_chat v0.2.0 (4 phases)
+  2026/07/12 18:03:39 profile loaded: s2_coding_agent v0.2.0 (8 phases)
+  2026/07/12 18:03:39 profile loaded: s3_multimodal v0.2.0 (8 phases)
+  2026/07/12 18:03:39 aneb-server/0.1.0 listening on 127.0.0.1:18443
+    (mono-anchor wall=1783879419488094615)
+  ps: root 2368 ... S aneb-server
+
+adb forward tcp:18446 tcp:18443
+host: curl.exe --noproxy '*' -s http://127.0.0.1:18446/api/v1/serverinfo
+→ {"version":"aneb-server/0.1.0","srv_ts_us":31881342,
+   "anchor_wall_unix_ns":1783879419488094615,"uptime_s":31,
+   "goos":"linux","goarch":"amd64",
+   "tcp_slow_start_after_idle":"1","congestion_control":"cubic"}
+
+--------------------------------------------------------------------------------
+[4] toybox date 语法自查 + 步进预演 (root 可设时钟的证明)
+--------------------------------------------------------------------------------
+date --help → Toybox 0.8.11-android; SET 格式支持 @UNIXTIME[.FRACTION]
+预演 (与实验同操作, 一次性 VM 无副作用):
+  before=1783879520.315609760
+  date @$((now+2)) → Sun Jul 12 18:05:22 GMT 2026
+  after=1783879522.055860383          (+~1.74s, 真实前跳)
+  date @$((n2-2))  → Sun Jul 12 18:05:20 GMT 2026
+  restored=1783879520.056289252       (回拨成功)
+
+--------------------------------------------------------------------------------
+[5] 实验组: 10s SSE 流 + 流中 ±2s 步进
+--------------------------------------------------------------------------------
+捕获命令 (host, 后台):
+curl.exe --noproxy '*' -sN --trace-time --trace-ascii c15_trace.txt -o c15_sse.txt \
+  'http://127.0.0.1:18446/api/v1/stream?tokens=200&rate_tps=20&run=c15'
+
+时间线 (host 时刻为北京时间 2026-07-13):
+  02:05:49.839  curl 开流 (pid=23604)
+  ── STEP +2s @ 流内 ~3.1s ──
+  02:05:52.926  步进前 guest date +%s.%N = 1783879551.978839927
+  adb shell 'now=$(date +%s); date @$((now+2))' → Sun Jul 12 18:05:54 GMT 2026
+  02:05:53.074  步进后 guest date +%s.%N = 1783879554.026415109   (跳变 +2.05s ✓)
+  ── STEP -2s @ 流内 ~6.2s ──
+  02:05:55.894  步进前 guest date +%s.%N = 1783879556.815058610
+  adb shell 'now=$(date +%s); date @$((now-2))' → Sun Jul 12 18:05:55 GMT 2026
+  02:05:56.087  步进后 guest date +%s.%N = 1783879555.036841030   (跳变 -1.78s ✓)
+  02:05:59.847  curl 正常结束, sse=59,564 bytes, trace=80,848 bytes
+
+对照组证据: guest 墙钟确实发生 +2/-2 量级真实跳变 (上表 date +%s.%N 前后对照),
+且两次步进均落在 10s 流窗口内部。
+
+--------------------------------------------------------------------------------
+[6] SSE 关键片段
+--------------------------------------------------------------------------------
+: prelude {"srv_ts_us":129959104,"anchor_wall_unix_ns":1783879419488094615,...}
+data: {"seq":0,  "sched_us":129959161,"pre_flush_us":129959175,...}
+data: {"seq":1,  "sched_us":130009161,"pre_flush_us":130010932,...}
+data: {"seq":2,  "sched_us":130059161,"pre_flush_us":130059406,...}
+  ... (步进发生于 seq≈60 与 seq≈124 附近, 序列无任何异常) ...
+data: {"seq":199,"sched_us":139909161,"pre_flush_us":139909215,...}
+event: summary → tokens=200, 四数组各 200 项 (完整数值见第[7]节统计)
+
+--------------------------------------------------------------------------------
+[7] 判定数值
+--------------------------------------------------------------------------------
+token 事件数: 200 (seq 0..199, 无缺失)
+
+(a) sched_us 严格 50ms 网格:
+    base=129959161, sched_us[i] == base + 50000*i 对全部 200 项成立
+    网格违例 = 0 ✓  (last=139909161 == 预期 139909161)
+
+(b) pre_flush_us 单调 + 相邻差 50ms±20ms:
+    非单调项 = 0 ✓
+    相邻差 min=45,133us  max=55,003us  (全部落在 [30,000, 70,000] 内) ✓
+    越界项 = 0 ✓
+
+(c) summary 数组无 2s 量级异常 (阈值 |x|>1,000,000us):
+    flush_return_us : n=200, 相邻差 min=42,319us max=58,414us  ✓
+    timer_late_us   : min=0      max=5,937us                    ✓
+    flush_block_us  : min=15us   max=8,046us                    ✓
+    carryover_us    : min=0      max=8us                        ✓
+    2s 量级异常值总数 = 0 ✓
+
+(d) 附加对照 — host 侧到达间隔 (curl --trace-time, Recv data 事件 201 个):
+    间隔 n=200: min=2ms max=56ms avg=49.8ms; >500ms 扰动 = 0 ✓
+    步进窗口 02:05:52–02:05:57 内 100 个间隔全部 44–56ms
+    (示例: 50,52,49,50,52,48,51,50,50,51,49,50,...,52,49)
+    → TCP 传输与服务端调度均不受 guest 墙钟步进影响的旁证 ✓
+
+--------------------------------------------------------------------------------
+[8] 结论
+--------------------------------------------------------------------------------
+guest 墙钟在流中被真实步进 +2.05s / -1.78s, 而服务端 SSE 时间戳序列
+(sched_us 网格 / pre_flush_us 单调差) 与 summary 全部数组零跳变,
+host 侧到达间隔保持 ~50ms 无扰动。
+证明 aneb-server 的时间戳锚定于单调时钟 (mono-anchor), 对墙钟步进完全免疫。
+
+★ P0-C15 PASS
+
+--------------------------------------------------------------------------------
+[9] 收尾
+--------------------------------------------------------------------------------
+adb emu kill → 模拟器销毁, guest 内 aneb-server 进程随 VM 消失。
+原始捕获文件 (会话 scratchpad, 临时): c15_sse.txt (59,564B), c15_trace.txt (80,848B)
+================================================================================

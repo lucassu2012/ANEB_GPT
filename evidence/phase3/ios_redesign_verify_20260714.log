@@ -1,0 +1,62 @@
+# ANEB Probe — iOS 重构真机部署验证日志
+# 设备: HUAWEI P40 Pro (ELS-AN00 / HWELS), serial=8MY0221126002537, API31 (RenderEffect 支持)
+# 日期: 2026-07-14  构建基线: HEAD 74c9cc0 + 本次 Type.kt 单行修复
+# 包名: com.aneb.probe  versionName=0.1.0-phase0
+
+## 1. 设备原始状态 (测前记录, 供恢复复核)
+night_mode = no
+animator_duration_scale = null (默认 1.0)
+wifi_on = 1 (Wi-Fi is enabled)
+stay_on_while_plugged_in = 0
+
+## 2. 构建 / 安装
+:probe:assembleDebug  -> BUILD SUCCESSFUL
+修复后重建         -> BUILD SUCCESSFUL (5 tasks executed)
+安装: adb install -r 在华为纯净模式下被 "风险提示/继续安装" GUI 拦截并跳转 AppGallery,
+      AppGallery 内 "继续安装" 常态 disabled -> 死路。
+      改用 push + pm install 绕过纯净模式 GUI:
+        adb push probe-fix.apk /data/local/tmp/
+        adb shell pm install -r -d /data/local/tmp/probe-fix.apk  -> Success
+      lastUpdateTime = 2026-07-14 01:35:54 (确认修复版落地)
+      清理: rm /data/local/tmp/probe-fix.apk (已删)
+
+## 3. 逐屏渲染验证 (深色为主, 另采浅色 + 减弱动效)
+01_home_dark.png              首页(深) — 仪表刻度环/蓝色播放键/"轻触开始·约90秒"/顶栏字标/上次卡, 正常
+02_testing_dark.png          测试中(深) — 双层实时遥测: AI业务层(token生成: 首字延迟/ITL中位/卡顿累计0次/token速率)
+                              + 移动网络层(5G SA: RTT/抖动/RSRP -101/SINR 11), 仪表"正在合成体验分", 正常
+                              (经 WiFi quick run 触发, 手动点按进测试中屏; autorun 为无头自动化路径不切屏, 符合 C07 设计)
+03_result_normal_dark.png    结果·简洁(深) — 本次为低置信/无效结果, 仪表空态显 "—" + 引导文案, 三瓦片降级显 "—", 正常
+04_result_dev_dark.png       结果·专业(深) — AQS 不可计算(KPI_MISSING), 子分权重 T1..N2 条, continuity C1/C2, REACH SNI=RST, 导出JSON/CSV, 正常
+05_settings_dark.png         设置(深) — 【修复后】测量服务器/自定义地址输入框/测量模式/传输通道/API探针/GPS路测, 正常
+06_report_dark.png           敏感度报告(深) — 头条结论卡/敏感度发现(低置信标)/结论明细/导出MD·JSON·分享, 正常
+07_history_dark.png          历史(深) — 分数徽章 91 "优秀" 优 低置信 / 未完成灰态 / status·report 行, 正常
+08_home_light.png            首页(浅) — 浅底 iOS 观感, 正常
+09_result_normal_light.png   结果·简洁(浅, 有效91) — 绿色仪表 91 "优秀" Agent体验分 / 17ms·0·28.7 三瓦片皆"优" / 查看详细数据·分享成绩, 正常
+10_result_reduced_motion.png 减弱动效(scale=0) 结果 — 仪表仍显终态 91 + 绿弧 + 瓦片满值, 无空白/卡零 (reduced-motion 降级 OK)
+11_home_reduced_motion.png   减弱动效(scale=0) 首页 — 仪表/播放键即时终态, 无空白入场 (OK)
+
+## 4. uiautomator 断言
+- 无崩溃 (设置页修复后打开不再 force-crash)
+- 关键中文在位: 体验分(Agent 体验分) / 查看详细数据 / 优秀 / 低置信 / claim scope(设置页脚 ResultFormat.CLAIM_SCOPE_TEXT) 均命中
+- 无中文截断 / 无状态栏遮挡 (内容从 y=187 起, 状态栏下方) / 无溢出裁切
+- 毛玻璃顶栏 (GlassHeader) 渲染正常
+- logcat FATAL/ANR 扫描: 修复后缓冲区 aneb 相关为空 (仅修复前存在设置页崩溃)
+
+## 5. 缺陷与修复 (功能性渲染崩溃, 授权最小修复)
+根因: 设置页 OutlinedTextField 浮动标签在 bodyLarge(静息)↔bodySmall(上浮) 间做 TextStyle.lerp;
+      主题 AnebType.Typography 把 bodyLarge.letterSpacing 覆盖为 .em, 但 bodySmall 保留 M3 默认 0.4.sp,
+      lerp(Em, Sp) 触发 IllegalArgumentException: "Cannot perform operation for Em and Sp" -> 打开设置即 FATAL 闪退回桌面。
+栈: SpanStyleKt.lerpTextUnitInheritable <- TextFieldImpl CommonDecorationBox decoratedLabel <- SettingsScreen.kt:103
+修复: app/probe/src/main/java/com/aneb/probe/ui/theme/Type.kt
+      Typography.copy 增补 bodySmall = bodySmall.copy(fontFamily=SystemSans, letterSpacing=0.em)
+      使标签动画两端字距同单位(.em)。纯 ui/theme 层, 零触测量语义/计时/落库/日志KEY。
+验证: 重装后打开设置页无崩溃, uiautomator dump 完整拉到 测量服务器/自定义服务器地址/测量模式/传输通道/GPS路测 等全部文本。
+其余屏纯审美未改。
+
+## 6. 设备恢复复核 (对齐 §1 原始值)
+night_mode = no                     (原 no, ✓)
+animator_duration_scale = null      (原 null, 已 settings delete, ✓)
+wifi_on = 1 / Wi-Fi is enabled      (测中被测量引擎切换关闭 -> svc wifi enable 恢复, ✓)
+stay_on_while_plugged_in = 0        (原 0, 未动, ✓)
+/data/local/tmp/probe-fix.apk       (已删除, ✓)
+流量: 仅 WiFi 到测试服务器 quick run, 未跑蜂窝; 华为 watchdog 观测 rx≈9-19KB/s 量级, 近零。

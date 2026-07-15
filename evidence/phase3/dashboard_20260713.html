@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ANEB 数据看板</title>
+<style>
+body{font-family:'Segoe UI',system-ui,sans-serif;margin:0;background:#f6f7f9;color:#202124}
+.wrap{max-width:960px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px} h2{font-size:16px;margin:28px 0 10px;border-bottom:1px solid #ddd;padding-bottom:6px}
+.cards{display:flex;gap:12px;flex-wrap:wrap}
+.card{flex:1 1 150px;background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:14px}
+.cv{font-size:26px;font-weight:600} .cl{font-size:12px;color:#5f6368;margin-top:4px}
+.panel{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:12px}
+svg{width:100%;height:auto;display:block}
+table{border-collapse:collapse;width:100%;font-size:12.5px;background:#fff}
+th,td{border:1px solid #e0e0e0;padding:5px 8px;text-align:right;white-space:nowrap}
+th{background:#f1f3f4;text-align:center} td.sid{text-align:left;font-weight:600}
+td .sub{display:block;font-size:10px;opacity:.75;font-weight:400}
+.narrow{max-width:360px} .narrow td:first-child{text-align:left}
+.scroll{overflow-x:auto}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.empty{color:#5f6368;font-style:italic} .warn{color:#b06000;background:#fef7e0;padding:8px 12px;border-radius:6px}
+.note{font-size:12px;color:#5f6368}
+footer{margin-top:36px;font-size:12px;color:#5f6368;border-top:1px solid #ddd;padding-top:12px}
+</style></head><body><div class="wrap">
+<h1>ANEB 数据看板</h1>
+<p class="note">生成时间：2026-07-13 07:54:34 +0800 · 输入文件：E:\C Project\ANEB\evidence\phase3\e01_results\20260712.jsonl</p>
+<p class='warn'>注意：1/1 条记录缺少 run/scenarios 正文（仅合同顶层字段，如冒烟验证记录），未计入 KPI/AQS 统计。</p>
+<div class="cards"><div class='card'><div class='cv'>1</div><div class='cl'>runs（上报记录数）</div></div><div class='card'><div class='cv'>N/A</div><div class='cl'>AQS 中位</div></div><div class='card'><div class='cv'>N/A</div><div class='cl'>场景有效率</div></div><div class='card'><div class='cv'>0</div><div class='cl'>含 KPI 正文的记录</div></div></div>
+<h2>AQS 时间线</h2><div class="panel"><p class='empty'>无 AQS 数据（上报体缺 run.aqs.score）</p></div>
+<h2>各场景 KPI 中位（色块 = 该 KPI 上报分级众数）</h2><p class='empty'>无场景 KPI 数据</p>
+<h2>Validity 分布（场景级三态）</h2><p class='empty'>无 validity 数据</p>
+<h2>ITL 直方图（跨场景聚合）</h2><div class="panel"><p class='empty'>无 ITL 直方图数据（上报体缺 scenarios[].itl_histogram）</p></div>
+<h2>版本</h2>
+<div class="scroll"><table><tr><th>kpi_set</th><th>aqs_version</th><th>schema_version</th><th>profile_versions</th><th>runs</th></tr><tr><td>agent-qoe-kpi-v0.2</td><td>aqs-v0.1</td><td>1.0</td><td>0.2.0</td><td>1</td></tr></table></div>
+<footer>claim_scope: <b>application_end_to_end_to_probe_node (1)</b> · 结论口径以 claim_scope 为界，不代表运营商网络端到端体验。<br>
+ANEB phase-3 dashboard · stdlib-only 生成 · 图表为手写内联 SVG，无外部依赖。</footer>
+</div></body></html>

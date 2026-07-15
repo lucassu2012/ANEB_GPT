@@ -1,0 +1,140 @@
+========================================================================
+P2-C05 模拟器 E2E 验收证据 — Cronet TCP(TLS) vs QUIC(h3) 背靠背 A/B
+日期：2026-07-13   验收判定：PARTIAL（h3 未协商，如实记录 fallback 全量+根因）
+========================================================================
+
+【任务】Cronet 客户端 + 同 profile TCP(TLS) vs QUIC(h3) 背靠背 A/B（设计文档
+§8 阶段 2、DECISION_LOG D-17/D-19、红队"QUIC 启用≠协商 h3"）。
+
+------------------------------------------------------------------------
+0. 实现清单（全部完成）
+------------------------------------------------------------------------
+- 依赖：org.chromium.net:cronet-embedded 143.7445.0（Google Maven 组当前最新
+  发布线；libs.versions.toml 精确钉死）。APK 由 ~14MB 增至 56MB（每 ABI 内嵌
+  网络栈，属预期，ADR-001 同款取舍）。
+- CronetStreamClient（net/cronet/）：ExperimentalCronetEngine，enableQuic +
+  addQuicHint + 禁缓存；UrlRequest.Callback.onReadCompleted 逐块 elapsedRealtimeNanos
+  打戳（语义类比 OkHttp"一次读一次戳"+sameReadBatch，KDoc 明示两栈计时钩子
+  粒度差异、数据不可互比）；逐请求记 UrlResponseInfo.getNegotiatedProtocol()
+  （h3 判定唯一依据）；SSE 边界扫描复用抽出的 SseBoundaryScanner + SseReader.parseRaw。
+- AbRunner（engine/）：同 profile s2_coding_agent phase0（300 token burst）
+  ABAB 交替 3+3；A 组 disableQuic、B 组 enableQuic+hint；B 组逐样本按
+  negotiatedProtocol 分箱（h3→quic，非 h3→fallback 不进对比）；结果落 ab_result
+  （DB v7）+ 日志 KEY AB_SAMPLE/AB_SUMMARY；UI 入口"AB h3"+ intent --es mode ab。
+- 本地双栈服务端 + 信任锚：server/tools/gencert 生成自签 ECDSA P-256 证书
+  （SAN=IP:10.0.2.2,IP:127.0.0.1,DNS:localhost）；server -h3 -tls-cert/-tls-key
+  起 https+h3 双栈；debug network_security_config 加 <certificates src="@raw/aneb_local_ca"/>。
+- JVM 单测：AbRunnerTest 13 个（交替顺序/分箱/fallback 单列/每样本 KPI/seq 审计/
+  分位数/phase 定位）；:probe:testDebugUnitTest 全绿 215 tests / 0 fail。
+- assembleDebug 通过，probe-debug.apk 56,364,376 bytes。
+
+------------------------------------------------------------------------
+1. 服务端双栈自证（host 侧，证明服务端 h3 栈健康——排除"服务端 h3 不通"）
+------------------------------------------------------------------------
+$ curl.exe --noproxy "*" -sk https://127.0.0.1:8443/api/v1/serverinfo
+{"version":"aneb-server/0.1.0",...,"h3_enabled":true,...}
+
+$ curl.exe --noproxy "*" -skI https://127.0.0.1:8443/api/v1/serverinfo
+  Alt-Svc: h3=":8443"; ma=86400
+  X-Aneb-Proto: HTTP/1.1;via=tcp
+  X-Aneb-Server: aneb-server/0.1.0
+
+$ go run ./tools/h3check      # quic-go http3 客户端直连（独立于 Cronet/NAT）
+proto=HTTP/3.0 status=200 x-aneb-proto="HTTP/3.0;via=h3-server"
+  → 服务端 h3 栈完全正常，真实 h3 客户端能协商成功并拿到 via=h3-server 证据头。
+
+netstat：仅 aneb-server-ab(pid 19268) 独占 :8443 TCP+UDP（v4/v6），无端口抢占。
+
+------------------------------------------------------------------------
+2. 模拟器 E2E（AVD aneb-ab，port 5588，android-35 google_apis x86_64）
+------------------------------------------------------------------------
+坑1（已排除）：宿主机全局代理（HTTP_PROXY=127.0.0.1:33210，Clash）导致模拟器
+  首次带 -http_proxy 环境继承，guest→host TCP 连接被代理吞掉（服务端零 TLS
+  握手日志）。清 proxy 环境变量后重启 AVD 解决——A 组/控制面全部转为成功。
+
+A 组（Cronet disableQuic）与 B 组控制面成功证据（AB_SUMMARY a_n=3 全成功）：
+AB_WARMUP group=a protocol=h2 http=200 error=none
+AB_WARMUP group=b protocol=h2 http=200 error=none
+AB_SAMPLE idx=0 group=a protocol=h2 bin=tcp   ttft_ms=6.07  itl_p50_ms=10.01 itl_p95_ms=11.55 itl_n=286 stall_rate=0 gaps=0 events=300 http=200
+AB_SAMPLE idx=1 group=b protocol=h2 bin=fallback ttft_ms=4.25 itl_p50_ms=10.01 itl_p95_ms=11.39 itl_n=286 stall_rate=0 gaps=0 events=300 http=200
+AB_SAMPLE idx=2 group=a protocol=h2 bin=tcp   ttft_ms=16.26 itl_p50_ms=10.02 itl_p95_ms=11.44 itl_n=285 ...
+AB_SAMPLE idx=3 group=b protocol=h2 bin=fallback ttft_ms=11.45 ...
+AB_SAMPLE idx=4 group=a protocol=h2 bin=tcp   ttft_ms=4.75  ...
+AB_SAMPLE idx=5 group=b protocol=h2 bin=fallback ttft_ms=12.75 ...
+AB_SUMMARY stack=cronet a_n=3 a_ttft_p50_ms=6.07 a_itl_p50_ms=10.01 a_itl_p95_ms=11.55
+           quic_n=0 quic_ttft_p50_ms=null quic_itl_p50_ms=null quic_itl_p95_ms=null
+           fallback_n=3 fallback_protocols=h2 comparable=false
+AB_END status=no_h3_negotiated
+
+  → A 组 protocol∈{h2} 全成功、gaps=0、300 events、itl_p50≈10ms（与 burst
+    cluster_tps=100 一致）——Cronet 栈端到端测量链路完全打通。
+  → B 组 3 样本全部 negotiated h2（非 h3）→ 分箱 fallback，QUIC 组为空。
+  → AB_SUMMARY 两组并列输出，comparable=false 如实标注不可下 A/B 结论。
+
+DB 落库自证（run-as sqlite3）：PRAGMA user_version=7（DB v7）；ab_result 46 行，
+stack=cronet、claim_scope=application_end_to_end_to_probe_node、bin 分箱正确落库。
+
+------------------------------------------------------------------------
+3. h3 未协商根因诊断（Cronet NetLog，逐帧证据）——非 NAT 问题
+------------------------------------------------------------------------
+UDP 路径排除：guest→host UDP datagram 实测可达
+  （host UDP listener :5599 收到 guest toybox nc -u 发的 "udping"，from 127.0.0.1）。
+
+NetLog（--ez ab_netlog true，B 组引擎 startNetLogToFile）关键帧序列：
+  QUIC_SESSION_POOL_JOB host=10.0.2.2 port=8443 proxy_chain=[direct://]
+  QUIC_SESSION ... versions=RFCv1 require_confirmation=true
+  QUIC_SESSION_PACKET_SENT ENCRYPTION_INITIAL ... （Client Hello 发出）
+  QUIC_SESSION_PACKET_RECEIVED peer=10.0.2.2:8443 self=10.0.2.16:xxxxx（服务端回包）
+  QUIC_SESSION_VERSION_NEGOTIATED version=RFCv1
+  QUIC_SESSION_CRYPTO_FRAME_RECEIVED ENCRYPTION_HANDSHAKE（收到服务端证书链）
+  CERT_VERIFY_PROC cert_status=0 is_issued_by_known_root=false
+  QUIC_SESSION_CERTIFICATE_VERIFIED subjects=["localhost"]
+  QUIC_SESSION_CONNECTION_CLOSE_FRAME_SENT close_type=Transport
+    details="TLS handshake failure (ENCRYPTION_HANDSHAKE) 46: certificate unknown.
+             SSLErrorStack:[handshake.cc:298] error:1000007d:SSL routines:
+             OPENSSL_internal:CERTIFICATE_VERIFY_FAILED" quic_error=199
+  QUIC_SESSION_CLOSED from_peer=false（客户端主动收连接）
+  → 随后 Cronet retry_without_alt_svc_on_quic_errors 退回 TCP → 协商 h2 → 样本落 fallback。
+
+根因（确定性）：
+  UDP 可达、QUIC 握手推进到 ENCRYPTION_HANDSHAKE 证书阶段——**不是 NAT 问题**。
+  CERT_VERIFY_PROC 报 cert_status=0（NSC 信任锚令 TCP(TLS) 栈证书校验通过），
+  但 is_issued_by_known_root=false。Chromium QUIC 的 ProofVerifierChromium 在证书
+  验证通过后额外要求链到"公共已知根"（known root），私有/自签 CA 天然
+  is_issued_by_known_root=false → BoringSSL 层以 alert 46 certificate_unknown 收连接
+  （from_peer=false，客户端侧拒绝）。
+
+已穷尽的合规修复尝试（均无效或不适用）：
+  a) NSC <certificates src="@raw/aneb_local_ca"/> 信任锚：只令 cert_status=0，
+     不改 is_issued_by_known_root（TCP(TLS) 生效、QUIC 无效）。
+  b) 实验选项 QUIC.origins_to_force_quic_on / host_whitelist：M143 libcronet
+     字符串搜索确认 origins_to_force_quic_on 为内部 embedder-only 配置键，
+     非 Cronet setExperimentalOptions 暴露项（NetLog context 的该字段恒 []）。
+  c) 把自签 CA 装入模拟器系统根（apex conscrypt cacerts tmpfs overlay +
+     nsenter bind 进 zygote/app 挂载命名空间，CERT_VISIBLE_IN_APP_NS 已确认）：
+     系统根同样只满足 cert_status=0，QUIC 仍 is_issued_by_known_root=false → 失败。
+  d) libcronet 143 仅暴露 Cronet_Engine_SetMockCertVerifierForTesting（测试专用
+     native 钩子），无 ignore_certificate_errors/allow_unknown_root 类生产选项。
+     用 MockCertVerifier 等同关闭真实证书校验，违背"测真实 h3 握手"的测量本意，
+     不采用（造假红线）。
+
+------------------------------------------------------------------------
+4. 验收判定：PARTIAL（如实，非造假）
+------------------------------------------------------------------------
+- A 组样本 protocol∈{h2}、gaps=0、300 events 全成功 —— 达标。
+- B 组 negotiated h3 样本数 = 0（QUIC 组为空）—— 未达"至少 2 个 h3"目标。
+- 根因确定：cronet-embedded 对私有/自签 CA 的 QUIC 强制 known-root 校验，非
+  NAT、非服务端、非本实现缺陷；fallback 全量如实记录（negotiatedProtocol=h2、
+  bin=fallback、comparable=false、status=no_h3_negotiated）。
+- 真实公网 CA（如 Let's Encrypt）部署的 h3 服务端上，B 组将正常协商 h3 并出
+  QUIC 组数据——A/B 机制、分箱、落库、KPI 口径均已就绪且经单测锚定；仅本地
+  自签联调环境无法满足 Chromium QUIC 的 known-root 前置。
+
+------------------------------------------------------------------------
+5. 清理
+------------------------------------------------------------------------
+- 自签证书私钥 server/certs/aneb_local_key.pem 入 .gitignore（不入库）；
+  证书公钥 cert.pem + debug res/raw 信任锚成对保留。
+- E2E 后删 AVD aneb-ab、停自起服务端进程（见会话末清理步骤）。
+- 运行二进制放 %TEMP%（aneb-server-ab.exe），不落项目目录。
+========================================================================

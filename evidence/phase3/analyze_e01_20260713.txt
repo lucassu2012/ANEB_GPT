@@ -1,0 +1,17 @@
+﻿# ANEB results summary
+
+records: **1**
+
+## versions
+
+| kpi_set | aqs | schema | runs |
+|---|---|---|---|
+| agent-qoe-kpi-v0.2 | aqs-v0.1 | 1.0 | 1 |
+
+## validity (scenario level)
+
+| validity | count |
+|---|---|
+
+## per-scenario KPI medians
+

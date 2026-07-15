@@ -1,0 +1,53 @@
+﻿=== smoke: GET /api/v1/profiles ===
+{"profiles":[{"profile_id":"s1_chat","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"对话流（对照组）：小 prompt 上行 + 稳态 token 流下行，对标普通 chat 应用","est_duration_s":60,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":2048,"chunk_kb":2},{"type":"token_stream","tokens":600,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":1001},{"type":"clock_sync","samples":20}]},{"profile_id":"s2_coding_agent","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"编码 Agent 流（主场景）：大 prompt 上行突发 + 思考停顿 + 工具循环往返 + 突发簇代码流，对标 Claude Code / Kimi Claw","est_duration_s":90,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":524288,"chunk_kb":64},{"type":"think_pause","duration_ms":3000},{"type":"token_stream","tokens":300,"rate_tps":60,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"burst":{"cluster_tps":100,"pause_ms":[300,800],"cluster_geom_p":0.05},"seed":2001},{"type":"tool_loop","rounds":8,"up_bytes":8192,"down_bytes":2048,"server_proc_ms":200},{"type":"think_pause","duration_ms":2000},{"type":"token_stream","tokens":800,"rate_tps":60,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"burst":{"cluster_tps":100,"pause_ms":[300,800],"cluster_geom_p":0.05},"seed":2002},{"type":"clock_sync","samples":20}]},{"profile_id":"s3_multimodal","version":"0.2.0","kpi_set":"agent-qoe-kpi-v0.2","description":"多模态流：周期性大图上行 + token 流下行交替，对标截图转代码类视觉 agentic","est_duration_s":75,"phases":[{"type":"clock_sync","samples":20},{"type":"upload_burst","bytes":1048576,"chunk_kb":64},{"type":"think_pause","duration_ms":2500},{"type":"token_stream","tokens":200,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":3001},{"type":"upload_burst","bytes":1048576,"chunk_kb":64},{"type":"think_pause","duration_ms":2500},{"type":"token_stream","tokens":200,"rate_tps":40,"token_bytes":{"dist":"lognormal","median":120,"sigma":0.6},"seed":3002},{"type":"clock_sync","samples":20}]}],"server_version":"aneb-server/0.1.0"}
+
+=== smoke: POST /api/v1/echo ===
+{"t1_us":2439450,"anchor_wall_unix_ns":1783823467808974600,"observed":"127.0.0.1:65143","t2_us":2439450}
+
+=== smoke: GET /api/v1/stream?tokens=5&rate_tps=20&run=smoke1 (SSE) ===
+: prelude {"srv_ts_us":2465246,"anchor_wall_unix_ns":1783823467808974600,"observed":"127.0.0.1:65144"}
+
+event: token
+data: {"seq":0,"sched_us":2465760,"pre_flush_us":2465760,"payload":"gAa/bYs4QrTHssak6S9gPBmVal8faXU+INi8+aIke7ys2kHw3wxpxciLq0GPLpFdsxpFm520TMhx"}
+
+event: token
+data: {"seq":1,"sched_us":2515760,"pre_flush_us":2516332,"payload":"kXVUA2qGdhFetz5YnLRRBPlUC3zL1ul3gyycnl3k75CBTTERgbG9cihjr/MZzexYJnJO8dfXcUUp1doP8FrLLb7cokDMaBsYYFDtmppEmkXumi69IF4F7jP2NnZlCPtdj2Ti8go+VyObrajXKhc3"}
+
+event: token
+data: {"seq":2,"sched_us":2565760,"pre_flush_us":2566247,"payload":"kicLAnLJaZFUhspyUgWYgdhUOw/MLHxAZ2UK5F8EJKKwOZMlVdDUDZjea7U+QZM7qch/Hp2K1qpM8YjLQyqwYhPMlGTddcc/9Sgqn/ApyoNTeT5guWQURg=="}
+
+event: token
+data: {"seq":3,"sched_us":2615760,"pre_flush_us":2616262,"payload":"DhD0h1frd6U6uHI/ijocBccBjN6S2tRLDo9SThDMSWHBa5lHWeLTDR1d0yr5r0kdySZKzyWsQklp0FVvzYqWYoXURGVff6SPxc6aU7UvhnOYVBhGJdUdzs9KrBTolrEaNvgmQF4GzIpgMBUbCEpUZvlwozVFcYKHRDD+BWgKFo6mjZa0VRsw0oRcxgGHa+BxrOpxjgUZLvHc5Q4O9sfNwtEYxYM/0pNQN1aumRwnTB1IyZujCmWfi8Tj+8ptqVBJElDYWz7Qkug5EjuKvQV8O8Inr/bzz5zRdv6Gy95FZwBfe7YLeRJ++fuZZBCwq9jPnDTjO2ovcUZIkthSl2lop1/6y4g3XfRrHybgl45Kwd1FZTbLSpkRChyvlOMW7bL5iPJ7WRaOqDbrezvszIKWuaue0pWzPlWwdNRdnAucChv0dhgqi64bFNJZcG+mrPJ42B2zfNIrTyvAvbhMVKuAsALO/Bbmu4f1OcqgUQHkQepkyG9A8JWs9e1g/rlZQL1eYg85nS1UFPLolbBwJcEjFYz1dF1KW1liIbkeNjvFukwM3ceExi2y1Q8HJvYlAy8T0EaOdBBxkwHArlMgndbksvI2XnNdeqkmccRDa6bR0TUHSwLamQf7PPI="}
+
+event: token
+data: {"seq":4,"sched_us":2665760,"pre_flush_us":2666193,"payload":"JU7hH+ZU/Bg8ViqPmp8fLCs2nwsbnhUoPDdVDODhNjhBotDvvNYz6JJ10wFQS8PCaSA1z2jxLip9EIX3kfN2AIbxLwRh53inWFlHilhJrDTEvSniWJeyN1l1iY8r8RzZJ65FVvtk32RcT9yMGcP01LIOZZrye1/2yJWk+5I/QeuI7/5opsPo/ZZueFea+uhPAIg="}
+
+event: summary
+data: {"tokens":5,"stream_start_us":2465760,"flush_return_us":[2465760,2516507,2566247,2616407,2666339],"timer_late_us":[0,572,487,502,433],"flush_block_us":[0,174,0,145,146],"carryover_us":[0,0,0,0,0]}
+
+
+=== smoke: POST /api/v1/toolloop?proc_ms=50&down_bytes=64 (headers) ===
+HTTP/1.1 200 OK
+Content-Length: 64
+Content-Type: application/octet-stream
+X-Aneb-Server: aneb-server/0.1.0
+X-Aneb-Trecv-Us: 2691193
+X-Aneb-Tsend-Us: 2741938
+Date: Sun, 12 Jul 2026 02:31:10 GMT
+
+
+=== smoke: POST /api/v1/results ===
+body must be a single JSON document
+
+=== server stderr ===
+2026/07/12 10:31:07 profile loaded: s1_chat v0.2.0 (4 phases)
+2026/07/12 10:31:07 profile loaded: s2_coding_agent v0.2.0 (8 phases)
+2026/07/12 10:31:07 profile loaded: s3_multimodal v0.2.0 (8 phases)
+2026/07/12 10:31:07 aneb-server/0.1.0 listening on 127.0.0.1:18443 (profiles=E:\C Project\ANEB\profiles data=C:\Users\lucas\AppData\Local\Temp\claude\E--C-Project-ANEB\61bd2401-d07a-40b2-a64d-14252cc1121f\scratchpad\data, mono-anchor wall=1783823467808974600)
+2026/07/12 10:31:07 WARNING: no -tls-cert/-tls-key given, serving PLAINTEXT HTTP 鈥?dev only, do not use for evidential runs
+=== results jsonl ===
+
+=== smoke retry: POST /api/v1/results (body via file, PS quoting artifact resolved) ===
+response: {"ok":true}
+jsonl: {"run_id":"smoke1","note":"phase0 smoke"}
+

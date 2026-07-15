@@ -1,0 +1,78 @@
+P2-C06 TLS cutover — E-01 co-op switch, 2026-07-13 (executor: subagent; cert issuance done by prior cert agent)
+server=120.79.148.0 (E-01, Aliyun Shenzhen, shared host) domain=120-79-148-0.sslip.io cert=Let's Encrypt (TLS-ALPN-01, ECDSA P-256, NotAfter 2026-10-11, chain -> ISRG Root X2)
+
+== 1. redeploy with TLS + h3 ==
+- precondition check: /opt/aneb/tls/public/{cert.pem,key.pem} present (installed 09:36 by cert agent) -> task UNBLOCKED
+- server/ rebuilt from main worktree (includes TCP_INFO P3-C05 changes; go vet clean, go test ok)
+- aneb-server.service ExecStart += -tls-cert /opt/aneb/tls/public/cert.pem -tls-key /opt/aneb/tls/public/key.pem -h3
+- deploy via scripts/deploy_server.ps1 (smoke curls switched to https -k) -> DEPLOY_OK 10:04:52 CST
+- server-local check over PUBLIC domain + real chain:
+  curl https://120-79-148-0.sslip.io:8443/api/v1/serverinfo -> HTTP 200, ssl_verify_result=0,
+  {"h3_enabled":true,"tcp_slow_start_after_idle":"0","congestion_control":"cubic"}
+- h3 side: udp *:8443 UNCONN listening (ss -ulnp), log "h3: HTTP/3 enabled on udp:8443 (Alt-Svc: h3=\":8443\"; ma=86400)"
+- h3 end-to-end (server-local, quic-go h3check, -insecure=false i.e. REAL cert verification):
+  proto=HTTP/3.0 status=200 x-aneb-proto="HTTP/3.0;via=h3-server"
+- note: quic-go warns UDP rcvbuf 416KiB < wanted 7168KiB (net.core.rmem_max not raised — shared-host rule
+  allows only the single 99-aneb.conf sysctl; revisit when h3 goes public)
+
+== 2. client co-op + FIRST full-chain public TLS run ==
+- MainActivity default server -> https://120-79-148-0.sslip.io:8443 (public CA, no trust anchor needed;
+  debug NSC self-signed anchors remain scoped to 10.0.2.2/127.0.0.1 only, system anchors untouched)
+- assembleDebug OK; AVD aneb-p3e (android-35 google_apis x86_64, port 5598) created fresh for this task
+- OBSTACLE 1 (R-03 live): emulator auto-adopts host system proxy (winhttp 127.0.0.1:33210, Clash);
+  all TLS to :8443 through it dies in handshake. netsimd crash-loops on -http-proxy ""/none.
+  Workaround: local direct-dial CONNECT forwarder (Go, 127.0.0.1:18888, zero upstream proxy) as -http-proxy.
+  TCP to 120.79.148.0:8443 then dials DIRECT from host; TLS stays end-to-end app<->server (no MITM).
+  DEVIATION: guest->host loopback CONNECT hop in path (sub-0.1ms); numbers below are functional-E2E
+  evidence, not clean-path baselines.
+- OBSTACLE 2 (measurement finding, red-team grade): on-path DPI selectively kills TLS ClientHellos to :8443
+  by TLS stack fingerprint, in bursts:
+    * Go crypto/tls: 75/75 fresh handshakes OK over 150s (hsmap probe 10:41:33-10:44:04, tls1.3, ~35ms)
+    * OpenSSL s_client: 8/8 OK (incl 3 full HTTPS GETs)
+    * Windows schannel (curl.exe/.NET/PS): 10/10 RST mid-handshake ("Recv failure: Connection was reset")
+    * Android conscrypt/BoringSSL (OkHttp in app): intermittent — whole scenarios pass then fail in waves
+  server journal shows "TLS handshake error ... connection reset by peer" FROM client IP 210.21.11.228
+  => bidirectional RST injection by middlebox, not server. Same behavior via Clash egress and direct.
+  Working hypothesis: CH-size/fingerprint-based (BoringSSL/schannel large padded+GREASE/PQ hellos killed;
+  small Go/OpenSSL hellos pass). THIS IS EXACTLY THE INTERFERENCE CLASS ANEB EXISTS TO MEASURE.
+  PS-based step-3 baseline was impossible (schannel 100% blocked) -> replaced by Go client (documented below).
+- run attempts (quick, autorun, default https URL): 5 runs total; per-handshake failures INVALID the affected
+  scenarios (TRUNCATED) exactly as designed; SUCCESS run:
+  RUN 019f595d-6a45-7c84-80dd-cd1a60ce8c58 (02:45-02:47 UTC / 10:45-10:47 CST):
+    s1_chat           VALID_LOW_CONFIDENCE t2=26.63ms n1=16.90ms n2=242.92ms
+    s2_coding_agent   VALID_LOW_CONFIDENCE t1=14.42ms t2=11.66ms t5=747.23ms u1=21.05Mbps u2=36.87ms
+    s3_multimodal     VALID_LOW_CONFIDENCE t2=27.15ms u1=19.48Mbps
+    AQS score=86.0 low_confidence=true veto=false subs=T1:98.9,T2:98.3,T3:100.0,U1:84.5,U2:96.3,N1:91.5,N2:0.0
+    REPORT http=200 bytes=8900 error=none ; RUN_END status=completed
+  server-side receipt: /opt/aneb/data/results/20260713.jsonl contains run_id 019f595d-6a45... (8901 bytes)
+  => GATE PASSED: first full-chain public TLS run, RUN_END completed + REPORT 200, cert chain = public CA.
+
+== 3. PC direct baseline: TLS vs phase0 plaintext ==
+method deviation: PS/.NET (schannel) is 100% RST'd by the middlebox above -> Go crypto/tls client
+(scratchpad tlsbase, Proxy=nil DIRECT, ForceAttemptHTTP2=false, keep-alive reuse like phase0), same shape:
+echo x22 drop 2 warmup + default 100-token stream (40tps nominal, 25ms grid).
+  first request (TCP+TLS1.3 handshake + echo): 229.6ms  proto=HTTP/1.1
+  echo RTT (n=20): min=11.1ms p50=12.0ms p95=13.3ms jitter(p95-p50)=1.2ms
+  phase0 plaintext reference (20260712): min=22.8 p50=28.1 p95=45.5 jitter=17.3
+  NOTE: p50 12.0 vs 28.1 — network conditions differ across days/route; NOT attributable to TLS
+  (TLS adds a handshake, it does not lower steady-state RTT). Steady-state echo over an established
+  TLS connection shows no measurable penalty vs plaintext era.
+  stream: headers=12.8ms first_read=12.8ms total=2489.5ms reads=102 tokens=100 summary=true
+  inter-read gaps: n=101 p50=25.1ms p95=26.4ms coalesced(<1ms)=2 stalls(>200ms)=0 (nominal 25ms)
+  phase0 plaintext reference: p50=25.1 p95=29.2 coalesced=2 stalls=0 -> pacing fidelity unchanged under TLS.
+
+== 4. UDP 8443 external reachability (h3 public) ==
+Go udpprobe: 3x QUIC-v1-Initial-shaped 1200B datagrams to 120.79.148.0:8443/UDP ->
+all 3 timeout (no response, no ICMP) => externally FILTERED as expected (cloud firewall has no UDP rule).
+Server-side UDP listener alive + h3 loopback verified (see §1). h3 public A/B remains BLOCKED pending
+user opening UDP 8443 in the Aliyun firewall — server side is already live; opens the instant the rule lands.
+
+== 5. cleanup ==
+emulator killed, AVD aneb-p3e deleted, directfwd forwarder stopped. No firewall/sysctl/co-tenant changes on E-01
+beyond the existing 99-aneb.conf. 443 untouched (was only used transiently by cert agent for ACME).
+
+follow-ups for main session:
+- phase2 STATUS C06 entry update (left to main session per task contract)
+- DPI ClientHello-kill finding deserves a red-team ledger entry + potential probe feature
+  (handshake-success-rate-by-fingerprint is a measurable ANEB KPI candidate)
+- consider net.core.rmem_max sysctl exception when h3 goes public (quic-go rcvbuf warning)

@@ -1,0 +1,556 @@
+﻿================================================================================
+ANEB 闃舵 0 妯℃嫙鍣ㄧ鍒扮鑱旇皟璇佹嵁 (P0-C09 / P0-C10 / P0-C12)
+鏃ユ湡: 2026-07-12  鎵ц: 鑱旇皟瀛愪唬鐞?(Claude Code)
+================================================================================
+
+[0] 鍔犻€熷櫒妫€鏌?--------------------------------------------------------------------------------
+鍛戒护: emulator.exe -accel-check
+杈撳嚭: accel: 0  "WHPX(10.0.22631) is installed and usable."
+缁撹: PASS (WHPX 鍙敤)
+
+[1] 浠ｇ爜澧炲己 (鑱旇皟鍙娴嬫€? 鏈敼娴嬮噺璇箟)
+--------------------------------------------------------------------------------
+a. MainActivity.kt: 鏂板 addLog() 鈥斺€?UI 鏃ュ織 Flow collect 澶勫苟琛?   android.util.Log.i("AnebProbe", line) 闀滃儚鍒?logcat; Radio snapshot 鍚屾牱鎺ュ叆銆?b. MainActivity.kt: onCreate 璇诲彇 intent extras --es server / --ez autorun;
+   autorun=true 鏃?LaunchedEffect(Unit) 瑙﹀彂涓€娆′笌鎸夐挳瀹屽叏绛変环鐨?startRun()銆?c. TestEngine.kt: 鏂板瀵归綈娈嬪樊缁熻 鈥斺€?鐩搁偦(鎸?seq 鎺掑簭) token 鐨?   |瀹㈡埛绔埌杈鹃棿闅攗s 鈭?鏈嶅姟绔彂鍑洪棿闅攗s(preFlushUs 宸?|, 鍓旈櫎 sameReadBatch
+   浼?0 鏍锋湰涓?preFlushUs 缂哄け(-1)鏍锋湰, 杈撳嚭 P50/P95(us),
+   姹囨€昏鎵撳嵃 alignResidualP95Us銆?閲嶅缓: gradlew :probe:assembleDebug --no-daemon -> BUILD SUCCESSFUL in 45s
+
+[2] 鏈満鏈嶅姟绔?--------------------------------------------------------------------------------
+缂栬瘧: go build -o %TEMP%\aneb-server.exe .  (9,643,008 bytes)
+鍚姩: aneb-server.exe -addr 127.0.0.1:8443 -profiles "E:\C Project\ANEB\profiles"
+      -data %TEMP%\aneb-data   PID=18328
+鐩磋繛楠岃瘉 (curl --noproxy '*', D-16 浠ｇ悊绾㈢嚎): POST /api/v1/echo -> 200, 2.1ms
+  鍝嶅簲: {"t1_us":36647618,"anchor_wall_unix_ns":1783866355663855000,
+         "observed":"127.0.0.1:59135","t2_us":36647618}
+
+[3] 妯℃嫙鍣ㄥ惎鍔?--------------------------------------------------------------------------------
+鍚姩杩涚▼鍐呮竻绌?HTTP_PROXY/HTTPS_PROXY/ALL_PROXY (澶у皬鍐欏悇绯? 鍚?
+emulator.exe -avd aneb -no-window -no-audio -no-boot-anim
+             -gpu swiftshader_indirect   PID=18204
+sys.boot_completed=1 浜?22:28:35 (绛夊緟寰幆, <5 鍒嗛挓) [瀹夸富鏃跺尯鏃跺埢]
+guest 鍐?logcat 鏃堕棿杞存樉绀轰负 14:30 鍓嶅悗 (guest 鏃跺尯涓嶅悓, 涓嶅奖鍝嶇浉瀵规椂搴?
+
+[4] 瀹夎 + 棣栬窇 (P0-C09)
+--------------------------------------------------------------------------------
+adb install -r probe-debug.apk -> Success
+adb shell am start -n com.aneb.probe/.ui.MainActivity
+    --es server "http://10.0.2.2:8443" --ez autorun true
+S1 瀹屾暣璺戦€? clock_sync 20 echo (valid 17/17, min-RTT 2882us,
+offset=83458666us +/- 1441us) -> upload 2048B (110.61ms, http=200)
+-> token_stream 600 events, reads=607, bytes=183173, parseErrors=0,
+truncatedTail=false, gaps=0 dup=0
+棣栬窇姹囨€? TTFT=26.27ms, ITL median=25.00ms P95=25.76ms,
+alignResidualP95Us=1148 P50=211 (n=599), stalls=0
+鍒ゅ畾: P0-C09 PASS (瀹屾暣 logcat 瑙侀檮褰?A)
+
+[5] 鍗佽繛娴?(P0-C10)
+--------------------------------------------------------------------------------
+鏂瑰紡: adb shell am start -S (寮哄仠鍚庡喎鍚? + --ez autorun true, 姣忔闂撮殧 5s,
+      姣忔杩愯鍓?logcat -c, 缁撴潫鍚庢寜 tag AnebProbe:I 鍏ㄩ噺钀界洏銆?run  status    ttft_ms  itl_med  itl_p95  alignP95us  alignP50us  n    stalls gaps
+ 1   COMPLETE    2.79    24.98    26.52      2440        358      599    0     0
+ 2   COMPLETE  146.28    24.98    26.34      2105        321      599    0     0
+ 3   COMPLETE    7.06    25.00    25.87      1088        260      599    0     0
+ 4   COMPLETE    2.36    25.00    26.96      2921        371      599    0     0
+ 5   COMPLETE   36.14    24.97    25.93      1045        315      599    0     0
+ 6   COMPLETE   15.22    25.00    25.94       970        244      599    0     0
+ 7   COMPLETE   60.34    25.00    26.51      1228        178      599    0     0
+ 8   COMPLETE   34.08    24.98    25.55       516        131      599    0     0
+ 9   COMPLETE    4.55    24.99    25.77      1122        175      599    0     0
+10   COMPLETE  114.32    24.99    25.72       753        143      599    0     0
+
+楠屾敹: 10 娆?alignResidualP95Us 鍗囧簭 = {516,753,970,1045,1088,1122,1228,
+2105,2440,2921}; 鍏?P95 (寮曟搸鍚屽彛寰?idx=floor((10-1)*0.95)=8, 鍗囧簭绗?9 涓?
+= 2440 us = 2.44 ms; 鏈€澶у€?2921 us = 2.92 ms銆?鍒ゅ畾: P0-C10 PASS (2.44 ms < 10 ms; 鍗充究鍙栨渶澶у€?2.92 ms 浜?PASS)
+娉? TTFT 娉㈠姩 2.4~146 ms 涓哄喎鍚姩棣栬繛 (姣忔 -S 寮哄仠) 鎵€鑷? 涓嶅湪鏈」楠屾敹鍙ｅ緞銆?
+[6] 瑙ｆ瀽寮€閿€ (P0-C12)
+--------------------------------------------------------------------------------
+姹囨€昏涓嶅惈瑙ｆ瀽鑰楁椂瀛楁 -> 閲囩敤 tokens=600 棣栬窇 logcat 鏃堕棿绾胯繎浼?
+  [token_stream] GET 鍙戝嚭浜?14:30:31.518;
+  鏈?token 鍒拌揪浼扮畻 = 璇锋眰 + TTFT 26.27ms + 599 x 25.0ms 鍚嶄箟鑺傚
+  ~= 14:30:46.52; EOF (summary 甯?鍏抽棴) 绱ч殢鍏跺悗;
+  EOF 鍚庤В鏋愰樁娈?(600 events JSON+base64) + 鍓?3 琛?emit 钀?logcat 浜?  14:30:46.736 -> 鍚庡鐞嗘€昏€楁椂涓婄晫 ~186-216 ms (~0.31-0.36 ms/event)銆?鍙ｅ緞闄愬埗 (濡傚疄澹版槑):
+  - 璇ュ樊鍊兼贩鍏ヤ簡 Flow 涓荤嚎绋?collect/Compose state 鍐欏叆/logcat 鍐欑洏寮€閿€,
+    鏃犳硶鍗曠嫭鍓ョ绾В鏋愯€楁椂;
+  - 鏈?token 鍒拌揪鏃跺埢鎸夊悕涔夎妭濂忎及绠?(ITL median 鎭颁负 25.00ms 鏀寔璇ュ亣璁?,
+    璇樊閲忕骇 卤鏁板崄 ms, 涓庤娴嬮噺鍚岄噺绾?
+  - 鏃?P0-C12 鏁板€奸棬闄愮殑鐩存帴娴嬮噺鍙ｅ緞銆?鍒ゅ畾: NOT_EXECUTED (缂虹洿鎺ヨВ鏋愯€楁椂鎵撶偣, 鏃堕棿绾胯繎浼间笉瓒充互鍒?PASS/FAIL)銆?鏃佽瘉: 瑙ｆ瀽鎸夎璁℃帹杩熷埌 EOF 鍚庢墽琛?(SseReader R-04), ITL P95 25.5~27.0ms
+璐磋繎 25ms 鍚嶄箟鑺傚銆乤lignResidual P95 鍧?<3ms, 琛ㄦ槑瑙ｆ瀽鏈薄鏌撴祦涓墦鐐广€?寤鸿: 鏈嶅姟绔?summary 鎴栧鎴风姹囨€昏澧炲姞 parseDurUs 鐩存帴鎵撶偣鍚庡娴嬨€?
+[7] 娓呯悊
+--------------------------------------------------------------------------------
+adb emu kill (妯℃嫙鍣?PID 18204); Stop-Process 18328 (鏈嶅姟绔?銆?
+闄勫綍 A: 棣栬窇瀹屾暣 logcat (P0-C09)
+================================================================================
+--------- beginning of main
+07-12 14:30:24.992  3540  3540 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:30:25.328  3540  3540 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:30:25.334  3540  3540 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:30:26.792  3540  3540 I AnebProbe:   echo[0] warmup t0=186729826us t1=271169200 t2=271169200 t3=188227188 rtt=1497362us offset=83690693us
+07-12 14:30:26.963  3540  3540 I AnebProbe:   echo[1] warmup t0=188418828us t1=271883677 t2=271883677 t3=188428874 rtt=10046us offset=83459826us
+07-12 14:30:27.236  3540  3540 I AnebProbe:   echo[2] warmup t0=188687541us t1=272149425 t2=272149425 t3=188697093 rtt=9552us offset=83457108us
+07-12 14:30:27.427  3540  3540 I AnebProbe:   echo[3] sample t0=188881197us t1=272347093 t2=272347093 t3=188891891 rtt=10694us offset=83460549us
+07-12 14:30:27.633  3540  3540 I AnebProbe:   echo[4] sample t0=189062110us t1=272532697 t2=272532697 t3=189083156 rtt=21046us offset=83460064us
+07-12 14:30:27.968  3540  3540 I AnebProbe:   echo[5] sample t0=189407789us t1=272877897 t2=272877897 t3=189425545 rtt=17756us offset=83461230us
+07-12 14:30:28.238  3540  3540 I AnebProbe:   echo[6] sample t0=189638031us t1=273153198 t2=273153198 t3=189700923 rtt=62892us offset=83483721us
+07-12 14:30:28.555  3540  3540 I AnebProbe:   echo[7] sample t0=189983160us t1=273468892 t2=273468892 t3=190013278 rtt=30118us offset=83470673us
+07-12 14:30:28.715  3540  3540 I AnebProbe:   echo[8] sample t0=190154308us t1=273633158 t2=273633158 t3=190180119 rtt=25811us offset=83465944us
+07-12 14:30:28.955  3540  3540 I AnebProbe:   echo[9] sample t0=190414656us t1=273876028 t2=273876028 t3=190421902 rtt=7246us offset=83457749us
+07-12 14:30:29.159  3540  3540 I AnebProbe:   echo[10] sample t0=190622350us t1=274082866 t2=274082866 t3=190625969 rtt=3619us offset=83458706us
+07-12 14:30:29.419  3540  3540 I AnebProbe:   echo[11] sample t0=190878421us t1=274340353 t2=274340353 t3=190885804 rtt=7383us offset=83458240us
+07-12 14:30:29.577  3540  3540 I AnebProbe:   echo[12] sample t0=191040816us t1=274501196 t2=274501196 t3=191044500 rtt=3684us offset=83458538us
+07-12 14:30:29.809  3540  3540 I AnebProbe:   echo[13] sample t0=191272598us t1=274732911 t2=274732911 t3=191275666 rtt=3068us offset=83458779us
+07-12 14:30:29.962  3540  3540 I AnebProbe:   echo[14] sample t0=191426831us t1=274886938 t2=274886938 t3=191429713 rtt=2882us offset=83458666us
+07-12 14:30:30.232  3540  3540 I AnebProbe:   echo[15] sample t0=191695864us t1=275155966 t2=275156097 t3=191699092 rtt=3097us offset=83458553us
+07-12 14:30:30.504  3540  3540 I AnebProbe:   echo[16] sample t0=191962173us t1=275423680 t2=275423680 t3=191967177 rtt=5004us offset=83459005us
+07-12 14:30:30.775  3540  3540 I AnebProbe:   echo[17] sample t0=192237606us t1=275697754 t2=275697754 t3=192241758 rtt=4152us offset=83458072us
+07-12 14:30:30.960  3540  3540 I AnebProbe:   echo[18] sample t0=192423756us t1=275884316 t2=275884316 t3=192427374 rtt=3618us offset=83458751us
+07-12 14:30:31.218  3540  3540 I AnebProbe:   echo[19] sample t0=192673383us t1=276134835 t2=276134835 t3=192681345 rtt=7962us offset=83457471us
+07-12 14:30:31.350  3540  3540 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458666us +/- 1441us (RTT/2), valid=17/17
+07-12 14:30:31.351  3540  3540 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:30:31.515  3540  3540 I AnebProbe:   chunk[0] 2048B wroteAt=+109.97ms (claim: written-to-local-stack, R-07)
+07-12 14:30:31.518  3540  3540 I AnebProbe:   upload endpoint=2xx-response-headers dur=110.61ms http=200
+07-12 14:30:31.518  3540  3540 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=88.13ms reqBodyEnd=109.86ms respHdrStart=110.48ms respHdrEnd=110.50ms
+07-12 14:30:31.518  3540  3540 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:30:46.728  3540  3540 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=3.81ms reqBodyEnd=null respHdrStart=29.27ms respHdrEnd=29.29ms
+07-12 14:30:46.736  3540  3540 I AnebProbe:   prelude arrival=+29.98ms raw=prelude {"srv_ts_us":276458101,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:64176"}
+07-12 14:30:46.736  3540  3540 I AnebProbe:   events=600 reads=607 bytes=183173 parseErrors=0 truncatedTail=false
+07-12 14:30:46.853  3540  3540 I AnebProbe: --- S1 summary ---
+07-12 14:30:46.855  3540  3540 I AnebProbe:   TTFT           = 26.27 ms (origin=requestHeadersEnd)
+07-12 14:30:46.855  3540  3540 I AnebProbe:   ITL median     = 25.00 ms  P95 = 25.76 ms  (n=599, coalesced excluded=0)
+07-12 14:30:46.855  3540  3540 I AnebProbe:   alignResidualP95Us = 1148  P50 = 211  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:30:46.855  3540  3540 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:30:46.855  3540  3540 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:30:46.855  3540  3540 I AnebProbe:   clock offset   = 83458666us +/- 1441us (RTT/2)
+07-12 14:30:46.855  3540  3540 I AnebProbe: === S1 run complete ===
+
+附录 B: 十连测各次完整 logcat (P0-C10)
+================================================================================
+
+----- run01.log -----
+--------- beginning of main
+07-12 14:31:52.513  3946  3946 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:31:52.924  3946  3946 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:31:52.926  3946  3946 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:31:54.228  3946  3946 I AnebProbe:   echo[0] warmup t0=274076669us t1=358974193 t2=358974193 t3=275653221 rtt=1576552us offset=84109248us
+07-12 14:31:54.403  3946  3946 I AnebProbe:   echo[1] warmup t0=275828954us t1=359322520 t2=359322520 t3=275867777 rtt=38823us offset=83474154us
+07-12 14:31:54.612  3946  3946 I AnebProbe:   echo[2] warmup t0=276058883us t1=359531477 t2=359531477 t3=276077564 rtt=18681us offset=83463253us
+07-12 14:31:54.893  3946  3946 I AnebProbe:   echo[3] sample t0=276334979us t1=359812228 t2=359812228 t3=276358688 rtt=23709us offset=83465394us
+07-12 14:31:55.213  3946  3946 I AnebProbe:   echo[4] sample t0=276656891us t1=360130384 t2=360130384 t3=276679175 rtt=22284us offset=83462351us
+07-12 14:31:55.431  3946  3946 I AnebProbe:   echo[5] sample t0=276884933us t1=360349325 t2=360349325 t3=276895202 rtt=10269us offset=83459257us
+07-12 14:31:55.607  3946  3946 I AnebProbe:   echo[6] sample t0=277056345us t1=360522439 t2=360522439 t3=277072876 rtt=16531us offset=83457828us
+07-12 14:31:55.877  3946  3946 I AnebProbe:   echo[7] sample t0=277334897us t1=360797649 t2=360797649 t3=277342323 rtt=7426us offset=83459039us
+07-12 14:31:56.128  3946  3946 I AnebProbe:   echo[8] sample t0=277582161us t1=361049296 t2=361049296 t3=277593683 rtt=11522us offset=83461374us
+07-12 14:31:56.337  3946  3946 I AnebProbe:   echo[9] sample t0=277797771us t1=361259562 t2=361259562 t3=277803567 rtt=5796us offset=83458893us
+07-12 14:31:56.550  3946  3946 I AnebProbe:   echo[10] sample t0=278010286us t1=361472115 t2=361472115 t3=278017091 rtt=6805us offset=83458426us
+07-12 14:31:56.733  3946  3946 I AnebProbe:   echo[11] sample t0=278192033us t1=361653824 t2=361653824 t3=278198809 rtt=6776us offset=83458403us
+07-12 14:31:56.927  3946  3946 I AnebProbe:   echo[12] sample t0=278385330us t1=361846978 t2=361847526 t3=278392048 rtt=6170us offset=83458563us
+07-12 14:31:57.229  3946  3946 I AnebProbe:   echo[13] sample t0=278688620us t1=362150938 t2=362150938 t3=278695538 rtt=6918us offset=83458859us
+07-12 14:31:57.500  3946  3946 I AnebProbe:   echo[14] sample t0=278961607us t1=362422500 t2=362422500 t3=278965981 rtt=4374us offset=83458706us
+07-12 14:31:57.685  3946  3946 I AnebProbe:   echo[15] sample t0=279147765us t1=362608696 t2=362608696 t3=279152447 rtt=4682us offset=83458590us
+07-12 14:31:57.924  3946  3946 I AnebProbe:   echo[16] sample t0=279382842us t1=362844581 t2=362844581 t3=279389070 rtt=6228us offset=83458625us
+07-12 14:31:58.227  3946  3946 I AnebProbe:   echo[17] sample t0=279690281us t1=363150795 t2=363150795 t3=279694358 rtt=4077us offset=83458475us
+07-12 14:31:58.458  3946  3946 I AnebProbe:   echo[18] sample t0=279920482us t1=363381918 t2=363381918 t3=279925133 rtt=4651us offset=83459110us
+07-12 14:31:58.746  3946  3946 I AnebProbe:   echo[19] sample t0=280209814us t1=363670418 t2=363670418 t3=280213439 rtt=3625us offset=83458791us
+07-12 14:31:58.944  3946  3946 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458791us +/- 1812us (RTT/2), valid=17/17
+07-12 14:31:58.945  3946  3946 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:31:58.973  3946  3946 I AnebProbe:   chunk[0] 2048B wroteAt=+22.43ms (claim: written-to-local-stack, R-07)
+07-12 14:31:58.974  3946  3946 I AnebProbe:   upload endpoint=2xx-response-headers dur=23.03ms http=200
+07-12 14:31:58.976  3946  3946 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=4.19ms reqBodyEnd=22.34ms respHdrStart=22.91ms respHdrEnd=22.94ms
+07-12 14:31:58.977  3946  3946 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:32:14.220  3946  3946 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=1.00ms reqBodyEnd=null respHdrStart=3.28ms respHdrEnd=3.29ms
+07-12 14:32:14.221  3946  3946 I AnebProbe:   prelude arrival=+3.81ms raw=prelude {"srv_ts_us":363908144,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:59198"}
+07-12 14:32:14.221  3946  3946 I AnebProbe:   events=600 reads=605 bytes=183349 parseErrors=0 truncatedTail=false
+07-12 14:32:14.258  3946  3946 I AnebProbe: --- S1 summary ---
+07-12 14:32:14.260  3946  3946 I AnebProbe:   TTFT           = 2.79 ms (origin=requestHeadersEnd)
+07-12 14:32:14.261  3946  3946 I AnebProbe:   ITL median     = 24.98 ms  P95 = 26.52 ms  (n=599, coalesced excluded=0)
+07-12 14:32:14.261  3946  3946 I AnebProbe:   alignResidualP95Us = 2440  P50 = 358  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:32:14.263  3946  3946 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:32:14.265  3946  3946 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:32:14.266  3946  3946 I AnebProbe:   clock offset   = 83458791us +/- 1812us (RTT/2)
+07-12 14:32:14.267  3946  3946 I AnebProbe: === S1 run complete ===
+
+----- run02.log -----
+--------- beginning of main
+07-12 14:32:24.066  4067  4067 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:32:24.719  4067  4067 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:32:24.720  4067  4067 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:32:25.789  4067  4067 I AnebProbe:   echo[0] warmup t0=305961938us t1=390487466 t2=390487466 t3=307199253 rtt=1237315us offset=83906870us
+07-12 14:32:25.941  4067  4067 I AnebProbe:   echo[1] warmup t0=307390315us t1=390862840 t2=390862840 t3=307407024 rtt=16709us offset=83464170us
+07-12 14:32:26.128  4067  4067 I AnebProbe:   echo[2] warmup t0=307553393us t1=391030706 t2=391030706 t3=307593229 rtt=39836us offset=83457395us
+07-12 14:32:26.296  4067  4067 I AnebProbe:   echo[3] sample t0=307754296us t1=391216667 t2=391216667 t3=307762107 rtt=7811us offset=83458465us
+07-12 14:32:26.605  4067  4067 I AnebProbe:   echo[4] sample t0=308052035us t1=391518652 t2=391518652 t3=308069574 rtt=17539us offset=83457847us
+07-12 14:32:26.840  4067  4067 I AnebProbe:   echo[5] sample t0=308283282us t1=391759287 t2=391759287 t3=308305112 rtt=21830us offset=83465090us
+07-12 14:32:27.018  4067  4067 I AnebProbe:   echo[6] sample t0=308451087us t1=391913724 t2=391913724 t3=308482512 rtt=31425us offset=83446924us
+07-12 14:32:27.336  4067  4067 I AnebProbe:   echo[7] sample t0=308789911us t1=392256910 t2=392256910 t3=308802358 rtt=12447us offset=83460775us
+07-12 14:32:27.540  4067  4067 I AnebProbe:   echo[8] sample t0=308995482us t1=392458234 t2=392458234 t3=309004505 rtt=9023us offset=83458240us
+07-12 14:32:27.806  4067  4067 I AnebProbe:   echo[9] sample t0=309146311us t1=392722928 t2=392722928 t3=309272015 rtt=125704us offset=83513765us
+07-12 14:32:28.133  4067  4067 I AnebProbe:   echo[10] sample t0=309566530us t1=393040386 t2=393040386 t3=309598939 rtt=32409us offset=83457651us
+07-12 14:32:28.366  4067  4067 I AnebProbe:   echo[11] sample t0=309810637us t1=393277762 t2=393277762 t3=309828120 rtt=17483us offset=83458383us
+07-12 14:32:28.680  4067  4067 I AnebProbe:   echo[12] sample t0=310124444us t1=393586708 t2=393586708 t3=310143792 rtt=19348us offset=83452590us
+07-12 14:32:28.919  4067  4067 I AnebProbe:   echo[13] sample t0=310365677us t1=393829138 t2=393829138 t3=310374908 rtt=9231us offset=83458845us
+07-12 14:32:29.099  4067  4067 I AnebProbe:   echo[14] sample t0=310529725us t1=394019708 t2=394019708 t3=310564932 rtt=35207us offset=83472379us
+07-12 14:32:29.360  4067  4067 I AnebProbe:   echo[15] sample t0=310803561us t1=394279627 t2=394279627 t3=310825541 rtt=21980us offset=83465076us
+07-12 14:32:29.596  4067  4067 I AnebProbe:   echo[16] sample t0=311053972us t1=394516533 t2=394516533 t3=311061829 rtt=7857us offset=83458632us
+07-12 14:32:29.883  4067  4067 I AnebProbe:   echo[17] sample t0=311318531us t1=394789943 t2=394789943 t3=311337910 rtt=19379us offset=83461722us
+07-12 14:32:30.244  4067  4067 I AnebProbe:   echo[18] sample t0=311681774us t1=395152191 t2=395152191 t3=311702581 rtt=20807us offset=83460013us
+07-12 14:32:30.521  4067  4067 I AnebProbe:   echo[19] sample t0=311968706us t1=395442015 t2=395442015 t3=311987103 rtt=18397us offset=83464110us
+07-12 14:32:30.695  4067  4067 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458465us +/- 3905us (RTT/2), valid=17/17
+07-12 14:32:30.696  4067  4067 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:32:30.795  4067  4067 I AnebProbe:   chunk[0] 2048B wroteAt=+30.67ms (claim: written-to-local-stack, R-07)
+07-12 14:32:30.796  4067  4067 I AnebProbe:   upload endpoint=2xx-response-headers dur=37.54ms http=200
+07-12 14:32:30.797  4067  4067 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=1.32ms reqBodyEnd=30.60ms respHdrStart=37.45ms respHdrEnd=37.48ms
+07-12 14:32:30.797  4067  4067 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:32:46.167  4067  4067 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=2.61ms reqBodyEnd=null respHdrStart=146.65ms respHdrEnd=146.68ms
+07-12 14:32:46.168  4067  4067 I AnebProbe:   prelude arrival=+148.62ms raw=prelude {"srv_ts_us":395823438,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:59294"}
+07-12 14:32:46.169  4067  4067 I AnebProbe:   events=600 reads=605 bytes=183305 parseErrors=0 truncatedTail=false
+07-12 14:32:46.218  4067  4067 I AnebProbe: --- S1 summary ---
+07-12 14:32:46.269  4067  4067 I AnebProbe:   TTFT           = 146.28 ms (origin=requestHeadersEnd)
+07-12 14:32:46.271  4067  4067 I AnebProbe:   ITL median     = 24.98 ms  P95 = 26.34 ms  (n=599, coalesced excluded=0)
+07-12 14:32:46.272  4067  4067 I AnebProbe:   alignResidualP95Us = 2105  P50 = 321  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:32:46.274  4067  4067 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:32:46.275  4067  4067 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:32:46.276  4067  4067 I AnebProbe:   clock offset   = 83458465us +/- 3905us (RTT/2)
+07-12 14:32:46.277  4067  4067 I AnebProbe: === S1 run complete ===
+
+----- run03.log -----
+--------- beginning of main
+07-12 14:32:57.001  4189  4189 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:32:57.180  4189  4189 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:32:57.203  4189  4189 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:32:58.321  4189  4189 I AnebProbe:   echo[0] warmup t0=338501479us t1=422986257 t2=422986257 t3=339780701 rtt=1279222us offset=83845167us
+07-12 14:32:58.537  4189  4189 I AnebProbe:   echo[1] warmup t0=339994710us t1=423459110 t2=423459110 t3=340003243 rtt=8533us offset=83460133us
+07-12 14:32:58.739  4189  4189 I AnebProbe:   echo[2] warmup t0=340196999us t1=423659851 t2=423659851 t3=340204534 rtt=7535us offset=83459084us
+07-12 14:32:58.999  4189  4189 I AnebProbe:   echo[3] sample t0=340458298us t1=423919822 t2=423919822 t3=340464828 rtt=6530us offset=83458259us
+07-12 14:32:59.156  4189  4189 I AnebProbe:   echo[4] sample t0=340583055us t1=424077591 t2=424077591 t3=340622044 rtt=38989us offset=83475041us
+07-12 14:32:59.464  4189  4189 I AnebProbe:   echo[5] sample t0=340919602us t1=424381215 t2=424381215 t3=340930515 rtt=10913us offset=83456156us
+07-12 14:32:59.645  4189  4189 I AnebProbe:   echo[6] sample t0=341104662us t1=424566405 t2=424567086 t3=341111093 rtt=5750us offset=83458868us
+07-12 14:32:59.892  4189  4189 I AnebProbe:   echo[7] sample t0=341351527us t1=424813514 t2=424813514 t3=341357894 rtt=6367us offset=83458803us
+07-12 14:33:00.150  4189  4189 I AnebProbe:   echo[8] sample t0=341609206us t1=425072296 t2=425072296 t3=341616295 rtt=7089us offset=83459545us
+07-12 14:33:00.392  4189  4189 I AnebProbe:   echo[9] sample t0=341854418us t1=425314658 t2=425314658 t3=341859441 rtt=5023us offset=83457728us
+07-12 14:33:00.533  4189  4189 I AnebProbe:   echo[10] sample t0=341995248us t1=425454472 t2=425454472 t3=342000006 rtt=4758us offset=83456845us
+07-12 14:33:00.734  4189  4189 I AnebProbe:   echo[11] sample t0=342197422us t1=425657827 t2=425657827 t3=342201099 rtt=3677us offset=83458566us
+07-12 14:33:00.965  4189  4189 I AnebProbe:   echo[12] sample t0=342427889us t1=425888462 t2=425888462 t3=342431837 rtt=3948us offset=83458599us
+07-12 14:33:01.106  4189  4189 I AnebProbe:   echo[13] sample t0=342568958us t1=426028279 t2=426028279 t3=342572849 rtt=3891us offset=83457375us
+07-12 14:33:01.413  4189  4189 I AnebProbe:   echo[14] sample t0=342876454us t1=426335799 t2=426335799 t3=342879687 rtt=3233us offset=83457728us
+07-12 14:33:01.666  4189  4189 I AnebProbe:   echo[15] sample t0=343127217us t1=426588191 t2=426588191 t3=343133455 rtt=6238us offset=83457855us
+07-12 14:33:01.914  4189  4189 I AnebProbe:   echo[16] sample t0=343377344us t1=426837562 t2=426837562 t3=343380912 rtt=3568us offset=83458434us
+07-12 14:33:02.145  4189  4189 I AnebProbe:   echo[17] sample t0=343609165us t1=427069048 t2=427069048 t3=343612296 rtt=3131us offset=83458317us
+07-12 14:33:02.453  4189  4189 I AnebProbe:   echo[18] sample t0=343917426us t1=427377844 t2=427377844 t3=343920695 rtt=3269us offset=83458783us
+07-12 14:33:02.714  4189  4189 I AnebProbe:   echo[19] sample t0=344177983us t1=427637433 t2=427637433 t3=344181227 rtt=3244us offset=83457828us
+07-12 14:33:02.939  4189  4189 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458317us +/- 1565us (RTT/2), valid=17/17
+07-12 14:33:02.939  4189  4189 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:33:02.946  4189  4189 I AnebProbe:   chunk[0] 2048B wroteAt=+3.44ms (claim: written-to-local-stack, R-07)
+07-12 14:33:02.947  4189  4189 I AnebProbe:   upload endpoint=2xx-response-headers dur=5.86ms http=200
+07-12 14:33:02.948  4189  4189 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=2.31ms reqBodyEnd=3.41ms respHdrStart=5.80ms respHdrEnd=5.82ms
+07-12 14:33:02.948  4189  4189 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:33:18.043  4189  4189 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=0.73ms reqBodyEnd=null respHdrStart=7.37ms respHdrEnd=7.39ms
+07-12 14:33:18.045  4189  4189 I AnebProbe:   prelude arrival=+7.75ms raw=prelude {"srv_ts_us":427878699,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:50622"}
+07-12 14:33:18.045  4189  4189 I AnebProbe:   events=600 reads=604 bytes=183548 parseErrors=0 truncatedTail=false
+07-12 14:33:18.045  4189  4189 I AnebProbe: --- S1 summary ---
+07-12 14:33:18.046  4189  4189 I AnebProbe:   TTFT           = 7.06 ms (origin=requestHeadersEnd)
+07-12 14:33:18.046  4189  4189 I AnebProbe:   ITL median     = 25.00 ms  P95 = 25.87 ms  (n=599, coalesced excluded=0)
+07-12 14:33:18.046  4189  4189 I AnebProbe:   alignResidualP95Us = 1088  P50 = 260  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:33:18.046  4189  4189 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:33:18.047  4189  4189 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:33:18.047  4189  4189 I AnebProbe:   clock offset   = 83458317us +/- 1565us (RTT/2)
+07-12 14:33:18.047  4189  4189 I AnebProbe: === S1 run complete ===
+
+----- run04.log -----
+--------- beginning of main
+07-12 14:33:28.093  4297  4297 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:33:28.435  4297  4297 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:33:28.477  4297  4297 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:33:29.767  4297  4297 I AnebProbe:   echo[0] warmup t0=369828997us t1=454168492 t2=454168492 t3=371217770 rtt=1388773us offset=83645108us
+07-12 14:33:29.915  4297  4297 I AnebProbe:   echo[1] warmup t0=371371263us t1=454833928 t2=454833928 t3=371378859 rtt=7596us offset=83458867us
+07-12 14:33:30.088  4297  4297 I AnebProbe:   echo[2] warmup t0=371550198us t1=455010882 t2=455010882 t3=371554649 rtt=4451us offset=83458458us
+07-12 14:33:30.320  4297  4297 I AnebProbe:   echo[3] sample t0=371781235us t1=455242942 t2=455242942 t3=371787634 rtt=6399us offset=83458507us
+07-12 14:33:30.617  4297  4297 I AnebProbe:   echo[4] sample t0=372076397us t1=455539070 t2=455539070 t3=372082826 rtt=6429us offset=83459458us
+07-12 14:33:30.749  4297  4297 I AnebProbe:   echo[5] sample t0=372198951us t1=455663616 t2=455663616 t3=372215459 rtt=16508us offset=83456411us
+07-12 14:33:31.014  4297  4297 I AnebProbe:   echo[6] sample t0=372475329us t1=455935684 t2=455935684 t3=372479502 rtt=4173us offset=83458268us
+07-12 14:33:31.324  4297  4297 I AnebProbe:   echo[7] sample t0=372785603us t1=456247642 t2=456247642 t3=372791159 rtt=5556us offset=83459261us
+07-12 14:33:31.628  4297  4297 I AnebProbe:   echo[8] sample t0=373091653us t1=456551330 t2=456551994 t3=373094996 rtt=2679us offset=83458337us
+07-12 14:33:31.826  4297  4297 I AnebProbe:   echo[9] sample t0=373289829us t1=456749743 t2=456749743 t3=373292884 rtt=3055us offset=83458386us
+07-12 14:33:31.960  4297  4297 I AnebProbe:   echo[10] sample t0=373423093us t1=456883376 t2=456883376 t3=373427225 rtt=4132us offset=83458217us
+07-12 14:33:32.162  4297  4297 I AnebProbe:   echo[11] sample t0=373625442us t1=457085817 t2=457085817 t3=373628914 rtt=3472us offset=83458639us
+07-12 14:33:32.345  4297  4297 I AnebProbe:   echo[12] sample t0=373808880us t1=457268001 t2=457268001 t3=373811952 rtt=3072us offset=83457585us
+07-12 14:33:32.543  4297  4297 I AnebProbe:   echo[13] sample t0=374007200us t1=457466901 t2=457466901 t3=374010445 rtt=3245us offset=83458078us
+07-12 14:33:32.682  4297  4297 I AnebProbe:   echo[14] sample t0=374146208us t1=457606449 t2=457606449 t3=374149214 rtt=3006us offset=83458738us
+07-12 14:33:32.838  4297  4297 I AnebProbe:   echo[15] sample t0=374301883us t1=457761416 t2=457761416 t3=374305215 rtt=3332us offset=83457867us
+07-12 14:33:32.992  4297  4297 I AnebProbe:   echo[16] sample t0=374456464us t1=457915992 t2=457915992 t3=374459252 rtt=2788us offset=83458134us
+07-12 14:33:33.159  4297  4297 I AnebProbe:   echo[17] sample t0=374623168us t1=458083417 t2=458083417 t3=374626266 rtt=3098us offset=83458700us
+07-12 14:33:33.389  4297  4297 I AnebProbe:   echo[18] sample t0=374853459us t1=458313091 t2=458313091 t3=374856366 rtt=2907us offset=83458178us
+07-12 14:33:33.633  4297  4297 I AnebProbe:   echo[19] sample t0=375097131us t1=458557498 t2=458557498 t3=375100417 rtt=3286us offset=83458724us
+07-12 14:33:33.751  4297  4297 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458337us +/- 1339us (RTT/2), valid=17/17
+07-12 14:33:33.751  4297  4297 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:33:33.759  4297  4297 I AnebProbe:   chunk[0] 2048B wroteAt=+2.49ms (claim: written-to-local-stack, R-07)
+07-12 14:33:33.759  4297  4297 I AnebProbe:   upload endpoint=2xx-response-headers dur=4.70ms http=200
+07-12 14:33:33.759  4297  4297 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=1.72ms reqBodyEnd=3.06ms respHdrStart=4.65ms respHdrEnd=4.68ms
+07-12 14:33:33.759  4297  4297 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:33:48.842  4297  4297 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=1.84ms reqBodyEnd=null respHdrStart=3.79ms respHdrEnd=3.80ms
+07-12 14:33:48.843  4297  4297 I AnebProbe:   prelude arrival=+4.15ms raw=prelude {"srv_ts_us":458687971,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:54295"}
+07-12 14:33:48.843  4297  4297 I AnebProbe:   events=600 reads=604 bytes=183405 parseErrors=0 truncatedTail=false
+07-12 14:33:48.843  4297  4297 I AnebProbe: --- S1 summary ---
+07-12 14:33:48.844  4297  4297 I AnebProbe:   TTFT           = 2.36 ms (origin=requestHeadersEnd)
+07-12 14:33:48.844  4297  4297 I AnebProbe:   ITL median     = 25.00 ms  P95 = 26.96 ms  (n=599, coalesced excluded=0)
+07-12 14:33:48.844  4297  4297 I AnebProbe:   alignResidualP95Us = 2921  P50 = 371  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:33:48.844  4297  4297 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:33:48.844  4297  4297 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:33:48.844  4297  4297 I AnebProbe:   clock offset   = 83458337us +/- 1339us (RTT/2)
+07-12 14:33:48.844  4297  4297 I AnebProbe: === S1 run complete ===
+
+----- run05.log -----
+--------- beginning of main
+07-12 14:33:58.244  4442  4442 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:33:58.368  4442  4442 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:33:58.368  4442  4442 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:33:59.308  4442  4442 I AnebProbe:   echo[0] warmup t0=399724046us t1=483741399 t2=483741399 t3=400771442 rtt=1047396us offset=83493655us
+07-12 14:33:59.540  4442  4442 I AnebProbe:   echo[1] warmup t0=401002967us t1=484463962 t2=484463962 t3=401006741 rtt=3774us offset=83459108us
+07-12 14:33:59.771  4442  4442 I AnebProbe:   echo[2] warmup t0=401234614us t1=484695707 t2=484695707 t3=401238642 rtt=4028us offset=83459079us
+07-12 14:34:00.038  4442  4442 I AnebProbe:   echo[3] sample t0=401499602us t1=484959985 t2=484959985 t3=401504134 rtt=4532us offset=83458117us
+07-12 14:34:00.206  4442  4442 I AnebProbe:   echo[4] sample t0=401670002us t1=485129497 t2=485130274 t3=401673028 rtt=2249us offset=83458370us
+07-12 14:34:00.498  4442  4442 I AnebProbe:   echo[5] sample t0=401961373us t1=485421616 t2=485421616 t3=401964831 rtt=3458us offset=83458514us
+07-12 14:34:00.714  4442  4442 I AnebProbe:   echo[6] sample t0=402178010us t1=485638370 t2=485638370 t3=402181271 rtt=3261us offset=83458729us
+07-12 14:34:00.980  4442  4442 I AnebProbe:   echo[7] sample t0=402443838us t1=485903838 t2=485903838 t3=402446975 rtt=3137us offset=83458431us
+07-12 14:34:01.117  4442  4442 I AnebProbe:   echo[8] sample t0=402580899us t1=486041153 t2=486041153 t3=402584089 rtt=3190us offset=83458659us
+07-12 14:34:01.227  4442  4442 I AnebProbe:   echo[9] sample t0=402690127us t1=486150541 t2=486150541 t3=402694222 rtt=4095us offset=83458366us
+07-12 14:34:01.397  4442  4442 I AnebProbe:   echo[10] sample t0=402861708us t1=486322102 t2=486322102 t3=402864810 rtt=3102us offset=83458843us
+07-12 14:34:01.657  4442  4442 I AnebProbe:   echo[11] sample t0=403120712us t1=486581365 t2=486581365 t3=403124704 rtt=3992us offset=83458657us
+07-12 14:34:01.785  4442  4442 I AnebProbe:   echo[12] sample t0=403246745us t1=486707166 t2=486707166 t3=403252618 rtt=5873us offset=83457484us
+07-12 14:34:01.972  4442  4442 I AnebProbe:   echo[13] sample t0=403433089us t1=486894810 t2=486894810 t3=403438537 rtt=5448us offset=83458997us
+07-12 14:34:02.105  4442  4442 I AnebProbe:   echo[14] sample t0=403551878us t1=487017504 t2=487017504 t3=403570550 rtt=18672us offset=83456290us
+07-12 14:34:02.344  4442  4442 I AnebProbe:   echo[15] sample t0=403803454us t1=487266570 t2=487266570 t3=403810342 rtt=6888us offset=83459672us
+07-12 14:34:02.495  4442  4442 I AnebProbe:   echo[16] sample t0=403953347us t1=487416457 t2=487416457 t3=403960593 rtt=7246us offset=83459487us
+07-12 14:34:02.760  4442  4442 I AnebProbe:   echo[17] sample t0=404221275us t1=487681865 t2=487681865 t3=404226799 rtt=5524us offset=83457828us
+07-12 14:34:02.932  4442  4442 I AnebProbe:   echo[18] sample t0=404392176us t1=487853647 t2=487853647 t3=404398504 rtt=6328us offset=83458307us
+07-12 14:34:03.244  4442  4442 I AnebProbe:   echo[19] sample t0=404699685us t1=488161915 t2=488162410 t3=404710561 rtt=10381us offset=83457039us
+07-12 14:34:03.432  4442  4442 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458370us +/- 1124us (RTT/2), valid=17/17
+07-12 14:34:03.433  4442  4442 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:34:03.467  4442  4442 I AnebProbe:   chunk[0] 2048B wroteAt=+17.29ms (claim: written-to-local-stack, R-07)
+07-12 14:34:03.468  4442  4442 I AnebProbe:   upload endpoint=2xx-response-headers dur=18.02ms http=200
+07-12 14:34:03.472  4442  4442 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=2.51ms reqBodyEnd=17.17ms respHdrStart=17.86ms respHdrEnd=17.88ms
+07-12 14:34:03.473  4442  4442 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:34:18.606  4442  4442 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=3.76ms reqBodyEnd=null respHdrStart=38.79ms respHdrEnd=39.20ms
+07-12 14:34:18.606  4442  4442 I AnebProbe:   prelude arrival=+39.90ms raw=prelude {"srv_ts_us":488434898,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:51434"}
+07-12 14:34:18.606  4442  4442 I AnebProbe:   events=600 reads=604 bytes=183132 parseErrors=0 truncatedTail=false
+07-12 14:34:18.606  4442  4442 I AnebProbe: --- S1 summary ---
+07-12 14:34:18.607  4442  4442 I AnebProbe:   TTFT           = 36.14 ms (origin=requestHeadersEnd)
+07-12 14:34:18.611  4442  4442 I AnebProbe:   ITL median     = 24.97 ms  P95 = 25.93 ms  (n=599, coalesced excluded=0)
+07-12 14:34:18.611  4442  4442 I AnebProbe:   alignResidualP95Us = 1045  P50 = 315  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:34:18.612  4442  4442 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:34:18.612  4442  4442 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:34:18.613  4442  4442 I AnebProbe:   clock offset   = 83458370us +/- 1124us (RTT/2)
+07-12 14:34:18.613  4442  4442 I AnebProbe: === S1 run complete ===
+
+----- run06.log -----
+--------- beginning of main
+07-12 14:34:29.373  4530  4530 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:34:29.613  4530  4530 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:34:29.614  4530  4530 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:34:30.391  4530  4530 I AnebProbe:   echo[0] warmup t0=430856833us t1=514990042 t2=514990042 t3=431852183 rtt=995350us offset=83635534us
+07-12 14:34:30.525  4530  4530 I AnebProbe:   echo[1] warmup t0=431988595us t1=515449225 t2=515449225 t3=431992204 rtt=3609us offset=83458825us
+07-12 14:34:30.835  4530  4530 I AnebProbe:   echo[2] warmup t0=432298467us t1=515758918 t2=515758918 t3=432301935 rtt=3468us offset=83458717us
+07-12 14:34:31.134  4530  4530 I AnebProbe:   echo[3] sample t0=432595228us t1=516057037 t2=516057037 t3=432600937 rtt=5709us offset=83458954us
+07-12 14:34:31.363  4530  4530 I AnebProbe:   echo[4] sample t0=432825331us t1=516286772 t2=516287100 t3=432830088 rtt=4429us offset=83459226us
+07-12 14:34:31.611  4530  4530 I AnebProbe:   echo[5] sample t0=433073281us t1=516533096 t2=516533096 t3=433077614 rtt=4333us offset=83457648us
+07-12 14:34:31.873  4530  4530 I AnebProbe:   echo[6] sample t0=433336674us t1=516796834 t2=516796834 t3=433339650 rtt=2976us offset=83458672us
+07-12 14:34:32.166  4530  4530 I AnebProbe:   echo[7] sample t0=433629324us t1=517090677 t2=517090677 t3=433633466 rtt=4142us offset=83459282us
+07-12 14:34:32.410  4530  4530 I AnebProbe:   echo[8] sample t0=433874347us t1=517334104 t2=517334104 t3=433877434 rtt=3087us offset=83458213us
+07-12 14:34:32.688  4530  4530 I AnebProbe:   echo[9] sample t0=434150968us t1=517611686 t2=517611686 t3=434155113 rtt=4145us offset=83458645us
+07-12 14:34:32.997  4530  4530 I AnebProbe:   echo[10] sample t0=434459501us t1=517920774 t2=517920774 t3=434463841 rtt=4340us offset=83459103us
+07-12 14:34:33.256  4530  4530 I AnebProbe:   echo[11] sample t0=434719857us t1=518180080 t2=518180080 t3=434723105 rtt=3248us offset=83458599us
+07-12 14:34:33.472  4530  4530 I AnebProbe:   echo[12] sample t0=434936012us t1=518396194 t2=518396194 t3=434939236 rtt=3224us offset=83458570us
+07-12 14:34:33.704  4530  4530 I AnebProbe:   echo[13] sample t0=435167958us t1=518628313 t2=518628313 t3=435171389 rtt=3431us offset=83458639us
+07-12 14:34:33.998  4530  4530 I AnebProbe:   echo[14] sample t0=435461384us t1=518921574 t2=518921574 t3=435465026 rtt=3642us offset=83458369us
+07-12 14:34:34.286  4530  4530 I AnebProbe:   echo[15] sample t0=435750637us t1=519210688 t2=519210688 t3=435753528 rtt=2891us offset=83458605us
+07-12 14:34:34.398  4530  4530 I AnebProbe:   echo[16] sample t0=435861123us t1=519322451 t2=519322451 t3=435865488 rtt=4365us offset=83459145us
+07-12 14:34:34.672  4530  4530 I AnebProbe:   echo[17] sample t0=436135937us t1=519596075 t2=519596075 t3=436139042 rtt=3105us offset=83458585us
+07-12 14:34:34.888  4530  4530 I AnebProbe:   echo[18] sample t0=436351760us t1=519812171 t2=519812171 t3=436355262 rtt=3502us offset=83458660us
+07-12 14:34:35.104  4530  4530 I AnebProbe:   echo[19] sample t0=436567044us t1=520027698 t2=520027698 t3=436570573 rtt=3529us offset=83458889us
+07-12 14:34:35.344  4530  4530 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458605us +/- 1445us (RTT/2), valid=17/17
+07-12 14:34:35.345  4530  4530 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:34:35.354  4530  4530 I AnebProbe:   chunk[0] 2048B wroteAt=+3.13ms (claim: written-to-local-stack, R-07)
+07-12 14:34:35.354  4530  4530 I AnebProbe:   upload endpoint=2xx-response-headers dur=5.05ms http=200
+07-12 14:34:35.354  4530  4530 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=1.88ms reqBodyEnd=3.52ms respHdrStart=5.00ms respHdrEnd=5.02ms
+07-12 14:34:35.354  4530  4530 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:34:50.493  4530  4530 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=4.66ms reqBodyEnd=null respHdrStart=17.86ms respHdrEnd=17.88ms
+07-12 14:34:50.493  4530  4530 I AnebProbe:   prelude arrival=+19.85ms raw=prelude {"srv_ts_us":520284291,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:64129"}
+07-12 14:34:50.493  4530  4530 I AnebProbe:   events=600 reads=603 bytes=183338 parseErrors=0 truncatedTail=false
+07-12 14:34:50.533  4530  4530 I AnebProbe: --- S1 summary ---
+07-12 14:34:50.554  4530  4530 I AnebProbe:   TTFT           = 15.22 ms (origin=requestHeadersEnd)
+07-12 14:34:50.555  4530  4530 I AnebProbe:   ITL median     = 25.00 ms  P95 = 25.94 ms  (n=599, coalesced excluded=0)
+07-12 14:34:50.555  4530  4530 I AnebProbe:   alignResidualP95Us = 970  P50 = 244  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:34:50.555  4530  4530 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:34:50.555  4530  4530 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:34:50.556  4530  4530 I AnebProbe:   clock offset   = 83458605us +/- 1445us (RTT/2)
+07-12 14:34:50.556  4530  4530 I AnebProbe: === S1 run complete ===
+
+----- run07.log -----
+--------- beginning of main
+07-12 14:34:59.771  4661  4661 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:35:00.147  4661  4661 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:35:00.148  4661  4661 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:35:00.872  4661  4661 I AnebProbe:   echo[0] warmup t0=461435782us t1=545574994 t2=545574994 t3=462316894 rtt=881112us offset=83698656us
+07-12 14:35:01.043  4661  4661 I AnebProbe:   echo[1] warmup t0=462506823us t1=545967525 t2=545967525 t3=462510360 rtt=3537us offset=83458933us
+07-12 14:35:01.259  4661  4661 I AnebProbe:   echo[2] warmup t0=462721315us t1=546182819 t2=546182819 t3=462726424 rtt=5109us offset=83458949us
+07-12 14:35:01.543  4661  4661 I AnebProbe:   echo[3] sample t0=463002102us t1=546464449 t2=546464449 t3=463010322 rtt=8220us offset=83458237us
+07-12 14:35:01.735  4661  4661 I AnebProbe:   echo[4] sample t0=463193582us t1=546654000 t2=546654000 t3=463201792 rtt=8210us offset=83456313us
+07-12 14:35:01.961  4661  4661 I AnebProbe:   echo[5] sample t0=463421884us t1=546884238 t2=546884238 t3=463427664 rtt=5780us offset=83459464us
+07-12 14:35:02.181  4661  4661 I AnebProbe:   echo[6] sample t0=463643789us t1=547104286 t2=547104286 t3=463647441 rtt=3652us offset=83458671us
+07-12 14:35:02.429  4661  4661 I AnebProbe:   echo[7] sample t0=463892108us t1=547351515 t2=547351515 t3=463895886 rtt=3778us offset=83457518us
+07-12 14:35:02.676  4661  4661 I AnebProbe:   echo[8] sample t0=464138238us t1=547599768 t2=547599768 t3=464143066 rtt=4828us offset=83459116us
+07-12 14:35:02.957  4661  4661 I AnebProbe:   echo[9] sample t0=464416986us t1=547878724 t2=547878724 t3=464423137 rtt=6151us offset=83458662us
+07-12 14:35:03.099  4661  4661 I AnebProbe:   echo[10] sample t0=464562580us t1=548022792 t2=548022792 t3=464566172 rtt=3592us offset=83458416us
+07-12 14:35:03.345  4661  4661 I AnebProbe:   echo[11] sample t0=464808620us t1=548268778 t2=548268778 t3=464812613 rtt=3993us offset=83458161us
+07-12 14:35:03.630  4661  4661 I AnebProbe:   echo[12] sample t0=465089308us t1=548549302 t2=548549302 t3=465097128 rtt=7820us offset=83456084us
+07-12 14:35:03.881  4661  4661 I AnebProbe:   echo[13] sample t0=465341900us t1=548803441 t2=548803441 t3=465347324 rtt=5424us offset=83458829us
+07-12 14:35:04.000  4661  4661 I AnebProbe:   echo[14] sample t0=465460586us t1=548922031 t2=548922031 t3=465466610 rtt=6024us offset=83458433us
+07-12 14:35:04.298  4661  4661 I AnebProbe:   echo[15] sample t0=465759407us t1=549220486 t2=549220486 t3=465764207 rtt=4800us offset=83458679us
+07-12 14:35:04.490  4661  4661 I AnebProbe:   echo[16] sample t0=465949654us t1=549411946 t2=549411946 t3=465955739 rtt=6085us offset=83459249us
+07-12 14:35:04.608  4661  4661 I AnebProbe:   echo[17] sample t0=466070386us t1=549531723 t2=549531723 t3=466075409 rtt=5023us offset=83458825us
+07-12 14:35:04.832  4661  4661 I AnebProbe:   echo[18] sample t0=466294825us t1=549755052 t2=549755052 t3=466298609 rtt=3784us offset=83458335us
+07-12 14:35:05.043  4661  4661 I AnebProbe:   echo[19] sample t0=466498676us t1=549961219 t2=549961219 t3=466508168 rtt=9492us offset=83457797us
+07-12 14:35:05.330  4661  4661 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458416us +/- 1796us (RTT/2), valid=17/17
+07-12 14:35:05.331  4661  4661 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:35:05.419  4661  4661 I AnebProbe:   chunk[0] 2048B wroteAt=+21.22ms (claim: written-to-local-stack, R-07)
+07-12 14:35:05.421  4661  4661 I AnebProbe:   upload endpoint=2xx-response-headers dur=54.85ms http=200
+07-12 14:35:05.421  4661  4661 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=20.19ms reqBodyEnd=21.30ms respHdrStart=54.71ms respHdrEnd=54.73ms
+07-12 14:35:05.422  4661  4661 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:35:20.842  4661  4661 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=31.83ms reqBodyEnd=null respHdrStart=91.08ms respHdrEnd=91.11ms
+07-12 14:35:20.850  4661  4661 I AnebProbe:   prelude arrival=+92.04ms raw=prelude {"srv_ts_us":550473590,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:64173"}
+07-12 14:35:20.851  4661  4661 I AnebProbe:   events=600 reads=606 bytes=183399 parseErrors=0 truncatedTail=false
+07-12 14:35:20.976  4661  4661 I AnebProbe: --- S1 summary ---
+07-12 14:35:20.980  4661  4661 I AnebProbe:   TTFT           = 60.34 ms (origin=requestHeadersEnd)
+07-12 14:35:20.981  4661  4661 I AnebProbe:   ITL median     = 25.00 ms  P95 = 26.51 ms  (n=599, coalesced excluded=0)
+07-12 14:35:20.982  4661  4661 I AnebProbe:   alignResidualP95Us = 1228  P50 = 178  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:35:20.983  4661  4661 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:35:20.984  4661  4661 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:35:21.019  4661  4661 I AnebProbe:   clock offset   = 83458416us +/- 1796us (RTT/2)
+07-12 14:35:21.020  4661  4661 I AnebProbe: === S1 run complete ===
+
+----- run08.log -----
+--------- beginning of main
+07-12 14:35:30.303  4782  4782 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:35:30.665  4782  4782 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:35:30.682  4782  4782 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:35:31.276  4782  4782 I AnebProbe:   echo[0] warmup t0=492252652us t1=576079603 t2=576079603 t3=492724705 rtt=472053us offset=83590924us
+07-12 14:35:31.585  4782  4782 I AnebProbe:   echo[1] warmup t0=493042041us t1=576504501 t2=576504501 t3=493050659 rtt=8618us offset=83458151us
+07-12 14:35:31.807  4782  4782 I AnebProbe:   echo[2] warmup t0=493263189us t1=576726566 t2=576726566 t3=493271932 rtt=8743us offset=83459005us
+07-12 14:35:32.062  4782  4782 I AnebProbe:   echo[3] sample t0=493519185us t1=576980460 t2=576980460 t3=493526415 rtt=7230us offset=83457660us
+07-12 14:35:32.323  4782  4782 I AnebProbe:   echo[4] sample t0=493719414us t1=577206799 t2=577206799 t3=493783301 rtt=63887us offset=83455441us
+07-12 14:35:32.487  4782  4782 I AnebProbe:   echo[5] sample t0=493924119us t1=577389010 t2=577389010 t3=493935315 rtt=11196us offset=83459293us
+07-12 14:35:32.668  4782  4782 I AnebProbe:   echo[6] sample t0=494107373us t1=577579501 t2=577579501 t3=494133251 rtt=25878us offset=83459189us
+07-12 14:35:32.958  4782  4782 I AnebProbe:   echo[7] sample t0=494399340us t1=577868259 t2=577868259 t3=494417092 rtt=17752us offset=83460043us
+07-12 14:35:33.246  4782  4782 I AnebProbe:   echo[8] sample t0=494696867us t1=578161941 t2=578161941 t3=494710656 rtt=13789us offset=83458179us
+07-12 14:35:33.434  4782  4782 I AnebProbe:   echo[9] sample t0=494890041us t1=578351734 t2=578351734 t3=494900004 rtt=9963us offset=83456711us
+07-12 14:35:33.613  4782  4782 I AnebProbe:   echo[10] sample t0=495067169us t1=578530069 t2=578530069 t3=495078959 rtt=11790us offset=83457005us
+07-12 14:35:33.855  4782  4782 I AnebProbe:   echo[11] sample t0=495315320us t1=578776286 t2=578776286 t3=495320802 rtt=5482us offset=83458225us
+07-12 14:35:34.020  4782  4782 I AnebProbe:   echo[12] sample t0=495479120us t1=578939358 t2=578939358 t3=495487246 rtt=8126us offset=83456175us
+07-12 14:35:34.235  4782  4782 I AnebProbe:   echo[13] sample t0=495696386us t1=579158134 t2=579158134 t3=495702492 rtt=6106us offset=83458695us
+07-12 14:35:34.394  4782  4782 I AnebProbe:   echo[14] sample t0=495850638us t1=579313518 t2=579313518 t3=495859440 rtt=8802us offset=83458479us
+07-12 14:35:34.587  4782  4782 I AnebProbe:   echo[15] sample t0=496025374us t1=579506681 t2=579506681 t3=496053058 rtt=27684us offset=83467465us
+07-12 14:35:34.747  4782  4782 I AnebProbe:   echo[16] sample t0=496210169us t1=579670991 t2=579670991 t3=496214200 rtt=4031us offset=83458806us
+07-12 14:35:34.981  4782  4782 I AnebProbe:   echo[17] sample t0=496440157us t1=579902236 t2=579902236 t3=496447854 rtt=7697us offset=83458230us
+07-12 14:35:35.281  4782  4782 I AnebProbe:   echo[18] sample t0=496742475us t1=580204472 t2=580204472 t3=496747748 rtt=5273us offset=83459360us
+07-12 14:35:35.516  4782  4782 I AnebProbe:   echo[19] sample t0=496977143us t1=580438323 t2=580438323 t3=496982143 rtt=5000us offset=83458680us
+07-12 14:35:35.764  4782  4782 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458806us +/- 2015us (RTT/2), valid=17/17
+07-12 14:35:35.765  4782  4782 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:35:35.807  4782  4782 I AnebProbe:   chunk[0] 2048B wroteAt=+20.93ms (claim: written-to-local-stack, R-07)
+07-12 14:35:35.809  4782  4782 I AnebProbe:   upload endpoint=2xx-response-headers dur=41.57ms http=200
+07-12 14:35:35.810  4782  4782 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=10.73ms reqBodyEnd=20.83ms respHdrStart=41.44ms respHdrEnd=41.46ms
+07-12 14:35:35.811  4782  4782 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:35:50.905  4782  4782 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=2.29ms reqBodyEnd=null respHdrStart=13.94ms respHdrEnd=13.97ms
+07-12 14:35:50.906  4782  4782 I AnebProbe:   prelude arrival=+14.81ms raw=prelude {"srv_ts_us":580744137,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:52033"}
+07-12 14:35:50.906  4782  4782 I AnebProbe:   events=600 reads=604 bytes=183385 parseErrors=0 truncatedTail=false
+07-12 14:35:50.909  4782  4782 I AnebProbe: --- S1 summary ---
+07-12 14:35:50.910  4782  4782 I AnebProbe:   TTFT           = 34.08 ms (origin=requestHeadersEnd)
+07-12 14:35:50.910  4782  4782 I AnebProbe:   ITL median     = 24.98 ms  P95 = 25.55 ms  (n=599, coalesced excluded=0)
+07-12 14:35:50.911  4782  4782 I AnebProbe:   alignResidualP95Us = 516  P50 = 131  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:35:50.911  4782  4782 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:35:50.912  4782  4782 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:35:50.913  4782  4782 I AnebProbe:   clock offset   = 83458806us +/- 2015us (RTT/2)
+07-12 14:35:50.914  4782  4782 I AnebProbe: === S1 run complete ===
+
+----- run09.log -----
+--------- beginning of main
+07-12 14:36:00.660  4874  4874 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:36:00.801  4874  4874 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:36:00.811  4874  4874 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:36:02.158  4874  4874 I AnebProbe:   echo[0] warmup t0=522266720us t1=606571356 t2=606571745 t3=523620554 rtt=1353445us offset=83627913us
+07-12 14:36:02.357  4874  4874 I AnebProbe:   echo[1] warmup t0=523817259us t1=607279477 t2=607279477 t3=523823985 rtt=6726us offset=83458855us
+07-12 14:36:02.603  4874  4874 I AnebProbe:   echo[2] warmup t0=524065375us t1=607525572 t2=607525572 t3=524069719 rtt=4344us offset=83458025us
+07-12 14:36:02.724  4874  4874 I AnebProbe:   echo[3] sample t0=524187449us t1=607648079 t2=607648079 t3=524191110 rtt=3661us offset=83458799us
+07-12 14:36:02.955  4874  4874 I AnebProbe:   echo[4] sample t0=524416618us t1=607877085 t2=607877085 t3=524420937 rtt=4319us offset=83458307us
+07-12 14:36:03.114  4874  4874 I AnebProbe:   echo[5] sample t0=524577369us t1=608036685 t2=608036685 t3=524581334 rtt=3965us offset=83457333us
+07-12 14:36:03.304  4874  4874 I AnebProbe:   echo[6] sample t0=524768087us t1=608228472 t2=608228472 t3=524771235 rtt=3148us offset=83458811us
+07-12 14:36:03.478  4874  4874 I AnebProbe:   echo[7] sample t0=524940113us t1=608400446 t2=608400446 t3=524944716 rtt=4603us offset=83458031us
+07-12 14:36:03.609  4874  4874 I AnebProbe:   echo[8] sample t0=525071772us t1=608532477 t2=608532477 t3=525076064 rtt=4292us offset=83458559us
+07-12 14:36:03.867  4874  4874 I AnebProbe:   echo[9] sample t0=525331482us t1=608791591 t2=608791591 t3=525334306 rtt=2824us offset=83458697us
+07-12 14:36:04.100  4874  4874 I AnebProbe:   echo[10] sample t0=525563638us t1=609023819 t2=609023819 t3=525566816 rtt=3178us offset=83458592us
+07-12 14:36:04.321  4874  4874 I AnebProbe:   echo[11] sample t0=525784873us t1=609244290 t2=609244290 t3=525788710 rtt=3837us offset=83457498us
+07-12 14:36:04.459  4874  4874 I AnebProbe:   echo[12] sample t0=525917954us t1=609380386 t2=609380386 t3=525924821 rtt=6867us offset=83458998us
+07-12 14:36:04.695  4874  4874 I AnebProbe:   echo[13] sample t0=526157023us t1=609618318 t2=609618318 t3=526162107 rtt=5084us offset=83458753us
+07-12 14:36:04.837  4874  4874 I AnebProbe:   echo[14] sample t0=526292734us t1=609756645 t2=609756645 t3=526303323 rtt=10589us offset=83458616us
+07-12 14:36:05.102  4874  4874 I AnebProbe:   echo[15] sample t0=526561068us t1=610023802 t2=610023802 t3=526567966 rtt=6898us offset=83459285us
+07-12 14:36:05.302  4874  4874 I AnebProbe:   echo[16] sample t0=526762484us t1=610224097 t2=610224097 t3=526768497 rtt=6013us offset=83458606us
+07-12 14:36:05.611  4874  4874 I AnebProbe:   echo[17] sample t0=527071496us t1=610533378 t2=610533378 t3=527077686 rtt=6190us offset=83458787us
+07-12 14:36:05.873  4874  4874 I AnebProbe:   echo[18] sample t0=527332772us t1=610795781 t2=610795781 t3=527339525 rtt=6753us offset=83459632us
+07-12 14:36:06.141  4874  4874 I AnebProbe:   echo[19] sample t0=527599744us t1=611063441 t2=611063441 t3=527607677 rtt=7933us offset=83459730us
+07-12 14:36:06.416  4874  4874 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458697us +/- 1412us (RTT/2), valid=17/17
+07-12 14:36:06.416  4874  4874 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:36:06.500  4874  4874 I AnebProbe:   chunk[0] 2048B wroteAt=+27.77ms (claim: written-to-local-stack, R-07)
+07-12 14:36:06.500  4874  4874 I AnebProbe:   upload endpoint=2xx-response-headers dur=56.31ms http=200
+07-12 14:36:06.501  4874  4874 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=4.04ms reqBodyEnd=28.05ms respHdrStart=56.14ms respHdrEnd=56.17ms
+07-12 14:36:06.501  4874  4874 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:36:21.822  4874  4874 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=3.82ms reqBodyEnd=null respHdrStart=7.16ms respHdrEnd=7.18ms
+07-12 14:36:21.825  4874  4874 I AnebProbe:   prelude arrival=+8.28ms raw=prelude {"srv_ts_us":611467973,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:56700"}
+07-12 14:36:21.825  4874  4874 I AnebProbe:   events=600 reads=605 bytes=183357 parseErrors=0 truncatedTail=false
+07-12 14:36:21.861  4874  4874 I AnebProbe: --- S1 summary ---
+07-12 14:36:21.865  4874  4874 I AnebProbe:   TTFT           = 4.55 ms (origin=requestHeadersEnd)
+07-12 14:36:21.883  4874  4874 I AnebProbe:   ITL median     = 24.99 ms  P95 = 25.77 ms  (n=599, coalesced excluded=0)
+07-12 14:36:21.911  4874  4874 I AnebProbe:   alignResidualP95Us = 1122  P50 = 175  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:36:21.911  4874  4874 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:36:21.911  4874  4874 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:36:21.912  4874  4874 I AnebProbe:   clock offset   = 83458697us +/- 1412us (RTT/2)
+07-12 14:36:21.912  4874  4874 I AnebProbe: === S1 run complete ===
+
+----- run10.log -----
+--------- beginning of main
+07-12 14:36:32.583  4978  4978 I AnebProbe: >>> Run S1 -> http://10.0.2.2:8443
+07-12 14:36:33.097  4978  4978 I AnebProbe: === S1 run start | profile=s1_chat tokens=600 server=http://10.0.2.2:8443 ===
+07-12 14:36:33.098  4978  4978 I AnebProbe: [clock_sync] echo x20 (first 3 = warmup, discarded; interval 100-300ms random)
+07-12 14:36:33.800  4978  4978 I AnebProbe:   echo[0] warmup t0=554375226us t1=638612743 t2=638612743 t3=555261178 rtt=885952us offset=83794541us
+07-12 14:36:33.969  4978  4978 I AnebProbe:   echo[1] warmup t0=555430540us t1=638891069 t2=638891069 t3=555434115 rtt=3575us offset=83458741us
+07-12 14:36:34.276  4978  4978 I AnebProbe:   echo[2] warmup t0=555733561us t1=639194139 t2=639194139 t3=555742586 rtt=9025us offset=83456065us
+07-12 14:36:34.399  4978  4978 I AnebProbe:   echo[3] sample t0=555860387us t1=639321751 t2=639322197 t3=555865878 rtt=5045us offset=83458841us
+07-12 14:36:34.644  4978  4978 I AnebProbe:   echo[4] sample t0=556106992us t1=639567954 t2=639568251 t3=556111423 rtt=4134us offset=83458895us
+07-12 14:36:34.888  4978  4978 I AnebProbe:   echo[5] sample t0=556351637us t1=639812335 t2=639812335 t3=556355461 rtt=3824us offset=83458786us
+07-12 14:36:35.139  4978  4978 I AnebProbe:   echo[6] sample t0=556601520us t1=640063463 t2=640063463 t3=556606560 rtt=5040us offset=83459423us
+07-12 14:36:35.282  4978  4978 I AnebProbe:   echo[7] sample t0=556745601us t1=640206092 t2=640206092 t3=556749084 rtt=3483us offset=83458749us
+07-12 14:36:35.563  4978  4978 I AnebProbe:   echo[8] sample t0=557025405us t1=640484451 t2=640484451 t3=557029284 rtt=3879us offset=83457106us
+07-12 14:36:35.816  4978  4978 I AnebProbe:   echo[9] sample t0=557280486us t1=640740659 t2=640740659 t3=557283524 rtt=3038us offset=83458654us
+07-12 14:36:36.085  4978  4978 I AnebProbe:   echo[10] sample t0=557548708us t1=641008558 t2=641008558 t3=557552167 rtt=3459us offset=83458120us
+07-12 14:36:36.298  4978  4978 I AnebProbe:   echo[11] sample t0=557761375us t1=641221468 t2=641221468 t3=557764955 rtt=3580us offset=83458303us
+07-12 14:36:36.534  4978  4978 I AnebProbe:   echo[12] sample t0=557997283us t1=641458177 t2=641458177 t3=558001016 rtt=3733us offset=83459027us
+07-12 14:36:36.743  4978  4978 I AnebProbe:   echo[13] sample t0=558203764us t1=641664221 t2=641664221 t3=558209638 rtt=5874us offset=83457520us
+07-12 14:36:36.947  4978  4978 I AnebProbe:   echo[14] sample t0=558406692us t1=641868006 t2=641868006 t3=558412960 rtt=6268us offset=83458180us
+07-12 14:36:37.253  4978  4978 I AnebProbe:   echo[15] sample t0=558711948us t1=642174672 t2=642174672 t3=558719080 rtt=7132us offset=83459158us
+07-12 14:36:37.389  4978  4978 I AnebProbe:   echo[16] sample t0=558845104us t1=642309534 t2=642309534 t3=558854805 rtt=9701us offset=83459579us
+07-12 14:36:37.603  4978  4978 I AnebProbe:   echo[17] sample t0=559063759us t1=642524303 t2=642524460 t3=559068219 rtt=4303us offset=83458392us
+07-12 14:36:37.723  4978  4978 I AnebProbe:   echo[18] sample t0=559182488us t1=642642827 t2=642642827 t3=559187015 rtt=4527us offset=83458075us
+07-12 14:36:37.915  4978  4978 I AnebProbe:   echo[19] sample t0=559374505us t1=642836038 t2=642836038 t3=559381074 rtt=6569us offset=83458248us
+07-12 14:36:38.205  4978  4978 I AnebProbe: [clock_sync] Cristian min-RTT sample: offset=83458654us +/- 1519us (RTT/2), valid=17/17
+07-12 14:36:38.205  4978  4978 I AnebProbe: [upload_burst] POST 2048B chunk=2048B
+07-12 14:36:38.249  4978  4978 I AnebProbe:   chunk[0] 2048B wroteAt=+4.17ms (claim: written-to-local-stack, R-07)
+07-12 14:36:38.273  4978  4978 I AnebProbe:   upload endpoint=2xx-response-headers dur=19.98ms http=200
+07-12 14:36:38.342  4978  4978 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=2.93ms reqBodyEnd=4.05ms respHdrStart=19.84ms respHdrEnd=19.87ms
+07-12 14:36:38.343  4978  4978 I AnebProbe: [token_stream] GET /api/v1/stream?profile=s1_chat&tokens=600
+07-12 14:36:53.441  4978  4978 I AnebProbe:   timing(rel callStart): dnsStart=null dnsEnd=null connStart=null tlsStart=null tlsEnd=null connEnd=null reqHdrEnd=10.02ms reqBodyEnd=null respHdrStart=93.90ms respHdrEnd=93.93ms
+07-12 14:36:53.441  4978  4978 I AnebProbe:   prelude arrival=+124.15ms raw=prelude {"srv_ts_us":643279742,"anchor_wall_unix_ns":1783866355663855000,"observed":"127.0.0.1:64438"}
+07-12 14:36:53.441  4978  4978 I AnebProbe:   events=600 reads=604 bytes=183245 parseErrors=0 truncatedTail=false
+07-12 14:36:53.448  4978  4978 I AnebProbe: --- S1 summary ---
+07-12 14:36:53.449  4978  4978 I AnebProbe:   TTFT           = 114.32 ms (origin=requestHeadersEnd)
+07-12 14:36:53.450  4978  4978 I AnebProbe:   ITL median     = 24.99 ms  P95 = 25.72 ms  (n=599, coalesced excluded=0)
+07-12 14:36:53.450  4978  4978 I AnebProbe:   alignResidualP95Us = 753  P50 = 143  (n=599, |arrivalΔ−preFlushΔ| us, sameReadBatch/preFlush 缺失剔除)
+07-12 14:36:53.461  4978  4978 I AnebProbe:   stalls(>200ms) = 0   [阶段0原始间隔口径，阶段1改残差域 R-09]
+07-12 14:36:53.462  4978  4978 I AnebProbe:   seq gaps       = 0 dup=0 maxSeq=599 truncatedEarly=false -> ok
+07-12 14:36:53.463  4978  4978 I AnebProbe:   clock offset   = 83458654us +/- 1519us (RTT/2)
+07-12 14:36:53.463  4978  4978 I AnebProbe: === S1 run complete ===

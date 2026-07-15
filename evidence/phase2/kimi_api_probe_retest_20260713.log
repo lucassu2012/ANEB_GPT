@@ -1,0 +1,89 @@
+# E-03 Kimi 真实 LLM API 探针复测（P2-C07）— 证据日志
+日期: 2026-07-13（用户充值后复测；前次 BLOCKED 证据见 kimi_api_probe_20260713.log）
+结论: PASS — PC 直连 + 模拟器 App 探针 ×2 全部 HTTP 200 流式成功，TTFT/ITL 有值，
+      claim_scope=application_end_to_end_to_llm_api，Room 落库 5 行且全库无 key。
+
+## 0. 调用账目（预算：总 ≤4 次推理调用）
+| # | 侧   | 结果 | 计费 | 说明 |
+|---|------|------|------|------|
+| 1 | PC   | 200  | 是(79 tok) | 最小验证，SSE 66 data 块 + [DONE] |
+| 2 | App  | 404  | 否   | url.not_found：App 自动拼 /v1/chat/completions，server 参数误带 /v1 → /v1/v1/... |
+| 3 | App  | 400  | 否   | invalid_temperature：kimi-k2.6 仅接受 temperature=1，请求体硬编码 0 |
+| 4 | App  | 200  | 是   | 修 temperature 后成功，但 ttft/itl=null（见 §3 适配器缺口） |
+| 5 | App  | 200  | 是   | 修 reasoning_content 后 RUN1（正式样本 1） |
+| 6 | App  | 200  | 是   | RUN2（正式样本 2） |
+实际推理（计费）调用 4 次，符合预算；404/400 为服务端参数拒绝，未进推理。
+
+## 1. PC 侧最小验证（curl 直连 --noproxy '*'，key 经 scratchpad 临时 header 文件注入，用后即删）
+- 请求: POST https://api.moonshot.cn/v1/chat/completions
+  model=kimi-k2.6, stream=true, max_tokens=64, 固定短 prompt
+- 结果: HTTP=200 t_starttransfer=1.855s t_total=5.671s
+- 流形态: 66 个 `data:` 块 + `data: [DONE]`；余额问题已解除（不再 429）
+- 关键发现: kimi-k2.6 为 reasoning 模型——全部增量在 delta.reasoning_content
+  （63 块），delta.content 非空块 = 0；尾帧 usage 内嵌在 choices[0] 而非顶层：
+  prompt_tokens=15 completion_tokens=64 (reasoning_tokens=63) finish_reason=length
+
+## 2. 本批次两处代码修复（复测中发现的真实兼容性缺口，均有注释与单测回归）
+a) ApiProbe.requestBodyJson(OPENAI_COMPAT): 移除硬编码 "temperature":0
+   —— Moonshot kimi-k2.6 仅接受 temperature=1，显式 0 → HTTP 400
+   invalid_temperature；延迟探针不依赖确定性输出，改走服务端默认值。
+b) OpenAiSseAdapter: delta.content 为空时回落 delta.reasoning_content 记 token
+   到达（优先 content）—— reasoning 模型正文可整段为空，否则 TTFT/ITL 恒 null。
+回归: :probe:testDebugUnitTest --tests com.aneb.probe.apiprobe.* 全绿（exit=0）。
+
+## 3. 模拟器 App 探针（AVD aneb-kimi2, android-35 google_apis x86_64, emulator-5604,
+     headless, 代理环境变量全清空, 模拟器 NAT 直连公网——ping api.moonshot.cn 通,
+     APIPROBE_GUARD proxy_detected=false vpn_detected=false）
+启动: am start -n com.aneb.probe/.ui.MainActivity --ez apiprobe_autorun true
+  --es apiprobe_server "https://api.moonshot.cn" --es apiprobe_provider openai
+  --es apiprobe_model kimi-k2.6 --es apiprobe_key <User 环境变量注入，不落盘>
+（注意：apiprobe_server 传 base 不带 /v1，App 端自动拼 /v1/chat/completions）
+
+### logcat（tag=AnebProbe，逐字）
+RUN1:
+07-13 04:20:09.875 I AnebProbe: APIPROBE_GUARD proxy_detected=false vpn_detected=false note=recorded_not_rejected(probe_exemption)
+07-13 04:20:09.880 I AnebProbe: APIPROBE_START provider=openai_compat protocol=openai_chat model=kimi-k2.6
+07-13 04:20:14.934 I AnebProbe: APIPROBE_TIMING timing(rel_callStart):_dnsStart=8.28ms_dnsEnd=305.11ms_connStart=306.32ms_tlsStart=823.22ms_tlsEnd=1595.75ms_connEnd=1659.71ms_reqHdrEnd=1680.92ms_reqBodyEnd=1681.85ms_respHdrStart=2378.06ms_respHdrEnd=2378.17ms
+07-13 04:20:14.944 I AnebProbe: APIPROBE_RESULT provider=openai_compat protocol=openai_chat http_code=200 ttft_ms=2380.66 itl_median_ms=187.62 itl_p95_ms=395.37 itl_samples=16 tokens=127 total_ms=5010.54 out_tokens=null stop=length parse_errors=0 proxy_detected=false vpn_detected=false claim_scope=application_end_to_end_to_llm_api error=none
+RUN2:
+07-13 04:20:26.834 I AnebProbe: APIPROBE_GUARD proxy_detected=false vpn_detected=false note=recorded_not_rejected(probe_exemption)
+07-13 04:20:26.840 I AnebProbe: APIPROBE_START provider=openai_compat protocol=openai_chat model=kimi-k2.6
+07-13 04:20:32.571 I AnebProbe: APIPROBE_TIMING timing(rel_callStart):_dnsStart=8.09ms_dnsEnd=154.87ms_connStart=168.85ms_tlsStart=670.81ms_tlsEnd=1681.68ms_connEnd=1750.68ms_reqHdrEnd=1784.98ms_reqBodyEnd=1785.73ms_respHdrStart=2632.40ms_respHdrEnd=2632.51ms
+07-13 04:20:32.581 I AnebProbe: APIPROBE_RESULT provider=openai_compat protocol=openai_chat http_code=200 ttft_ms=2635.50 itl_median_ms=227.73 itl_p95_ms=565.26 itl_samples=15 tokens=127 total_ms=5676.93 out_tokens=null stop=length parse_errors=0 proxy_detected=false vpn_detected=false claim_scope=application_end_to_end_to_llm_api error=none
+
+### 断言核对
+- http_code=200 error=none ×2                                    -> PASS
+- ttft_ms 有值: 2380.66 / 2635.50 ms                             -> PASS
+- itl_median_ms 有值: 187.62 / 227.73 ms（p95 395.37/565.26）    -> PASS
+- claim_scope=application_end_to_end_to_llm_api                  -> PASS
+- 稳定性: 两次 TTFT 差 ~255ms(±5%)、ITL 中位差 ~40ms，同一量级，
+  无超时/截断/解析错误（parse_errors=0, truncated 无）           -> PASS
+- 已知留意项: out_tokens=null —— Moonshot 把 usage 内嵌在
+  choices[0]（非顶层），extractUsage 未覆盖该形态；不影响本任务
+  断言（ttft/itl/claim_scope），已单列跟进                        -> NOTE
+
+## 4. Room 抽验（run-as cat 导出 db+wal 到 /data/local/tmp，设备端 sqlite3）
+select id,provider,model,httpCode,ttftMs,itlMedianMs,itlP95Ms,itlSampleCount,tokenEventCount,stopReason,claimScope,error:
+1|openai_compat|kimi-k2.6|404|null|null|null|0|0||...|http 404 url.not_found（误带 /v1）
+2|openai_compat|kimi-k2.6|400|null|null|null|0|0||...|http 400 invalid_temperature
+3|openai_compat|kimi-k2.6|200|null|null|null|0|0|length|...|none（reasoning 适配前）
+4|openai_compat|kimi-k2.6|200|2380.7|187.6|395.4|16|127|length|application_end_to_end_to_llm_api|none
+5|openai_compat|kimi-k2.6|200|2635.5|227.7|565.3|15|127|length|application_end_to_end_to_llm_api|none
+- 失败行按 R-10 语义 KPI 全 null（无 0/哨兵伪值）                 -> PASS
+- 全库（db+wal checkpoint 后）grep 'sk-' 命中 0                   -> PASS
+
+## 5. 对照解读（一句话）
+Kimi 真实 API 端到端 TTFT≈2.4–2.6s、ITL 中位≈190–230ms，比 E-01 仿真节点公网
+路径（TTFT P50≈18.6ms、ITL P50≈10ms，cronet_ab_public_h3_20260713.log）高约两个
+数量级——差距主体是 LLM 推理排队/生成时间而非网络路径，印证"仿真节点测网络、
+真实 API 探针测体验对照列"的双口径设计。
+
+## 6. key 卫生自查
+- key 全程仅经内存变量注入：curl 用 scratchpad 临时 header 文件（用后即删），
+  App 用 am start extras（debug-only 通道），命令行由 PowerShell 变量展开，
+  会话中从未回显 key 明文
+- 本文件落盘前程序化比对: file_contains_full_key=False（见复测执行记录）
+- Room 全库 grep 前缀命中 0（§4）；导出/日志红线另有 JVM 单测锚定
+  （KeyRedactionTest 6 项，本批次回归全绿）
+- 清理: scratchpad h.txt/body.json/resp.txt 已删；设备 /data/local/tmp/p.db* 已删；
+  AVD aneb-kimi2 已停机删除

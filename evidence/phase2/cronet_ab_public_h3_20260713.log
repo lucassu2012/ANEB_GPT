@@ -1,0 +1,77 @@
+# P2-C06 公网 Cronet QUIC A/B 实采证据
+# Date: 2026-07-13 (host local), guest logcat 时戳为 AVD 内部时钟
+# Server: https://120-79-148-0.sslip.io:8443 (E-01, Let's Encrypt 公共证书, UDP 8443 已放行)
+# Device: AVD aneb-quic (pixel_6, system-images;android-35;google_apis;x86_64), port 5600,
+#         headless, 启动进程已清空全部 proxy 环境变量, -dns-server 8.8.8.8,223.5.5.5
+# APK: probe-debug (assembleDebug, 本工作树), applicationId=com.aneb.probe
+# Intent: am start -n com.aneb.probe/.ui.MainActivity --es mode ab
+#         --es server https://120-79-148-0.sslip.io:8443 --ei ab_pairs 3 --ez autorun true
+# 背景: 此前 B 组 h3=0 系自签证书被 Cronet known-root 校验阻断 (D-21)。
+#       本次为换公共 CA + 放行 UDP 8443 后的首次公网真实路径实采。
+# 预检: guest settings global http_proxy=null; ping 120.79.148.0 2/2 应答 (rtt ~476ms,
+#       ICMP 经模拟器 NAT, 仅作可达性证据不作 RTT 口径)。
+
+## 1. 逐样本协商与 KPI 记录 (logcat tag=AnebProbe, 原样)
+
+07-13 03:39:24.741  3699  3699 I AnebProbe: >>> AB pairs=3 -> https://120-79-148-0.sslip.io:8443
+07-13 03:39:25.418  3699  3699 I AnebProbe: AB_START run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a server=https://120-79-148-0.sslip.io:8443 profile=s2_coding_agent phase=0 pairs=3 stack=cronet claim_scope=application_end_to_end_to_probe_node
+07-13 03:39:25.600  3699  3699 I AnebProbe: AB_GUARD ok=true metadata=private_dns_active=false;active_transports=wifi;active_validated=false;checked_at_nanos=250272892233
+07-13 03:39:27.764  3699  3699 I AnebProbe: AB_PROFILES warn=profiles_fetch_failed_http=null_error=java.net.SocketException:_Connection_reset
+07-13 03:39:27.770  3699  3699 I AnebProbe: AB_PROFILES warn=using_assets_fallback_version_consistency_with_server=UNVERIFIED_versions=s1_chat@0.2.0;s2_coding_agent@0.2.0;s3_multimodal@0.2.0
+07-13 03:39:27.774  3699  3699 I AnebProbe: AB_PROFILES source=assets_fallback profile=s2_coding_agent version=0.2.0 tokens=300 rate_tps=60.0
+07-13 03:39:29.827  3699  3699 I AnebProbe: AB_WARMUP group=a protocol=h2 http=200 error=none
+07-13 03:39:30.704  3699  3699 I AnebProbe: AB_WARMUP group=b protocol=h3 http=200 error=none
+07-13 03:39:39.821  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=0 group=a protocol=h2 bin=tcp ttft_ms=77.55 itl_p50_ms=9.89 itl_p95_ms=16.46 itl_n=251 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:39:48.914  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=1 group=b protocol=h3 bin=quic ttft_ms=63.29 itl_p50_ms=9.91 itl_p95_ms=14.50 itl_n=282 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:39:57.985  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=2 group=a protocol=h2 bin=tcp ttft_ms=18.56 itl_p50_ms=9.99 itl_p95_ms=13.69 itl_n=281 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:40:07.044  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=3 group=b protocol=h3 bin=quic ttft_ms=18.03 itl_p50_ms=9.94 itl_p95_ms=11.59 itl_n=287 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:40:16.105  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=4 group=a protocol=h2 bin=tcp ttft_ms=16.91 itl_p50_ms=10.02 itl_p95_ms=11.83 itl_n=286 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:40:25.162  3699  3699 I AnebProbe: AB_SAMPLE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a idx=5 group=b protocol=h3 bin=quic ttft_ms=17.05 itl_p50_ms=10.01 itl_p95_ms=12.79 itl_n=288 stall_rate=0.0000 gaps=0 dup=0 events=300 truncated_early=false http=200 error=none
+07-13 03:40:25.164  3699  3699 I AnebProbe: AB_SUMMARY run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a stack=cronet a_n=3 a_ttft_p50_ms=18.56 a_itl_p50_ms=9.99 a_itl_p95_ms=13.69 quic_n=3 quic_ttft_p50_ms=18.03 quic_itl_p50_ms=9.94 quic_itl_p95_ms=12.79 fallback_n=0 fallback_protocols=none comparable=true
+07-13 03:40:25.233  3699  3699 I AnebProbe: AB_DB_WRITE run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a rows=6
+07-13 03:40:25.233  3699  3699 I AnebProbe: AB_END run_id=019f598e-e5a6-79c9-93e6-0eb2a175a56a status=completed
+
+## 2. 两组对比表 (中位数=组内每样本 KPI 的 P50; 口径见 AbRunner KDoc, 仅 Cronet 栈内可比)
+
+| 指标            | A 组 (TCP/h2, n=3) | B 组 (QUIC/h3, n=3) | 差值 (QUIC−TCP) |
+|-----------------|--------------------:|---------------------:|-----------------:|
+| TTFT P50 (ms)   |               18.56 |                18.03 |            -0.53 |
+| ITL P50 (ms)    |                9.99 |                 9.94 |            -0.05 |
+| ITL P95 (ms)    |               13.69 |                12.79 |            -0.90 |
+| fallback 样本   |                   — |                    0 |                — |
+| comparable      |         true (a_n=3, quic_n=3)                   ||                  |
+
+逐样本 TTFT (ms): A = [77.55, 18.56, 16.91]; B(h3) = [63.29, 18.03, 17.05]
+（idx0/idx1 首对样本 TTFT 显著偏高，warmup 后连接仍有首用开销；ABAB 交替使两组
+  首样本条件对齐，不影响组间对比。）
+
+## 3. 断言核对
+
+- [x] B 组 ≥2 样本 negotiatedProtocol=h3: 实际 3/3 (idx 1/3/5 全部 protocol=h3 bin=quic)
+- [x] AB_SUMMARY 两组 TTFT/ITL 并列, comparable=true
+- [x] fallback 单列不混入: fallback_n=0 fallback_protocols=none
+- [x] A 组 h2 全成功: 3/3 protocol=h2 http=200 error=none
+- [x] DB 落库 stack=cronet: ab_result 6 行 (下节 sqlite3 原样输出)
+
+## 4. DB 取证 (adb shell run-as com.aneb.probe sqlite3 databases/aneb-probe.db)
+
+sampleIndex|groupLabel|bin|negotiatedProtocol|stack|httpCode|error|ttftMs|itlP50Ms|itlP95Ms|runId
+0|a|tcp|h2|cronet|200||77.547533|9.887057|16.45548|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+1|b|quic|h3|cronet|200||63.288861|9.908728|14.498057|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+2|a|tcp|h2|cronet|200||18.557036|9.994081|13.694236|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+3|b|quic|h3|cronet|200||18.027166|9.943807|11.586991|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+4|a|tcp|h2|cronet|200||16.913293|10.015423|11.829333|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+5|b|quic|h3|cronet|200||17.048918|10.011076|12.791269|019f598e-e5a6-79c9-93e6-0eb2a175a56a
+
+## 5. 方法注记与已知限制
+
+- D-21 闭环: 公共 CA (Let's Encrypt) 下 Cronet known-root 校验通过, B 组无需任何
+  信任锚 hack 即真实协商 h3 (含 warmup 首次即 h3, 说明 QUIC hint + UDP 8443 出站通畅)。
+- 模拟器 guest 经 QEMU NAT (SLIRP) 出公网, UDP 8443 出站未被阻断——B 组 h3 3/3 即为
+  UDP 直连能力的实证, 无需 CONNECT 转发器 (本次未使用任何转发/代理)。
+- AB_PROFILES 控制面拉取一次 Connection_reset 后走 assets_fallback (版本 0.2.0 与
+  服务端一致性 UNVERIFIED); 仅影响 profile 参数来源, 不影响测量路径与协商结果。
+- n=3/组, 样本量小; 差值 (TTFT −0.53ms, ITL P95 −0.90ms) 在本环境噪声量级内,
+  仅作"公网真实路径 h3 可协商且两组量级一致"的首组对照证据, 不作性能优劣结论。
+- guest 时钟与 host 存在偏差 (logcat 显示 07-13 03:39, 为 AVD 内部时钟), run_id
+  可作跨源关联键。

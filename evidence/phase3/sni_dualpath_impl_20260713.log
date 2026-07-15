@@ -1,0 +1,101 @@
+========================================================================
+ANEB 阶段3 — SNI 双通道实现 + E-01 部署证据
+日期: 2026-07-13
+分支: main
+========================================================================
+
+【研究背景】
+授权网络性能测量（自有服务器+自有设备+自有 SIM）。电信 NR-SA 对 sslip.io
+主机名注入 SNI-keyed TLS RST（真机首测实证 realdevice_first_campaign_20260713.log）；
+bare-IP 路径 TLS 可完成仅缺 IP-SAN。本次把 SNI-RST 做成可量化测量维度，并
+用 bare-IP 通道采集真实蜂窝 KPI。非规避审查。
+
+------------------------------------------------------------------------
+1) 服务端 SNI 证书选择（server/tls.go 新增）
+------------------------------------------------------------------------
+- certSelector.getCertificate 依 ClientHelloInfo.ServerName 分流：
+    ServerName == "120-79-148-0.sslip.io"（具名主机） -> 默认/LE 公共证书
+    ServerName == "" 或 IP 字面量（bare-IP 连接） -> 自签 IP-SAN 证书
+    其它具名主机 -> 回退默认证书
+- 新增 flag -tls-cert-ip / -tls-key-ip；缺省时 bare-IP 回退默认证书 + 日志告警
+  （fail-open：本机默认分支 go vet/test 不因缺 IP 证书而红）。
+- TCP(net/http) 与 h3(quic-go http3) 共用同一 *tls.Config（GetCertificate 回调）：
+  http3.ConfigureTLSConfig 克隆时保留 GetCertificate，QUIC 证书选择走同一回调。
+- main.go: srv.TLSConfig = tlsConf; ListenAndServeTLS("","")；h3srv.TLSConfig=tlsConf;
+  h3srv.ListenAndServe()。validateIPCertPair fail-closed 成对校验。
+- gencert 增 -mode=ip -ip=120.79.148.0：产 IsCA 自签 IP-SAN 证书
+  aneb_ip_cert.pem / aneb_ip_key.pem（兼作服务端叶证书与客户端信任锚）。
+
+  go vet ./...  -> exit 0
+  go test ./... -> ok aneb-server（含新增 tls_test.go：SNI 路由/回退/成对校验）
+
+------------------------------------------------------------------------
+2) 客户端连接成功率 KPI 观测（ReachabilityProbe）
+------------------------------------------------------------------------
+- net/ReachabilityProbe.kt：run 前对同一 E-01 分别用 {带 SNI 主机名, bare-IP}
+  各发 1 次 GET /api/v1/serverinfo，分类 TLS 握手结果 ok/rst/timeout/error:*
+  + 耗时 ms。deriveE01Pair 由配置基址推导两端点（非 E-01 目标返回 null=不探测）。
+  绑定网络非 null 时复用同 socketFactory/DNS（R-01 同网）。best-effort，绝不
+  抛进测量流程。
+- TestEngine：client 创建后探测，落 TestRun.{sniReachable,sniReachMs,ipReachable,
+  ipReachMs}（additive，可空）；日志 KEY 新增
+    REACH sni=<ok|rst|timeout|error:*> sni_ms=.. ip=.. ip_ms=..
+- DB v9 -> v10 显式迁移 MIGRATION_9_10：test_run 增 4 列（additive/可空/无默认）。
+  单测 MigrationV10Test + ReachabilityProbeTest（deriveE01Pair）全绿。
+- 不改既有测量语义与日志 KEY；WiFi/公共域名路径行为不变；ResultReporter 上报
+  体未改（可达性只入本地 Room + 日志）。
+
+------------------------------------------------------------------------
+3) 客户端 bare-IP 信任锚
+------------------------------------------------------------------------
+- app debug res/raw/aneb_ip_ca.pem = gencert -mode=ip 产的 IP-SAN 自签证书公钥。
+- debug network_security_config.xml 追加 domain-config：
+    <domain>120.79.148.0</domain> trust-anchors=@raw/aneb_ip_ca + system
+  （https:8443 不需明文）。保留既有 sslip 系统根链与 aneb_local_ca。
+- App 已支持 --es server https://120.79.148.0:8443（MainActivity intentServer）；
+  OkHttp 默认 hostnameVerifier 对 IP-SAN 证书正常校验，无需改码。
+
+------------------------------------------------------------------------
+4) 顺手修 Moonshot usage（P2-C07 留意项）
+------------------------------------------------------------------------
+- OpenAiSseAdapter.extractUsage：兼容 usage 内嵌于 choices[0] 的情形（Moonshot
+  尾帧），顶层缺失时回落 choices[0].usage。补单测
+  `moonshot usage nested inside choices0 extracted`（out_tokens 非 null）。
+
+------------------------------------------------------------------------
+5) E-01 部署（scripts/deploy_server.ps1 + aneb-server.service）
+------------------------------------------------------------------------
+- service ExecStart 追加 -tls-cert-ip /opt/aneb/tls/ip/cert.pem
+  -tls-key-ip /opt/aneb/tls/ip/key.pem（其余不变，含 -h3）。
+- deploy 脚本新增：ship server/tls/ip 的 IP-SAN 证书对 -> /opt/aneb/tls/ip/
+  （cert 644 / key 600 / chown aneb）；server/tls/ 加 .gitignore（私钥不入库）。
+- 部署输出：DEPLOY_OK，systemctl is-active=active，/profiles + /echo 冒烟通过。
+- 共用服务器隔离守则遵守：仅动 /opt/aneb + 既有 99-aneb.conf，未碰 80/8080/
+  co-tenant 服务。
+
+  验证（ssh E-01 openssl s_client）：
+    SNI=120-79-148-0.sslip.io  -> subject CN=120-79-148-0.sslip.io
+                                   issuer Let's Encrypt YE2         [LE 公共证书 OK]
+    bare-IP 无 SNI             -> subject/issuer O=ANEB CN=ANEB IP-SAN CA
+                                   SAN IP:120.79.148.0              [自签 IP-SAN OK]
+    SNI=120.79.148.0 (IP)      -> IP-SAN 证书                       [OK]
+
+  锚点一致性（served bare-IP cert vs 客户端 res/raw 锚点 SHA-256 指纹）：
+    E-01 served : 0E:13:3B:2D:FE:4C:E5:2B:27:D4:A7:11:D3:36:58:3F:
+                  60:E6:15:9E:28:0C:36:D2:14:00:2A:A6:BA:B2:E5:94
+    client anchor: 0E:13:3B:2D:FE:4C:E5:2B:27:D4:A7:11:D3:36:58:3F:
+                  60:E6:15:9E:28:0C:36:D2:14:00:2A:A6:BA:B2:E5:94   [完全一致]
+
+------------------------------------------------------------------------
+6) 构建
+------------------------------------------------------------------------
+  server:  go vet ./... = 0；go test ./... = ok
+  client:  :probe:testDebugUnitTest = BUILD SUCCESSFUL
+           :probe:assembleDebug     = BUILD SUCCESSFUL（NSC + res/raw 打包通过）
+
+========================================================================
+结论：SNI 双通道端到端打通。E-01 同端口按 SNI 分流两套证书（LE 具名 /
+自签 bare-IP IP-SAN），h3 复用同回调。真机蜂窝可经 bare-IP 通道
+（https://120.79.148.0:8443）完成 TLS 并采集蜂窝 KPI；带 SNI vs bare-IP
+连接成功率成为可量化维度（TestRun.sni_reachable/ip_reachable + 日志 REACH）。
+========================================================================

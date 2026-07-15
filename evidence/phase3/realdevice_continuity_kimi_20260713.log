@@ -1,0 +1,117 @@
+================================================================================
+ANEB 阶段3 真机蜂窝收尾战役 证据账本
+日期: 2026-07-13   设备: 8MY0221126002537 (华为 P40 Pro, 电信 5G SA)
+APK: probe-debug.apk (含 bare-IP 信任锚 @raw/aneb_ip_ca + Moonshot temperature 省略/baseURL 自动拼 修复)
+     lastUpdateTime=2026-07-13 13:24:45  versionName=0.1.0-phase0
+数据预算: ≤10MB (continuity 一遍 + Kimi 2 次调用)  实测≈0.15MB (见 §5)
+================================================================================
+
+[§0] 设备就位与原值记录
+  adb devices -> 8MY0221126002537  device
+  原值: wifi_on=1  stay_on_while_plugged_in=0
+  svc power stayon usb -> stay_on=2 (联调期防休眠)
+
+[§1] 装新 APK
+  gradlew :probe:assembleDebug -> BUILD SUCCESSFUL (源码为最新, 39 tasks up-to-date)
+  源码核验:
+    - temperature 省略: ApiProbe.kt:246-247 (Moonshot kimi-k2.6 仅接受 temperature=1, 显式 0 会 400)
+    - OPENAI_COMPAT path=/v1/chat/completions 自动拼 (ApiProbe.kt:237, base trimEnd '/')
+    - bare-IP 信任锚: network_security_config.xml domain 120.79.148.0 -> @raw/aneb_ip_ca
+  adb install -r -> 成功 (adb 前台超时但 lastUpdateTime 已更新, 覆盖安装保留数据)
+  权限复核 (覆盖安装保留): ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION / READ_PHONE_STATE = granted=true
+
+[§2] 真实蜂窝 Kimi token 级 (项目终极目标场景 — 首个真实蜂窝上真实 LLM API token 级数据)
+  前置: svc wifi disable -> wifi_on=0
+        默认网 = NetworkAgentInfo{... MOBILE[NR] CONNECTED ... VALIDATED} transport=CELLULAR
+        gsm.network.type = NR_SA (5G 独立组网)
+  intent: am start ... --es apiprobe_server https://api.moonshot.cn --es apiprobe_provider openai
+          --es apiprobe_model kimi-k2.6 --es apiprobe_key <REDACTED>
+          (server 不带 /v1, App 自动拼 /v1/chat/completions; key 仅存 PowerShell 变量, 从不落文件)
+
+  --- RUN 1 (成功, 完整 token 级) ---
+  APIPROBE_START provider=openai_compat protocol=openai_chat model=kimi-k2.6
+  APIPROBE_TIMING dnsStart=18.92 dnsEnd=49.47 connStart=58.09 tlsStart=121.04 tlsEnd=395.55
+                  connEnd=442.67 reqHdrEnd=461.51 reqBodyEnd=463.25 respHdrStart=1237.23 respHdrEnd=1237.83 (ms, rel_callStart)
+  APIPROBE_RESULT http_code=200 ttft_ms=1245.78 itl_median_ms=2.10 itl_p95_ms=354.99
+                  itl_samples=19 tokens=127 total_ms=2823.81 out_tokens=128 stop=length
+                  parse_errors=0 proxy_detected=false vpn_detected=false
+                  claim_scope=application_end_to_end_to_llm_api error=none
+                  totalBytes(DB)=31584
+  >> temperature 修复生效: 不再 400 invalid_temperature, 首拿真实蜂窝真实 Kimi token 级数据.
+
+  --- RUN 2 (真实蜂窝流体断流) ---
+  APIPROBE_START ... model=kimi-k2.6
+  APIPROBE_TIMING ... respHdrStart=1268.37 respHdrEnd=1268.97 (ms) -> 头部已到 (http 200)
+  APIPROBE_RESULT http_code=200 ttft_ms=null itl_median_ms=null itl_samples=0 tokens=0
+                  total_ms=null out_tokens=null stop=null parse_errors=0
+                  error=java.net.SocketTimeoutException:_timeout
+  >> 头部 200 到达 (1.27s) 但 SSE 流体在蜂窝上停滞 -> socket 读超时. 真实蜂窝网络条件下的
+     流式断流样本 (与 RUN1 稳定流形成对照). 计 2 次 Kimi 调用, 用满预算内额度.
+
+  DB 对照 (api_probe_result, 倒序):
+     row(new) 200 SocketTimeout | row 200 ttft=1245.78 itl_median=2.10 19samples 128tok | row 400 invalid_temperature(旧APK前置)
+     baseUrl 均存 https://api.moonshot.cn (无 /v1 -> 证实 App 自动拼); key 未入库.
+
+  [模拟器 vs 真实蜂窝对照]  (见 notes 首条)
+     模拟器(既往): 局域回环, TTFT 数十~百 ms 级, ITL 稳定.
+     真实蜂窝 NR_SA RUN1: TTFT=1245.78ms (含真实 DNS 49ms + TLS 274ms + 服务端首字 ~775ms), ITL_median=2.10ms ITL_p95=354.99ms.
+     真实蜂窝首字延迟显著高于模拟器 (真实广域 RTT + 公网 TLS + 服务端排队), ITL 中位极低 (突发到达) 但 p95 抖动大 (蜂窝调度).
+
+[§3] 真实蜂窝连续性 C2 (bare-IP, 真机首次真实 蜂窝->WiFi 切换)
+  intent: am start ... --es mode continuity --es server https://120.79.148.0:8443
+          --es transport CELLULAR --ez autorun true
+  CONTINUITY_START tokens=1200 rate_tps=40.0 seed=42 max_segments=8 max_attempts=5
+  CONTINUITY_GUARD ok=true (active_transports=cellular; active_validated=true; private_dns_active=false)
+  CONTINUITY_BIND transport=cellular (network 110, validated, down_kbps=145000)
+  --- 流中 ~10s 处 svc wifi enable 制造真实切换 (14:02:04) ---
+  CONTINUITY_PATH PATH_CHANGE default_network_changed_->_111  exempt=true   (WiFi 成为默认网)
+  CONTINUITY_PATH PATH_CHANGE bound_network_lost_110          exempt=true   (绑定的蜂窝网 110 被拆除)
+  CONTINUITY_SEGMENT seg=1 tokens=1175 http=200 completed=false error=SocketException:_Software_caused_connection_abort
+  CONTINUITY_RECONNECT attempt=1..5 ok=false
+     error=SocketException:_Binding_socket_to_network_110_failed:_EPERM_(Operation_not_permitted)
+  CONTINUITY_RECOVERY_FAILED seg=1 attempts=5
+  CONTINUITY_C1 segments=1 disconnects=1 rate=1.0000 grade=poor
+  CONTINUITY_C2 samples=0 p50_ms=null grade=null
+  CONTINUITY_KPI c1_rate=1.0000 c2_recovery_p50_ms=null path_change_events=2 aqs_version_candidate=aqs-v0.2
+  CONTINUITY_END status=recovery_failed
+  --- run 完成后 svc wifi disable -> wifi_on=0, 新蜂窝网 112 上线为默认 ---
+
+  [断言核验]
+   - PathMonitor 豁免生效: 两条 CONTINUITY_PATH 均 exempt=true, run 状态=recovery_failed (非 INVALID),
+     未把"被测切换事件"误判为污染 INVALID -> 豁免设计本尊验证通过.
+   - recovery_ms 未取到: 真机 CELLULAR-bound socket 在 WiFi 使能后蜂窝数据网 110 被系统硬拆除,
+     ContinuityRunner 按设计回绑"同一网络句柄 110" -> EPERM (网络已不存在) -> 5 次重连全败.
+
+  [模拟器 508ms vs 真机真实切换对照]  (见 notes 第二条)
+   - 模拟器: 切换为平滑网络替换, 绑定网仍可回绑, recovery_ms=508ms (成功恢复).
+   - 真机 P40 真实 蜂窝->WiFi: 硬切换拆除原蜂窝网, 回绑原句柄 EPERM, recovery_failed (无 recovery_ms).
+   - 结论: 真实广域硬切换比模拟器更严苛; 暴露"回绑固定网络句柄"策略在真机切换下的局限
+     (回绑任意可用网/新默认网 才能在真机硬切换存活 — 设计观察, 非本战役改动范围).
+
+[§4] 数据回收
+  DB 名: aneb-probe.db (databases/); 含活跃 -wal(524288)/-shm(32768) (含 §2/§3 最新写入).
+  Bash(Git Bash) 字节安全拉取 (adb exec-out run-as com.aneb.probe cat > file):
+    db/wal/shm 三件套拉到 evidence/phase3/realdevice_data/aneb-probe-cellular2.db(+wal/shm), 尺寸与设备一致.
+  sqlite3 打开时自动 checkpoint 将 wal 折叠入主 db, 侧文件消解 -> aneb-probe-cellular2.db 自洽完整 (2707456B).
+  PRAGMA integrity_check=ok
+  行数: api_probe_result=5  continuity_result=1  radio_sample=671(1Hz 三元组)  env_event=93
+
+[§5] key 卫生自查
+  对 aneb-probe-cellular2.db(+wal/+shm) 全字节 ASCII 扫描 key (keylen=51, 值从不打印):
+    aneb-probe-cellular2.db key_matches=0
+    (wal/shm 已 checkpoint 折叠, 折叠前主库已 0)
+    TOTAL_KEY_MATCHES=0
+  本证据文件 key 字段一律 <REDACTED>; logcat/intent 未回显 key 值.
+  数据预算实测: Kimi RUN1 totalBytes=31584B (~31KB, 完整 128 tok 流);
+    Kimi RUN2 头部到达即超时, 仅 TLS+头部, 忽略级 (<5KB);
+    continuity 流 seg1 收 1175 tok (~0.1MB 量级 SSE), 5 次重连于 bind 处即败无数据体.
+    合计 ≈0.15MB, 约为 10MB 预算的 1.5% (远低于预算).
+
+[§6] 设备恢复 (无条件, 最后一步)
+  svc wifi enable + svc power stayon false
+  settings get 复核:
+    wifi_on = 1   (原值 1  ✓ 已回原值)
+    stay_on_while_plugged_in = 0   (原值 0  ✓ 已回原值)
+  device_restored = true
+  App 保留 (未卸载).
+================================================================================
