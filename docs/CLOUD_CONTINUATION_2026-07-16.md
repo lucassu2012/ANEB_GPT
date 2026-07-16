@@ -17,6 +17,7 @@
 
 ## 2. 已完成
 
+- 此前本地开发的 M1 协议仿真、v3.0/v3.1 设计、Android Echo/M2 交接与验证状态已完成恢复审计；安全的历史机器摘要和全部归档哈希见 `docs/references/RECOVERED_LOCAL_DEVELOPMENT_INDEX_2026-07-16.md`。旧代码、旧评分配置、APK、密钥与原始设备证据未导入。
 - SpeedTest 级视觉框架、动态仪表、基础网络测速、结果结论和新版图标已在 Android 工程内。
 - 独立 `tools/aneb-ai-behavior-model` 已实现确定性 PCG32、Token/实时语音假设模型、轨迹生成、拟合、Schema 和测试。
 - Profile Contract v2 Kotlin 数据结构已开始接入：`ProfileModels.kt` 支持 business、measurements、live_presentation、evaluation、trace。
