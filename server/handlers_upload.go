@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -54,7 +55,13 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			break
+			if err == io.EOF {
+				break
+			}
+			// 只有 EOF 才证明请求体完整读完。连接截断或其它读取错误不能返回
+			// 2xx，否则客户端会把未完整送达的字节误记为成功上传样本。
+			http.Error(w, "body unreadable", http.StatusBadRequest)
+			return
 		}
 	}
 	recvEnd := nowMicros()
@@ -110,7 +117,13 @@ func (a *app) handleToolLoop(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			break
+			if err == io.EOF {
+				break
+			}
+			// 与 /upload 同口径：请求体未完整读完时不进入模拟处理阶段，
+			// 也不返回可被客户端当作成功工具循环的响应。
+			http.Error(w, "body unreadable", http.StatusBadRequest)
+			return
 		}
 	}
 	tRecv := nowMicros()

@@ -11,20 +11,23 @@ permissions:
 
 jobs:
   android:
-    name: Android unit tests
+    name: Android quality gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Gradle wrapper executable
+        working-directory: app
+        run: test -x ./gradlew
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test Android probe
+      - name: Test, lint, and assemble Android probe
         working-directory: app
-        run: ./gradlew :probe:testDebugUnitTest --no-parallel
+        run: ./gradlew :probe:testDebugUnitTest :probe:lintDebug :probe:assembleDebug --no-daemon --no-parallel --max-workers=1
 
   server:
     name: Go server tests
@@ -36,9 +39,20 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
-      - name: Test ANEB node
+      - name: Format, vet, and test ANEB node
         working-directory: server
-        run: go test ./...
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Go files require gofmt"
+            printf '%s\n' "$unformatted"
+            while IFS= read -r file; do
+              gofmt -d "$file"
+            done <<< "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+          go test -count=1 ./...
 
   behavior-model:
     name: AI behavior model tests
