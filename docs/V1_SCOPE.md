@@ -12,7 +12,7 @@ Complexity: Ambitious.
 - AQS and T/U/C/N KPI presentation using the frozen v0.2.2 semantics.
 - Local Room history, result detail, JSON/CSV export, and native share card.
 - Test-node selection, reachability status, settings persistence, cancellation, offline, timeout, permission-denied, and background/resume handling.
-- No-key AI endpoint reachability and optional keyed API probes as separate evidence; neither enters AQS.
+- Formal product routes execute only controlled simulations on self-operated ANEB nodes. Existing keyed API probes remain development diagnostics only: they stay out of navigation, Profiles, formal results, and AQS (D-36/D-37).
 - Domestic Probe operation, privacy-safe evidence, release signing readiness, and a repeatable quality gate.
 
 ## Later, not Version 1
@@ -45,4 +45,3 @@ Open app
 - All error and nullable states render without fake zero values.
 - 375×667 and larger phone layouts have no horizontal overflow or clipped primary actions.
 - Physical-device and public-node gaps remain `BLOCKED_EXTERNAL`; they are never converted to PASS.
-

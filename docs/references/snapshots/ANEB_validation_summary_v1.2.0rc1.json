@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0.0",
+  "product": "ANEB - Agent Network Experience Benchmark",
+  "implementation_version": "1.2.0rc1",
+  "design_version": "3.1 Engineering Validation RC",
+  "status": "PASS_WITH_SCOPE_LIMITATIONS",
+  "generated_at": "2026-07-11T00:00:00+08:00",
+  "delivery_commit": "4a382b9737d7c0abc2b0da7b88d5c32d006c8a79",
+  "validated_code_commit": "e217e38",
+  "product_code_changes_after_validation": 0,
+  "iterations_completed": 31,
+  "release_gates": {
+    "qa": "PASS",
+    "isolated_test_batches": "PASS",
+    "batch_count": 25,
+    "tests": 79,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "scenario_matrix": {
+      "cases": 9,
+      "passed": 9,
+      "failed": 0,
+      "failed_cases": {},
+      "node_invalid": 1,
+      "diagnostic_codes": [
+        "HIGH_INTERACTION_LATENCY",
+        "LOW_UPLINK_GOODPUT",
+        "NODE_NOISE",
+        "NO_CRITICAL_ISSUE",
+        "REQUEST_DELIVERY_FAILURE",
+        "SLOW_SESSION_RESUME",
+        "STREAM_INTERRUPTED",
+        "STREAM_STALL"
+      ],
+      "shards": [
+        "reports/final-rc27/matrix-shard-1-current",
+        "reports/final-rc27/matrix-shard-2-fixed",
+        "reports/final-rc27/matrix-shard-3"
+      ]
+    },
+    "repeatability": "PASS",
+    "stress": "PASS",
+    "clean_install": "PASS",
+    "docx_accessibility": {
+      "design": "PASS",
+      "validation_report": "PASS"
+    },
+    "docx_visual_qa": {
+      "design_pages": 33,
+      "validation_report_pages": 7,
+      "status": "PASS"
+    }
+  },
+  "validated_scope": [
+    "Installed CLI/terminal simulator",
+    "FastAPI Probe Node and control/data endpoints",
+    "Synthetic Agent workloads",
+    "Application Echo, TTFA, Streaming, Upload, Download and Session Resume measurements",
+    "Deterministic fault profiles and nine-scenario matrix",
+    "Metric calculation, quality gates, readiness scoring, diagnosis and reports",
+    "Lifecycle, security contracts, concurrency/resource checks and package installation"
+  ],
+  "not_validated": [
+    "Physical Android radio/baseband behavior and OEM-specific lifecycle restrictions",
+    "Commercial 4G/5G/Wi-Fi field performance",
+    "HTTP/3/QUIC connection migration on physical devices",
+    "Carrier-grade multi-region Probe Node deployment",
+    "Real on-device LLM runtime performance",
+    "AES subjective study and formal standards qualification"
+  ],
+  "claim_boundary": "This is an engineering simulation release candidate, not a commercial mobile-network certification or proof that all software defects are impossible."
+}

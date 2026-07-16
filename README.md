@@ -5,11 +5,12 @@
 ## 仓库结构
 
 - `docs/` — 研究文档
-  - 《智能体互联网时代（Agentic Internet）移动通信网络的新型网络性能与体验诉求》：诉求分析 + Agent-QoE KPI 体系（agent-qoe-kpi v0.2.1：指标/门限/测量方法/声明边界 + 首轮实测锚点修注，第五部分）
+  - 《智能体互联网时代（Agentic Internet）移动通信网络的新型网络性能与体验诉求》：诉求分析 + Agent-QoE KPI 体系（agent-qoe-kpi v0.2.2：指标/门限/测量方法/声明边界 + 首轮实测锚点修注，第五部分）
   - 《ANEB Probe 开发设计文档》（v0.3，as-built）：测试工具的架构、技术选型、分阶段实现计划与实际完成状态、红队修订
   - 《测量红队清单》：32 项经多代理对抗验证的测量失真风险与闭环计划（10 项 high）
   - 《DECISION_LOG》：决策日志（D-xx）、否决记录、外部依赖清单（E-xx）
   - 《参考_ChatGPT侧ANEB_AndroidEcho方案与进展》：并行姊妹项目制度借鉴（只读参考）
+  - [《历史本地开发资产恢复索引》](docs/references/RECOVERED_LOCAL_DEVELOPMENT_INDEX_2026-07-16.md)：此前 M1 仿真、Android Echo/M2 资产的哈希、验证边界和可重写经验（非当前产品事实）
 - `profiles/` — 版本化测试场景配置 v0.2.0（客户端/服务端共享，发布即冻结，改动须升版本）
   - `basic_network.json` 网络基本性能（下载、上传、时延、抖动、应用层请求失败率）
   - `s1_chat.json` 对话流（对照组）
