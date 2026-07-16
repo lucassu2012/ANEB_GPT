@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,15 +27,33 @@ const validProfileV2 = `{
   "measurements": [
     {
       "metric_id": "FUTURE-B01",
+      "label": "Future metric",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "unsupported",
+      "formula_id": "future-formula-v1",
+      "aggregation": "ratio",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "descriptive",
+      "quality_target": null,
       "future_metric_field": ["metric-preserved"]
     }
   ],
   "live_presentation": {
     "primary_metric_id": "FUTURE_LIVE",
+    "window_ms": 1000,
+    "ui_refresh_ms": 250,
+    "missing_behavior": "show_unavailable_never_zero",
     "future_live_field": true
   },
   "evaluation": {
+    "target_set_id": "future-targets-v1",
     "score_policy_id": "future-score-v1",
+    "conclusion_policy_id": "future-conclusions-v1",
+    "missing_required_metric": "score_null",
+    "invalid_run": "retain_raw_suppress_score",
     "future_evaluation_field": 17
   },
   "trace": {
@@ -48,7 +67,10 @@ const validProfileV2 = `{
       "future_phase_field": {"sentinel": "phase-preserved"}
     }
   ],
-  "future_top_level_field": {"sentinel": "top-level-preserved"}
+  "future_top_level_field": {
+    "sentinel": "top-level-preserved",
+    "future_large_integer": 9007199254740993
+  }
 }`
 
 func TestProfileV2EndpointPreservesWireDocument(t *testing.T) {
@@ -93,16 +115,22 @@ func TestProfileV2EndpointPreservesWireDocument(t *testing.T) {
 		t.Fatalf("got %d profiles, want 1", len(body.Profiles))
 	}
 
-	var source, served any
-	if err := json.Unmarshal([]byte(validProfileV2), &source); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(body.Profiles[0], &served); err != nil {
-		t.Fatal(err)
-	}
+	source := decodeJSONDocument(t, []byte(validProfileV2))
+	served := decodeJSONDocument(t, body.Profiles[0])
 	if !reflect.DeepEqual(served, source) {
 		t.Fatalf("served v2 profile changed wire semantics\nsource: %#v\nserved: %#v", source, served)
 	}
+}
+
+func decodeJSONDocument(t *testing.T, data []byte) any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestLoadProfilesRejectsInvalidV2Envelope(t *testing.T) {
@@ -117,6 +145,13 @@ func TestLoadProfilesRejectsInvalidV2Envelope(t *testing.T) {
 				value["contract_version"] = "aneb-profile-v99"
 			},
 			wantErr: "unsupported contract_version",
+		},
+		{
+			name: "v2 facets without contract",
+			mutate: func(value map[string]any) {
+				delete(value, "contract_version")
+			},
+			wantErr: "contract_version is required",
 		},
 		{
 			name: "missing mode",
@@ -151,7 +186,14 @@ func TestLoadProfilesRejectsInvalidV2Envelope(t *testing.T) {
 			mutate: func(value map[string]any) {
 				value["measurements"] = []any{}
 			},
-			wantErr: "measurements must be a non-empty array",
+			wantErr: "measurements must be a non-empty array of objects",
+		},
+		{
+			name: "null measurement item",
+			mutate: func(value map[string]any) {
+				value["measurements"] = []any{nil}
+			},
+			wantErr: "measurements must be a non-empty array of objects",
 		},
 		{
 			name: "null live presentation",
@@ -165,15 +207,22 @@ func TestLoadProfilesRejectsInvalidV2Envelope(t *testing.T) {
 			mutate: func(value map[string]any) {
 				value["phases"] = []any{}
 			},
-			wantErr: "phases must be a non-empty array",
+			wantErr: "phases must be a non-empty array of objects",
+		},
+		{
+			name: "null phase item",
+			mutate: func(value map[string]any) {
+				value["phases"] = []any{nil}
+			},
+			wantErr: "phases must be a non-empty array of objects",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var value map[string]any
-			if err := json.Unmarshal([]byte(validProfileV2), &value); err != nil {
-				t.Fatal(err)
+			value, ok := decodeJSONDocument(t, []byte(validProfileV2)).(map[string]any)
+			if !ok {
+				t.Fatal("v2 fixture is not a JSON object")
 			}
 			tt.mutate(value)
 			encoded, err := json.Marshal(value)

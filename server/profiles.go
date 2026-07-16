@@ -174,6 +174,21 @@ func validateProfileEnvelope(p *Profile) error {
 		return fmt.Errorf("decode profile envelope: %w", err)
 	}
 	if _, declaresContract := fields["contract_version"]; !declaresContract {
+		// v2-only facet 出现却没有版本声明时不能退化成 legacy；否则一次漏字段
+		// 就会绕过 target/claim scope 门禁，并被客户端按错误能力路径处理。
+		for _, name := range []string{
+			"execution_target",
+			"claim_scope",
+			"business",
+			"measurements",
+			"live_presentation",
+			"evaluation",
+			"trace",
+		} {
+			if _, exists := fields[name]; exists {
+				return fmt.Errorf("contract_version is required when %s is present", name)
+			}
+		}
 		return nil
 	}
 	if p.ContractVersion != profileContractV2 {
@@ -194,8 +209,8 @@ func validateProfileEnvelope(p *Profile) error {
 		}
 	}
 	for _, name := range []string{"measurements", "phases"} {
-		if !isNonEmptyJSONArray(fields[name]) {
-			return fmt.Errorf("%s must be a non-empty array", name)
+		if !isNonEmptyJSONObjectArray(fields[name]) {
+			return fmt.Errorf("%s must be a non-empty array of objects", name)
 		}
 	}
 	return nil
@@ -210,13 +225,21 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &value) == nil && value != nil
 }
 
-func isNonEmptyJSONArray(raw json.RawMessage) bool {
+func isNonEmptyJSONObjectArray(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || raw[0] != '[' {
 		return false
 	}
 	var value []json.RawMessage
-	return json.Unmarshal(raw, &value) == nil && len(value) > 0
+	if json.Unmarshal(raw, &value) != nil || len(value) == 0 {
+		return false
+	}
+	for _, item := range value {
+		if !isJSONObject(item) {
+			return false
+		}
+	}
+	return true
 }
 
 // handleProfiles GET /api/v1/profiles：下发全部 profile（含 profile_id/version）。
