@@ -42,7 +42,15 @@ jobs:
       - name: Format, vet, and test ANEB node
         working-directory: server
         run: |
-          test -z "$(gofmt -l .)"
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Go files require gofmt"
+            printf '%s\n' "$unformatted"
+            while IFS= read -r file; do
+              gofmt -d "$file"
+            done <<< "$unformatted"
+            exit 1
+          fi
           go vet ./...
           go test -count=1 ./...
 
