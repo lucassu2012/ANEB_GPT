@@ -37,6 +37,12 @@ class ProbeSettingsStoreTest {
     }
 
     @Test
+    fun `legacy hidden mode migrates to public token simulation`() {
+        val decoded = ProbeSettingsCodec.decode(null, null, null, false, "TOKEN_EXPERIENCE")
+        assertEquals(AnebTestMode.TOKEN_SIMULATION, decoded.testMode)
+    }
+
+    @Test
     fun `manual launch restores saved values`() {
         val saved = ProbeSettings(
             serverUrl = "https://node.example:8443",

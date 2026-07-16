@@ -22,6 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BasicSpeedResultEntity::class,
         TokenSimulationResultEntity::class,
         RealtimeSimulationResultEntity::class,
+        NetworkComprehensiveResultEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -40,7 +41,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
     // v13：Profile v2——新增 token_simulation_result 独立表；不并入 TestRun/AQS。
     // v14：Profile v2——新增 realtime_simulation_result 独立表；不并入 TestRun/AQS。
-    version = 14,
+    // v15：Profile v2——新增 network_comprehensive_result 独立证据表。
+    version = 15,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -57,6 +59,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun basicSpeedResultDao(): BasicSpeedResultDao
     abstract fun tokenSimulationResultDao(): TokenSimulationResultDao
     abstract fun realtimeSimulationResultDao(): RealtimeSimulationResultDao
+    abstract fun networkComprehensiveResultDao(): NetworkComprehensiveResultDao
 
     companion object {
         @Volatile
@@ -330,6 +333,28 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_14_15_SQL = listOf(
+            "CREATE TABLE IF NOT EXISTS `network_comprehensive_result` (" +
+                "`runId` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, " +
+                "`serverBase` TEXT NOT NULL, `claimScope` TEXT NOT NULL, " +
+                "`profileId` TEXT NOT NULL, `profileVersion` TEXT NOT NULL, `variant` TEXT NOT NULL, " +
+                "`scorePolicyId` TEXT NOT NULL, `scoreAnchorPolicyId` TEXT NOT NULL, `conclusionPolicyId` TEXT NOT NULL, " +
+                "`status` TEXT NOT NULL, `totalScore` REAL, `grade` TEXT, `verdict` TEXT NOT NULL, `confidence` TEXT NOT NULL, " +
+                "`downloadMbps` REAL, `uploadMbps` REAL, `idleRttMs` REAL, `loadedRttMs` REAL, " +
+                "`latencyDeltaMs` REAL, `jitterMs` REAL, `requestLossRate` REAL, `throughputRobustCv` REAL, " +
+                "`udpNonReturnRate` REAL, `postLoadPingMs` REAL, `downloadBytes` INTEGER NOT NULL, `uploadBytes` INTEGER NOT NULL, " +
+                "`transferErrors` TEXT NOT NULL, `metricsJson` TEXT NOT NULL, `groupScoresJson` TEXT NOT NULL, " +
+                "`conclusionsJson` TEXT NOT NULL, `evidenceJson` TEXT NOT NULL, PRIMARY KEY(`runId`))",
+            "CREATE INDEX IF NOT EXISTS `index_network_comprehensive_result_startedAtEpochMs` " +
+                "ON `network_comprehensive_result` (`startedAtEpochMs`)",
+        )
+
+        internal val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_14_15_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -341,7 +366,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     // 不可静默丢弃）——v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11 见上方（均 additive）。
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

@@ -2,7 +2,7 @@
 
 > 日期：2026-07-16  
 > 输入：Codex 会话 `019f4b68-e951-78b0-a670-2f61c8748352` 的结论  
-> 状态：测量架构已采纳；候选数值门限尚未替代 D-37 的 provisional v1 目标
+> 状态：测量架构已落地到 Token、AI 实时与网络综合三类可执行 Profile；候选 enhanced 数值仍未替代 D-37 的 provisional v1 目标
 
 ## 1. 反方观点与边界
 
@@ -67,10 +67,9 @@ D-37 当前 Token、实时交互和网络综合三套 provisional v1 门限不�
 - 零失败不等于零风险。单侧 95% 上界低于 1%/0.1%，约需 299/2,995 次独立任务且零失败。
 - 当前快测无法支撑 99.9% 可靠性通过结论时，应输出 `INCONCLUSIVE`，不能用短样本给出高可靠性承诺。
 
-## 7. 本轮实施顺序
+## 7. 实施状态
 
-1. 完成 Profile v2 的 nullable 模型来源、严格缺失值/指标清单/权重验证与正式导航边界。
-2. 将 `network_comprehensive_standard` 接入目录，但在执行引擎完成前明确标记不可执行。
-3. 优先实现 Token 标准引擎，再实现实时语音与网络综合；三类独立评分。
+1. Profile v2 的 nullable 模型来源、严格缺失值、指标/权重校验与正式导航边界已完成。
+2. `network_comprehensive_quick@1.0.0` 与 `network_comprehensive_standard@1.0.0` 已发布并可执行。
+3. Token、AI 实时与网络综合三类引擎均已实现独立评分、冻结证据与独立历史结果。
 4. 后续增加 `agent_control`、`background_continuity`、`realtime_visual`，不把五类业务硬塞进同一总分。
-

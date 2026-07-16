@@ -121,6 +121,8 @@ data class ProfileExecutionPlan(
 @Serializable
 data class ProfilePhase(
     val type: String,
+    // path_setup / protocol handshake
+    val attempts: Int = 0,
     // clock_sync
     val samples: Int = 0,
     // upload_burst
@@ -128,6 +130,12 @@ data class ProfilePhase(
     @SerialName("chunk_kb") val chunkKb: Int = 0,
     /** throughput phase 的并发连接数；其他 phase 保持 0。 */
     val parallel: Int = 0,
+    /** 负载阶段并发应用层 echo 的采样间隔。 */
+    @SerialName("echo_interval_ms") val echoIntervalMs: Int = 0,
+    // udp_sequence
+    val packets: Int = 0,
+    @SerialName("packet_bytes") val packetBytes: Int = 0,
+    @SerialName("rate_per_second") val ratePerSecond: Int = 0,
     // think_pause
     @SerialName("duration_ms") val durationMs: Int = 0,
     // token_stream
@@ -157,6 +165,12 @@ data class ProfilePhase(
         const val TYPE_DOWNLOAD_THROUGHPUT = "download_throughput"
         const val TYPE_UPLOAD_THROUGHPUT = "upload_throughput"
         const val TYPE_BEHAVIOR_TRACE = "behavior_trace"
+        const val TYPE_PATH_SETUP = "path_setup"
+        const val TYPE_IDLE_LATENCY = "idle_latency"
+        const val TYPE_DOWNLOAD_LOADED = "download_loaded"
+        const val TYPE_UPLOAD_LOADED = "upload_loaded"
+        const val TYPE_UDP_SEQUENCE = "udp_sequence"
+        const val TYPE_POST_LOAD_LATENCY = "post_load_latency"
     }
 }
 
@@ -206,13 +220,15 @@ object ProfileParser {
     /** 随 APK 打包的全部 Profile；REQUIRED_IDS 仍只定义现有 AQS 场景合同。 */
     val BUILTIN_IDS = REQUIRED_IDS + "basic_network"
     /** 只进入合同目录审计，不得被运行引擎自动选择。 */
-    val AUDIT_ONLY_ASSET_PATHS = listOf("drafts/network_comprehensive_standard.json")
+    val AUDIT_ONLY_ASSET_PATHS = emptyList<String>()
     /** 已发布的 Profile v2；运行时仍需逐一通过 capability 与哈希校验。 */
     val PUBLISHED_V2_ASSET_PATHS = listOf(
         "published/token_multimodal_quick/profile.json",
         "published/token_multimodal_standard/profile.json",
         "published/ai_realtime_voice_quick/profile.json",
         "published/ai_realtime_voice_standard/profile.json",
+        "published/network_comprehensive_quick/profile.json",
+        "published/network_comprehensive_standard/profile.json",
     )
 
     private val json = Json { ignoreUnknownKeys = true }

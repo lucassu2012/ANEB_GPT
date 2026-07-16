@@ -36,7 +36,8 @@ internal object ProbeSettingsCodec {
             AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
             AnebTestMode.TOKEN_SIMULATION.name -> AnebTestMode.TOKEN_SIMULATION
             AnebTestMode.AI_REALTIME_SIMULATION.name -> AnebTestMode.AI_REALTIME_SIMULATION
-            AnebTestMode.TOKEN_EXPERIENCE.name -> AnebTestMode.TOKEN_EXPERIENCE
+            // 旧 Agent 取证入口已退出三类正式产品导航；历史偏好迁移到 Token 仿真。
+            AnebTestMode.TOKEN_EXPERIENCE.name -> AnebTestMode.TOKEN_SIMULATION
             else -> AnebTestMode.TOKEN_SIMULATION
         },
         mode = when (mode) {

@@ -7,12 +7,13 @@ import (
 	"crypto/tls"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
-const serverVersion = "aneb-server/0.3.0"
+const serverVersion = "aneb-server/0.4.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -70,6 +71,7 @@ func main() {
 		"enable /stream fault-injection hooks (&inject=...) — test rigs only, NEVER in production")
 	h3Enabled := flag.Bool("h3", false,
 		"serve HTTP/3 (quic-go) on the same port over UDP in parallel with TCP — requires -tls-cert/-tls-key (fail-closed)")
+	udpEchoAddr := flag.String("udp-echo-addr", ":8443", "ANEB sequenced UDP echo address; may share the h3 UDP port")
 	flag.Parse()
 
 	// 配置级 fail-closed 校验放在一切资源加载之前：配错即刻退出。
@@ -149,10 +151,27 @@ func main() {
 	// 退出——半瘸状态（只剩 TCP 却广告着 h3）会污染 A/B 分组。
 	if *h3Enabled {
 		h3srv := a.newH3Server(*addr, tlsConf)
-		go func() {
-			log.Fatalf("h3 server: %v", h3srv.ListenAndServe())
-		}()
+		if *udpEchoAddr == *addr {
+			packetConn, err := net.ListenPacket("udp", *addr)
+			if err != nil {
+				log.Fatalf("udp shared listener: %v", err)
+			}
+			go func() {
+				log.Fatalf("h3 shared server: %v", h3srv.Serve(newUDPProbeFilteringConn(packetConn)))
+			}()
+			log.Printf("udp echo: ANEB datagram probe shares h3 udp%s", *addr)
+		} else {
+			go func() {
+				log.Fatalf("h3 server: %v", h3srv.ListenAndServe())
+			}()
+		}
 		log.Printf("h3: HTTP/3 enabled on udp%s (Alt-Svc: %s)", *addr, altSvc)
+	}
+	if *udpEchoAddr != "" && (!*h3Enabled || *udpEchoAddr != *addr) {
+		go func() {
+			log.Fatalf("udp echo server: %v", serveUDPEcho(*udpEchoAddr))
+		}()
+		log.Printf("udp echo: sequenced application datagram probe enabled on udp%s", *udpEchoAddr)
 	}
 
 	if *tlsCert != "" && *tlsKey != "" {

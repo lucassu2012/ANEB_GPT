@@ -27,7 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
-import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.data.RealtimeSimulationResultEntity
 import com.aneb.probe.data.TokenSimulationResultEntity
 import com.aneb.probe.ui.components.AnebGradientCard
@@ -48,7 +48,7 @@ import kotlin.math.roundToInt
 @Composable
 fun HistoryScreen(
     runs: List<TestRun>,
-    basicRuns: List<BasicSpeedResultEntity>,
+    basicRuns: List<NetworkComprehensiveResultEntity>,
     tokenSimulationRuns: List<TokenSimulationResultEntity>,
     realtimeSimulationRuns: List<RealtimeSimulationResultEntity>,
     onOpen: (String) -> Unit,
@@ -68,9 +68,10 @@ fun HistoryScreen(
             realtimeSimulationRuns.forEach { add(HistoryEntry.RealtimeSimulation(it)) }
         }.sortedByDescending { it.startedAtEpochMs }
     }
-    val scored = remember(runs, tokenSimulationRuns, realtimeSimulationRuns) {
+    val scored = remember(runs, basicRuns, tokenSimulationRuns, realtimeSimulationRuns) {
         buildList {
             addAll(runs.mapNotNull { it.aqsScore })
+            addAll(basicRuns.mapNotNull { it.totalScore })
             addAll(tokenSimulationRuns.mapNotNull { it.totalScore })
             addAll(realtimeSimulationRuns.mapNotNull { it.totalScore })
         }.filter { it.isFinite() }
@@ -137,7 +138,7 @@ private sealed interface HistoryEntry {
         override val key = "token:${run.runId}"
     }
 
-    data class Basic(val result: BasicSpeedResultEntity) : HistoryEntry {
+    data class Basic(val result: NetworkComprehensiveResultEntity) : HistoryEntry {
         override val startedAtEpochMs = result.startedAtEpochMs
         override val key = "basic:${result.runId}"
     }
@@ -243,7 +244,7 @@ private fun HistoryRecord(run: TestRun, onOpen: (String) -> Unit) {
 }
 
 @Composable
-private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) -> Unit) {
+private fun BasicHistoryRecord(result: NetworkComprehensiveResultEntity, onOpen: (String) -> Unit) {
     val colors = AnebTheme.colors
     val accent = when (result.status) {
         "completed" -> colors.brand
@@ -271,7 +272,7 @@ private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) 
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "基础测速 · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
+                "网络综合 · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = colors.ink,
@@ -280,7 +281,7 @@ private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) 
             val down = result.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
             val up = result.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
             Text(
-                "${fmt.format(Date(result.startedAtEpochMs))} · ↓$down ↑$up Mbps",
+                "${fmt.format(Date(result.startedAtEpochMs))} · ${result.totalScore?.let { String.format(Locale.ROOT, "%.1f 分", it) } ?: "不可评分"} · ↓$down ↑$up",
                 fontSize = 10.sp,
                 color = colors.muted,
                 modifier = Modifier.padding(top = 3.dp),

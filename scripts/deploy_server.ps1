@@ -120,6 +120,17 @@ echo '--- smoke: /api/v1/download ---'
 bytes=$(curl -sk https://127.0.0.1:8443/api/v1/download?bytes=1024 | wc -c)
 test "$bytes" -eq 1024
 echo "download_bytes=$bytes"
+echo '--- smoke: shared UDP 8443 sequenced echo ---'
+python3 - <<'PY'
+import socket, struct, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(1)
+packet = b'ANEB1' + struct.pack('>Iq', 7, time.monotonic_ns()) + bytes(47)
+s.sendto(packet, ('127.0.0.1', 8443))
+reply, _ = s.recvfrom(512)
+assert reply == packet, (len(reply), len(packet))
+print('udp_echo_bytes=' + str(len(reply)))
+PY
 echo 'DEPLOY_OK'
 '@
 

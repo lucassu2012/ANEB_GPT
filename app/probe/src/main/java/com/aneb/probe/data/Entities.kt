@@ -101,6 +101,46 @@ data class BasicSpeedResultEntity(
     val transferErrors: String,
 )
 
+/** Profile v2 网络综合性能独立结果；保留旧 basic_speed_result 只用于历史兼容。 */
+@Entity(
+    tableName = "network_comprehensive_result",
+    indices = [Index("startedAtEpochMs")],
+)
+data class NetworkComprehensiveResultEntity(
+    @PrimaryKey val runId: String,
+    val startedAtEpochMs: Long,
+    val serverBase: String,
+    val claimScope: String,
+    val profileId: String,
+    val profileVersion: String,
+    val variant: String,
+    val scorePolicyId: String,
+    val scoreAnchorPolicyId: String,
+    val conclusionPolicyId: String,
+    val status: String,
+    val totalScore: Double?,
+    val grade: String?,
+    val verdict: String,
+    val confidence: String,
+    val downloadMbps: Double?,
+    val uploadMbps: Double?,
+    val idleRttMs: Double?,
+    val loadedRttMs: Double?,
+    val latencyDeltaMs: Double?,
+    val jitterMs: Double?,
+    val requestLossRate: Double?,
+    val throughputRobustCv: Double?,
+    val udpNonReturnRate: Double?,
+    val postLoadPingMs: Double?,
+    val downloadBytes: Long,
+    val uploadBytes: Long,
+    val transferErrors: String,
+    val metricsJson: String,
+    val groupScoresJson: String,
+    val conclusionsJson: String,
+    val evidenceJson: String,
+)
+
 /** Profile v2 Token 仿真独立结果；不进入 TestRun/AQS，完整证据以版本化 JSON 保留。 */
 @Entity(
     tableName = "token_simulation_result",

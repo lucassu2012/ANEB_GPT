@@ -60,7 +60,7 @@ internal object ProbeRunLogParser {
     private val runId = Regex("(?:^|\\s)run_id=(\\S+)")
 
     fun runId(line: String): String? =
-        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("TOKEN_V2_START ") || line.startsWith("REALTIME_V1_START ")) {
+        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("NET_V1_START ") || line.startsWith("TOKEN_V2_START ") || line.startsWith("REALTIME_V1_START ")) {
             runId.find(line)?.groupValues?.get(1)
         } else {
             null
@@ -76,6 +76,13 @@ internal object ProbeRunLogParser {
         line.startsWith("BASIC_PHASE ") && line.contains("phase=download") -> "正在测量下载速度"
         line.startsWith("BASIC_PHASE ") && line.contains("phase=upload") -> "正在测量上传速度"
         line.startsWith("BASIC_RESULT ") -> "正在生成基本测速结论"
+        line.startsWith("NET_V1_START ") -> "正在校验网络综合 Profile"
+        line.startsWith("NET_V1_PHASE ") && line.contains("phase=handshake") -> "正在测量 DNS/TCP/TLS 握手"
+        line.startsWith("NET_V1_PHASE ") && line.contains("phase=idle_latency") -> "正在测量空闲响应性"
+        line.startsWith("NET_V1_PHASE ") && line.contains("phase=download_loaded") -> "正在测量下载容量与负载 RTT"
+        line.startsWith("NET_V1_PHASE ") && line.contains("phase=upload_loaded") -> "正在测量上传容量与负载 RTT"
+        line.startsWith("NET_V1_PHASE ") && line.contains("phase=udp") -> "正在测量 UDP 应用探针"
+        line.startsWith("NET_V1_RESULT ") -> "正在生成网络综合结论"
         line.startsWith("TOKEN_V2_START ") -> "正在校验 Token 行为模型"
         line.startsWith("TOKEN_V2_TASK_START ") -> "正在模拟多模态 AI 任务"
         line.startsWith("TOKEN_V2_RESULT ") -> "正在生成 Token 质量结论"
@@ -185,7 +192,13 @@ class ProbeRunService : Service() {
                         resultJob = serviceScope.launch {
                             engine.result.collect { _basicResult.value = it }
                         }
-                        engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
+                        engine.run(
+                            NetworkSpeedEngine.Config(
+                                serverBase = config.serverBase,
+                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                transport = config.transport,
+                            ),
+                        )
                     }
                     AnebTestMode.TOKEN_SIMULATION -> {
                         val engine = TokenSimulationEngine(applicationContext)

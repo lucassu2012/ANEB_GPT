@@ -29,6 +29,18 @@ interface BasicSpeedResultDao {
 }
 
 @Dao
+interface NetworkComprehensiveResultDao {
+    @Insert
+    suspend fun insert(result: NetworkComprehensiveResultEntity)
+
+    @Query("SELECT * FROM network_comprehensive_result ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<NetworkComprehensiveResultEntity>
+
+    @Query("SELECT * FROM network_comprehensive_result WHERE runId = :runId")
+    suspend fun byId(runId: String): NetworkComprehensiveResultEntity?
+}
+
+@Dao
 interface TokenSimulationResultDao {
     @Insert
     suspend fun insert(result: TokenSimulationResultEntity)

@@ -29,6 +29,14 @@ object ProfileCapability {
     )
     private val tokenSimulationPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
     private val realtimeSimulationPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
+    private val networkComprehensivePhases = setOf(
+        ProfilePhase.TYPE_PATH_SETUP,
+        ProfilePhase.TYPE_IDLE_LATENCY,
+        ProfilePhase.TYPE_DOWNLOAD_LOADED,
+        ProfilePhase.TYPE_UPLOAD_LOADED,
+        ProfilePhase.TYPE_UDP_SEQUENCE,
+        ProfilePhase.TYPE_POST_LOAD_LATENCY,
+    )
     private val tokenRequiredFormulaIds = setOf(
         "tok_b01-v1",
         "tok_b02-v1",
@@ -58,6 +66,17 @@ object ProfileCapability {
         "live_n03-v1",
         "live_n04-v1",
     )
+    private val networkRequiredFormulaIds = setOf(
+        "window-goodput-p05-v1",
+        "echo-rtt-v1",
+        "loaded-echo-rtt-v1",
+        "loaded-p95-minus-idle-p50-v1",
+        "rtt-p95-minus-p50-v1",
+        "goodput-robust-cv-v1",
+        "application-request-failure-ratio-v1",
+        "sequenced-udp-nonreturn-ratio-v1",
+        "connection-stage-timing-v1",
+    )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
 
@@ -67,6 +86,7 @@ object ProfileCapability {
             ScenarioProfile.MODE_NETWORK_BASIC -> basicPhases
             ScenarioProfile.MODE_TOKEN_SIMULATION -> tokenSimulationPhases
             ScenarioProfile.MODE_AI_REALTIME_SIMULATION -> realtimeSimulationPhases
+            ScenarioProfile.MODE_NETWORK_COMPREHENSIVE -> networkComprehensivePhases
             // v2 引擎逐类接入；未接入前必须保持不可执行。
             else -> emptySet()
         }
@@ -185,6 +205,21 @@ object ProfileCapability {
                 if (execution.seed == 0L) add("实时交互执行计划缺少 seed")
                 if (execution.variant != profile.evidenceTier) add("实时交互执行计划与证据等级不一致")
             }
+        }
+        if (profile.modeId == ScenarioProfile.MODE_NETWORK_COMPREHENSIVE) {
+            if (profile.evaluation.scorePolicyId != "network-comprehensive-score-v1") add("网络综合评分策略未被当前引擎识别")
+            if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("网络综合评分锚点策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != "network-comprehensive-conclusions-v1") add("网络综合结论策略未被当前引擎识别")
+            val requiredFormulaIds = profile.measurements
+                .filter { it.requiredForScore }
+                .map { it.formulaId }
+                .toSet()
+            val unknown = requiredFormulaIds - networkRequiredFormulaIds
+            if (unknown.isNotEmpty()) add("网络综合必需指标公式未被识别: ${unknown.sorted().joinToString()}")
+            if (profile.evidenceTier !in setOf("quick", "standard")) add("网络综合证据等级无效")
+            if (profile.executionPlan != null) add("网络综合测试不得声明行为模型执行计划")
+            val phaseTypes = profile.phases.map { it.type }
+            if (phaseTypes != networkComprehensivePhases.toList()) add("网络综合阶段顺序或集合不受支持")
         }
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")
         if (profile.evaluation.missingRequiredMetric != "score_null") add("必需指标缺失策略必须为 score_null")

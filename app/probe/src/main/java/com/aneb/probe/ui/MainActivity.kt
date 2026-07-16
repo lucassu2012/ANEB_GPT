@@ -47,7 +47,7 @@ import com.aneb.probe.apiprobe.LlmProvider
 import com.aneb.probe.apiprobe.ProviderPresets
 import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
-import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.data.RealtimeSimulationResultEntity
 import com.aneb.probe.data.TokenSimulationResultEntity
 import com.aneb.probe.data.Exporter
@@ -320,7 +320,7 @@ class MainActivity : ComponentActivity() {
                             return
                         }
                         val state = radioPermissionState()
-                        if (testMode == AnebTestMode.NETWORK_BASIC || state.hasFullRadioEvidence) {
+                        if (testMode != AnebTestMode.TOKEN_EXPERIENCE || state.hasFullRadioEvidence) {
                             requestRunNotificationPermission { startRun(fromAutorun = false) }
                         } else {
                             permissionPrompt = RadioPermissionPrompt(
@@ -726,9 +726,9 @@ class MainActivity : ComponentActivity() {
                 db.testRunDao().all().maxByOrNull { it.startedAtEpochMs }
             }
         }
-        val lastBasicRun by produceState<BasicSpeedResultEntity?>(initialValue = null, running) {
+        val lastBasicRun by produceState<NetworkComprehensiveResultEntity?>(initialValue = null, running) {
             value = withContext(Dispatchers.IO) {
-                db.basicSpeedResultDao().all().maxByOrNull { it.startedAtEpochMs }
+                db.networkComprehensiveResultDao().all().maxByOrNull { it.startedAtEpochMs }
             }
         }
         HomeScreen(
@@ -750,14 +750,14 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BasicResultRoute(runId: String, onBack: () -> Unit) {
         val result by produceState<com.aneb.probe.engine.BasicSpeedResult?>(initialValue = null, runId) {
-            value = withContext(Dispatchers.IO) { db.basicSpeedResultDao().byId(runId)?.toDomain() }
+            value = withContext(Dispatchers.IO) { db.networkComprehensiveResultDao().byId(runId)?.toDomain() }
         }
         val loaded = result
         if (loaded != null) {
             BasicSpeedResultScreen(result = loaded, onBack = onBack)
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text("未找到基础测速记录", color = AnebTheme.colors.muted)
+                Text("未找到网络综合记录", color = AnebTheme.colors.muted)
             }
         }
     }
@@ -812,7 +812,7 @@ class MainActivity : ComponentActivity() {
             value = withContext(Dispatchers.IO) {
                 HistoryData(
                     tokenRuns = db.testRunDao().all(),
-                    basicRuns = db.basicSpeedResultDao().all(),
+                    basicRuns = db.networkComprehensiveResultDao().all(),
                     tokenSimulationRuns = db.tokenSimulationResultDao().all(),
                     realtimeSimulationRuns = db.realtimeSimulationResultDao().all(),
                 )
@@ -835,7 +835,7 @@ class MainActivity : ComponentActivity() {
 
     private data class HistoryData(
         val tokenRuns: List<TestRun> = emptyList(),
-        val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
+        val basicRuns: List<NetworkComprehensiveResultEntity> = emptyList(),
         val tokenSimulationRuns: List<TokenSimulationResultEntity> = emptyList(),
         val realtimeSimulationRuns: List<RealtimeSimulationResultEntity> = emptyList(),
     )

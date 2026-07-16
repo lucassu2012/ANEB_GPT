@@ -173,7 +173,7 @@ class ProfileCapabilityTest {
     }
 
     @Test
-    fun `network comprehensive accepts no behavior model but remains non executable`() {
+    fun `network comprehensive accepts no behavior model and rejects mismatched policy`() {
         val network = ProfileParser.parseSingle(
             validV2Json
                 .replace("\"profile_id\":\"token_standard\"", "\"profile_id\":\"network_standard\"")
@@ -191,8 +191,9 @@ class ProfileCapabilityTest {
         val result = ProfileCapability.assess(network)
         assertNull(network.business.behaviorModelId)
         assertEquals("not_applicable", network.business.calibrationStatus)
-        assertTrue(result.contractIssues.isEmpty())
+        assertTrue(result.contractIssues.none { it.contains("行为模型") })
+        assertTrue(result.contractIssues.isNotEmpty())
         assertFalse(result.executable)
-        assertTrue("path_setup" in result.unsupportedPhaseTypes)
+        assertFalse("path_setup" in result.unsupportedPhaseTypes)
     }
 }

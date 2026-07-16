@@ -49,7 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
-import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
@@ -67,7 +67,7 @@ import kotlin.math.roundToInt
 @Composable
 fun HomeScreen(
     lastRun: TestRun?,
-    lastBasicRun: BasicSpeedResultEntity?,
+    lastBasicRun: NetworkComprehensiveResultEntity?,
     testMode: AnebTestMode,
     onTestModeChange: (AnebTestMode) -> Unit,
     running: Boolean,
@@ -129,7 +129,7 @@ fun HomeScreen(
             IdleStartRing(running = running, onStart = onStart)
             Text(
                 when (testMode) {
-                    AnebTestMode.NETWORK_BASIC -> "测试下载、上传、Ping、抖动与应用层请求失败"
+                    AnebTestMode.NETWORK_BASIC -> "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
                     AnebTestMode.TOKEN_SIMULATION -> "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
                     AnebTestMode.AI_REALTIME_SIMULATION -> "模拟 GPT-Live 类双工语音、连续音频帧与用户打断"
                     AnebTestMode.TOKEN_EXPERIENCE -> "执行经典 Agent 场景取证与 AQS 评分"
@@ -248,8 +248,8 @@ fun HomeScreen(
                     val up = lastBasicRun.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
                     SheetDetailRow(
                         symbol = "↕",
-                        label = "上次基础测速",
-                        value = "↓ $down  ↑ $up Mbps",
+                        label = "上次网络综合",
+                        value = "${lastBasicRun.totalScore?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"} 分 · ↓ $down ↑ $up",
                         action = "查看",
                         onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
                     )
@@ -267,7 +267,7 @@ fun HomeScreen(
                         symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
                         label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "测试档位",
                         value = when (testMode) {
-                            AnebTestMode.NETWORK_BASIC -> "下载 · 上传 · Ping · 抖动"
+                            AnebTestMode.NETWORK_BASIC -> "Quick 约 20 秒 · Standard 约 42 秒"
                             AnebTestMode.TOKEN_SIMULATION -> "Quick 约 2 分钟 · Standard 约 23 分钟"
                             AnebTestMode.AI_REALTIME_SIMULATION -> "Quick 约 25 秒 · Standard 约 22 分钟"
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
