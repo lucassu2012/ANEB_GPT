@@ -28,7 +28,7 @@ object ProfileCapability {
         ProfilePhase.TYPE_UPLOAD_THROUGHPUT,
     )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
-    private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired")
+    private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
 
     fun assess(profile: ScenarioProfile): Assessment {
         val supported = when (profile.modeId) {
@@ -63,10 +63,14 @@ object ProfileCapability {
     private fun assessV2(profile: ScenarioProfile): List<String> = buildList {
         if (profile.executionTarget != "aneb_probe_simulator") add("执行目标不是 ANEB 自建仿真节点")
         if (profile.claimScope.isBlank()) add("缺少结论适用范围")
+        if (profile.claimScope != "application_end_to_end_to_probe_node") add("结论适用范围必须限定为自建节点应用层路径")
         if (profile.business.categoryId.isBlank() || profile.business.label.isBlank()) add("缺少业务类型")
         if (profile.business.behaviorFeatureIds.isEmpty()) add("缺少业务行为特征")
-        if (profile.business.behaviorModelId.isBlank()) add("缺少行为模型来源")
-        if (profile.business.behaviorModelHash.isBlank()) add("缺少行为模型哈希")
+        val modelId = profile.business.behaviorModelId.orEmpty()
+        val modelHash = profile.business.behaviorModelHash.orEmpty()
+        val modelRequired = profile.business.calibrationStatus != "not_applicable"
+        if (modelRequired && modelId.isBlank()) add("缺少行为模型来源")
+        if (modelRequired && modelHash.isBlank()) add("缺少行为模型哈希")
         if (profile.business.calibrationStatus !in calibrationStates) add("模型校准状态无效")
         if (profile.phases.isEmpty()) add("没有测试阶段")
         if (profile.measurements.isEmpty()) add("缺少全量测量指标")
