@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -51,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebPalette
@@ -69,6 +72,7 @@ fun HomeScreen(
     lastRun: TestRun?,
     lastBasicRun: NetworkComprehensiveResultEntity?,
     testMode: AnebTestMode,
+    mode: TestEngine.Mode,
     onTestModeChange: (AnebTestMode) -> Unit,
     running: Boolean,
     notice: String? = null,
@@ -84,6 +88,7 @@ fun HomeScreen(
     var dragTotal by remember { mutableFloatStateOf(0f) }
     var dragDeltaDp by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
+    var confirmStress by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val collapsedHeight = 150.dp
     val halfHeight = 250.dp
@@ -126,11 +131,24 @@ fun HomeScreen(
                 onSelect = onTestModeChange,
             )
             Spacer(Modifier.height(27.dp))
-            IdleStartRing(running = running, onStart = onStart)
+            IdleStartRing(
+                running = running,
+                onStart = {
+                    if (testMode == AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
+                        confirmStress = true
+                    } else {
+                        onStart()
+                    }
+                },
+            )
             Text(
                 when (testMode) {
                     AnebTestMode.NETWORK_BASIC -> "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
-                    AnebTestMode.TOKEN_SIMULATION -> "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
+                    AnebTestMode.TOKEN_SIMULATION -> if (mode == TestEngine.Mode.STRESS) {
+                        "100MiB 视频上传 + 100MiB 大对象返回，动态测量容量与负载 RTT"
+                    } else {
+                        "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
+                    }
                     AnebTestMode.AI_REALTIME_SIMULATION -> "模拟 GPT-Live 类双工语音、连续音频帧与用户打断"
                     AnebTestMode.TOKEN_EXPERIENCE -> "执行经典 Agent 场景取证与 AQS 评分"
                 },
@@ -267,9 +285,13 @@ fun HomeScreen(
                         symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
                         label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "测试档位",
                         value = when (testMode) {
-                            AnebTestMode.NETWORK_BASIC -> "Quick 约 20 秒 · Standard 约 42 秒"
-                            AnebTestMode.TOKEN_SIMULATION -> "Quick 约 2 分钟 · Standard 约 23 分钟"
-                            AnebTestMode.AI_REALTIME_SIMULATION -> "Quick 约 25 秒 · Standard 约 22 分钟"
+                            AnebTestMode.NETWORK_BASIC -> modeSummary(mode, "约 20 秒", "约 42 秒")
+                            AnebTestMode.TOKEN_SIMULATION -> when (mode) {
+                                TestEngine.Mode.QUICK -> "当前：快测 · 约 2 分钟"
+                                TestEngine.Mode.FORENSIC -> "当前：标准 · 约 23 分钟"
+                                TestEngine.Mode.STRESS -> "当前：压力 · 约 2–5 分钟 · 约 200MiB 流量"
+                            }
+                            AnebTestMode.AI_REALTIME_SIMULATION -> modeSummary(mode, "约 25 秒", "约 22 分钟")
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
                         action = null,
@@ -278,7 +300,32 @@ fun HomeScreen(
                 }
             }
         }
+
+        if (confirmStress) {
+            AlertDialog(
+                onDismissRequest = { confirmStress = false },
+                title = { Text("开始大对象压力测试？") },
+                text = {
+                    Text(
+                        "本次将上传 100MiB 仿真视频并下载 100MiB 仿真结果，预计消耗约 200MiB 流量，" +
+                            "可能引起手机发热。建议使用 WiFi，并保持 ANEB 在前台。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { confirmStress = false; onStart() }) { Text("开始压力测试") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmStress = false }) { Text("取消") }
+                },
+            )
+        }
     }
+}
+
+private fun modeSummary(mode: TestEngine.Mode, quick: String, standard: String): String = when (mode) {
+    TestEngine.Mode.QUICK -> "当前：快测 · $quick"
+    TestEngine.Mode.FORENSIC -> "当前：标准 · $standard"
+    TestEngine.Mode.STRESS -> "当前：快测 · $quick"
 }
 
 @Composable

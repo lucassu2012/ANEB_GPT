@@ -43,6 +43,14 @@ class ProbeSettingsStoreTest {
     }
 
     @Test
+    fun `decode restores token stress mode`() {
+        val decoded = ProbeSettingsCodec.decode(null, "STRESS", null, false, "TOKEN_SIMULATION")
+
+        assertEquals(TestEngine.Mode.STRESS, decoded.mode)
+        assertEquals(AnebTestMode.TOKEN_SIMULATION, decoded.testMode)
+    }
+
+    @Test
     fun `manual launch restores saved values`() {
         val saved = ProbeSettings(
             serverUrl = "https://node.example:8443",

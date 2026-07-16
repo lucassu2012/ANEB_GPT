@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.ui.components.GlassChrome
 import com.aneb.probe.ui.components.AnebPageIntro
@@ -63,6 +64,7 @@ import com.aneb.probe.ui.theme.AnebType
 fun SettingsScreen(
     serverUrl: String,
     onServerUrlChange: (String) -> Unit,
+    testMode: AnebTestMode,
     mode: TestEngine.Mode,
     onModeChange: (TestEngine.Mode) -> Unit,
     transport: TestEngine.TransportMode,
@@ -83,6 +85,7 @@ fun SettingsScreen(
         SettingsRootScreen(
             serverUrl = serverUrl,
             onServerUrlChange = onServerUrlChange,
+            testMode = testMode,
             mode = mode,
             onModeChange = onModeChange,
             transport = transport,
@@ -163,10 +166,10 @@ fun SettingsScreen(
         // ---- 模式 ----
         SectionLabel("测量模式")
         SegmentedControl(
-            options = listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC),
+            options = modeOptions(testMode),
             selected = mode,
             onSelect = onModeChange,
-            label = { if (it == TestEngine.Mode.QUICK) "快测（约 90s）" else "取证（多遍拉丁方）" },
+            label = { modeLabel(it, testMode) },
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(10.dp))
@@ -300,6 +303,7 @@ private data class ServerPreset(val label: String, val url: String)
 private fun SettingsRootScreen(
     serverUrl: String,
     onServerUrlChange: (String) -> Unit,
+    testMode: AnebTestMode,
     mode: TestEngine.Mode,
     onModeChange: (TestEngine.Mode) -> Unit,
     transport: TestEngine.TransportMode,
@@ -336,14 +340,14 @@ private fun SettingsRootScreen(
                 icon = "⌁",
                 tint = colors.brand,
                 title = "测试模式",
-                subtitle = "快测或多遍取证",
+                subtitle = if (testMode == AnebTestMode.TOKEN_SIMULATION) "快测、标准或 100MiB 压力测试" else "快测或标准测试",
             ) {
                 SegmentedControl(
-                    options = listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC),
+                    options = modeOptions(testMode),
                     selected = mode,
                     onSelect = onModeChange,
-                    label = { if (it == TestEngine.Mode.QUICK) "快测" else "取证" },
-                    modifier = Modifier.width(132.dp),
+                    label = { modeLabel(it, testMode) },
+                    modifier = Modifier.width(if (testMode == AnebTestMode.TOKEN_SIMULATION) 184.dp else 132.dp),
                 )
             }
             HairlineDivider()
@@ -683,4 +687,16 @@ internal fun BackButton(onBack: () -> Unit) {
             .then(Modifier.pressable(onClick = onBack))
             .padding(horizontal = 13.dp, vertical = 7.dp),
     )
+}
+
+private fun modeOptions(testMode: AnebTestMode): List<TestEngine.Mode> = if (testMode == AnebTestMode.TOKEN_SIMULATION) {
+    listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC, TestEngine.Mode.STRESS)
+} else {
+    listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC)
+}
+
+private fun modeLabel(mode: TestEngine.Mode, testMode: AnebTestMode): String = when (mode) {
+    TestEngine.Mode.QUICK -> "快测"
+    TestEngine.Mode.FORENSIC -> if (testMode == AnebTestMode.TOKEN_EXPERIENCE) "取证" else "标准"
+    TestEngine.Mode.STRESS -> "压力"
 }

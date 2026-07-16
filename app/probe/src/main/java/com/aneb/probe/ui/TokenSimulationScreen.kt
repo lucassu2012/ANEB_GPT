@@ -179,10 +179,10 @@ fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Uni
         Box(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 14.dp)) {
             Text("‹", fontSize = 30.sp, color = colors.ink, modifier = Modifier.align(Alignment.CenterStart).pressable(onClick = onBack).padding(6.dp))
             AnebWordmark(Modifier.align(Alignment.Center))
-            Text("Token 仿真", fontSize = 10.sp, color = colors.brand, modifier = Modifier.align(Alignment.CenterEnd))
+            Text(if (result.variant == "stress") "Token 压力" else "Token 仿真", fontSize = 10.sp, color = colors.brand, modifier = Modifier.align(Alignment.CenterEnd))
         }
         Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("多模态 AI 网络体验", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
+            Text(if (result.variant == "stress") "大对象 AI 网络压力" else "多模态 AI 网络体验", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
             Text(
                 "${result.variant.uppercase()} · ${result.evidence.tasks.size} 个任务 · ${score.confidence.name}",
                 fontSize = 10.sp,
@@ -199,11 +199,19 @@ fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Uni
                 modifier = Modifier.size(214.dp).padding(top = 10.dp),
             )
             AnebMetricTrio(
-                listOf(
-                    AnebMetric("Token 准时", score.metrics["TOK-B07"].ratioText(), "%", colors.brand),
-                    AnebMetric("RTT 达标", score.metrics["TOK-N03"].ratioText(), "%"),
-                    AnebMetric("上行达标", score.metrics["TOK-N06"].ratioText(), "%", colors.brand2),
-                ),
+                if (result.variant == "stress") {
+                    listOf(
+                        AnebMetric("上行达标", score.metrics["TOK-N06"].ratioText(), "%", colors.brand2),
+                        AnebMetric("下行达标", score.metrics["TOK-N07"].ratioText(), "%", colors.excellent),
+                        AnebMetric("负载 RTT", score.metrics["TOK-N08"].ratioText(), "%", colors.brand),
+                    )
+                } else {
+                    listOf(
+                        AnebMetric("Token 准时", score.metrics["TOK-B07"].ratioText(), "%", colors.brand),
+                        AnebMetric("RTT 达标", score.metrics["TOK-N03"].ratioText(), "%"),
+                        AnebMetric("上行达标", score.metrics["TOK-N06"].ratioText(), "%", colors.brand2),
+                    )
+                },
             )
             Text("测试结论", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, modifier = Modifier.align(Alignment.Start).padding(top = 20.dp, bottom = 8.dp))
             score.conclusions.forEach { conclusion ->
@@ -217,12 +225,22 @@ fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Uni
             AnebGradientCard(Modifier.fillMaxWidth().padding(top = 4.dp), radius = 14.dp) {
                 Column(Modifier.padding(12.dp)) {
                     Text("业务行为特征", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-                    Text("上行突发 · 低时延启动 · Token 连续性 · 可选大文件下行", fontSize = 10.sp, lineHeight = 16.sp, color = colors.muted, modifier = Modifier.padding(top = 4.dp))
+                    Text(
+                        if (result.variant == "stress") {
+                            "100MiB 视频突发上行 · 100MiB 大对象下行 · 负载时延敏感 · Token 连续性"
+                        } else {
+                            "上行突发 · 低时延启动 · Token 连续性 · 可选大文件下行"
+                        },
+                        fontSize = 10.sp,
+                        lineHeight = 16.sp,
+                        color = colors.muted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                     Text("${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}", fontSize = 9.sp, color = colors.faint, modifier = Modifier.padding(top = 6.dp))
                 }
             }
             Text(
-                "评分 token-sim-score-v1 · 锚点 compliance-anchors-v1\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
+                "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
                 fontSize = 9.sp,
                 lineHeight = 14.sp,
                 textAlign = TextAlign.Center,
@@ -263,7 +281,7 @@ fun TokenSimulationStoredResultScreen(result: TokenSimulationResultEntity, onBac
             Text("Token 历史", fontSize = 10.sp, color = colors.brand, modifier = Modifier.align(Alignment.CenterEnd))
         }
         Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("多模态 AI 网络体验", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
+            Text(if (result.variant == "stress") "大对象 AI 网络压力" else "多模态 AI 网络体验", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
             Text("${result.variant.uppercase()} · ${confidenceLabel(confidence)}", fontSize = 10.sp, color = colors.muted, modifier = Modifier.align(Alignment.Start).padding(top = 4.dp))
             AnebScoreRing(
                 score = result.totalScore?.toInt(),
@@ -275,11 +293,19 @@ fun TokenSimulationStoredResultScreen(result: TokenSimulationResultEntity, onBac
                 modifier = Modifier.size(214.dp).padding(top = 10.dp),
             )
             AnebMetricTrio(
-                listOf(
-                    AnebMetric("Token 准时", ratio("TOK-B07"), "%", colors.brand),
-                    AnebMetric("RTT 达标", ratio("TOK-N03"), "%"),
-                    AnebMetric("上行达标", ratio("TOK-N06"), "%", colors.brand2),
-                ),
+                if (result.variant == "stress") {
+                    listOf(
+                        AnebMetric("上行达标", ratio("TOK-N06"), "%", colors.brand2),
+                        AnebMetric("下行达标", ratio("TOK-N07"), "%", colors.excellent),
+                        AnebMetric("负载 RTT", ratio("TOK-N08"), "%", colors.brand),
+                    )
+                } else {
+                    listOf(
+                        AnebMetric("Token 准时", ratio("TOK-B07"), "%", colors.brand),
+                        AnebMetric("RTT 达标", ratio("TOK-N03"), "%"),
+                        AnebMetric("上行达标", ratio("TOK-N06"), "%", colors.brand2),
+                    )
+                },
             )
             Text("测试结论", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, modifier = Modifier.align(Alignment.Start).padding(top = 20.dp, bottom = 8.dp))
             conclusions.forEach { conclusion ->
@@ -309,9 +335,10 @@ private fun TokenPhaseRow(phase: TokenSimulationPhase) {
         TokenSimulationPhase.IDLE, TokenSimulationPhase.PREPARING, TokenSimulationPhase.LATENCY -> 0
         TokenSimulationPhase.UPLOADING -> 1
         TokenSimulationPhase.PROCESSING, TokenSimulationPhase.STREAMING -> 2
-        else -> 3
+        TokenSimulationPhase.DOWNLOADING -> 3
+        else -> 4
     }
-    val labels = listOf("RTT", "上传", "Token", "结论")
+    val labels = listOf("RTT", "上传", "Token", "下载", "结论")
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
         labels.forEachIndexed { index, label ->
             Text(label, fontSize = 9.sp, color = if (index == active) colors.brand else colors.faint)

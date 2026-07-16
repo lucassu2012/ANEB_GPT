@@ -19,6 +19,7 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 - PCG32 跨语言确定性随机数；
 - Token `FAST / NORMAL / PAUSE` 三状态 Markov + 状态内经验分布；
 - 多模态上传、模拟处理、Token 流和返回文件金轨迹；
+- 独立 Token Stress 运行计划：100MiB 视频上传 + 100MiB 大对象返回，不与 Standard 混分；
 - 实时语音 20ms 双向帧、轮次、等待和打断金轨迹；
 - session JSONL → calibrated Token 模型拟合；
 - Profile v2、验证报告和 SHA-256 manifest 导出；
@@ -61,6 +62,12 @@ python -m aneb_behavior_model.cli publish-runtime `
   --model models\token_multimodal_hypothesis_v0.1.json `
   --seed 20260716 `
   --out ..\..\profiles\published\token_multimodal_standard
+
+python -m aneb_behavior_model.cli publish-runtime `
+  --model models\token_multimodal_stress_hypothesis_v0.1.json `
+  --variant stress `
+  --seed 20260716 `
+  --out ..\..\profiles\published\token_multimodal_stress
 ```
 
 输出目录固定包含：`model.json`、`golden_trace.jsonl`、`profile.json`、

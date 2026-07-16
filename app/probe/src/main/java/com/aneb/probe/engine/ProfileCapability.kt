@@ -50,6 +50,9 @@ object ProfileCapability {
         "tok_n04-v1",
         "tok_n05-v1",
         "tok_n06-v1",
+        "tok_n07-v1",
+        "tok_n08-v1",
+        "tok_n09-v1",
     )
     private val realtimeRequiredFormulaIds = setOf(
         "live_b01-v1",
@@ -163,9 +166,12 @@ object ProfileCapability {
         if (profile.evaluation.targetSetId.isBlank()) add("缺少目标集版本")
         if (profile.evaluation.scorePolicyId.isBlank()) add("缺少评分策略")
         if (profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION) {
-            if (profile.evaluation.scorePolicyId != "token-sim-score-v1") add("Token 评分策略未被当前引擎识别")
+            val stress = profile.evidenceTier == "stress"
+            val expectedScorePolicy = if (stress) "token-stress-score-v1" else "token-sim-score-v1"
+            val expectedConclusionPolicy = if (stress) "token-stress-conclusions-v1" else "token-sim-conclusions-v1"
+            if (profile.evaluation.scorePolicyId != expectedScorePolicy) add("Token 评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("Token 评分锚点策略未被当前引擎识别")
-            if (profile.evaluation.conclusionPolicyId != "token-sim-conclusions-v1") add("Token 结论策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != expectedConclusionPolicy) add("Token 结论策略未被当前引擎识别")
             val requiredFormulaIds = profile.measurements
                 .filter { it.requiredForScore }
                 .map { it.formulaId }
@@ -173,7 +179,7 @@ object ProfileCapability {
             val unknown = requiredFormulaIds - tokenRequiredFormulaIds
             if (unknown.isNotEmpty()) add("Token 必需指标公式未被识别: ${unknown.sorted().joinToString()}")
             val execution = profile.executionPlan
-            if (profile.evidenceTier !in setOf("quick", "standard")) add("Token 证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "stress")) add("Token 证据等级无效")
             if (execution == null) {
                 add("Token 缺少可执行计划")
             } else {

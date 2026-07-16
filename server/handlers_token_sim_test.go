@@ -133,3 +133,17 @@ func TestTokenSimRejectsUnknownWorkload(t *testing.T) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestTokenSimAcceptsStressUploadAndRetainsHardLimit(t *testing.T) {
+	plan := validTokenSimPlan()
+	plan.WorkloadKind = "video"
+	plan.UploadPayloadBytes = 100 << 20
+	if err := validateTokenSimPlan(plan); err != nil {
+		t.Fatalf("100MiB stress upload rejected: %v", err)
+	}
+
+	plan.UploadPayloadBytes = tokenSimMaxUploadBytes + 1
+	if err := validateTokenSimPlan(plan); err == nil || !strings.Contains(err.Error(), "invalid upload_payload_bytes") {
+		t.Fatalf("oversized upload was not rejected: %v", err)
+	}
+}

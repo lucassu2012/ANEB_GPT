@@ -21,6 +21,7 @@ data class TokenTaskEvidence(
     val itlResidualMs: List<Double>,
     val requestCount: Int,
     val failedRequestCount: Int,
+    val artifactDownloadDurationMs: Double? = null,
 )
 
 data class TokenRunEvidence(
@@ -28,6 +29,7 @@ data class TokenRunEvidence(
     val tasks: List<TokenTaskEvidence>,
     val rttSamplesMs: List<Double?>,
     val invalidReason: String? = null,
+    val loadedRttSamplesMs: List<Double?> = emptyList(),
 )
 
 data class TokenMetricEvidence(
@@ -88,8 +90,8 @@ object TokenSimulationScorer {
         val lateness = tasks.flatMap { it.tokenLatenessMs }
         val residuals = tasks.flatMap { it.itlResidualMs }
         val validRtt = evidence.rttSamplesMs.filterNotNull()
-        val requestCount = evidence.rttSamplesMs.size + tasks.sumOf { it.requestCount }
-        val failedRequests = evidence.rttSamplesMs.count { it == null } + tasks.sumOf { it.failedRequestCount }
+        val requestCount = evidence.rttSamplesMs.size + evidence.loadedRttSamplesMs.size + tasks.sumOf { it.requestCount }
+        val failedRequests = evidence.rttSamplesMs.count { it == null } + evidence.loadedRttSamplesMs.count { it == null } + tasks.sumOf { it.failedRequestCount }
 
         fun metric(id: String, value: Double?, compliance: Double?, count: Int): TokenMetricEvidence {
             val spec = checkNotNull(requiredSpecs[id])

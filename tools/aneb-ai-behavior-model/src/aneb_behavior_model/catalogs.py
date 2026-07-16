@@ -108,6 +108,28 @@ TOKEN_SIM_MEASUREMENTS: list[dict[str, Any]] = [
 ]
 
 
+# Stress 只回答一次明确的大对象容量与负载响应性问题；它不冒充 Standard 的
+# 20 个任务/95% 长期稳定性样本。全量目录不变，但评分必需项和最小样本量独立冻结。
+TOKEN_STRESS_REQUIRED = {
+    "TOK-B01",
+    "TOK-B02",
+    "TOK-B11",
+    "TOK-N05",
+    "TOK-N06",
+    "TOK-N07",
+    "TOK-N08",
+    "TOK-N09",
+}
+TOKEN_STRESS_MEASUREMENTS: list[dict[str, Any]] = deepcopy(TOKEN_SIM_MEASUREMENTS)
+for _metric_spec in TOKEN_STRESS_MEASUREMENTS:
+    _metric_id = _metric_spec["metric_id"]
+    _metric_spec["required_for_score"] = _metric_id in TOKEN_STRESS_REQUIRED
+    if _metric_id in {"TOK-B01", "TOK-B02", "TOK-B11", "TOK-N05", "TOK-N06", "TOK-N07"}:
+        _metric_spec["minimum_sample_count"] = 1
+    elif _metric_id in {"TOK-N08", "TOK-N09"}:
+        _metric_spec["minimum_sample_count"] = 20
+
+
 REALTIME_SIM_MEASUREMENTS: list[dict[str, Any]] = [
     _metric("LIVE-B01", "会话建立成功率", "business", "ratio", "derived", "ratio", "higher_is_better", required=True, minimum_samples=10, target=_target("gte", 0.99)),
     _metric("LIVE-B02", "会话建立时延", "business", "ms", "exact", "p95", "lower_is_better", required=True, minimum_samples=10, target=_target("lte", 2000)),
@@ -153,6 +175,7 @@ NETWORK_COMPREHENSIVE_MEASUREMENTS: list[dict[str, Any]] = [
 CATALOGS: dict[str, list[dict[str, Any]]] = {
     "token-sim-measurements-v1": TOKEN_SIM_MEASUREMENTS,
     "token-sim-measurements-v1-draft": TOKEN_SIM_MEASUREMENTS,
+    "token-stress-measurements-v1": TOKEN_STRESS_MEASUREMENTS,
     "realtime-sim-measurements-v1": REALTIME_SIM_MEASUREMENTS,
     "realtime-sim-measurements-v1-draft": REALTIME_SIM_MEASUREMENTS,
     "network-comprehensive-measurements-v1-draft": NETWORK_COMPREHENSIVE_MEASUREMENTS,

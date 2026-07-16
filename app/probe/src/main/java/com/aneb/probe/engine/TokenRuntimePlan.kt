@@ -62,14 +62,14 @@ class TokenRuntimeRepository(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun load(variant: String): LoadedTokenRuntime = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard")) { "unsupported_token_variant:$variant" }
+        require(variant in setOf("quick", "standard", "stress")) { "unsupported_token_variant:$variant" }
         val base = "published/token_multimodal_$variant"
         val profileText = context.assets.open("$base/profile.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val planText = context.assets.open("$base/runtime_plan.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val profile = ProfileParser.parseSingle(profileText)
         val capability = ProfileCapability.assess(profile)
         require(capability.executable) {
-            "token_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}" 
+            "token_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}"
         }
         val execution = requireNotNull(profile.executionPlan) { "token_execution_plan_missing" }
         val actualHash = TokenRuntimeIntegrity.canonicalSha256(planText)
@@ -89,7 +89,7 @@ class TokenRuntimeRepository(private val context: Context) {
         require(plan.seed == execution.seed && plan.variant == execution.variant) { "token_runtime_seed_or_variant_mismatch" }
         require(plan.taskCount == plan.tasks.size && plan.tasks.isNotEmpty()) { "token_runtime_task_count_invalid" }
         plan.tasks.forEach { task ->
-            require(task.taskId.isNotBlank() && task.workloadKind in setOf("text", "document", "image")) { "token_runtime_task_identity_invalid" }
+            require(task.taskId.isNotBlank() && task.workloadKind in setOf("text", "document", "image", "video")) { "token_runtime_task_identity_invalid" }
             require(task.upload.payloadBytes > 0 && task.upload.chunkBytes > 0) { "token_runtime_upload_invalid" }
             require(task.tokenStream.intervalsMs.isNotEmpty()) { "token_runtime_stream_empty" }
             require(task.tokenStream.intervalsMs.size == task.tokenStream.sizesBytes.size) { "token_runtime_stream_length_mismatch" }

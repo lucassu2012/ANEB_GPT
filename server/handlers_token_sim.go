@@ -16,7 +16,9 @@ import (
 const (
 	tokenSimTaskContract    = "aneb-token-task-v1"
 	tokenSimMaxPlanBytes    = 1 << 20
-	tokenSimMaxUploadBytes  = 16 << 20
+	// Token Stress Profile 需要 100MiB 视频突发；保留 128MiB 硬上限，
+	// 既容纳协议/版本演进余量，也避免任意超大请求耗尽节点资源。
+	tokenSimMaxUploadBytes  = 128 << 20
 	tokenSimMaxRequestBytes = tokenSimMaxPlanBytes + tokenSimMaxUploadBytes + 4
 	tokenSimMaxTokens       = 10_000
 	tokenSimMaxTokenBytes   = 4_096

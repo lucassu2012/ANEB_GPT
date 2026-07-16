@@ -42,6 +42,7 @@ internal object ProbeSettingsCodec {
         },
         mode = when (mode) {
             TestEngine.Mode.FORENSIC.name -> TestEngine.Mode.FORENSIC
+            TestEngine.Mode.STRESS.name -> TestEngine.Mode.STRESS
             else -> TestEngine.Mode.QUICK
         },
         transport = when (transport) {

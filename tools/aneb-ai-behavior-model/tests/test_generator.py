@@ -115,6 +115,27 @@ class GeneratorTest(unittest.TestCase):
         task_metric = next(metric for metric in profile["measurements"] if metric["metric_id"] == "TOK-B01")
         self.assertGreaterEqual(plan["task_count"], task_metric["minimum_sample_count"])
 
+    def test_stress_variant_is_isolated_100mib_bidirectional_task(self) -> None:
+        model = load_model(ROOT / "models/token_multimodal_stress_hypothesis_v0.1.json")
+        artifacts = build_artifacts(model, 20260716)
+        profile, plan = derive_token_runtime_variant(artifacts, "stress")
+        self.assertEqual(profile["profile_id"], "token_multimodal_stress")
+        self.assertEqual(profile["evidence_tier"], "stress")
+        self.assertEqual(profile["evaluation"]["score_policy_id"], "token-stress-score-v1")
+        self.assertEqual(plan["variant"], "stress")
+        self.assertEqual(plan["task_count"], 1)
+        task = plan["tasks"][0]
+        self.assertEqual(task["workload_kind"], "video")
+        self.assertEqual(task["upload"]["payload_bytes"], 100 * 1024 * 1024)
+        self.assertEqual(task["response_artifact_bytes"], 100 * 1024 * 1024)
+        required = {
+            metric["metric_id"] for metric in profile["measurements"] if metric["required_for_score"]
+        }
+        self.assertEqual(
+            required,
+            {"TOK-B01", "TOK-B02", "TOK-B11", "TOK-N05", "TOK-N06", "TOK-N07", "TOK-N08", "TOK-N09"},
+        )
+
     def test_realtime_standard_has_connection_and_interruption_evidence(self) -> None:
         model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
         artifacts = build_artifacts(model, 20260716)

@@ -12,10 +12,14 @@ import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.net.TokenSimTaskPlan
 import com.aneb.probe.net.TokenSimTaskResult
+import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -60,6 +66,9 @@ data class TokenSimulationResult(
     val behaviorModelHash: String,
     val calibrationStatus: String,
     val variant: String,
+    val scorePolicyId: String,
+    val scoreAnchorPolicyId: String,
+    val conclusionPolicyId: String,
     val score: TokenScoreResult,
     val evidence: TokenRunEvidence,
 )
@@ -107,6 +116,9 @@ class TokenSimulationEngine(private val context: Context) {
             return@channelFlow
         }
 
+        val loadedRttSamples = Collections.synchronizedList(mutableListOf<Double?>())
+        val loadedMonitorEnabled = AtomicBoolean(false)
+        var loadedMonitorJob: Job? = null
         try {
             val loaded = TokenRuntimeRepository(context).load(config.variant)
             val profile = loaded.profile
@@ -117,6 +129,24 @@ class TokenSimulationEngine(private val context: Context) {
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
             }
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
+            if (config.variant == "stress") {
+                loadedMonitorJob = launch {
+                    while (isActive) {
+                        if (!loadedMonitorEnabled.get()) {
+                            delay(LOADED_ECHO_IDLE_GAP_MS)
+                            continue
+                        }
+                        val echo = runCatching { client.echo("$measureBase/api/v1/echo") }.getOrNull()
+                        val sample = echo?.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
+                        loadedRttSamples += sample
+                        _telemetry.value = _telemetry.value.copy(
+                            liveRttMs = sample,
+                            updatedAtNanos = SystemClock.elapsedRealtimeNanos(),
+                        )
+                        delay(LOADED_ECHO_GAP_MS)
+                    }
+                }
+            }
             log(
                 "TOKEN_V2_PROFILE id=${profile.profileId} version=${profile.version} model=${plan.modelId}@${plan.modelVersion} " +
                     "hash=${plan.modelHash} calibration=${plan.calibrationStatus} tasks=${plan.taskCount}"
@@ -172,6 +202,7 @@ class TokenSimulationEngine(private val context: Context) {
                     tokenIntervalsMs = task.tokenStream.intervalsMs,
                     tokenSizesBytes = task.tokenStream.sizesBytes,
                 )
+                loadedMonitorEnabled.set(config.variant == "stress")
                 val taskResult = client.tokenSim(
                     url = "$measureBase/api/v1/token-sim",
                     plan = wirePlan,
@@ -187,6 +218,7 @@ class TokenSimulationEngine(private val context: Context) {
                         )
                     },
                     onPrelude = { _, arrival ->
+                        loadedMonitorEnabled.set(false)
                         _telemetry.value = _telemetry.value.copy(
                             phase = TokenSimulationPhase.PROCESSING,
                             liveUploadMbps = null,
@@ -220,10 +252,12 @@ class TokenSimulationEngine(private val context: Context) {
                         )
                     },
                 )
+                loadedMonitorEnabled.set(false)
                 if (taskResult.prelude?.let { it.taskId != task.taskId || it.contractVersion != "aneb-token-task-v1" } == true) {
                     invalidReason = "node_contract_or_task_identity_mismatch"
                 }
                 var downloadMbps: Double? = null
+                var downloadDurationMs: Double? = null
                 var downloadFailed = false
                 if (task.responseArtifactBytes > 0L && taskResult.completed) {
                     _telemetry.value = _telemetry.value.copy(
@@ -234,6 +268,7 @@ class TokenSimulationEngine(private val context: Context) {
                     )
                     val downloadStart = AtomicLong(-1L)
                     val downloadedBytes = AtomicLong(0L)
+                    loadedMonitorEnabled.set(config.variant == "stress")
                     val download = client.downloadThroughput(
                         "$measureBase/api/v1/download?bytes=${task.responseArtifactBytes}&chunk_kb=256",
                     ) { bytes, now ->
@@ -245,13 +280,15 @@ class TokenSimulationEngine(private val context: Context) {
                             updatedAtNanos = now,
                         )
                     }
+                    loadedMonitorEnabled.set(false)
                     downloadMbps = if (download.error == null && download.endNanos != null) {
                         val seconds = (download.endNanos - download.startNanos).coerceAtLeast(1L) / 1_000_000_000.0
+                        downloadDurationMs = seconds * 1_000.0
                         download.totalBytes * 8.0 / seconds / 1_000_000.0
                     } else null
                     downloadFailed = download.error != null || download.totalBytes != task.responseArtifactBytes
                 }
-                val measured = measureTask(task, taskResult, offsetUs, downloadMbps, downloadFailed)
+                val measured = measureTask(task, taskResult, offsetUs, downloadMbps, downloadDurationMs, downloadFailed)
                 taskEvidence += measured
                 _telemetry.value = _telemetry.value.copy(
                     liveTokenPerSecond = null,
@@ -274,12 +311,23 @@ class TokenSimulationEngine(private val context: Context) {
                 liveDownloadMbps = null,
                 progress = 0.96,
             )
-            val evidence = TokenRunEvidence(config.variant, taskEvidence, rttSamples, invalidReason)
-            val score = TokenSimulationScorer.score(evidence)
+            loadedMonitorEnabled.set(false)
+            loadedMonitorJob?.cancelAndJoin()
+            loadedMonitorJob = null
+            val loadedRttSnapshot = synchronized(loadedRttSamples) { loadedRttSamples.toList() }
+            val evidence = TokenRunEvidence(
+                variant = config.variant,
+                tasks = taskEvidence,
+                rttSamplesMs = rttSamples,
+                invalidReason = invalidReason,
+                loadedRttSamplesMs = loadedRttSnapshot,
+            )
+            val score = score(evidence)
             val result = TokenSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
                 plan.modelId, plan.modelVersion, plan.modelHash, plan.calibrationStatus,
-                plan.variant, score, evidence,
+                plan.variant, profile.evaluation.scorePolicyId, profile.evaluation.scoreAnchorPolicyId,
+                profile.evaluation.conclusionPolicyId, score, evidence,
             )
             publishResult(result, log)
             _telemetry.value = _telemetry.value.copy(
@@ -298,6 +346,8 @@ class TokenSimulationEngine(private val context: Context) {
             log("TOKEN_V2_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("TOKEN_V2_END run_id=$runId status=error")
         } finally {
+            loadedMonitorEnabled.set(false)
+            loadedMonitorJob?.cancelAndJoin()
             bound?.release()
         }
     }.flowOn(Dispatchers.IO)
@@ -307,6 +357,7 @@ class TokenSimulationEngine(private val context: Context) {
         result: TokenSimTaskResult,
         offsetUs: Long?,
         downloadMbps: Double?,
+        downloadDurationMs: Double?,
         downloadFailed: Boolean,
     ): TokenTaskEvidence {
         val validArrivals = result.arrivals.filter { it.event.seq in task.tokenStream.intervalsMs.indices }
@@ -363,6 +414,7 @@ class TokenSimulationEngine(private val context: Context) {
             itlResidualMs = residual,
             requestCount = requestCount,
             failedRequestCount = failedCount,
+            artifactDownloadDurationMs = downloadDurationMs,
         )
     }
 
@@ -375,10 +427,11 @@ class TokenSimulationEngine(private val context: Context) {
         log: suspend (String) -> Unit,
     ) {
         val evidence = TokenRunEvidence(variant, emptyList(), emptyList(), reason)
+        val policies = policies(variant)
         val result = TokenSimulationResult(
             runId, startedAt, server, "token_multimodal_$variant", "unknown",
             "unknown", "unknown", "unknown", "unknown", variant,
-            TokenSimulationScorer.score(evidence), evidence,
+            policies.first, policies.second, policies.third, score(evidence), evidence,
         )
         publishResult(result, log)
         _telemetry.value = TokenSimulationTelemetry(phase = TokenSimulationPhase.FAILED)
@@ -410,9 +463,9 @@ class TokenSimulationEngine(private val context: Context) {
         behaviorModelHash = behaviorModelHash,
         calibrationStatus = calibrationStatus,
         variant = variant,
-        scorePolicyId = "token-sim-score-v1",
-        scoreAnchorPolicyId = "compliance-anchors-v1",
-        conclusionPolicyId = "token-sim-conclusions-v1",
+        scorePolicyId = scorePolicyId,
+        scoreAnchorPolicyId = scoreAnchorPolicyId,
+        conclusionPolicyId = conclusionPolicyId,
         totalScore = score.totalScore,
         grade = score.grade,
         verdict = score.verdict.name,
@@ -442,6 +495,7 @@ class TokenSimulationEngine(private val context: Context) {
         put("variant", variant)
         put("invalid_reason", invalidReason?.let(::JsonPrimitive) ?: JsonNull)
         put("rtt_samples_ms", JsonArray(rttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
+        put("loaded_rtt_samples_ms", JsonArray(loadedRttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
         put("tasks", buildJsonArray {
             tasks.forEach { task ->
                 add(buildJsonObject {
@@ -455,6 +509,7 @@ class TokenSimulationEngine(private val context: Context) {
                     putNullableDouble("ttft_excess_ms", task.ttftExcessMs)
                     putNullableDouble("upload_goodput_mbps", task.uploadGoodputMbps)
                     putNullableDouble("download_goodput_mbps", task.downloadGoodputMbps)
+                    putNullableDouble("artifact_download_duration_ms", task.artifactDownloadDurationMs)
                     put("expected_tokens", task.expectedTokens)
                     put("unique_tokens", task.uniqueTokens)
                     put("duplicate_tokens", task.duplicateTokens)
@@ -478,9 +533,20 @@ class TokenSimulationEngine(private val context: Context) {
 
     private fun medianLong(values: List<Long>): Long? = values.sorted().takeIf { it.isNotEmpty() }?.let { sorted -> sorted[sorted.size / 2] }
 
+    private fun score(evidence: TokenRunEvidence): TokenScoreResult =
+        if (evidence.variant == "stress") TokenStressScorer.score(evidence) else TokenSimulationScorer.score(evidence)
+
+    private fun policies(variant: String): Triple<String, String, String> = if (variant == "stress") {
+        Triple("token-stress-score-v1", "compliance-anchors-v1", "token-stress-conclusions-v1")
+    } else {
+        Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v1")
+    }
+
     private companion object {
         const val ECHO_SAMPLES = 20
         const val ECHO_GAP_MS = 80L
+        const val LOADED_ECHO_GAP_MS = 250L
+        const val LOADED_ECHO_IDLE_GAP_MS = 50L
         const val LIVE_WINDOW_NANOS = 1_000_000_000L
     }
 }

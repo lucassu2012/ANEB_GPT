@@ -200,6 +200,7 @@ class MainActivity : ComponentActivity() {
         intentModeOverride = when (intent?.getStringExtra("mode")?.lowercase()) {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
+            "stress" -> TestEngine.Mode.STRESS
             else -> null
         }
         intentContinuity = intent?.getStringExtra("mode")?.lowercase() == "continuity"
@@ -262,7 +263,15 @@ class MainActivity : ComponentActivity() {
                     var serverUrl by rememberSaveable {
                         mutableStateOf(launchSettings.serverUrl)
                     }
-                    var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
+                    var mode by rememberSaveable {
+                        mutableStateOf(
+                            if (launchSettings.mode == TestEngine.Mode.STRESS && launchSettings.testMode != AnebTestMode.TOKEN_SIMULATION) {
+                                TestEngine.Mode.QUICK
+                            } else {
+                                launchSettings.mode
+                            },
+                        )
+                    }
                     var testMode by rememberSaveable { mutableStateOf(launchSettings.testMode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
                     var driveTest by rememberSaveable { mutableStateOf(launchSettings.driveTest) }
@@ -462,9 +471,14 @@ class MainActivity : ComponentActivity() {
                                     MainTab.Test -> HomeRoute(
                                         running = running,
                                         testMode = testMode,
+                                        mode = mode,
                                         onTestModeChange = {
                                             testMode = it
                                             settingsStore.saveTestMode(it)
+                                            if (it != AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
+                                                mode = TestEngine.Mode.QUICK
+                                                settingsStore.saveMode(mode)
+                                            }
                                         },
                                         notice = homeNotice,
                                         connectionLabel = when (transport) {
@@ -511,6 +525,7 @@ class MainActivity : ComponentActivity() {
                                             serverUrl = it
                                             settingsStore.saveServerUrl(it)
                                         },
+                                        testMode = testMode,
                                         mode = mode,
                                         onModeChange = {
                                             mode = it
@@ -711,6 +726,7 @@ class MainActivity : ComponentActivity() {
     private fun HomeRoute(
         running: Boolean,
         testMode: AnebTestMode,
+        mode: TestEngine.Mode,
         onTestModeChange: (AnebTestMode) -> Unit,
         notice: String?,
         connectionLabel: String,
@@ -735,6 +751,7 @@ class MainActivity : ComponentActivity() {
             lastRun = lastRun,
             lastBasicRun = lastBasicRun,
             testMode = testMode,
+            mode = mode,
             onTestModeChange = onTestModeChange,
             running = running,
             notice = notice,

@@ -147,7 +147,7 @@ ANEB App + 自建仿真节点
 | Profile | 默认负载 | 用途 |
 |---|---|---|
 | `token_multimodal_standard@1.0.0` | 8KB 文本、5MiB 文档、10MiB 图片，多轮 Token 流和可选返回文件 | 日常测试 |
-| `token_multimodal_stress@1.0.0` | 在 standard 基础上增加 100MiB 视频上传和大对象返回 | 用户明确启动的压力测试 |
+| `token_multimodal_stress@1.0.0` | 单独执行 100MiB 视频上传、仿真 Token 流和 100MiB 大对象返回 | 用户明确启动的压力测试 |
 
 100MiB 视频不进入默认快测。它会显著增加流量、测试时长和发热；单独 Profile 才能保证不同 run 的负载可比。
 
@@ -222,6 +222,23 @@ ANEB App + 自建仿真节点
 - 任一必需指标缺失：不重分权，分数为 `null`；
 - 任务成功率 <80% 或严重卡顿率 >1%：总分封顶 54；
 - 100MiB stress 与 standard 独立出分，禁止横向混排。
+
+### 4.6 Token Stress Score v1（已冻结）
+
+Stress 只评价一次明确的大对象容量与负载响应性任务，使用独立的 `token-stress-score-v1`：
+
+| 组 | 权重 | 必需指标 |
+|---|---:|---|
+| 任务完成 | 20% | TOK-B01、TOK-B11、TOK-N05 |
+| 上行容量 | 30% | TOK-B02、TOK-N06 |
+| 下行容量 | 25% | TOK-N07 |
+| 负载响应性 | 25% | TOK-N08、TOK-N09 |
+
+- 必需指标：`TOK-B01/B02/B11/N05/N06/N07/N08/N09`；负载 RTT 至少 20 次尝试；
+- 100MiB 任务或 Token 流不完整时判 `FAIL` 且总分封顶 54；
+- 单次任务即使完整也固定为 `LOW/INCONCLUSIVE`，不得声称已证明 95% 长期稳定性；
+- 动态主指标按阶段切换为上行 Mbps、仿真 Token/s、下行 Mbps，负载 RTT 并发刷新；缺样本显示“—”，不得补 0；
+- 启动前必须提示约 200MiB 流量与发热风险，Stress 选项只在 Token 类测试出现。
 
 ## 5. AI 实时交互仿真 Profile
 
@@ -453,7 +470,7 @@ Token 准时到达率当前为 92%，未达 95% 目标。
 
 1. 先实现独立模型工程的 schema、确定性生成器、校验器和三个 hypothesis 原型；
 2. 在 ANEB App 中新增 Profile v2 解析与目录展示，但不改变现有 AQS；
-3. 新增 Token standard/stress 执行引擎和结论，实机闭环；
+3. 新增 Token standard/stress 执行引擎和结论，实机闭环；（已完成）
 4. 新增实时语音 WebSocket 仿真引擎和动态仪表；
 5. 把 basic network 升为 comprehensive，增加 loaded RTT、窗口达标率和 UDP 探针；
 6. Product Owner 批准新门限/权重后，追加 Decision Log、冻结 policy 版本，再让新分数进入正式结果。
@@ -464,3 +481,5 @@ Product Owner 于 2026-07-16 回复“按推荐方案”，裁定：
 
 1. 批准本文三套 provisional 质量目标与分组权重作为实验性 v1 实施基线；
 2. 真实 API 探针从正式产品入口隐藏，代码仅保留为开发诊断能力，不进入新 Profile 或评分。
+
+后续实现裁定见 D-43：Stress 采用独立权重、固定低置信单次结论，并已完成 P40 Pro 100MiB 双向真机闭环。

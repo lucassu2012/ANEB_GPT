@@ -211,7 +211,11 @@ class ProbeRunService : Service() {
                         engine.run(
                             TokenSimulationEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                variant = when (config.mode) {
+                                    TestEngine.Mode.QUICK -> "quick"
+                                    TestEngine.Mode.FORENSIC -> "standard"
+                                    TestEngine.Mode.STRESS -> "stress"
+                                },
                                 transport = config.transport,
                             ),
                         )

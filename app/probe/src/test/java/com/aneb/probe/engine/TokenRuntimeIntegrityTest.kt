@@ -11,8 +11,8 @@ class TokenRuntimeIntegrityTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
-    fun `published quick and standard assets are executable and hash bound`() {
-        listOf("quick", "standard").forEach { variant ->
+    fun `published token assets are executable and hash bound`() {
+        listOf("quick", "standard", "stress").forEach { variant ->
             val base = repositoryRoot().resolve("profiles/published/token_multimodal_$variant")
             val profileText = Files.readAllBytes(base.resolve("profile.json")).toString(Charsets.UTF_8)
             val planText = Files.readAllBytes(base.resolve("runtime_plan.json")).toString(Charsets.UTF_8)

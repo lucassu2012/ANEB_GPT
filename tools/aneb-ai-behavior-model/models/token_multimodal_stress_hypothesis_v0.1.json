@@ -1,0 +1,78 @@
+{
+  "model_contract_version": "aneb-behavior-model-v1",
+  "model_id": "token-multimodal-stress-behavior-v0.1",
+  "model_version": "0.1.0",
+  "business_type": "token_multimodal",
+  "status": "hypothesis",
+  "source": {
+    "kind": "product_requirement_hypothesis",
+    "content_retained": false,
+    "notes": "Explicit 100MiB upload/download stress requirement; not provider performance data"
+  },
+  "prng": "pcg32-v1",
+  "generation": {
+    "gap_between_tasks_ms": {"type": "empirical", "values": [0]},
+    "workloads": [
+      {
+        "kind": "video",
+        "repetitions": 1,
+        "payload_bytes": {"type": "empirical", "values": [104857600]},
+        "chunk_bytes": 65536,
+        "upload_chunk_cadence_ms": 1,
+        "processing_delay_ms": {"type": "empirical", "values": [2000]},
+        "output_token_count": {"type": "empirical", "values": [300]},
+        "token_bytes": {"type": "empirical", "values": [72, 96, 120, 160, 220]},
+        "response_artifact_bytes": {"type": "empirical", "values": [104857600]},
+        "artifact_chunk_bytes": 262144,
+        "token_interval_model": {
+          "type": "markov_empirical",
+          "states": {
+            "FAST": {"type": "empirical", "values": [10, 12, 16, 20]},
+            "NORMAL": {"type": "empirical", "values": [30, 50, 80, 120]},
+            "PAUSE": {"type": "empirical", "values": [300, 600, 1000]}
+          },
+          "start_probabilities": {"FAST": 0.1, "NORMAL": 0.8, "PAUSE": 0.1},
+          "transition_probabilities": {
+            "FAST": {"FAST": 0.65, "NORMAL": 0.32, "PAUSE": 0.03},
+            "NORMAL": {"FAST": 0.15, "NORMAL": 0.78, "PAUSE": 0.07},
+            "PAUSE": {"FAST": 0.2, "NORMAL": 0.78, "PAUSE": 0.02}
+          }
+        }
+      }
+    ]
+  },
+  "profile_export": {
+    "contract_version": "aneb-profile-v2",
+    "profile_id": "token_multimodal_stress",
+    "version": "1.0.0",
+    "mode_id": "token_simulation",
+    "execution_target": "aneb_probe_simulator",
+    "claim_scope": "application_end_to_end_to_probe_node",
+    "measurement_catalog_id": "token-stress-measurements-v1",
+    "business": {
+      "category_id": "token_multimodal_stress",
+      "label": "多模态 Token 大对象压力测试",
+      "archetype_labels": ["kimi_like", "deepseek_like", "qwen_like"],
+      "behavior_feature_ids": ["very_large_uplink_burst", "large_downlink", "loaded_latency_sensitive", "stream_continuity"]
+    },
+    "live_presentation": {
+      "primary_metric_id": "UP_LIVE",
+      "secondary_metric_ids": ["DOWN_LIVE", "RTT_LIVE", "SIM_TPS_LIVE"],
+      "window_ms": 1000,
+      "ui_refresh_ms": 250,
+      "stale_after_ms": 1500,
+      "missing_behavior": "show_unavailable_never_zero"
+    },
+    "evaluation": {
+      "target_set_id": "token-stress-targets-v1",
+      "score_policy_id": "token-stress-score-v1",
+      "score_anchor_policy_id": "compliance-anchors-v1",
+      "conclusion_policy_id": "token-stress-conclusions-v1",
+      "required_metric_ids": ["TOK-B01", "TOK-B02", "TOK-B11", "TOK-N05", "TOK-N06", "TOK-N07", "TOK-N08", "TOK-N09"],
+      "guardrail_metric_ids": ["TOK-B01", "TOK-B11"],
+      "group_weights": {"task_completion": 0.2, "uplink_capacity": 0.3, "downlink_capacity": 0.25, "loaded_responsiveness": 0.25},
+      "missing_required_metric": "score_null",
+      "invalid_run": "retain_raw_suppress_score"
+    }
+  }
+}

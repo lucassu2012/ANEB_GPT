@@ -55,10 +55,10 @@ def derive_token_runtime_variant(
     artifacts: BuildArtifacts,
     variant: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return a published standard or low-confidence quick runtime pair."""
+    """Return a published standard, quick, or isolated large-object stress runtime pair."""
     if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != TOKEN_RUNTIME_CONTRACT:
         raise ValueError("token runtime variant requires token_multimodal artifacts")
-    if variant not in {"standard", "quick"}:
+    if variant not in {"standard", "quick", "stress"}:
         raise ValueError(f"unsupported runtime variant: {variant}")
     plan = deepcopy(artifacts.runtime_plan)
     profile = deepcopy(artifacts.profile)
@@ -79,6 +79,19 @@ def derive_token_runtime_variant(
         plan["task_count"] = len(selected)
         profile["profile_id"] = "token_multimodal_quick"
         profile.setdefault("business", {})["label"] = "多模态 Token 快测"
+    elif variant == "stress":
+        video_tasks = [
+            task for task in plan["tasks"]
+            if task["workload_kind"] == "video"
+            and int(task["upload"]["payload_bytes"]) >= 100 * 1024 * 1024
+            and int(task["response_artifact_bytes"]) >= 100 * 1024 * 1024
+        ]
+        if not video_tasks:
+            raise ValueError("stress variant requires a 100MiB video upload and response artifact")
+        plan["tasks"] = video_tasks
+        plan["task_count"] = len(video_tasks)
+        profile["profile_id"] = "token_multimodal_stress"
+        profile.setdefault("business", {})["label"] = "多模态 Token 大对象压力测试"
     plan["variant"] = variant
     _bind_token_runtime_plan(profile, plan, int(plan["seed"]), variant)
     return profile, plan
