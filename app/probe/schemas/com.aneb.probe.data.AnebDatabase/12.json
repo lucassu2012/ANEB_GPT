@@ -1,0 +1,1616 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 12,
+    "identityHash": "f295e26b7db9e1f57876148a3a65645e",
+    "entities": [
+      {
+        "tableName": "test_run",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`runId` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `serverBase` TEXT NOT NULL, `mode` TEXT NOT NULL, `scenarioOrder` TEXT NOT NULL, `transport` TEXT NOT NULL, `kpiSet` TEXT NOT NULL, `aqsVersion` TEXT NOT NULL, `profileVersions` TEXT NOT NULL, `schemaVersion` TEXT NOT NULL, `profileSource` TEXT NOT NULL, `appVersionName` TEXT, `appVersionCode` INTEGER, `guardMetadata` TEXT, `aqsScore` REAL, `aqsLowConfidence` INTEGER, `aqsVetoApplied` INTEGER, `aqsNotComputableReason` TEXT, `status` TEXT, `reportStatus` TEXT, `aqsV02Score` REAL, `aqsV02LowConfidence` INTEGER, `aqsV02VetoApplied` INTEGER, `aqsV02NotComputableReason` TEXT, `aqsV02ContinuityRunId` TEXT, `aqsV02ContinuityStartedAtEpochMs` INTEGER, `aqsV02C1DropRate` REAL, `aqsV02C2RecoveryMs` REAL, `sniReachable` TEXT, `sniReachMs` INTEGER, `ipReachable` TEXT, `ipReachMs` INTEGER, PRIMARY KEY(`runId`))",
+        "fields": [
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverBase",
+            "columnName": "serverBase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioOrder",
+            "columnName": "scenarioOrder",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transport",
+            "columnName": "transport",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kpiSet",
+            "columnName": "kpiSet",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "aqsVersion",
+            "columnName": "aqsVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileVersions",
+            "columnName": "profileVersions",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schemaVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileSource",
+            "columnName": "profileSource",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "appVersionName",
+            "columnName": "appVersionName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "appVersionCode",
+            "columnName": "appVersionCode",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "guardMetadata",
+            "columnName": "guardMetadata",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsScore",
+            "columnName": "aqsScore",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsLowConfidence",
+            "columnName": "aqsLowConfidence",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsVetoApplied",
+            "columnName": "aqsVetoApplied",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsNotComputableReason",
+            "columnName": "aqsNotComputableReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "reportStatus",
+            "columnName": "reportStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02Score",
+            "columnName": "aqsV02Score",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02LowConfidence",
+            "columnName": "aqsV02LowConfidence",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02VetoApplied",
+            "columnName": "aqsV02VetoApplied",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02NotComputableReason",
+            "columnName": "aqsV02NotComputableReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02ContinuityRunId",
+            "columnName": "aqsV02ContinuityRunId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02ContinuityStartedAtEpochMs",
+            "columnName": "aqsV02ContinuityStartedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02C1DropRate",
+            "columnName": "aqsV02C1DropRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "aqsV02C2RecoveryMs",
+            "columnName": "aqsV02C2RecoveryMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sniReachable",
+            "columnName": "sniReachable",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sniReachMs",
+            "columnName": "sniReachMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ipReachable",
+            "columnName": "ipReachable",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ipReachMs",
+            "columnName": "ipReachMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "runId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "token_event",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT NOT NULL, `scenarioKey` TEXT NOT NULL, `streamIndex` INTEGER NOT NULL, `seq` INTEGER NOT NULL, `schedUs` INTEGER, `preFlushUs` INTEGER, `arrivalNanos` INTEGER, `payloadBytes` INTEGER, `sameReadBatch` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioKey",
+            "columnName": "scenarioKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streamIndex",
+            "columnName": "streamIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schedUs",
+            "columnName": "schedUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "preFlushUs",
+            "columnName": "preFlushUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "arrivalNanos",
+            "columnName": "arrivalNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "payloadBytes",
+            "columnName": "payloadBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sameReadBatch",
+            "columnName": "sameReadBatch",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_token_event_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_token_event_runId` ON `${TABLE_NAME}` (`runId`)"
+          },
+          {
+            "name": "index_token_event_runId_scenarioKey_streamIndex_seq",
+            "unique": false,
+            "columnNames": [
+              "runId",
+              "scenarioKey",
+              "streamIndex",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_token_event_runId_scenarioKey_streamIndex_seq` ON `${TABLE_NAME}` (`runId`, `scenarioKey`, `streamIndex`, `seq`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "scenario_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT NOT NULL, `profileId` TEXT NOT NULL, `profileVersion` TEXT NOT NULL, `repeatIndex` INTEGER NOT NULL, `orderIndex` INTEGER NOT NULL, `startedAtNanos` INTEGER NOT NULL, `endedAtNanos` INTEGER, `validity` TEXT NOT NULL, `invalidReasons` TEXT NOT NULL, `t1TtftMs` REAL, `t1Grade` TEXT, `t2ItlP95Ms` REAL, `t2Grade` TEXT, `t2ItlP95InclCoalescedMs` REAL, `t3StallRate` REAL, `t3Grade` TEXT, `t3StallRateInclResume` REAL, `t4SevereStallRate` REAL, `t4Grade` TEXT, `t5ResumeP95Ms` REAL, `n1RttP50Ms` REAL, `n1Grade` TEXT, `n2JitterMs` REAL, `n2Grade` TEXT, `u1GoodputMbps` REAL, `u1Grade` TEXT, `u1GoodputExclSlowStartMbps` REAL, `u2ToolLoopP95Ms` REAL, `u2Grade` TEXT, `seqGapCount` INTEGER NOT NULL, `seqDupCount` INTEGER NOT NULL, `lowConfidenceKpis` TEXT NOT NULL, `offsetStartUs` INTEGER, `offsetStartErrUs` INTEGER, `offsetEndUs` INTEGER, `offsetEndErrUs` INTEGER, `offsetDriftPpm` REAL, `offsetSuspect` INTEGER NOT NULL, `netTransport` TEXT, `netCapabilities` TEXT, `netInterfaceName` TEXT, `serverObservedAddr` TEXT, `parseDurUsTotal` INTEGER, `perEventParseUs` REAL, `bufferingScore` REAL, `bufferingAttribution` TEXT, `bufferingSampleCount` INTEGER, `bufferingSawtoothRatio` REAL, `bufferingNearZeroRatio` REAL, `bufferingLag1Autocorr` REAL, `bufferingBatchCount` INTEGER, `bufferingBestGridUs` INTEGER, `bufferingJankOverlapRatio` REAL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileVersion",
+            "columnName": "profileVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repeatIndex",
+            "columnName": "repeatIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderIndex",
+            "columnName": "orderIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtNanos",
+            "columnName": "startedAtNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endedAtNanos",
+            "columnName": "endedAtNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "validity",
+            "columnName": "validity",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "invalidReasons",
+            "columnName": "invalidReasons",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "t1TtftMs",
+            "columnName": "t1TtftMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t1Grade",
+            "columnName": "t1Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t2ItlP95Ms",
+            "columnName": "t2ItlP95Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t2Grade",
+            "columnName": "t2Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t2ItlP95InclCoalescedMs",
+            "columnName": "t2ItlP95InclCoalescedMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t3StallRate",
+            "columnName": "t3StallRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t3Grade",
+            "columnName": "t3Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t3StallRateInclResume",
+            "columnName": "t3StallRateInclResume",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t4SevereStallRate",
+            "columnName": "t4SevereStallRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t4Grade",
+            "columnName": "t4Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t5ResumeP95Ms",
+            "columnName": "t5ResumeP95Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "n1RttP50Ms",
+            "columnName": "n1RttP50Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "n1Grade",
+            "columnName": "n1Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "n2JitterMs",
+            "columnName": "n2JitterMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "n2Grade",
+            "columnName": "n2Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "u1GoodputMbps",
+            "columnName": "u1GoodputMbps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "u1Grade",
+            "columnName": "u1Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "u1GoodputExclSlowStartMbps",
+            "columnName": "u1GoodputExclSlowStartMbps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "u2ToolLoopP95Ms",
+            "columnName": "u2ToolLoopP95Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "u2Grade",
+            "columnName": "u2Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "seqGapCount",
+            "columnName": "seqGapCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seqDupCount",
+            "columnName": "seqDupCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lowConfidenceKpis",
+            "columnName": "lowConfidenceKpis",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "offsetStartUs",
+            "columnName": "offsetStartUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetStartErrUs",
+            "columnName": "offsetStartErrUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetEndUs",
+            "columnName": "offsetEndUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetEndErrUs",
+            "columnName": "offsetEndErrUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetDriftPpm",
+            "columnName": "offsetDriftPpm",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetSuspect",
+            "columnName": "offsetSuspect",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "netTransport",
+            "columnName": "netTransport",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "netCapabilities",
+            "columnName": "netCapabilities",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "netInterfaceName",
+            "columnName": "netInterfaceName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "serverObservedAddr",
+            "columnName": "serverObservedAddr",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "parseDurUsTotal",
+            "columnName": "parseDurUsTotal",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "perEventParseUs",
+            "columnName": "perEventParseUs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingScore",
+            "columnName": "bufferingScore",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingAttribution",
+            "columnName": "bufferingAttribution",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingSampleCount",
+            "columnName": "bufferingSampleCount",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingSawtoothRatio",
+            "columnName": "bufferingSawtoothRatio",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingNearZeroRatio",
+            "columnName": "bufferingNearZeroRatio",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingLag1Autocorr",
+            "columnName": "bufferingLag1Autocorr",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingBatchCount",
+            "columnName": "bufferingBatchCount",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingBestGridUs",
+            "columnName": "bufferingBestGridUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bufferingJankOverlapRatio",
+            "columnName": "bufferingJankOverlapRatio",
+            "affinity": "REAL",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_scenario_result_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_scenario_result_runId` ON `${TABLE_NAME}` (`runId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "echo_sample",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT NOT NULL, `scenarioKey` TEXT NOT NULL, `phaseIndex` INTEGER NOT NULL, `idx` INTEGER NOT NULL, `warmup` INTEGER NOT NULL, `t0Us` INTEGER NOT NULL, `t1Us` INTEGER, `t2Us` INTEGER, `t3Us` INTEGER, `rttUs` INTEGER, `offsetUs` INTEGER, `error` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scenarioKey",
+            "columnName": "scenarioKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseIndex",
+            "columnName": "phaseIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "idx",
+            "columnName": "idx",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "warmup",
+            "columnName": "warmup",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "t0Us",
+            "columnName": "t0Us",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "t1Us",
+            "columnName": "t1Us",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t2Us",
+            "columnName": "t2Us",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "t3Us",
+            "columnName": "t3Us",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rttUs",
+            "columnName": "rttUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "offsetUs",
+            "columnName": "offsetUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_echo_sample_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_echo_sample_runId` ON `${TABLE_NAME}` (`runId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "env_event",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT, `tsNanos` INTEGER NOT NULL, `type` TEXT NOT NULL, `detail` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "tsNanos",
+            "columnName": "tsNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_env_event_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_env_event_runId` ON `${TABLE_NAME}` (`runId`)"
+          },
+          {
+            "name": "index_env_event_tsNanos",
+            "unique": false,
+            "columnNames": [
+              "tsNanos"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_env_event_tsNanos` ON `${TABLE_NAME}` (`tsNanos`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "radio_sample",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT, `tsNanos` INTEGER NOT NULL, `cellTsNanos` INTEGER, `stale` INTEGER NOT NULL, `subId` INTEGER NOT NULL, `subSwitched` INTEGER NOT NULL, `networkType` TEXT NOT NULL, `overrideType` TEXT, `nrState` TEXT NOT NULL, `rat` TEXT, `pci` INTEGER, `tac` INTEGER, `arfcn` INTEGER, `rsrp` INTEGER, `rsrq` INTEGER, `sinr` INTEGER, `operatorName` TEXT, `lat` REAL, `lon` REAL, `accuracyM` REAL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "tsNanos",
+            "columnName": "tsNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cellTsNanos",
+            "columnName": "cellTsNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stale",
+            "columnName": "stale",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subId",
+            "columnName": "subId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subSwitched",
+            "columnName": "subSwitched",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "networkType",
+            "columnName": "networkType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "overrideType",
+            "columnName": "overrideType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "nrState",
+            "columnName": "nrState",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rat",
+            "columnName": "rat",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pci",
+            "columnName": "pci",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "tac",
+            "columnName": "tac",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "arfcn",
+            "columnName": "arfcn",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rsrp",
+            "columnName": "rsrp",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rsrq",
+            "columnName": "rsrq",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sinr",
+            "columnName": "sinr",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "operatorName",
+            "columnName": "operatorName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lon",
+            "columnName": "lon",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accuracyM",
+            "columnName": "accuracyM",
+            "affinity": "REAL",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_radio_sample_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_radio_sample_runId` ON `${TABLE_NAME}` (`runId`)"
+          },
+          {
+            "name": "index_radio_sample_tsNanos",
+            "unique": false,
+            "columnNames": [
+              "tsNanos"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_radio_sample_tsNanos` ON `${TABLE_NAME}` (`tsNanos`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "report_body",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`runId` TEXT NOT NULL, `body` TEXT NOT NULL, PRIMARY KEY(`runId`))",
+        "fields": [
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "runId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "continuity_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`runId` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `serverBase` TEXT NOT NULL, `transport` TEXT NOT NULL, `tokens` INTEGER NOT NULL, `rateTps` REAL NOT NULL, `segmentsTotal` INTEGER NOT NULL, `abnormalDisconnects` INTEGER NOT NULL, `c1DropRate` REAL, `c1Grade` TEXT, `recoveryMsCsv` TEXT NOT NULL, `c2RecoveryMsP50` REAL, `c2Grade` TEXT, `c2CrossNetworkRecoveries` INTEGER, `c3LadderCsv` TEXT NOT NULL, `c3FunctionalOnly` INTEGER NOT NULL, `pathChangeEvents` INTEGER NOT NULL, `status` TEXT NOT NULL, `aqsVersionCandidate` TEXT NOT NULL, PRIMARY KEY(`runId`))",
+        "fields": [
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverBase",
+            "columnName": "serverBase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transport",
+            "columnName": "transport",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokens",
+            "columnName": "tokens",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rateTps",
+            "columnName": "rateTps",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "segmentsTotal",
+            "columnName": "segmentsTotal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "abnormalDisconnects",
+            "columnName": "abnormalDisconnects",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "c1DropRate",
+            "columnName": "c1DropRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "c1Grade",
+            "columnName": "c1Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "recoveryMsCsv",
+            "columnName": "recoveryMsCsv",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "c2RecoveryMsP50",
+            "columnName": "c2RecoveryMsP50",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "c2Grade",
+            "columnName": "c2Grade",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "c2CrossNetworkRecoveries",
+            "columnName": "c2CrossNetworkRecoveries",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "c3LadderCsv",
+            "columnName": "c3LadderCsv",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "c3FunctionalOnly",
+            "columnName": "c3FunctionalOnly",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pathChangeEvents",
+            "columnName": "pathChangeEvents",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "aqsVersionCandidate",
+            "columnName": "aqsVersionCandidate",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "runId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_continuity_result_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_continuity_result_runId` ON `${TABLE_NAME}` (`runId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "api_probe_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `provider` TEXT NOT NULL, `protocolId` TEXT NOT NULL, `baseUrl` TEXT NOT NULL, `model` TEXT NOT NULL, `claimScope` TEXT NOT NULL, `httpCode` INTEGER, `error` TEXT, `ttftMs` REAL, `itlMedianMs` REAL, `itlP95Ms` REAL, `itlSampleCount` INTEGER NOT NULL, `tokenEventCount` INTEGER NOT NULL, `totalMs` REAL, `totalTextChars` INTEGER NOT NULL, `inputTokens` INTEGER, `outputTokens` INTEGER, `stopReason` TEXT, `parseErrors` INTEGER NOT NULL, `protocolError` TEXT, `proxyDetected` INTEGER NOT NULL, `vpnDetected` INTEGER NOT NULL, `guardMetadata` TEXT, `readCount` INTEGER, `totalBytes` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protocolId",
+            "columnName": "protocolId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseUrl",
+            "columnName": "baseUrl",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "model",
+            "columnName": "model",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "claimScope",
+            "columnName": "claimScope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "httpCode",
+            "columnName": "httpCode",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ttftMs",
+            "columnName": "ttftMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlMedianMs",
+            "columnName": "itlMedianMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlP95Ms",
+            "columnName": "itlP95Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlSampleCount",
+            "columnName": "itlSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenEventCount",
+            "columnName": "tokenEventCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalMs",
+            "columnName": "totalMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "totalTextChars",
+            "columnName": "totalTextChars",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inputTokens",
+            "columnName": "inputTokens",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "outputTokens",
+            "columnName": "outputTokens",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stopReason",
+            "columnName": "stopReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "parseErrors",
+            "columnName": "parseErrors",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protocolError",
+            "columnName": "protocolError",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "proxyDetected",
+            "columnName": "proxyDetected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vpnDetected",
+            "columnName": "vpnDetected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "guardMetadata",
+            "columnName": "guardMetadata",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "readCount",
+            "columnName": "readCount",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "totalBytes",
+            "columnName": "totalBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "ab_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `serverBase` TEXT NOT NULL, `stack` TEXT NOT NULL, `claimScope` TEXT NOT NULL, `profileId` TEXT NOT NULL, `phaseIndex` INTEGER NOT NULL, `sampleIndex` INTEGER NOT NULL, `groupLabel` TEXT NOT NULL, `bin` TEXT NOT NULL, `negotiatedProtocol` TEXT, `httpCode` INTEGER, `error` TEXT, `ttftMs` REAL, `itlP50Ms` REAL, `itlP95Ms` REAL, `itlSampleCount` INTEGER NOT NULL, `stallCount` INTEGER, `stallRate` REAL, `gapCount` INTEGER NOT NULL, `dupCount` INTEGER NOT NULL, `tokenEventCount` INTEGER NOT NULL, `truncatedEarly` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverBase",
+            "columnName": "serverBase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stack",
+            "columnName": "stack",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "claimScope",
+            "columnName": "claimScope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseIndex",
+            "columnName": "phaseIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sampleIndex",
+            "columnName": "sampleIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "groupLabel",
+            "columnName": "groupLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bin",
+            "columnName": "bin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "negotiatedProtocol",
+            "columnName": "negotiatedProtocol",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "httpCode",
+            "columnName": "httpCode",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ttftMs",
+            "columnName": "ttftMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlP50Ms",
+            "columnName": "itlP50Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlP95Ms",
+            "columnName": "itlP95Ms",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "itlSampleCount",
+            "columnName": "itlSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stallCount",
+            "columnName": "stallCount",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stallRate",
+            "columnName": "stallRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gapCount",
+            "columnName": "gapCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dupCount",
+            "columnName": "dupCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenEventCount",
+            "columnName": "tokenEventCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "truncatedEarly",
+            "columnName": "truncatedEarly",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_ab_result_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ab_result_runId` ON `${TABLE_NAME}` (`runId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "basic_speed_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`runId` TEXT NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, `serverBase` TEXT NOT NULL, `claimScope` TEXT NOT NULL, `profileId` TEXT NOT NULL, `profileVersion` TEXT NOT NULL, `conclusionPolicyId` TEXT NOT NULL, `status` TEXT NOT NULL, `downloadMbps` REAL, `uploadMbps` REAL, `pingMs` REAL, `jitterMs` REAL, `requestLossRate` REAL, `postLoadPingMs` REAL, `downloadBytes` INTEGER NOT NULL, `uploadBytes` INTEGER NOT NULL, `transferErrors` TEXT NOT NULL, PRIMARY KEY(`runId`))",
+        "fields": [
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "startedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverBase",
+            "columnName": "serverBase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "claimScope",
+            "columnName": "claimScope",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileVersion",
+            "columnName": "profileVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conclusionPolicyId",
+            "columnName": "conclusionPolicyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "downloadMbps",
+            "columnName": "downloadMbps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "uploadMbps",
+            "columnName": "uploadMbps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pingMs",
+            "columnName": "pingMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "jitterMs",
+            "columnName": "jitterMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "requestLossRate",
+            "columnName": "requestLossRate",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "postLoadPingMs",
+            "columnName": "postLoadPingMs",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "downloadBytes",
+            "columnName": "downloadBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadBytes",
+            "columnName": "uploadBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transferErrors",
+            "columnName": "transferErrors",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "runId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_basic_speed_result_startedAtEpochMs",
+            "unique": false,
+            "columnNames": [
+              "startedAtEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_basic_speed_result_startedAtEpochMs` ON `${TABLE_NAME}` (`startedAtEpochMs`)"
+          }
+        ],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f295e26b7db9e1f57876148a3a65645e')"
+    ]
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "contract_version": "aneb-profile-v2",
+  "profile_id": "network_comprehensive_standard",
+  "version": "1.0.0-draft",
+  "mode_id": "network_comprehensive",
+  "execution_target": "aneb_probe_simulator",
+  "claim_scope": "application_end_to_end_to_probe_node",
+  "business": {
+    "category_id": "network_comprehensive",
+    "label": "网络综合性能",
+    "behavior_model_id": null,
+    "calibration_status": "not_applicable",
+    "behavior_feature_ids": ["sustained_downlink", "sustained_uplink", "loaded_responsiveness", "path_stability"]
+  },
+  "measurements": [
+    {"metric_id":"NET-B01","label":"下载持续有效速率","domain":"network","unit":"Mbps","measurement_level":"derived","formula_id":"window-goodput-p05-v1","aggregation":"p05","direction":"higher_is_better","required_for_score":true,"minimum_sample_count":10,"target_role":"quality","quality_target":{"operator":"gte","value":25,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B02","label":"上传持续有效速率","domain":"network","unit":"Mbps","measurement_level":"derived","formula_id":"window-goodput-p05-v1","aggregation":"p05","direction":"higher_is_better","required_for_score":true,"minimum_sample_count":10,"target_role":"quality","quality_target":{"operator":"gte","value":10,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B03","label":"空闲 RTT","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"echo-rtt-v1","aggregation":"p95","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":20,"target_role":"quality","quality_target":{"operator":"lte","value":100,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B04","label":"负载中 RTT","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"loaded-echo-rtt-v1","aggregation":"p95","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":20,"target_role":"quality","quality_target":{"operator":"lte","value":200,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B05","label":"负载时延增量","domain":"network","unit":"ms","measurement_level":"derived","formula_id":"loaded-p95-minus-idle-p50-v1","aggregation":"loaded_p95_minus_idle_p50","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":20,"target_role":"quality","quality_target":{"operator":"lte","value":100,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B06","label":"RTT 变化","domain":"network","unit":"ms","measurement_level":"derived","formula_id":"rtt-p95-minus-p50-v1","aggregation":"p95_minus_p50","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":20,"target_role":"quality","quality_target":{"operator":"lte","value":30,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B07","label":"吞吐稳定性","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"goodput-robust-cv-v1","aggregation":"robust_cv","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":10,"target_role":"quality","quality_target":{"operator":"lte","value":0.2,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B08","label":"低速窗口率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"below-target-window-ratio-v1","aggregation":"ratio","direction":"lower_is_better","required_for_score":false,"minimum_sample_count":10,"target_role":"quality","quality_target":{"operator":"lte","value":0.05,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B09","label":"应用请求失败率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"application-request-failure-ratio-v1","aggregation":"ratio","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":20,"target_role":"quality","quality_target":{"operator":"lte","value":0.02,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B10","label":"UDP 数据报未返回率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"sequenced-udp-nonreturn-ratio-v1","aggregation":"ratio","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":100,"target_role":"quality","quality_target":{"operator":"lte","value":0.01,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B11","label":"UDP 乱序率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"sequenced-udp-reorder-ratio-v1","aggregation":"ratio","direction":"lower_is_better","required_for_score":false,"minimum_sample_count":100,"target_role":"quality","quality_target":{"operator":"lte","value":0.005,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B12","label":"DNS/TCP/TLS 时延","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"connection-stage-timing-v1","aggregation":"p95_by_stage","direction":"lower_is_better","required_for_score":false,"minimum_sample_count":3,"target_role":"quality","quality_target":{"operator":"lte_by_stage","values":{"dns":500,"tcp":500,"tls":1000},"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-R01","label":"无线层协变量","domain":"radio_covariate","unit":"mixed","measurement_level":"exact","formula_id":"public-radio-snapshot-v1","aggregation":"time_series","direction":"descriptive","required_for_score":false,"minimum_sample_count":1,"target_role":"covariate","quality_target":null}
+  ],
+  "live_presentation": {
+    "primary_metric_id": "LOADED_RTT_LIVE",
+    "secondary_metric_ids": ["DOWN_Mbps_LIVE", "UP_Mbps_LIVE", "IDLE_RTT_LIVE", "LOW_SPEED_WINDOW_RATIO_LIVE"],
+    "window_ms": 1000,
+    "ui_refresh_ms": 250,
+    "stale_after_ms": 1500,
+    "missing_behavior": "show_unavailable_never_zero"
+  },
+  "evaluation": {
+    "target_set_id": "network-comprehensive-targets-v1-draft",
+    "score_policy_id": "network-comprehensive-score-v1-draft",
+    "conclusion_policy_id": "network-comprehensive-conclusions-v1-draft",
+    "required_metric_ids": ["NET-B01","NET-B02","NET-B03","NET-B04","NET-B05","NET-B06","NET-B07","NET-B09","NET-B10"],
+    "guardrail_metric_ids": ["NET-B09","NET-B10"],
+    "group_weights": {"responsiveness":0.30,"capacity":0.35,"stability":0.35},
+    "grade_bands": {"excellent":85,"good":70,"fair":55},
+    "missing_required_metric": "score_null",
+    "invalid_run": "retain_raw_suppress_score"
+  },
+  "phases": [
+    {"type":"path_setup","attempts":5},
+    {"type":"idle_latency","samples":30},
+    {"type":"download_loaded","duration_ms":15000,"parallel":4,"echo_interval_ms":250},
+    {"type":"upload_loaded","duration_ms":15000,"parallel":2,"echo_interval_ms":250},
+    {"type":"udp_sequence","packets":200,"packet_bytes":256,"rate_per_second":50},
+    {"type":"post_load_latency","samples":20}
+  ]
+}
+

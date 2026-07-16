@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 变体引用（src/debug/AndroidManifest.xml）：允许对仿真服务器的明文流量。
+     只对已知联调地址按 domain-config 放行，不用 base-config 全局放行（收窄 MITM 面）。
+     注意：<domain> 条目只支持具体域名/IP，不支持网段（如 192.168.0.0/16）——
+     真机联调时请按实际服务器 IP 在此增补条目（如 <domain>192.168.1.100</domain>）。
+
+     P2-C05：同一批联调地址加本地自签信任锚 @raw/aneb_local_ca（server/tools/gencert
+     生成，SAN=IP:10.0.2.2/IP:127.0.0.1/DNS:localhost），支撑 https+h3 双栈 A/B。
+     OkHttp（平台 TrustManager）与 Cronet 均尊重 NSC 信任锚。release 变体不带本配置。 -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android 模拟器指向宿主机 -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        <!-- 本机回环（adb reverse 场景） -->
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <trust-anchors>
+            <!-- 本地自签联调 CA（debug only） -->
+            <certificates src="@raw/aneb_local_ca" />
+            <!-- 保留系统锚：同地址将来换正规证书不需改配置 -->
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+    <!-- 阶段3 SNI 双通道：E-01 bare-IP 蜂窝通道信任自签 IP-SAN CA（含 IP:120.79.148.0，
+         server/tools/gencert -mode=ip 生成）。该路径为 https（:8443），不需明文。
+         sslip.io 公共域名（LE 证书）走系统根，无需在此列（release 变体不带本文件）。
+         保留 system 锚：将来换正规 IP 证书不必改配置。 -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">120.79.148.0</domain>
+        <trust-anchors>
+            <certificates src="@raw/aneb_ip_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

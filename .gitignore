@@ -1,0 +1,40 @@
+# Android
+app/build/
+app/.gradle/
+app/local.properties
+app/.idea/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Go
+server/aneb-server
+server/aneb-server.exe
+server/data/
+
+# P2-C05 本地联调自签证书私钥不入库（证书公钥部分入库：server/certs/ 的 cert 与
+# app debug res/raw 信任锚需成对；重新生成用 server/tools/gencert 并同步两处）
+server/certs/aneb_local_key.pem
+
+# 阶段3 SNI 双通道 bare-IP 自签 IP-SAN 证书：私钥不入库（公钥部分作客户端信任锚
+# 入库于 app debug res/raw/aneb_ip_ca.pem，与部署到 E-01 /opt/aneb/tls/ip 的证书成对；
+# 重新生成用 server/tools/gencert -mode=ip 并同步 res/raw 锚点）。整目录忽略防私钥误入库。
+server/tls/
+
+# misc
+.DS_Store
+Thumbs.db
+app/probe/build/
+
+
+# Kotlin build artifacts
+app/.kotlin/
+
+# Public cloud checkpoint: real-device databases/logs/screenshots stay local.
+evidence/
+
+# Bundled AI behavior-model generated artifacts are reproducible and not source.
+tools/aneb-ai-behavior-model/build/
+tools/aneb-ai-behavior-model/**/__pycache__/
+tools/aneb-ai-behavior-model/**/*.pyc

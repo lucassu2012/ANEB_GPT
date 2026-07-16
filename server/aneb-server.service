@@ -1,0 +1,25 @@
+[Unit]
+Description=ANEB Probe simulation server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aneb
+Group=aneb
+ExecStart=/opt/aneb/bin/aneb-server -addr :8443 -profiles /opt/aneb/profiles -data /opt/aneb/data -tls-cert /opt/aneb/tls/public/cert.pem -tls-key /opt/aneb/tls/public/key.pem -tls-cert-ip /opt/aneb/tls/ip/cert.pem -tls-key-ip /opt/aneb/tls/ip/key.pem -h3
+Restart=on-failure
+RestartSec=3
+
+# Isolation hardening: shared host, must not affect co-tenant services
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/aneb/data
+MemoryMax=384M
+CPUQuota=120%
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

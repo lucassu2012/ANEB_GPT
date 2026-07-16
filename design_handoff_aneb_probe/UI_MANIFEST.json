@@ -1,0 +1,33 @@
+{
+  "package": "ANEB UI Claude Code Handoff",
+  "version": "2026.07.15-2",
+  "locale": "zh-CN",
+  "visualStyle": "SpeedTest-inspired dark navy",
+  "sourceOfTruth": {
+    "designDecisions": "DESIGN_DECISIONS.md",
+    "integrationGuide": "CLAUDE_CODE_HANDOFF.md"
+  },
+  "sharedBundles": [
+    { "files": ["screens/home.css", "screens/home.js"], "consumers": ["home.html"] },
+    { "files": ["screens/future.css", "screens/future.js"], "consumers": ["probe.html", "map.html"] },
+    { "files": ["screens/suite.css", "screens/suite.js"], "consumers": ["foundations.html", "history.html", "motion.html", "result-dev.html", "result-light.html", "result-simple.html", "server.html", "settings.html", "share.html", "testing.html"] }
+  ],
+  "productScreens": [
+    { "file": "screens/home.html", "route": "/test", "status": "final-ui" },
+    { "file": "screens/testing.html", "route": "/test/live", "status": "final-ui" },
+    { "file": "screens/probe.html", "route": "/probe", "status": "future-ui" },
+    { "file": "screens/map.html", "route": "/map", "status": "future-ui" },
+    { "file": "screens/history.html", "route": "/results", "status": "final-ui" },
+    { "file": "screens/result-simple.html", "route": "/results/:id", "status": "final-ui" },
+    { "file": "screens/result-light.html", "route": "/results/:id/wifi", "status": "final-ui" },
+    { "file": "screens/result-dev.html", "route": "/results/:id/pro", "status": "final-ui" },
+    { "file": "screens/server.html", "route": "/servers", "status": "final-ui" },
+    { "file": "screens/settings.html", "route": "/settings", "status": "final-ui" },
+    { "file": "screens/share.html", "route": "/results/:id/share", "status": "final-ui" }
+  ],
+  "referenceScreens": [
+    { "file": "screens/foundations.html", "purpose": "design tokens and component rules" },
+    { "file": "screens/motion.html", "purpose": "motion and accessibility rules" }
+  ],
+  "excludedLegacyFiles": ["tokens.css", "screens/aneb.js", "reference/", "CONTINUE_DESIGN.md"]
+}

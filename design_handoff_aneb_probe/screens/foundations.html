@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#070a18"><title>ANEB Probe · 设计系统</title><link rel="stylesheet" href="suite.css"></head>
+<body><main class="suite-stage"><section class="suite-shell" aria-label="ANEB 设计系统手机界面"><div class="suite-app">
+  <div class="suite-status"><span>14:41</span><span class="suite-icons"><span class="suite-signal"><i></i><i></i><i></i><i></i></span><span class="suite-wifi"></span><span class="suite-battery"></span></span></div>
+  <a class="suite-back" href="settings.html" aria-label="返回设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m15 5-7 7 7 7"/></svg></a>
+  <a class="suite-wordmark" href="home.html" aria-label="返回首页"><svg viewBox="0 0 20 20" fill="none"><path d="M3.5 13.5a7 7 0 0 1 13 0" stroke="currentColor" stroke-width="1.45"/><path d="m10 13 3.7-5" stroke="currentColor" stroke-width="1.45"/><circle cx="10" cy="13" r="1" fill="currentColor"/></svg><strong>ANEB</strong><span>PROBE</span></a>
+  <button class="suite-menu" type="button" data-toast="设计令牌 v1.0" aria-label="版本信息"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></button>
+  <section class="suite-scroll">
+    <header class="page-head"><span class="eyebrow">DESIGN SYSTEM</span><h1>视觉基础</h1><p>与首页、探针和地图共用的颜色、排版、圆角与交互规则。</p></header>
+    <div class="foundation-grid">
+      <article class="suite-card foundation-card"><h2>语义色</h2><p>青绿代表测试与优秀，紫色只用于上行，暖色表达波动与异常。</p><div class="swatch-row"><button class="swatch" style="--sw:#43e1e6" data-copy-color="#43E1E6">测试</button><button class="swatch" style="--sw:#59e493" data-copy-color="#59E493">优秀</button><button class="swatch" style="--sw:#a779f2" data-copy-color="#A779F2">上行</button><button class="swatch" style="--sw:#efca72" data-copy-color="#EFCA72">波动</button></div></article>
+      <article class="suite-card foundation-card"><h2>排版层级</h2><p>数字收紧、标题克制、小字增距，保持 SpeedTest 风格的仪器感。</p><div class="type-samples"><div><strong style="--fs:29px;--fw:540;--ls:-.06em">89 分</strong><span>Score</span></div><div><strong style="--fs:17px;--fw:560;--ls:-.03em">测试结果</strong><span>Title</span></div><div><strong style="--fs:10px;--fw:450;--ls:0">网络很适合 AI</strong><span>Body</span></div></div></article>
+      <article class="suite-card foundation-card"><h2>连续圆角</h2><p>卡片、控件和标签按层级递减，主测试圆环始终保持 1:1。</p><div class="radius-row"><div class="radius-sample" style="--r:18px">18</div><div class="radius-sample" style="--r:14px">14</div><div class="radius-sample" style="--r:10px">10</div><div class="radius-sample" style="--r:999px">∞</div></div></article>
+      <article class="suite-card foundation-card"><h2>玻璃材质</h2><p>弹窗与抽屉使用深色半透明材质，避免实心色块切断页面。</p><div class="glass-card" style="padding:13px;border-radius:14px"><strong style="font-size:10px;font-weight:520">Material · Dark Navy</strong><span style="display:block;margin-top:4px;color:var(--muted);font-size:8px">blur 18 · border 12%</span></div></article>
+      <article class="suite-card foundation-card"><h2>结论文案</h2><p>普通用户先看到一句人话，再决定是否阅读专业指标。</p><div class="metric-trio"><div><span>优秀</span><strong class="green">85+</strong></div><div><span>良好</span><strong class="cyan">70+</strong></div><div><span>需改善</span><strong style="color:var(--yellow)">&lt;70</strong></div></div></article>
+    </div>
+  </section>
+  <nav class="suite-nav" data-suite-nav data-active="settings"></nav><div id="suite-toast" class="suite-toast" role="status"></div><div class="suite-homebar"></div>
+</div></section></main><script src="suite.js"></script></body></html>

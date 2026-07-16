@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#070a18"><title>ANEB Probe · 动效规范</title><link rel="stylesheet" href="suite.css"></head>
+<body><main class="suite-stage"><section class="suite-shell" aria-label="ANEB 动效规范手机界面"><div class="suite-app">
+  <div class="suite-status"><span>14:41</span><span class="suite-icons"><span class="suite-signal"><i></i><i></i><i></i><i></i></span><span class="suite-wifi"></span><span class="suite-battery"></span></span></div>
+  <a class="suite-back" href="settings.html" aria-label="返回设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m15 5-7 7 7 7"/></svg></a>
+  <a class="suite-wordmark" href="home.html" aria-label="返回首页"><svg viewBox="0 0 20 20" fill="none"><path d="M3.5 13.5a7 7 0 0 1 13 0" stroke="currentColor" stroke-width="1.45"/><path d="m10 13 3.7-5" stroke="currentColor" stroke-width="1.45"/><circle cx="10" cy="13" r="1" fill="currentColor"/></svg><strong>ANEB</strong><span>PROBE</span></a>
+  <button class="suite-menu" type="button" data-toast="动效会自动遵循系统减弱动效设置" aria-label="动效说明"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></button>
+  <section class="suite-scroll">
+    <header class="page-head"><span class="eyebrow">MOTION LAB</span><h1>动效规范</h1><p>参考 SpeedTest 的即时反馈、持续状态和抽屉吸附节奏。</p></header>
+    <div class="motion-list">
+      <article class="suite-card motion-card"><h2>01 · 按压即反馈</h2><p>手指落下时立即缩小，松开后快速回弹。</p><div class="motion-demo"><button class="motion-button" type="button" data-toast="按压反馈 120ms">按住试试</button><span style="color:var(--muted);font-size:8px">scale .94 · 120ms</span></div></article>
+      <article class="suite-card motion-card"><h2>02 · 连续测试状态</h2><p>长任务使用呼吸和脉冲，让用户知道测试仍在进行。</p><div class="motion-demo"><div class="pulse-demo">LIVE</div><span style="color:var(--muted);font-size:8px">正在探测 API 端点…</span></div></article>
+      <article class="suite-card motion-card"><h2>03 · 手势跟随</h2><p>滑块与抽屉跟随手指，不使用延迟的固定补间。</p><div class="motion-demo"><div style="width:100%"><input id="motion-range" class="motion-range" type="range" min="0" max="100" value="0" aria-label="动效跟随滑块"><div style="height:18px;position:relative"><i id="motion-dot" style="position:absolute;left:0;top:5px;width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 9px var(--cyan)"></i></div></div></div></article>
+      <article class="suite-card motion-card"><h2>04 · 材质抽屉</h2><p>玻璃材质与位移同时到场，点击区域可切换吸附状态。</p><button class="motion-demo" type="button" data-sheet-demo style="width:100%;border:0;background:transparent;padding:0;cursor:pointer"><span class="sheet-demo"><span></span></span></button></article>
+      <article class="suite-card motion-card"><h2>05 · 减弱动效</h2><p>系统启用减弱动效时，脉冲与位移自动退化为短促淡入。</p><div class="motion-demo"><span style="color:var(--green);font-size:18px">✓</span><span style="color:var(--muted);font-size:8px">信息反馈保留，过冲和长动画关闭</span></div></article>
+    </div>
+  </section>
+  <nav class="suite-nav" data-suite-nav data-active="settings"></nav><div id="suite-toast" class="suite-toast" role="status"></div><div class="suite-homebar"></div>
+</div></section></main><script src="suite.js"></script></body></html>

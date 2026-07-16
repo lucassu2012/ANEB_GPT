@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#070a18"><title>ANEB Probe · 测试节点</title><link rel="stylesheet" href="suite.css"></head>
+<body><main class="suite-stage"><section class="suite-shell" aria-label="ANEB 测试节点手机界面"><div class="suite-app">
+  <div class="suite-status"><span>14:34</span><span class="suite-icons"><span class="suite-signal"><i></i><i></i><i></i><i></i></span><span class="suite-wifi"></span><span class="suite-battery"></span></span></div>
+  <a class="suite-back" href="home.html" aria-label="返回首页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m15 5-7 7 7 7"/></svg></a>
+  <a class="suite-wordmark" href="home.html" aria-label="返回首页"><svg viewBox="0 0 20 20" fill="none"><path d="M3.5 13.5a7 7 0 0 1 13 0" stroke="currentColor" stroke-width="1.45"/><path d="m10 13 3.7-5" stroke="currentColor" stroke-width="1.45"/><circle cx="10" cy="13" r="1" fill="currentColor"/></svg><strong>ANEB</strong><span>PROBE</span></a>
+  <button class="suite-menu" type="button" data-toast="节点按实时延迟排序" aria-label="节点说明"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></button>
+  <section class="suite-scroll">
+    <header class="page-head"><span class="eyebrow">TEST SERVER</span><h1>选择测试节点</h1><p>优先使用低延迟节点，结果更接近真实 AI 使用体验。</p></header>
+    <article class="suite-card setting-row" style="grid-template-columns:31px 1fr auto"><span class="setting-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg></span><span class="setting-label"><strong>自动选择最优</strong><span>每次测试前刷新延迟</span></span><button class="switch on" type="button" role="switch" aria-checked="true" aria-label="自动选择最优节点"></button></article>
+    <div class="section-title"><span>附近节点</span><button type="button" data-toast="延迟已刷新">刷新</button></div>
+    <article class="suite-card settings-group">
+      <button class="node-row selected" type="button" data-node="深圳 · 中国电信"><span class="node-check">✓</span><span class="setting-label"><strong>Node-SZ-03 · 深圳</strong><span>中国电信 · 自动优选</span></span><span class="node-latency">12 ms</span></button>
+      <button class="node-row" type="button" data-node="深圳 · 中国移动"><span class="node-check">✓</span><span class="setting-label"><strong>Node-SZ-06 · 深圳</strong><span>中国移动</span></span><span class="node-latency">16 ms</span></button>
+      <button class="node-row" type="button" data-node="广州 · 中国联通"><span class="node-check">✓</span><span class="setting-label"><strong>Node-GZ-02 · 广州</strong><span>中国联通</span></span><span class="node-latency" style="--node-color:var(--cyan)">28 ms</span></button>
+      <button class="node-row" type="button" data-node="香港 · Cloud Edge"><span class="node-check">✓</span><span class="setting-label"><strong>Node-HK-02 · 香港</strong><span>跨境 · 国际出口</span></span><span class="node-latency" style="--node-color:var(--yellow)">47 ms</span></button>
+    </article>
+    <div class="section-title"><span>其他地区</span></div>
+    <article class="suite-card settings-group">
+      <button class="node-row" type="button" data-node="上海 · 中国电信"><span class="node-check">✓</span><span class="setting-label"><strong>Node-SH-04 · 上海</strong><span>中国电信</span></span><span class="node-latency" style="--node-color:var(--yellow)">52 ms</span></button>
+      <button class="node-row" type="button" data-node="北京 · 中国移动"><span class="node-check">✓</span><span class="setting-label"><strong>Node-BJ-02 · 北京</strong><span>中国移动</span></span><span class="node-latency" style="--node-color:var(--red)">74 ms</span></button>
+    </article>
+  </section>
+  <nav class="suite-nav" data-suite-nav data-active="home"></nav><div id="suite-toast" class="suite-toast" role="status"></div><div class="suite-homebar"></div>
+</div></section></main><script src="suite.js"></script></body></html>

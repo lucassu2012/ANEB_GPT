@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ANEB Probe 图标：270° 探针环 + 抽象 A 形三节点网络。
+  所有关键笔画位于 adaptive-icon 66dp 安全区，适配圆形/方圆形/华为蒙版。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 柔光底，不依赖位图。 -->
+    <path
+        android:fillColor="#1243E1E6"
+        android:pathData="M54,20 A34,34 0,1 1,53.99 20" />
+
+    <!-- 270° 暗轨与双色活动弧。 -->
+    <path
+        android:pathData="M34,74 A28,28 0,1 1,74 74"
+        android:strokeColor="#34445F"
+        android:strokeWidth="4.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M34,74 A28,28 0,0 1,54 26"
+        android:strokeColor="#67EDCC"
+        android:strokeWidth="5.2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M54,26 A28,28 0,0 1,74 74"
+        android:strokeColor="#43E1E6"
+        android:strokeWidth="5.2"
+        android:strokeLineCap="round" />
+
+    <!-- 抽象 A / 网络拓扑：三端点 + 中心探针。 -->
+    <path
+        android:pathData="M42,64 L54,42 L66,64 M47,55 L61,55 M54,42 L54,55"
+        android:strokeColor="#F3F6FA"
+        android:strokeWidth="3.1"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path android:fillColor="#67EDCC" android:pathData="M54,37 A5,5 0,1 1,53.99 37" />
+    <path android:fillColor="#43E1E6" android:pathData="M42,59 A5,5 0,1 1,41.99 59" />
+    <path android:fillColor="#3EB4F1" android:pathData="M66,59 A5,5 0,1 1,65.99 59" />
+    <path android:fillColor="#F3F6FA" android:pathData="M54,51 A4,4 0,1 1,53.99 51" />
+</vector>
