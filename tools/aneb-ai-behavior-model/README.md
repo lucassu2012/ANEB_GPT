@@ -6,6 +6,7 @@
 
 - 版本化 `model.json`；
 - 可复现 `golden_trace.jsonl`；
+- 供 App 精确执行、经哈希绑定的紧凑 `runtime_plan.json`；
 - 模型校准/验证报告；
 - 候选 ANEB Profile Contract v2。
 
@@ -54,10 +55,16 @@ python -m aneb_behavior_model.cli build `
   --model models\ai_realtime_voice_hypothesis_v0.1.json `
   --seed 20260716 `
   --out build\realtime
+
+# 只发布 App 运行所需的小型、可追踪产物
+python -m aneb_behavior_model.cli publish-runtime `
+  --model models\token_multimodal_hypothesis_v0.1.json `
+  --seed 20260716 `
+  --out ..\..\profiles\published\token_multimodal_standard
 ```
 
 输出目录固定包含：`model.json`、`golden_trace.jsonl`、`profile.json`、
-`validation.json`、`manifest.sha256`。
+`validation.json`、`manifest.sha256`；Token 模型另含 `runtime_plan.json`。
 
 ## Token 观测输入
 
@@ -90,4 +97,3 @@ python -m aneb_behavior_model.cli fit-token `
 - 相同模型版本、seed 和参数必须生成字节级一致的事件轨迹；
 - 原始业务内容、账号、API key 不进入模型产物或 Git；
 - 每个正式模型发布包必须附哈希和验证报告。
-

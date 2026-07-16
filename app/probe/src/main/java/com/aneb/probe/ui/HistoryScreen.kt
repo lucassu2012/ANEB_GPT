@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.TokenSimulationResultEntity
 import com.aneb.probe.ui.components.AnebGradientCard
 import com.aneb.probe.ui.components.AnebPageIntro
 import com.aneb.probe.ui.components.AnebSectionTitle
@@ -47,17 +48,20 @@ import kotlin.math.roundToInt
 fun HistoryScreen(
     runs: List<TestRun>,
     basicRuns: List<BasicSpeedResultEntity>,
+    tokenSimulationRuns: List<TokenSimulationResultEntity>,
     onOpen: (String) -> Unit,
     onOpenBasic: (String) -> Unit,
+    onOpenTokenSimulation: (String) -> Unit,
     onGenerateReport: () -> Unit,
     onBack: () -> Unit,
     showBack: Boolean = true,
 ) {
     val colors = AnebTheme.colors
-    val ordered = remember(runs, basicRuns) {
+    val ordered = remember(runs, basicRuns, tokenSimulationRuns) {
         buildList<HistoryEntry> {
             runs.forEach { add(HistoryEntry.Token(it)) }
             basicRuns.forEach { add(HistoryEntry.Basic(it)) }
+            tokenSimulationRuns.forEach { add(HistoryEntry.TokenSimulation(it)) }
         }.sortedByDescending { it.startedAtEpochMs }
     }
     val scored = remember(runs) { runs.mapNotNull { it.aqsScore }.filter { it.isFinite() } }
@@ -105,6 +109,7 @@ fun HistoryScreen(
                     when (val item = ordered[index]) {
                         is HistoryEntry.Token -> HistoryRecord(item.run, onOpen)
                         is HistoryEntry.Basic -> BasicHistoryRecord(item.result, onOpenBasic)
+                        is HistoryEntry.TokenSimulation -> TokenSimulationHistoryRecord(item.result, onOpenTokenSimulation)
                     }
                 }
             }
@@ -124,6 +129,11 @@ private sealed interface HistoryEntry {
     data class Basic(val result: BasicSpeedResultEntity) : HistoryEntry {
         override val startedAtEpochMs = result.startedAtEpochMs
         override val key = "basic:${result.runId}"
+    }
+
+    data class TokenSimulation(val result: TokenSimulationResultEntity) : HistoryEntry {
+        override val startedAtEpochMs = result.startedAtEpochMs
+        override val key = "token-v2:${result.runId}"
     }
 }
 
@@ -255,6 +265,42 @@ private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) 
             val up = result.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
             Text(
                 "${fmt.format(Date(result.startedAtEpochMs))} · ↓$down ↑$up Mbps",
+                fontSize = 10.sp,
+                color = colors.muted,
+                modifier = Modifier.padding(top = 3.dp),
+                maxLines = 1,
+            )
+        }
+        Text("›", fontSize = 18.sp, color = colors.faint)
+    }
+}
+
+@Composable
+private fun TokenSimulationHistoryRecord(result: TokenSimulationResultEntity, onOpen: (String) -> Unit) {
+    val colors = AnebTheme.colors
+    val accent = when (result.verdict) {
+        "PASS" -> colors.excellent
+        "FAIL" -> colors.poor
+        "INCONCLUSIVE" -> colors.fair
+        else -> colors.muted
+    }
+    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.US) }
+    Row(
+        modifier = Modifier.fillMaxWidth().height(61.dp).clip(RoundedCornerShape(14.dp))
+            .background(androidx.compose.ui.graphics.Color(0xB811162C))
+            .border(1.dp, colors.hairline, RoundedCornerShape(14.dp))
+            .pressable(onClick = { onOpen(result.runId) })
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(41.dp).clip(CircleShape).border(1.dp, accent.copy(alpha = 0.48f), CircleShape), contentAlignment = Alignment.Center) {
+            Text(result.totalScore?.roundToInt()?.toString() ?: "—", style = AnebType.StatValue, fontSize = 15.sp, color = accent)
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Token 仿真 · ${result.variant.uppercase()}", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.ink, maxLines = 1)
+            Text(
+                "${fmt.format(Date(result.startedAtEpochMs))} · ${result.verdict} · ${result.confidence}",
                 fontSize = 10.sp,
                 color = colors.muted,
                 modifier = Modifier.padding(top = 3.dp),

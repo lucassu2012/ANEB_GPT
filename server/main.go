@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.1.0"
+const serverVersion = "aneb-server/0.2.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -35,6 +35,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/v1/echo", a.handleEcho)
 	mux.HandleFunc("/api/v1/profiles", a.handleProfiles)
 	mux.HandleFunc("/api/v1/stream", a.handleStream)
+	mux.HandleFunc("/api/v1/token-sim", a.handleTokenSim)
 	mux.HandleFunc("/api/v1/download", a.handleDownload)
 	mux.HandleFunc("/api/v1/upload", a.handleUpload)
 	mux.HandleFunc("/api/v1/toolloop", a.handleToolLoop)

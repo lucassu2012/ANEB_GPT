@@ -19,6 +19,8 @@ import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.LockSupport
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -37,7 +39,9 @@ import kotlin.coroutines.resumeWithException
 class AnebClient(bound: BoundNetwork? = null) {
 
     private val timingFactory = TimingEventListener.Factory()
-    private val json = Json { ignoreUnknownKeys = true }
+    // Wire contracts must include version/default fields; omitting contract_version
+    // makes the self-hosted node correctly fail closed with HTTP 400.
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val sseReader = SseReader(json)
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -279,6 +283,144 @@ class AnebClient(bound: BoundNetwork? = null) {
             throw e
         } catch (e: Exception) {
             TransferResult(startNanos, null, 0L, null, e.toString(), timingFactory.recordFor(call))
+        }
+    }
+
+    // ----------------------------------------------------- Profile v2 Token simulation
+
+    /**
+     * Executes one exact Token behavior task against the self-hosted node.
+     * The body is: 4-byte big-endian plan JSON length + plan JSON + deterministic
+     * upload bytes. Every returned SSE token is timestamped at the event boundary.
+     */
+    suspend fun tokenSim(
+        url: String,
+        plan: TokenSimTaskPlan,
+        uploadChunkBytes: Int,
+        uploadChunkCadenceMs: Double,
+        onUploadBytes: (totalBytes: Long, writtenAtNanos: Long) -> Unit = { _, _ -> },
+        onPrelude: (TokenSimPrelude, arrivalNanos: Long) -> Unit = { _, _ -> },
+        onToken: (TokenSimArrival) -> Unit = {},
+    ): TokenSimTaskResult {
+        require(plan.uploadPayloadBytes > 0L) { "uploadPayloadBytes must be positive" }
+        require(uploadChunkBytes > 0) { "uploadChunkBytes must be positive" }
+        require(plan.tokenIntervalsMs.isNotEmpty()) { "token schedule must not be empty" }
+        require(plan.tokenIntervalsMs.size == plan.tokenSizesBytes.size) { "token schedule lengths differ" }
+        val encodedPlan = json.encodeToString(TokenSimTaskPlan.serializer(), plan).toByteArray(Charsets.UTF_8)
+        val uploadStart = AtomicLong(-1L)
+        val uploadEnd = AtomicLong(-1L)
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength(): Long = 4L + encodedPlan.size + plan.uploadPayloadBytes
+
+            override fun writeTo(sink: BufferedSink) {
+                sink.writeInt(encodedPlan.size)
+                sink.write(encodedPlan)
+                val chunk = ByteArray(uploadChunkBytes) { index -> ((index * 31 + 17) and 0xff).toByte() }
+                val started = SystemClock.elapsedRealtimeNanos()
+                uploadStart.set(started)
+                var remaining = plan.uploadPayloadBytes
+                var total = 0L
+                var chunkIndex = 0L
+                val cadenceNanos = (uploadChunkCadenceMs.coerceAtLeast(0.0) * 1_000_000.0).toLong()
+                while (remaining > 0L) {
+                    val count = minOf(chunk.size.toLong(), remaining).toInt()
+                    sink.write(chunk, 0, count)
+                    total += count
+                    remaining -= count
+                    val now = SystemClock.elapsedRealtimeNanos()
+                    onUploadBytes(total, now)
+                    chunkIndex++
+                    if (remaining > 0L && cadenceNanos > 0L) {
+                        val target = started + chunkIndex * cadenceNanos
+                        val waitNanos = target - SystemClock.elapsedRealtimeNanos()
+                        if (waitNanos > 0L) LockSupport.parkNanos(waitNanos)
+                    }
+                }
+                sink.flush()
+                uploadEnd.set(SystemClock.elapsedRealtimeNanos())
+            }
+        }
+        val call = client.newCall(
+            Request.Builder()
+                .url(url)
+                .header("Accept", "text/event-stream")
+                .post(body)
+                .build(),
+        )
+        val requestStart = SystemClock.elapsedRealtimeNanos()
+        var prelude: TokenSimPrelude? = null
+        var preludeArrival: Long? = null
+        val arrivals = mutableListOf<TokenSimArrival>()
+        var summary: TokenSimSummary? = null
+        var summaryArrival: Long? = null
+        var httpCode: Int? = null
+        return try {
+            executeCancellable(call) { resp ->
+                httpCode = resp.code
+                if (!resp.isSuccessful) {
+                    val detail = resp.body?.string()?.trim().orEmpty()
+                    TokenSimTaskResult(
+                        requestStart, uploadStart.valueOrNull(), uploadEnd.valueOrNull(),
+                        null, null, emptyList(), null, null, resp.code,
+                        "http ${resp.code}${if (detail.isBlank()) "" else ":$detail"}", timingFactory.recordFor(call),
+                    )
+                } else {
+                    val source = checkNotNull(resp.body) { "empty body for 2xx" }.source()
+                    var eventName: String? = null
+                    var data: String? = null
+                    while (true) {
+                        val line = source.readUtf8Line() ?: break
+                        if (line.isEmpty()) {
+                            val arrivalNanos = SystemClock.elapsedRealtimeNanos()
+                            val eventData = data
+                            when (eventName) {
+                                "prelude" -> if (eventData != null) {
+                                    prelude = json.decodeFromString(TokenSimPrelude.serializer(), eventData)
+                                    preludeArrival = arrivalNanos
+                                    onPrelude(checkNotNull(prelude), arrivalNanos)
+                                }
+                                "token" -> if (eventData != null) {
+                                    val arrival = TokenSimArrival(
+                                        json.decodeFromString(TokenSimToken.serializer(), eventData),
+                                        arrivalNanos,
+                                    )
+                                    arrivals += arrival
+                                    onToken(arrival)
+                                }
+                                "summary" -> if (eventData != null) {
+                                    summary = json.decodeFromString(TokenSimSummary.serializer(), eventData)
+                                    summaryArrival = arrivalNanos
+                                }
+                            }
+                            eventName = null
+                            data = null
+                        } else when {
+                            line.startsWith("event:") -> eventName = line.substringAfter(':').trim()
+                            line.startsWith("data:") -> data = line.substringAfter(':').trimStart()
+                        }
+                    }
+                    val streamError = when {
+                        prelude == null -> "missing_prelude"
+                        summary == null -> "missing_summary"
+                        arrivals.size != summary?.tokens -> "token_count_mismatch"
+                        else -> null
+                    }
+                    TokenSimTaskResult(
+                        requestStart, uploadStart.valueOrNull(), uploadEnd.valueOrNull(),
+                        prelude, preludeArrival, arrivals.toList(), summary, summaryArrival,
+                        resp.code, streamError, timingFactory.recordFor(call),
+                    )
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TokenSimTaskResult(
+                requestStart, uploadStart.valueOrNull(), uploadEnd.valueOrNull(),
+                prelude, preludeArrival, arrivals.toList(), summary, summaryArrival,
+                httpCode, e.toString(), timingFactory.recordFor(call),
+            )
         }
     }
 
@@ -657,4 +799,6 @@ class AnebClient(bound: BoundNetwork? = null) {
         private val SSE_EVENT_DELIMITER = "\n\n".encodeUtf8()
         private val SEQ_REGEX = Regex("\"seq\"\\s*:\\s*(\\d+)")
     }
+
+    private fun AtomicLong.valueOrNull(): Long? = get().takeIf { it >= 0L }
 }

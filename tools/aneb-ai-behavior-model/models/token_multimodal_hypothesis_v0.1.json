@@ -15,7 +15,7 @@
     "workloads": [
       {
         "kind": "text",
-        "repetitions": 4,
+        "repetitions": 8,
         "payload_bytes": {"type": "empirical", "values": [2048, 8192, 16384]},
         "chunk_bytes": 2048,
         "upload_chunk_cadence_ms": 1,
@@ -41,7 +41,7 @@
       },
       {
         "kind": "document",
-        "repetitions": 3,
+        "repetitions": 6,
         "payload_bytes": {"type": "empirical", "values": [1048576, 5242880, 10485760]},
         "chunk_bytes": 65536,
         "upload_chunk_cadence_ms": 1,
@@ -67,7 +67,7 @@
       },
       {
         "kind": "image",
-        "repetitions": 3,
+        "repetitions": 6,
         "payload_bytes": {"type": "empirical", "values": [5242880, 10485760, 15728640]},
         "chunk_bytes": 65536,
         "upload_chunk_cadence_ms": 1,
@@ -96,11 +96,11 @@
   "profile_export": {
     "contract_version": "aneb-profile-v2",
     "profile_id": "token_multimodal_standard",
-    "version": "1.0.0-draft",
+    "version": "1.0.0",
     "mode_id": "token_simulation",
     "execution_target": "aneb_probe_simulator",
     "claim_scope": "application_end_to_end_to_probe_node",
-    "measurement_catalog_id": "token-sim-measurements-v1-draft",
+    "measurement_catalog_id": "token-sim-measurements-v1",
     "business": {
       "category_id": "token_multimodal",
       "label": "多模态 Token 业务",
@@ -116,9 +116,10 @@
       "missing_behavior": "show_unavailable_never_zero"
     },
     "evaluation": {
-      "target_set_id": "token-sim-targets-v1-draft",
-      "score_policy_id": "token-sim-score-v1-draft",
-      "conclusion_policy_id": "token-sim-conclusions-v1-draft",
+      "target_set_id": "token-sim-targets-v1",
+      "score_policy_id": "token-sim-score-v1",
+      "score_anchor_policy_id": "compliance-anchors-v1",
+      "conclusion_policy_id": "token-sim-conclusions-v1",
       "required_metric_ids": ["TOK-B01", "TOK-B02", "TOK-B05", "TOK-B07", "TOK-B09", "TOK-B10", "TOK-B11", "TOK-B14", "TOK-N03", "TOK-N04", "TOK-N05", "TOK-N06"],
       "guardrail_metric_ids": ["TOK-B10"],
       "group_weights": {"task_completion": 0.25, "interaction": 0.30, "multimodal_transfer": 0.25, "network_stability": 0.15, "efficiency": 0.05},

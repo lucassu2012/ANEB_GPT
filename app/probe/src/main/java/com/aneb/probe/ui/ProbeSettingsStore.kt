@@ -8,7 +8,7 @@ import com.aneb.probe.engine.TestEngine
 /** 可跨进程重启恢复的非敏感测量设置。API key 仍由独立的加密存储负责。 */
 internal data class ProbeSettings(
     val serverUrl: String = DEFAULT_SERVER_URL,
-    val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+    val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
     val mode: TestEngine.Mode = TestEngine.Mode.QUICK,
     val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
     val driveTest: Boolean = false,
@@ -34,7 +34,9 @@ internal object ProbeSettingsCodec {
             ?: ProbeSettings.DEFAULT_SERVER_URL,
         testMode = when (testMode) {
             AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
-            else -> AnebTestMode.TOKEN_EXPERIENCE
+            AnebTestMode.TOKEN_SIMULATION.name -> AnebTestMode.TOKEN_SIMULATION
+            AnebTestMode.TOKEN_EXPERIENCE.name -> AnebTestMode.TOKEN_EXPERIENCE
+            else -> AnebTestMode.TOKEN_SIMULATION
         },
         mode = when (mode) {
             TestEngine.Mode.FORENSIC.name -> TestEngine.Mode.FORENSIC

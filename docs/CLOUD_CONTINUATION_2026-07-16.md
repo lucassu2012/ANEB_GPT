@@ -12,26 +12,28 @@
 - Token、AI 实时交互、网络综合性能三类测试独立评分，禁止混入原有 AQS。
 - 缺失测量值必须为 `null`/“—”，不得填 0；95% 达标结论必须带有效样本数和置信度。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36、D-37；完整指标、目标、评分与结论合同见
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-40；完整指标、目标、评分与结论合同见
 `docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
 
 ## 2. 已完成
 
 - SpeedTest 级视觉框架、动态仪表、基础网络测速、结果结论和新版图标已在 Android 工程内。
 - 独立 `tools/aneb-ai-behavior-model` 已实现确定性 PCG32、Token/实时语音假设模型、轨迹生成、拟合、Schema 和测试。
-- Profile Contract v2 Kotlin 数据结构已开始接入：`ProfileModels.kt` 支持 business、measurements、live_presentation、evaluation、trace。
-- `ProfileCapability.kt` 已增加 v2 fail-closed 合同校验；未经运行时接入的 v2 模式仍明确显示不可执行。
+- Token Quick/Standard Profile 已发布为 `profile.json + runtime_plan.json + SHA-256 manifest`；模型只描述业务行为，不注入 RTT、丢包或速率结果。
+- Android 已实现 Profile v2 fail-closed 校验、计划哈希验证、真实上传/SSE Token 流、250ms 动态仪表、Token Simulation Score v1、Room v13 独立结果表及历史详情页。
+- E-01 已部署 `POST /api/v1/token-sim`，严格执行上传接收、处理基线和逐 Token 绝对时序；服务端不合成网络损伤。
+- P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 10 项测试和 Go 服务端测试，并隔离并行开发时的 KSP 缓存竞争。
 - 网络综合 Profile 草案位于 `profiles/drafts/network_comprehensive_standard.json`。
 
-## 3. 当前未完成点（恢复后按顺序）
+## 3. 下一阶段（按顺序）
 
-1. 为 Profile v2 Kotlin 解析和校验补单元测试，并运行 Android 全量单测；当前最后一次模型测试为 7/7 通过，但 Kotlin v2 改动后尚未完成编译验收。
-2. 正式导航下线 API 探针：底部“探针”页改为 Profile/业务测试目录；设置页删除 API 探针入口；保留 ADB autorun 诊断路径。
-3. 将 Token standard/stress Profile 接入独立运行服务、实时 `SIM_TPS_LIVE`、结果实体和 Token Simulation Score v1。
-4. 接入 AI 实时语音 WebSocket 仿真：20ms 上行/下行帧、打断、恢复、`AUDIO_ON_TIME_RATIO_2S` 和独立评分。
-5. 升级网络综合引擎：loaded RTT、1s goodput 窗口、UDP echo 未返回/乱序、恢复 RTT 和独立评分。
-6. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
-7. 编译 APK 后再占用 P40 Pro：先检查 `com.aneb.probe` 是否在前台；Claude 测试中则等待。完成后按 HOME 并验证 launcher，主动释放手机。
+1. 增加独立 Token Stress Profile，覆盖 100MiB 视频上传和大文件下行；不得把 stress 时长与样本混入 Standard 高置信评分。
+2. 接入 AI 实时语音 WebSocket 仿真：20ms 上行/下行帧、打断、恢复、`AUDIO_ON_TIME_RATIO_2S` 和独立评分。
+3. 升级网络综合引擎：loaded RTT、1s goodput 窗口、UDP echo 未返回/乱序、恢复 RTT 和独立评分。
+4. 正式导航下线真实 API 探针：底部“探针”页改为 Profile/业务测试目录；保留仅限 ADB 的开发诊断路径。
+5. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
+6. 完成 Standard/Stress 的长时真机稳定性、取消/切后台/断网恢复和 Android 16 回归，再进入 release 签名候选。
 
 ## 4. 关键目录
 
@@ -48,11 +50,7 @@
 ```powershell
 git clone https://github.com/lucassu2012/ANEB_GPT.git
 cd ANEB_GPT
-cd tools/aneb-ai-behavior-model
-$env:PYTHONPATH = (Join-Path (Get-Location) 'src')
-python -m unittest discover -s tests -v
-cd ..\..\app
-.\gradlew.bat :probe:testDebugUnitTest
+.\scripts\quality_gate.ps1
 ```
 
 Android 构建依赖和签名流程见 `docs/RELEASE_BUILD.md`。不要把 `local.properties`、keystore、API key、设备数据库或证据日志提交到公开仓。

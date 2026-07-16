@@ -30,7 +30,8 @@ import java.util.concurrent.atomic.LongAdder
 
 enum class AnebTestMode(val label: String) {
     NETWORK_BASIC("基本测速"),
-    TOKEN_EXPERIENCE("Token 体验"),
+    TOKEN_SIMULATION("Token 仿真"),
+    TOKEN_EXPERIENCE("Agent 取证"),
 }
 
 enum class BasicSpeedPhase { IDLE, PREPARING, LATENCY, DOWNLOAD, UPLOAD, FINALIZING, COMPLETE, FAILED }

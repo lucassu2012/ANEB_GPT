@@ -37,21 +37,21 @@ internal sealed interface ProbeRunSession {
     data class Running(
         val autorun: Boolean,
         val runId: String? = null,
-        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
     ) : ProbeRunSession
     data class Completed(
         val autorun: Boolean,
         val runId: String,
-        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
     ) : ProbeRunSession
     data class Failed(
         val autorun: Boolean,
         val message: String,
-        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
     ) : ProbeRunSession
     data class Cancelled(
         val autorun: Boolean,
-        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
     ) : ProbeRunSession
 }
 
@@ -60,7 +60,7 @@ internal object ProbeRunLogParser {
     private val runId = Regex("(?:^|\\s)run_id=(\\S+)")
 
     fun runId(line: String): String? =
-        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ")) {
+        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("TOKEN_V2_START ")) {
             runId.find(line)?.groupValues?.get(1)
         } else {
             null
@@ -76,6 +76,9 @@ internal object ProbeRunLogParser {
         line.startsWith("BASIC_PHASE ") && line.contains("phase=download") -> "正在测量下载速度"
         line.startsWith("BASIC_PHASE ") && line.contains("phase=upload") -> "正在测量上传速度"
         line.startsWith("BASIC_RESULT ") -> "正在生成基本测速结论"
+        line.startsWith("TOKEN_V2_START ") -> "正在校验 Token 行为模型"
+        line.startsWith("TOKEN_V2_TASK_START ") -> "正在模拟多模态 AI 任务"
+        line.startsWith("TOKEN_V2_RESULT ") -> "正在生成 Token 质量结论"
         else -> null
     }
 }
@@ -87,7 +90,7 @@ internal object ProbeRunLogParser {
 class ProbeRunService : Service() {
     internal data class Config(
         val serverBase: String,
-        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
         val mode: TestEngine.Mode,
         val transport: TestEngine.TransportMode,
         val inject: String?,
@@ -120,7 +123,7 @@ class ProbeRunService : Service() {
         val autorun = intent.getBooleanExtra(EXTRA_AUTORUN, false)
         val testMode = enumValueOrDefault(
             intent.getStringExtra(EXTRA_TEST_MODE),
-            AnebTestMode.TOKEN_EXPERIENCE,
+            AnebTestMode.TOKEN_SIMULATION,
         )
         val config = Config(
             serverBase = intent.getStringExtra(EXTRA_SERVER)
@@ -146,6 +149,8 @@ class ProbeRunService : Service() {
         _telemetry.value = LiveTelemetry()
         _basicTelemetry.value = BasicSpeedTelemetry()
         _basicResult.value = null
+        _tokenSimulationTelemetry.value = TokenSimulationTelemetry()
+        _tokenSimulationResult.value = null
         _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
 
         runJob = serviceScope.launch {
@@ -176,6 +181,22 @@ class ProbeRunService : Service() {
                             engine.result.collect { _basicResult.value = it }
                         }
                         engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
+                    }
+                    AnebTestMode.TOKEN_SIMULATION -> {
+                        val engine = TokenSimulationEngine(applicationContext)
+                        telemetryJob = serviceScope.launch {
+                            engine.telemetry.collect { _tokenSimulationTelemetry.value = it }
+                        }
+                        resultJob = serviceScope.launch {
+                            engine.result.collect { _tokenSimulationResult.value = it }
+                        }
+                        engine.run(
+                            TokenSimulationEngine.Config(
+                                serverBase = config.serverBase,
+                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                transport = config.transport,
+                            ),
+                        )
                     }
                 }
                 lines.collect { line ->
@@ -313,6 +334,10 @@ class ProbeRunService : Service() {
         internal val basicTelemetry: StateFlow<BasicSpeedTelemetry> = _basicTelemetry.asStateFlow()
         private val _basicResult = MutableStateFlow<BasicSpeedResult?>(null)
         internal val basicResult: StateFlow<BasicSpeedResult?> = _basicResult.asStateFlow()
+        private val _tokenSimulationTelemetry = MutableStateFlow(TokenSimulationTelemetry())
+        internal val tokenSimulationTelemetry: StateFlow<TokenSimulationTelemetry> = _tokenSimulationTelemetry.asStateFlow()
+        private val _tokenSimulationResult = MutableStateFlow<TokenSimulationResult?>(null)
+        internal val tokenSimulationResult: StateFlow<TokenSimulationResult?> = _tokenSimulationResult.asStateFlow()
 
         internal fun start(context: Context, config: Config, autorun: Boolean) {
             val intent = Intent(context, ProbeRunService::class.java)

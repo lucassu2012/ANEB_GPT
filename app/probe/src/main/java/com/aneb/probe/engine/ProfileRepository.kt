@@ -67,7 +67,9 @@ class ProfileRepository(private val context: Context) {
 
     private suspend fun loadAssets(): Map<String, ScenarioProfile> = withContext(Dispatchers.IO) {
         // 同步磁盘 IO 显式落 IO 池（R-16；与 TestEngine.run 的 flowOn(IO) 双重兜底）
-        val paths = ProfileParser.BUILTIN_IDS.map { "$it.json" } + ProfileParser.AUDIT_ONLY_ASSET_PATHS
+        val paths = ProfileParser.BUILTIN_IDS.map { "$it.json" } +
+            ProfileParser.PUBLISHED_V2_ASSET_PATHS +
+            ProfileParser.AUDIT_ONLY_ASSET_PATHS
         val profiles = paths.map { path ->
             context.assets.open(path).use { input ->
                 ProfileParser.parseSingle(input.readBytes().toString(Charsets.UTF_8))

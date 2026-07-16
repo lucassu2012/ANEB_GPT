@@ -27,6 +27,21 @@ object ProfileCapability {
         ProfilePhase.TYPE_DOWNLOAD_THROUGHPUT,
         ProfilePhase.TYPE_UPLOAD_THROUGHPUT,
     )
+    private val tokenSimulationPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
+    private val tokenRequiredFormulaIds = setOf(
+        "tok_b01-v1",
+        "tok_b02-v1",
+        "ttft-excess-v1",
+        "token-on-time-200ms-v1",
+        "itl-residual-over-200ms-v1",
+        "itl-residual-over-1000ms-v1",
+        "unique-seq-completeness-v1",
+        "sim-token-retry-overhead-v1",
+        "tok_n03-v1",
+        "tok_n04-v1",
+        "tok_n05-v1",
+        "tok_n06-v1",
+    )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
 
@@ -34,6 +49,7 @@ object ProfileCapability {
         val supported = when (profile.modeId) {
             ScenarioProfile.MODE_TOKEN_EXPERIENCE -> tokenPhases
             ScenarioProfile.MODE_NETWORK_BASIC -> basicPhases
+            ScenarioProfile.MODE_TOKEN_SIMULATION -> tokenSimulationPhases
             // v2 引擎逐类接入；未接入前必须保持不可执行。
             else -> emptySet()
         }
@@ -109,6 +125,28 @@ object ProfileCapability {
         if (profile.evaluation.guardrailMetricIds.any { it !in required }) add("门控指标不在必需指标中")
         if (profile.evaluation.targetSetId.isBlank()) add("缺少目标集版本")
         if (profile.evaluation.scorePolicyId.isBlank()) add("缺少评分策略")
+        if (profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION) {
+            if (profile.evaluation.scorePolicyId != "token-sim-score-v1") add("Token 评分策略未被当前引擎识别")
+            if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("Token 评分锚点策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != "token-sim-conclusions-v1") add("Token 结论策略未被当前引擎识别")
+            val requiredFormulaIds = profile.measurements
+                .filter { it.requiredForScore }
+                .map { it.formulaId }
+                .toSet()
+            val unknown = requiredFormulaIds - tokenRequiredFormulaIds
+            if (unknown.isNotEmpty()) add("Token 必需指标公式未被识别: ${unknown.sorted().joinToString()}")
+            val execution = profile.executionPlan
+            if (profile.evidenceTier !in setOf("quick", "standard")) add("Token 证据等级无效")
+            if (execution == null) {
+                add("Token 缺少可执行计划")
+            } else {
+                if (execution.contractVersion != "aneb-token-runtime-plan-v1") add("Token 执行计划合同不受支持")
+                if (execution.artifact != "runtime_plan.json") add("Token 执行计划文件名不受支持")
+                if (!execution.artifactHash.startsWith("sha256:")) add("Token 执行计划缺少哈希")
+                if (execution.seed == 0L) add("Token 执行计划缺少 seed")
+                if (execution.variant != profile.evidenceTier) add("Token 执行计划与证据等级不一致")
+            }
+        }
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")
         if (profile.evaluation.missingRequiredMetric != "score_null") add("必需指标缺失策略必须为 score_null")
         if (profile.evaluation.invalidRun != "retain_raw_suppress_score") add("无效 run 策略不符合 fail-closed")
@@ -126,6 +164,11 @@ object ProfileCapability {
             if (phase.modelId != profile.business.behaviorModelId) add("阶段模型 ID 与业务声明不一致")
             if (phase.modelHash != profile.business.behaviorModelHash) add("阶段模型哈希与业务声明不一致")
             if (phase.seed == 0L) add("行为轨迹缺少确定性 seed")
+            profile.executionPlan?.let { execution ->
+                if (phase.runtimeArtifact != execution.artifact) add("阶段执行文件与 Profile 不一致")
+                if (phase.runtimeArtifactHash != execution.artifactHash) add("阶段执行哈希与 Profile 不一致")
+                if (phase.seed != execution.seed) add("阶段 seed 与执行计划不一致")
+            }
         }
     }
 }

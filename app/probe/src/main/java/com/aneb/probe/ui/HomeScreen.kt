@@ -128,10 +128,10 @@ fun HomeScreen(
             Spacer(Modifier.height(27.dp))
             IdleStartRing(running = running, onStart = onStart)
             Text(
-                if (testMode == AnebTestMode.NETWORK_BASIC) {
-                    "测试下载、上传、Ping、抖动与应用层请求失败"
-                } else {
-                    "评估网络是否适合 AI 对话、编码和文件上传"
+                when (testMode) {
+                    AnebTestMode.NETWORK_BASIC -> "测试下载、上传、Ping、抖动与应用层请求失败"
+                    AnebTestMode.TOKEN_SIMULATION -> "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
+                    AnebTestMode.TOKEN_EXPERIENCE -> "执行经典 Agent 场景取证与 AQS 评分"
                 },
                 fontSize = 10.5.sp,
                 lineHeight = 16.sp,
@@ -264,11 +264,11 @@ fun HomeScreen(
                 } else if (sheetSnap == SheetSnap.Expanded) {
                     SheetDetailRow(
                         symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
-                        label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "上次成绩",
-                        value = if (testMode == AnebTestMode.NETWORK_BASIC) {
-                            "下载 · 上传 · Ping · 抖动"
-                        } else {
-                            "完成首次测试后显示"
+                        label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "测试档位",
+                        value = when (testMode) {
+                            AnebTestMode.NETWORK_BASIC -> "下载 · 上传 · Ping · 抖动"
+                            AnebTestMode.TOKEN_SIMULATION -> "Quick 约 2 分钟 · Standard 约 23 分钟"
+                            AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
                         action = null,
                         onAction = {},

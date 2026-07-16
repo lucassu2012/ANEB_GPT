@@ -22,20 +22,41 @@ if (-not $env:ANDROID_HOME -or -not (Test-Path $env:ANDROID_HOME)) {
 
 Push-Location (Join-Path $repo 'app')
 try {
-    # Room's KSP verifier loads sqlite-jdbc native code. Serial workers avoid an intermittent
-    # Windows DLL extraction/load race observed when main and unit-test KSP tasks overlap.
+    # Room's KSP verifier loads sqlite-jdbc native code. Serial workers plus in-process,
+    # non-incremental KSP avoid Windows DLL and lookup-cache races during parallel development.
     & .\gradlew.bat `
         ':probe:testDebugUnitTest' `
         ':probe:lintDebug' `
         ':probe:assembleDebug' `
         '--no-daemon' `
         '--no-parallel' `
-        '--max-workers=1'
+        '--max-workers=1' `
+        '-Pkotlin.compiler.execution.strategy=in-process' `
+        '-Pksp.incremental=false'
     if ($LASTEXITCODE -ne 0) {
         throw "Android quality gate failed with exit code $LASTEXITCODE."
     }
 }
 finally {
+    Pop-Location
+}
+
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCommand) {
+    throw 'Python 3.11+ is required for the behavior-model quality gate.'
+}
+
+Push-Location (Join-Path $repo 'tools\aneb-ai-behavior-model')
+try {
+    $previousPythonPath = $env:PYTHONPATH
+    $env:PYTHONPATH = 'src'
+    & $pythonCommand.Source -m unittest discover -s tests
+    if ($LASTEXITCODE -ne 0) {
+        throw "Behavior-model tests failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    $env:PYTHONPATH = $previousPythonPath
     Pop-Location
 }
 

@@ -31,7 +31,7 @@ class ProbeSettingsStoreTest {
 
         assertEquals(ProbeSettings.DEFAULT_SERVER_URL, decoded.serverUrl)
         assertEquals(TestEngine.Mode.QUICK, decoded.mode)
-        assertEquals(AnebTestMode.TOKEN_EXPERIENCE, decoded.testMode)
+        assertEquals(AnebTestMode.TOKEN_SIMULATION, decoded.testMode)
         assertEquals(TestEngine.TransportMode.AUTO, decoded.transport)
         assertFalse(decoded.driveTest)
     }

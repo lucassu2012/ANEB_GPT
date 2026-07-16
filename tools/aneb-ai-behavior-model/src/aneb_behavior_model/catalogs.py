@@ -64,6 +64,7 @@ TOKEN_SIM_MEASUREMENTS: list[dict[str, Any]] = [
         target={
             "operator": "lte_by_workload",
             "values": {"text": 1000, "document_5mib": 6000, "image_10mib": 10000, "video_100mib": 60000},
+            "policy_id": "token-upload-deadline-v1",
             "required_compliance_ratio": 0.95,
             "provenance": "aneb_product_provisional_v1",
         },
@@ -150,6 +151,7 @@ NETWORK_COMPREHENSIVE_MEASUREMENTS: list[dict[str, Any]] = [
 
 
 CATALOGS: dict[str, list[dict[str, Any]]] = {
+    "token-sim-measurements-v1": TOKEN_SIM_MEASUREMENTS,
     "token-sim-measurements-v1-draft": TOKEN_SIM_MEASUREMENTS,
     "realtime-sim-measurements-v1-draft": REALTIME_SIM_MEASUREMENTS,
     "network-comprehensive-measurements-v1-draft": NETWORK_COMPREHENSIVE_MEASUREMENTS,
@@ -161,4 +163,3 @@ def metric_catalog(catalog_id: str) -> list[dict[str, Any]]:
         return deepcopy(CATALOGS[catalog_id])
     except KeyError as error:
         raise ValueError(f"unknown measurement_catalog_id: {catalog_id}") from error
-

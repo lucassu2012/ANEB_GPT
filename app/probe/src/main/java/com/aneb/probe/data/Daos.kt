@@ -29,6 +29,18 @@ interface BasicSpeedResultDao {
 }
 
 @Dao
+interface TokenSimulationResultDao {
+    @Insert
+    suspend fun insert(result: TokenSimulationResultEntity)
+
+    @Query("SELECT * FROM token_simulation_result ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<TokenSimulationResultEntity>
+
+    @Query("SELECT * FROM token_simulation_result WHERE runId = :runId")
+    suspend fun byId(runId: String): TokenSimulationResultEntity?
+}
+
+@Dao
 interface ReportBodyDao {
     @Insert
     suspend fun insert(body: ReportBodyEntity)

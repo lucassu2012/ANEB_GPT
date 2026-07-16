@@ -91,6 +91,7 @@ data class ProfileLivePresentation(
 data class ProfileEvaluation(
     @SerialName("target_set_id") val targetSetId: String = "",
     @SerialName("score_policy_id") val scorePolicyId: String = "",
+    @SerialName("score_anchor_policy_id") val scoreAnchorPolicyId: String = "",
     @SerialName("conclusion_policy_id") val conclusionPolicyId: String = "",
     @SerialName("required_metric_ids") val requiredMetricIds: List<String> = emptyList(),
     @SerialName("guardrail_metric_ids") val guardrailMetricIds: List<String> = emptyList(),
@@ -105,6 +106,15 @@ data class ProfileTrace(
     @SerialName("contract_version") val contractVersion: String = "",
     val seed: Long = 0,
     val prng: String = "",
+)
+
+@Serializable
+data class ProfileExecutionPlan(
+    @SerialName("contract_version") val contractVersion: String = "",
+    val artifact: String = "",
+    @SerialName("artifact_hash") val artifactHash: String = "",
+    val seed: Long = 0,
+    val variant: String = "",
 )
 
 /** phase 联合体：字段按 [type] 选用（同 Go 侧 Phase）。 */
@@ -135,6 +145,8 @@ data class ProfilePhase(
     @SerialName("model_id") val modelId: String = "",
     @SerialName("model_version") val modelVersion: String = "",
     @SerialName("model_hash") val modelHash: String = "",
+    @SerialName("runtime_artifact") val runtimeArtifact: String = "",
+    @SerialName("runtime_artifact_hash") val runtimeArtifactHash: String = "",
 ) {
     companion object {
         const val TYPE_CLOCK_SYNC = "clock_sync"
@@ -165,6 +177,8 @@ data class ScenarioProfile(
     @SerialName("live_presentation") val livePresentation: ProfileLivePresentation = ProfileLivePresentation(),
     val evaluation: ProfileEvaluation = ProfileEvaluation(),
     val trace: ProfileTrace? = null,
+    @SerialName("evidence_tier") val evidenceTier: String = "",
+    @SerialName("execution_plan") val executionPlan: ProfileExecutionPlan? = null,
     /** v1 兼容字段；v2 只能用于显示旧 Profile，不能替代 live_presentation/evaluation。 */
     val presentation: ProfilePresentation = ProfilePresentation(),
     val phases: List<ProfilePhase> = emptyList(),
@@ -193,6 +207,11 @@ object ProfileParser {
     val BUILTIN_IDS = REQUIRED_IDS + "basic_network"
     /** 只进入合同目录审计，不得被运行引擎自动选择。 */
     val AUDIT_ONLY_ASSET_PATHS = listOf("drafts/network_comprehensive_standard.json")
+    /** 已发布的 Profile v2；运行时仍需逐一通过 capability 与哈希校验。 */
+    val PUBLISHED_V2_ASSET_PATHS = listOf(
+        "published/token_multimodal_quick/profile.json",
+        "published/token_multimodal_standard/profile.json",
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
 

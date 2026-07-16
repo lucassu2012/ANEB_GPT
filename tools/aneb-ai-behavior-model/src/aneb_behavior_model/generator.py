@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any
 
 from .model import export_profile, model_sha256, sample_empirical, validate_model
@@ -12,11 +13,13 @@ from .rng import Pcg32
 from .statistics import describe
 
 TRACE_CONTRACT = "aneb-behavior-trace-v1"
+RUNTIME_CONTRACT = "aneb-token-runtime-plan-v1"
 
 
 @dataclass(frozen=True)
 class BuildArtifacts:
     trace: list[dict[str, Any]]
+    runtime_plan: dict[str, Any] | None
     profile: dict[str, Any]
     validation: dict[str, Any]
     manifest: dict[str, str]
@@ -26,9 +29,14 @@ def build_artifacts(model: dict[str, Any], seed: int) -> BuildArtifacts:
     validate_model(model)
     if model["business_type"] == "token_multimodal":
         trace = _generate_token_trace(model, seed)
+        runtime_plan = _build_token_runtime_plan(model, trace, seed)
     else:
         trace = _generate_realtime_trace(model, seed)
+        runtime_plan = None
     profile = export_profile(model, seed)
+    if runtime_plan is not None:
+        runtime_plan["variant"] = "standard"
+        _bind_runtime_plan(profile, runtime_plan, seed, "standard")
     validation = validate_trace(model, trace)
     manifest = {
         "model.json": model_sha256(model),
@@ -36,7 +44,155 @@ def build_artifacts(model: dict[str, Any], seed: int) -> BuildArtifacts:
         "profile.json": _sha256_json(profile),
         "validation.json": _sha256_json(validation),
     }
-    return BuildArtifacts(trace, profile, validation, manifest)
+    if runtime_plan is not None:
+        manifest["runtime_plan.json"] = _sha256_json(runtime_plan)
+    return BuildArtifacts(trace, runtime_plan, profile, validation, manifest)
+
+
+def derive_token_runtime_variant(
+    artifacts: BuildArtifacts,
+    variant: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a published standard or low-confidence quick runtime pair."""
+    if artifacts.runtime_plan is None:
+        raise ValueError("token runtime variant requires token_multimodal artifacts")
+    if variant not in {"standard", "quick"}:
+        raise ValueError(f"unsupported runtime variant: {variant}")
+    plan = deepcopy(artifacts.runtime_plan)
+    profile = deepcopy(artifacts.profile)
+    if variant == "quick":
+        by_kind: dict[str, list[dict[str, Any]]] = {}
+        for task in plan["tasks"]:
+            by_kind.setdefault(task["workload_kind"], []).append(task)
+        selected = [
+            min(tasks, key=lambda task: float(task["planned_duration_ms"]))
+            for tasks in by_kind.values()
+        ]
+        for index, task in enumerate(selected):
+            task["start_after_previous_ms"] = 0.0 if index == 0 else min(
+                800.0,
+                float(task["start_after_previous_ms"]),
+            )
+        plan["tasks"] = selected
+        plan["task_count"] = len(selected)
+        profile["profile_id"] = "token_multimodal_quick"
+        profile.setdefault("business", {})["label"] = "多模态 Token 快测"
+    plan["variant"] = variant
+    _bind_runtime_plan(profile, plan, int(plan["seed"]), variant)
+    return profile, plan
+
+
+def _bind_runtime_plan(
+    profile: dict[str, Any],
+    runtime_plan: dict[str, Any],
+    seed: int,
+    variant: str,
+) -> None:
+    runtime_hash = _sha256_json(runtime_plan)
+    planned_ms = sum(
+        float(task["start_after_previous_ms"]) + float(task["planned_duration_ms"])
+        for task in runtime_plan["tasks"]
+    )
+    profile["evidence_tier"] = variant
+    profile["est_duration_s"] = round(planned_ms / 1000.0, 1)
+    profile["execution_plan"] = {
+        "contract_version": RUNTIME_CONTRACT,
+        "artifact": "runtime_plan.json",
+        "artifact_hash": runtime_hash,
+        "seed": seed,
+        "variant": variant,
+    }
+    for phase in profile.get("phases", []):
+        if phase.get("type") == "behavior_trace":
+            phase["runtime_artifact"] = "runtime_plan.json"
+            phase["runtime_artifact_hash"] = runtime_hash
+
+
+def _build_token_runtime_plan(
+    model: dict[str, Any],
+    trace: list[dict[str, Any]],
+    seed: int,
+) -> dict[str, Any]:
+    """Collapse the verbose golden trace into the exact plan consumed by ANEB App.
+
+    The runtime artifact contains business-side intent only. It never contains an
+    observed RTT, arrival time, loss decision, or synthetic network impairment.
+    """
+    by_task: dict[str, list[dict[str, Any]]] = {}
+    for event in trace:
+        task_id = event.get("task_id")
+        if task_id is not None:
+            by_task.setdefault(str(task_id), []).append(event)
+
+    tasks: list[dict[str, Any]] = []
+    previous_complete_ms: float | None = None
+    for task_id, events in by_task.items():
+        user_action = _only_event(events, "user_action")
+        upload = _only_event(events, "upload_complete_plan")
+        processing = _only_event(events, "processing_end_plan")
+        complete = _only_event(events, "task_complete_plan")
+        tokens = sorted(
+            (event for event in events if event["event_type"] == "token_emit_plan"),
+            key=lambda event: int(event["seq"]),
+        )
+        artifact = next(
+            (event for event in events if event["event_type"] == "artifact_complete_plan"),
+            None,
+        )
+        upload_chunks = [event for event in events if event["event_type"] == "upload_chunk_plan"]
+        cadence_ms = 0.0
+        if len(upload_chunks) > 1:
+            cadence_ms = max(
+                0.0,
+                float(upload_chunks[1]["planned_offset_ms"])
+                - float(upload_chunks[0]["planned_offset_ms"]),
+            )
+        start_ms = float(user_action["planned_offset_ms"])
+        gap_ms = 0.0 if previous_complete_ms is None else max(0.0, start_ms - previous_complete_ms)
+        tasks.append(
+            {
+                "task_id": task_id,
+                "workload_kind": user_action["workload_kind"],
+                "repetition": int(user_action["repetition"]),
+                "start_after_previous_ms": round(gap_ms, 3),
+                "upload": {
+                    "payload_bytes": int(upload["bytes"]),
+                    "chunk_bytes": max(int(event["bytes"]) for event in upload_chunks),
+                    "chunk_cadence_ms": round(cadence_ms, 3),
+                },
+                "processing_ms": round(float(processing["duration_ms"]), 3),
+                "token_stream": {
+                    "intervals_ms": [round(float(event["planned_interval_ms"]), 3) for event in tokens],
+                    "sizes_bytes": [int(event["token_bytes"]) for event in tokens],
+                },
+                "response_artifact_bytes": int(artifact["bytes"]) if artifact else 0,
+                "planned_duration_ms": round(float(complete["planned_offset_ms"]) - start_ms, 3),
+            }
+        )
+        previous_complete_ms = float(complete["planned_offset_ms"])
+
+    return {
+        "contract_version": RUNTIME_CONTRACT,
+        "model_id": model["model_id"],
+        "model_version": model["model_version"],
+        "model_hash": model_sha256(model),
+        "calibration_status": model["status"],
+        "seed": seed,
+        "task_count": len(tasks),
+        "tasks": tasks,
+        "claim": (
+            "product hypothesis; not a validated representation of any named provider"
+            if model["status"] == "hypothesis"
+            else "versioned business behavior plan; validation evidence is separate"
+        ),
+    }
+
+
+def _only_event(events: list[dict[str, Any]], event_type: str) -> dict[str, Any]:
+    matches = [event for event in events if event["event_type"] == event_type]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one {event_type}, got {len(matches)}")
+    return matches[0]
 
 
 def _base_event(model: dict[str, Any], seed: int, index: int, **payload: Any) -> dict[str, Any]:
@@ -277,4 +433,3 @@ def _sha256_jsonl(trace: list[dict[str, Any]]) -> str:
         for event in trace
     )
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
-

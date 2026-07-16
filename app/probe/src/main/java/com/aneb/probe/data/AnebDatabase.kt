@@ -20,6 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ApiProbeResultEntity::class,
         AbResultEntity::class,
         BasicSpeedResultEntity::class,
+        TokenSimulationResultEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -36,7 +37,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v11：阶段3 真机跨网迁移修复——continuity_result 增 c2CrossNetworkRecoveries 可空列
     //      （真机硬切换拆除原绑定网后迁到新默认网恢复的样本数，两种 C2 语义，D-23，additive）
     // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
-    version = 12,
+    // v13：Profile v2——新增 token_simulation_result 独立表；不并入 TestRun/AQS。
+    version = 13,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -51,6 +53,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun apiProbeResultDao(): ApiProbeResultDao
     abstract fun abResultDao(): AbResultDao
     abstract fun basicSpeedResultDao(): BasicSpeedResultDao
+    abstract fun tokenSimulationResultDao(): TokenSimulationResultDao
 
     companion object {
         @Volatile
@@ -253,6 +256,42 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        /** v12→v13：新增 Token Profile v2 独立结果表，不修改既有 AQS/基础测速数据。 */
+        internal val MIGRATION_12_13_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `token_simulation_result` (" +
+                "`runId` TEXT NOT NULL, " +
+                "`startedAtEpochMs` INTEGER NOT NULL, " +
+                "`serverBase` TEXT NOT NULL, " +
+                "`claimScope` TEXT NOT NULL, " +
+                "`profileId` TEXT NOT NULL, " +
+                "`profileVersion` TEXT NOT NULL, " +
+                "`behaviorModelId` TEXT NOT NULL, " +
+                "`behaviorModelVersion` TEXT NOT NULL, " +
+                "`behaviorModelHash` TEXT NOT NULL, " +
+                "`calibrationStatus` TEXT NOT NULL, " +
+                "`variant` TEXT NOT NULL, " +
+                "`scorePolicyId` TEXT NOT NULL, " +
+                "`scoreAnchorPolicyId` TEXT NOT NULL, " +
+                "`conclusionPolicyId` TEXT NOT NULL, " +
+                "`totalScore` REAL, " +
+                "`grade` TEXT, " +
+                "`verdict` TEXT NOT NULL, " +
+                "`confidence` TEXT NOT NULL, " +
+                "`capReason` TEXT, " +
+                "`metricsJson` TEXT NOT NULL, " +
+                "`conclusionsJson` TEXT NOT NULL, " +
+                "`evidenceJson` TEXT NOT NULL, " +
+                "PRIMARY KEY(`runId`))",
+            "CREATE INDEX IF NOT EXISTS `index_token_simulation_result_startedAtEpochMs` " +
+                "ON `token_simulation_result` (`startedAtEpochMs`)",
+        )
+
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_12_13_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -264,7 +303,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     // 不可静默丢弃）——v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11 见上方（均 additive）。
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                        MIGRATION_11_12,
+                        MIGRATION_11_12, MIGRATION_12_13,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

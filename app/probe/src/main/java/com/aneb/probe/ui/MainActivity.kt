@@ -48,6 +48,7 @@ import com.aneb.probe.apiprobe.ProviderPresets
 import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.TokenSimulationResultEntity
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
@@ -169,6 +170,8 @@ class MainActivity : ComponentActivity() {
         data object Home : Screen
         data object Testing : Screen
         data object BasicTesting : Screen
+        data object TokenSimulationTesting : Screen
+        data class TokenSimulationResult(val runId: String) : Screen
         data class BasicResult(val runId: String) : Screen
         data class Result(val runId: String, val fromHistory: Boolean) : Screen
         data object ApiProbe : Screen
@@ -214,7 +217,8 @@ class MainActivity : ComponentActivity() {
         }
         intentTestModeOverride = when (intent?.getStringExtra("test_mode")?.lowercase()) {
             "network_basic", "basic" -> AnebTestMode.NETWORK_BASIC
-            "token_experience", "token" -> AnebTestMode.TOKEN_EXPERIENCE
+            "token_simulation", "token" -> AnebTestMode.TOKEN_SIMULATION
+            "token_experience", "legacy_token" -> AnebTestMode.TOKEN_EXPERIENCE
             else -> null
         }
         intentInject = if (BuildConfig.DEBUG) intent?.getStringExtra("inject") else null
@@ -262,6 +266,8 @@ class MainActivity : ComponentActivity() {
                     val serviceLogs by ProbeRunService.logs.collectAsStateWithLifecycle()
                     val serviceTelemetry by ProbeRunService.telemetry.collectAsStateWithLifecycle()
                     val basicTelemetry by ProbeRunService.basicTelemetry.collectAsStateWithLifecycle()
+                    val tokenSimulationTelemetry by ProbeRunService.tokenSimulationTelemetry.collectAsStateWithLifecycle()
+                    val tokenSimulationResult by ProbeRunService.tokenSimulationResult.collectAsStateWithLifecycle()
                     val specialRunSession by ProbeSpecialRunService.session.collectAsStateWithLifecycle()
                     val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
                     val running = runSession is ProbeRunSession.Running || auxiliaryRunning
@@ -281,7 +287,11 @@ class MainActivity : ComponentActivity() {
                             !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
                             acceptManualSessions = true
-                            screen = if (testMode == AnebTestMode.NETWORK_BASIC) Screen.BasicTesting else Screen.Testing
+                            screen = when (testMode) {
+                                AnebTestMode.NETWORK_BASIC -> Screen.BasicTesting
+                                AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationTesting
+                                AnebTestMode.TOKEN_EXPERIENCE -> Screen.Testing
+                            }
                         }
                         ProbeRunService.start(
                             context = applicationContext,
@@ -377,19 +387,19 @@ class MainActivity : ComponentActivity() {
                                 if (acceptManualSessions && !session.autorun) {
                                     radioEvidenceLimited = session.testMode == AnebTestMode.TOKEN_EXPERIENCE &&
                                         !radioPermissionState().hasFullRadioEvidence
-                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
-                                        Screen.BasicTesting
-                                    } else {
-                                        Screen.Testing
+                                    screen = when (session.testMode) {
+                                        AnebTestMode.NETWORK_BASIC -> Screen.BasicTesting
+                                        AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationTesting
+                                        AnebTestMode.TOKEN_EXPERIENCE -> Screen.Testing
                                     }
                                 }
                             }
                             is ProbeRunSession.Completed -> {
                                 if (acceptManualSessions && !session.autorun) {
-                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
-                                        Screen.BasicResult(session.runId)
-                                    } else {
-                                        Screen.Result(session.runId, fromHistory = false)
+                                    screen = when (session.testMode) {
+                                        AnebTestMode.NETWORK_BASIC -> Screen.BasicResult(session.runId)
+                                        AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationResult(session.runId)
+                                        AnebTestMode.TOKEN_EXPERIENCE -> Screen.Result(session.runId, fromHistory = false)
                                     }
                                 }
                             }
@@ -475,6 +485,9 @@ class MainActivity : ComponentActivity() {
                                         onOpenBasic = { runId ->
                                             screen = Screen.BasicResult(runId)
                                         },
+                                        onOpenTokenSimulation = { runId ->
+                                            screen = Screen.TokenSimulationResult(runId)
+                                        },
                                         onGenerateReport = { screen = Screen.Report },
                                         onBack = { tab = MainTab.Test },
                                         showBack = false,
@@ -542,6 +555,18 @@ class MainActivity : ComponentActivity() {
                                     nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
                                     onCancel = ::cancelManualRun,
                                 )
+                                is Screen.TokenSimulationTesting -> TokenSimulationTestingScreen(
+                                    telemetry = tokenSimulationTelemetry,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    onCancel = ::cancelManualRun,
+                                )
+                                is Screen.TokenSimulationResult -> {
+                                    TokenSimulationResultRoute(
+                                        runId = s.runId,
+                                        liveResult = tokenSimulationResult,
+                                        onBack = { screen = Screen.Home },
+                                    )
+                                }
                                 is Screen.BasicResult -> {
                                     BasicResultRoute(runId = s.runId, onBack = { screen = Screen.Home })
                                 }
@@ -714,9 +739,28 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun TokenSimulationResultRoute(
+        runId: String,
+        liveResult: com.aneb.probe.engine.TokenSimulationResult?,
+        onBack: () -> Unit,
+    ) {
+        val stored by produceState<TokenSimulationResultEntity?>(initialValue = null, runId) {
+            value = withContext(Dispatchers.IO) { db.tokenSimulationResultDao().byId(runId) }
+        }
+        when {
+            liveResult?.runId == runId -> TokenSimulationResultScreen(result = liveResult, onBack = onBack)
+            stored != null -> TokenSimulationStoredResultScreen(result = checkNotNull(stored), onBack = onBack)
+            else -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text("未找到 Token 仿真记录", color = AnebTheme.colors.muted)
+            }
+        }
+    }
+
+    @Composable
     private fun HistoryRoute(
         onOpen: (String) -> Unit,
         onOpenBasic: (String) -> Unit,
+        onOpenTokenSimulation: (String) -> Unit,
         onGenerateReport: () -> Unit,
         onBack: () -> Unit,
         showBack: Boolean = true,
@@ -726,14 +770,17 @@ class MainActivity : ComponentActivity() {
                 HistoryData(
                     tokenRuns = db.testRunDao().all(),
                     basicRuns = db.basicSpeedResultDao().all(),
+                    tokenSimulationRuns = db.tokenSimulationResultDao().all(),
                 )
             }
         }
         HistoryScreen(
             runs = history.tokenRuns,
             basicRuns = history.basicRuns,
+            tokenSimulationRuns = history.tokenSimulationRuns,
             onOpen = onOpen,
             onOpenBasic = onOpenBasic,
+            onOpenTokenSimulation = onOpenTokenSimulation,
             onGenerateReport = onGenerateReport,
             onBack = onBack,
             showBack = showBack,
@@ -743,6 +790,7 @@ class MainActivity : ComponentActivity() {
     private data class HistoryData(
         val tokenRuns: List<TestRun> = emptyList(),
         val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
+        val tokenSimulationRuns: List<TokenSimulationResultEntity> = emptyList(),
     )
 
     @Composable

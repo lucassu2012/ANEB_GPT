@@ -101,6 +101,36 @@ data class BasicSpeedResultEntity(
     val transferErrors: String,
 )
 
+/** Profile v2 Token 仿真独立结果；不进入 TestRun/AQS，完整证据以版本化 JSON 保留。 */
+@Entity(
+    tableName = "token_simulation_result",
+    indices = [Index("startedAtEpochMs")],
+)
+data class TokenSimulationResultEntity(
+    @PrimaryKey val runId: String,
+    val startedAtEpochMs: Long,
+    val serverBase: String,
+    val claimScope: String,
+    val profileId: String,
+    val profileVersion: String,
+    val behaviorModelId: String,
+    val behaviorModelVersion: String,
+    val behaviorModelHash: String,
+    val calibrationStatus: String,
+    val variant: String,
+    val scorePolicyId: String,
+    val scoreAnchorPolicyId: String,
+    val conclusionPolicyId: String,
+    val totalScore: Double?,
+    val grade: String?,
+    val verdict: String,
+    val confidence: String,
+    val capReason: String?,
+    val metricsJson: String,
+    val conclusionsJson: String,
+    val evidenceJson: String,
+)
+
 @Entity(
     tableName = "token_event",
     indices = [Index("runId"), Index(value = ["runId", "scenarioKey", "streamIndex", "seq"])],
