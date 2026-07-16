@@ -82,7 +82,9 @@ object ProfileCapability {
             if (metric.requiredForScore && metric.qualityTarget == null) add("${metric.metricId} 必需指标缺少质量目标")
             metric.qualityTarget?.let { target ->
                 if (target.operator.isBlank()) add("${metric.metricId} 质量目标缺少运算符")
-                if (target.value == null && target.values.isEmpty()) add("${metric.metricId} 质量目标缺少门限")
+                if (target.value == null && target.values.isEmpty() && target.policyId.isBlank()) {
+                    add("${metric.metricId} 质量目标缺少门限或策略")
+                }
                 target.requiredComplianceRatio?.let { ratio ->
                     if (ratio !in 0.0..1.0) add("${metric.metricId} 达标比例无效")
                 }

@@ -89,6 +89,11 @@ android {
             // 直接指向仓库共享目录，单一事实来源，防内置副本与服务端版本静默漂移。
             assets.srcDirs("../../profiles")
         }
+        getByName("test") {
+            // Schema / Kotlin / Go 共用同一份 test-only Profile v2 golden。
+            // 这里只进入 JVM test classpath，不进入 APK assets 或正式运行目录。
+            resources.srcDir("../../testdata")
+        }
     }
 }
 
