@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: aneb-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,9 +27,18 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test Android probe
+      - name: Test, lint, and build Android probe
         working-directory: app
-        run: ./gradlew :probe:testDebugUnitTest --no-parallel
+        run: >-
+          ./gradlew
+          :probe:testDebugUnitTest
+          :probe:lintDebug
+          :probe:assembleDebug
+          --no-daemon
+          --no-parallel
+          --max-workers=1
+          -Pkotlin.compiler.execution.strategy=in-process
+          -Pksp.incremental=false
 
   server:
     name: Go server tests
@@ -38,7 +52,7 @@ jobs:
           cache-dependency-path: server/go.sum
       - name: Test ANEB node
         working-directory: server
-        run: go test ./...
+        run: go test -count=1 ./...
 
   behavior-model:
     name: AI behavior model tests
