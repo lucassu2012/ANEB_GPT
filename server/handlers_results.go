@@ -17,6 +17,7 @@ const resultsMaxBytes = 1 << 20 // 1MB
 //     "应用层端到端到探针节点"口径，任何别的声明一律拒收；
 //   - kpi_set / aqs_version / profile_versions / schema_version 必填非空字符串；
 //   - schema_version 当前只接受 "1.0"（升版需扩 acceptedSchemaVersions）。
+//
 // 校验手写（不引第三方 JSON Schema 库，供应链纪律见设计文档 §8 阶段 0）。
 //
 // R-27 预留（本轮不实现聚合）：ITL 直方图分桶方案属于版本化合同的一部分，
