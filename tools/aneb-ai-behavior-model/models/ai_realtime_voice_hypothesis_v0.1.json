@@ -42,6 +42,7 @@
       "secondary_metric_ids": ["PLAYOUT_HEADROOM_LIVE", "RTT_LIVE", "UP_KBPS_LIVE", "DOWN_KBPS_LIVE"],
       "window_ms": 2000,
       "ui_refresh_ms": 100,
+      "stale_after_ms": 1500,
       "missing_behavior": "show_unavailable_never_zero"
     },
     "evaluation": {

@@ -40,7 +40,13 @@ class ProfileRepository(private val context: Context) {
                 if (sv != av) {
                     warnings += "version_mismatch server=$sv assets=$av (以服务端为准)"
                 }
-                return Loaded(server, "server", warnings)
+                val auditOnly = assets.values.filter { candidate ->
+                    candidate.contractVersion == ScenarioProfile.CONTRACT_V2 && candidate.profileId !in server
+                }
+                if (auditOnly.isNotEmpty()) {
+                    warnings += "bundled_audit_only_profiles=" + auditOnly.joinToString(",") { it.profileId }
+                }
+                return Loaded(server + auditOnly.associateBy { it.profileId }, "server", warnings)
             }
         } else {
             warnings += "profiles_fetch_failed http=${resp.httpCode ?: "null"} error=${resp.error ?: "none"}"
@@ -61,8 +67,9 @@ class ProfileRepository(private val context: Context) {
 
     private suspend fun loadAssets(): Map<String, ScenarioProfile> = withContext(Dispatchers.IO) {
         // 同步磁盘 IO 显式落 IO 池（R-16；与 TestEngine.run 的 flowOn(IO) 双重兜底）
-        val profiles = ProfileParser.BUILTIN_IDS.map { id ->
-            context.assets.open("$id.json").use { input ->
+        val paths = ProfileParser.BUILTIN_IDS.map { "$it.json" } + ProfileParser.AUDIT_ONLY_ASSET_PATHS
+        val profiles = paths.map { path ->
+            context.assets.open(path).use { input ->
                 ProfileParser.parseSingle(input.readBytes().toString(Charsets.UTF_8))
             }
         }

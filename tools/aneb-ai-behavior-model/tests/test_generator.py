@@ -46,6 +46,7 @@ class GeneratorTest(unittest.TestCase):
             "hypothesis",
         )
         self.assertTrue(artifacts.profile["business"]["behavior_model_hash"].startswith("sha256:"))
+        self.assertEqual(artifacts.profile["live_presentation"]["stale_after_ms"], 1500)
         self.assertGreaterEqual(len(artifacts.profile["measurements"]), 20)
         self.assertTrue(
             all("quality_target" in metric for metric in artifacts.profile["measurements"])

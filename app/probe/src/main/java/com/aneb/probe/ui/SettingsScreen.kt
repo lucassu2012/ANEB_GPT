@@ -52,7 +52,7 @@ import com.aneb.probe.ui.theme.AnebType
 
 /**
  * 设置页（设计稿 §设置，iOS 化）：服务器（sslip.io 默认 / bare-IP 旁路 / 自定义）、模式（快测/取证）、
- * 传输（自动/WiFi/蜂窝）、Kimi/LLM API 探针入口、路测开关（危险项二次确认）、debug 注入提示。
+ * 传输（自动/WiFi/蜂窝）、无凭据可达性诊断、路测开关（危险项二次确认）、debug 注入提示。
  *
  * iOS 材质：毛玻璃顶栏（[GlassHeader]）、inset-grouped 分组卡（#1C1C1E 连续圆角 + hairline 分隔）、
  * 分段控件胶囊、iOS 蓝主色、绿色系统开关、按压缩放（[pressable]，减弱动效自动降级）。
@@ -71,7 +71,6 @@ fun SettingsScreen(
     onDriveTestChange: (Boolean) -> Unit,
     injectActive: String?,
     onOpenServer: () -> Unit,
-    onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
     onBack: () -> Unit,
@@ -92,7 +91,6 @@ fun SettingsScreen(
             onDriveRequest = { on -> if (on) confirmDrive = true else onDriveTestChange(false) },
             injectActive = injectActive,
             onOpenServer = onOpenServer,
-            onOpenApiProbe = onOpenApiProbe,
             onOpenReachBoard = onOpenReachBoard,
             onOpenProfiles = onOpenProfiles,
         )
@@ -202,17 +200,9 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxWidth(),
         )
 
-        // ---- 对照/探针入口（API 探针 + 可达性看板；后者已从顶级 tab 降为此二级入口）----
-        SectionLabel("对照：真实 LLM 探针")
+        // ---- 诊断入口：无凭据的连接层探测；不进入正式评分。----
+        SectionLabel("诊断工具")
         GroupedCard {
-            OptionRow(
-                title = "Kimi / OpenAI 兼容 API 探针",
-                subtitle = "API key 走 Android Keystore 加密存储 · 独立口径不进 AQS",
-                selected = false,
-                showChevron = true,
-                onClick = onOpenApiProbe,
-            )
-            HairlineDivider()
             OptionRow(
                 title = "AI 可达性看板",
                 subtitle = "无 key 连接层探测（TLS 握手）· best-effort 不进 AQS",
@@ -318,7 +308,6 @@ private fun SettingsRootScreen(
     onDriveRequest: (Boolean) -> Unit,
     injectActive: String?,
     onOpenServer: () -> Unit,
-    onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
 ) {
@@ -402,14 +391,6 @@ private fun SettingsRootScreen(
                     modifier = Modifier.width(154.dp),
                 )
             }
-            HairlineDivider()
-            SettingsDesignRow(
-                icon = "⌘",
-                tint = colors.brand,
-                title = "API 探针",
-                subtitle = "真实 LLM 端到端对照",
-                onClick = onOpenApiProbe,
-            ) { Text("›", fontSize = 18.sp, color = colors.faint) }
             HairlineDivider()
             SettingsDesignRow(
                 icon = "⌖",

@@ -112,6 +112,7 @@
       "secondary_metric_ids": ["RTT_LIVE", "UP_LIVE", "ON_TIME_RATIO_LIVE"],
       "window_ms": 1000,
       "ui_refresh_ms": 250,
+      "stale_after_ms": 1500,
       "missing_behavior": "show_unavailable_never_zero"
     },
     "evaluation": {

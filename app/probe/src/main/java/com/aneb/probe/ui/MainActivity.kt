@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Scaffold
@@ -240,11 +241,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AnebTheme {
-                // 只消费顶部状态栏。华为三键导航模式已经从 Activity 内容窗口排除了底栏，
-                // 若再消费 navigationBars inset，会把五栏导航的点击区裁到窗口之外。
+                // edge-to-edge 会让 Activity 覆盖系统导航区；顶部和底部都必须显式消费。
+                // P40 Pro 三键导航真机验证：不消费底部 inset 时，五栏只露图标上缘且不可点击。
                 Surface(
                     color = AnebTheme.colors.background,
-                    modifier = Modifier.fillMaxSize().statusBarsPadding(),
+                    modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
                 ) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                     // 底部 5-tab 外壳选中态（默认测试）；下钻只在 Home 哨兵下按 tab 决定根，
@@ -462,9 +463,9 @@ class MainActivity : ComponentActivity() {
                                             screen = Screen.BasicResult(runId)
                                         },
                                     )
-                                    MainTab.Probe -> ApiProbeRoute(
+                                    MainTab.Probe -> ProfileCatalogRoute(
+                                        serverUrl = serverUrl,
                                         onBack = { tab = MainTab.Test },
-                                        onOpenReachBoard = { screen = Screen.ReachBoard },
                                         showBack = false,
                                     )
                                     MainTab.Results -> HistoryRoute(
@@ -519,7 +520,6 @@ class MainActivity : ComponentActivity() {
                                         },
                                         injectActive = intentInject,
                                         onOpenServer = ::openServerScreen,
-                                        onOpenApiProbe = { tab = MainTab.Probe },
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
                                         onOpenProfiles = { screen = Screen.Profiles },
@@ -563,6 +563,7 @@ class MainActivity : ComponentActivity() {
                                 is Screen.Profiles -> ProfileCatalogRoute(
                                     serverUrl = serverUrl,
                                     onBack = { screen = Screen.Home },
+                                    showBack = true,
                                 )
                                 is Screen.Servers -> ServerScreen(
                                     currentUrl = serverUrl,
@@ -780,7 +781,7 @@ class MainActivity : ComponentActivity() {
     )
 
     @Composable
-    private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit) {
+    private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit, showBack: Boolean) {
         var refreshTick by rememberSaveable { mutableIntStateOf(0) }
         val catalog by produceState(
             initialValue = ProfileCatalogData(),
@@ -835,6 +836,7 @@ class MainActivity : ComponentActivity() {
             error = catalog.error,
             onRefresh = { refreshTick += 1 },
             onBack = onBack,
+            showBack = showBack,
         )
     }
 

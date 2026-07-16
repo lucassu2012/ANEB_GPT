@@ -47,10 +47,11 @@ fun ProfileCatalogScreen(
     error: String?,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val colors = AnebTheme.colors
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
-        AnebTopBar(showBack = true, onBack = onBack, showMenu = true)
+        AnebTopBar(showBack = showBack, onBack = onBack, showMenu = true)
         Row(verticalAlignment = Alignment.Bottom) {
             AnebPageIntro(
                 eyebrow = "PROFILE REGISTRY",
@@ -144,6 +145,8 @@ private fun ContractStatusCard(
         Text(
             when {
                 error != null -> error
+                warnings.any { it.startsWith("bundled_audit_only_profiles=") } ->
+                    "节点合同已核验；同时展示 APK 内置候选 Profile，候选项不会自动执行或进入评分。"
                 warnings.isNotEmpty() -> "节点配置未完成一致性核验；当前展示已明确标注来源。"
                 source == "server" -> "展示内容来自当前测试节点，并已通过 Profile 合同解析。"
                 else -> "离线展示随 APK 发布的冻结副本。"
@@ -160,6 +163,21 @@ private fun ContractStatusCard(
 private fun ProfileContractCard(profile: ScenarioProfile) {
     val colors = AnebTheme.colors
     val assessment = ProfileCapability.assess(profile)
+    val isV2 = profile.contractVersion == ScenarioProfile.CONTRACT_V2
+    val title = profile.business.label.takeIf { isV2 && it.isNotBlank() } ?: profileTitle(profile.profileId)
+    val liveMetric = if (isV2) profile.livePresentation.primaryMetricId else profile.presentation.liveMetricLabel
+    val liveDetail = if (isV2) {
+        "${profile.livePresentation.windowMs}ms 窗口 · ${profile.livePresentation.uiRefreshMs}ms 刷新 · ${profile.livePresentation.staleAfterMs}ms 过期"
+    } else if (profile.presentation.liveWindowMs > 0 && profile.presentation.uiRefreshMs > 0) {
+        "${profile.presentation.liveWindowMs}ms 窗口 · ${profile.presentation.uiRefreshMs}ms 刷新"
+    } else null
+    val metricSummary = if (isV2) {
+        profile.measurements.take(6).joinToString(" · ") { it.label.ifBlank { it.metricId } } +
+            if (profile.measurements.size > 6) " · +${profile.measurements.size - 6}" else ""
+    } else {
+        profile.presentation.metricIds.joinToString(" · ")
+    }
+    val conclusionPolicy = if (isV2) profile.evaluation.conclusionPolicyId else profile.presentation.conclusionPolicyId
     Column(
         Modifier
             .fillMaxWidth()
@@ -169,7 +187,7 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(profileTitle(profile.profileId), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
                 Text(
                     "${modeLabel(profile.modeId)} · ${profile.profileId}@${profile.version}",
                     fontSize = 9.sp,
@@ -177,31 +195,41 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
                     color = colors.muted,
                 )
             }
-            StatusPill(assessment.executable)
+            StatusPill(assessment.executable, profile.version.contains("draft", ignoreCase = true))
         }
         Text(
-            profile.description.ifBlank { "未提供业务说明" },
+            profile.description.ifBlank {
+                profile.business.behaviorFeatureIds.takeIf { isV2 && it.isNotEmpty() }?.joinToString(" · ")
+                    ?: "未提供业务说明"
+            },
             fontSize = 10.sp,
             lineHeight = 15.sp,
             color = colors.muted,
             modifier = Modifier.padding(top = 9.dp),
         )
 
+        if (isV2) {
+            ContractLine(
+                label = "业务与边界",
+                value = profile.business.categoryId,
+                detail = "${profile.claimScope} · ${profile.business.calibrationStatus}",
+            )
+        }
         ContractLine(
             label = "实时主指标",
-            value = profile.presentation.liveMetricLabel.ifBlank { "—" } +
-                profile.presentation.liveMetricUnit.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
-            detail = if (profile.presentation.liveWindowMs > 0 && profile.presentation.uiRefreshMs > 0) {
-                "${profile.presentation.liveWindowMs}ms 窗口 · ${profile.presentation.uiRefreshMs}ms 刷新"
-            } else null,
+            value = liveMetric.ifBlank { "—" } + if (!isV2) {
+                profile.presentation.liveMetricUnit.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+            } else "",
+            detail = liveDetail,
         )
         ContractLine(
             label = "输出指标",
-            value = profile.presentation.metricIds.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "—",
+            value = metricSummary.ifBlank { "—" },
         )
         ContractLine(
             label = "结论策略",
-            value = profile.presentation.conclusionPolicyId.ifBlank { "—" },
+            value = conclusionPolicy.ifBlank { "—" },
+            detail = profile.evaluation.targetSetId.takeIf { isV2 && it.isNotBlank() },
         )
         ContractLine(
             label = "测试阶段",
@@ -228,11 +256,15 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
 }
 
 @Composable
-private fun StatusPill(executable: Boolean) {
+private fun StatusPill(executable: Boolean, draft: Boolean) {
     val colors = AnebTheme.colors
     val color = if (executable) colors.excellent else colors.fair
     Text(
-        if (executable) "当前引擎可执行" else "需要引擎适配",
+        when {
+            draft -> "候选 · 未执行"
+            executable -> "当前引擎可执行"
+            else -> "需要引擎适配"
+        },
         fontSize = 8.5.sp,
         color = color,
         modifier = Modifier
@@ -268,6 +300,9 @@ private fun EmptyCatalog(error: String?) {
 private fun modeLabel(modeId: String): String = when (modeId) {
     ScenarioProfile.MODE_TOKEN_EXPERIENCE -> "Token 体验"
     ScenarioProfile.MODE_NETWORK_BASIC -> "基本测速"
+    ScenarioProfile.MODE_TOKEN_SIMULATION -> "Token 模拟"
+    ScenarioProfile.MODE_AI_REALTIME_SIMULATION -> "AI 实时交互"
+    ScenarioProfile.MODE_NETWORK_COMPREHENSIVE -> "网络综合性能"
     else -> "扩展模式"
 }
 

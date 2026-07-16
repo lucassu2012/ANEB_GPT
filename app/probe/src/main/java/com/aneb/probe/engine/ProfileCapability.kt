@@ -28,7 +28,7 @@ object ProfileCapability {
         ProfilePhase.TYPE_UPLOAD_THROUGHPUT,
     )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
-    private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired")
+    private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
 
     fun assess(profile: ScenarioProfile): Assessment {
         val supported = when (profile.modeId) {
@@ -65,9 +65,20 @@ object ProfileCapability {
         if (profile.claimScope.isBlank()) add("缺少结论适用范围")
         if (profile.business.categoryId.isBlank() || profile.business.label.isBlank()) add("缺少业务类型")
         if (profile.business.behaviorFeatureIds.isEmpty()) add("缺少业务行为特征")
-        if (profile.business.behaviorModelId.isBlank()) add("缺少行为模型来源")
-        if (profile.business.behaviorModelHash.isBlank()) add("缺少行为模型哈希")
         if (profile.business.calibrationStatus !in calibrationStates) add("模型校准状态无效")
+        if (profile.business.calibrationStatus == "not_applicable") {
+            if (
+                !profile.business.behaviorModelId.isNullOrBlank() ||
+                !profile.business.behaviorModelVersion.isNullOrBlank() ||
+                !profile.business.behaviorModelHash.isNullOrBlank() ||
+                !profile.business.modelSourceKind.isNullOrBlank()
+            ) {
+                add("无需行为模型的业务不得声明模型元数据")
+            }
+        } else {
+            if (profile.business.behaviorModelId.isNullOrBlank()) add("缺少行为模型来源")
+            if (profile.business.behaviorModelHash.isNullOrBlank()) add("缺少行为模型哈希")
+        }
         if (profile.phases.isEmpty()) add("没有测试阶段")
         if (profile.measurements.isEmpty()) add("缺少全量测量指标")
 
@@ -82,7 +93,9 @@ object ProfileCapability {
             if (metric.requiredForScore && metric.qualityTarget == null) add("${metric.metricId} 必需指标缺少质量目标")
             metric.qualityTarget?.let { target ->
                 if (target.operator.isBlank()) add("${metric.metricId} 质量目标缺少运算符")
-                if (target.value == null && target.values.isEmpty()) add("${metric.metricId} 质量目标缺少门限")
+                if (target.value == null && target.values.isEmpty() && target.policyId.isNullOrBlank()) {
+                    add("${metric.metricId} 质量目标缺少门限或策略")
+                }
                 target.requiredComplianceRatio?.let { ratio ->
                     if (ratio !in 0.0..1.0) add("${metric.metricId} 达标比例无效")
                 }
@@ -109,6 +122,7 @@ object ProfileCapability {
         if (profile.livePresentation.missingBehavior != "show_unavailable_never_zero") add("缺失值策略必须为 show_unavailable_never_zero")
 
         profile.phases.filter { it.type == ProfilePhase.TYPE_BEHAVIOR_TRACE }.forEach { phase ->
+            if (profile.business.calibrationStatus == "not_applicable") add("无需行为模型的业务不得包含行为轨迹阶段")
             if (phase.modelId != profile.business.behaviorModelId) add("阶段模型 ID 与业务声明不一致")
             if (phase.modelHash != profile.business.behaviorModelHash) add("阶段模型哈希与业务声明不一致")
             if (phase.seed == 0L) add("行为轨迹缺少确定性 seed")

@@ -43,11 +43,11 @@ data class ProfileBusiness(
     val label: String = "",
     @SerialName("archetype_labels") val archetypeLabels: List<String> = emptyList(),
     @SerialName("behavior_feature_ids") val behaviorFeatureIds: List<String> = emptyList(),
-    @SerialName("behavior_model_id") val behaviorModelId: String = "",
-    @SerialName("behavior_model_version") val behaviorModelVersion: String = "",
-    @SerialName("behavior_model_hash") val behaviorModelHash: String = "",
+    @SerialName("behavior_model_id") val behaviorModelId: String? = null,
+    @SerialName("behavior_model_version") val behaviorModelVersion: String? = null,
+    @SerialName("behavior_model_hash") val behaviorModelHash: String? = null,
     @SerialName("calibration_status") val calibrationStatus: String = "",
-    @SerialName("model_source_kind") val modelSourceKind: String = "",
+    @SerialName("model_source_kind") val modelSourceKind: String? = null,
 )
 
 @Serializable
@@ -55,6 +55,7 @@ data class ProfileQualityTarget(
     val operator: String = "",
     val value: Double? = null,
     val values: Map<String, Double> = emptyMap(),
+    @SerialName("policy_id") val policyId: String? = null,
     @SerialName("required_compliance_ratio") val requiredComplianceRatio: Double? = null,
     val provenance: String = "",
 )
@@ -190,6 +191,8 @@ object ProfileParser {
     val REQUIRED_IDS = listOf("s1_chat", "s2_coding_agent", "s3_multimodal")
     /** 随 APK 打包的全部 Profile；REQUIRED_IDS 仍只定义现有 AQS 场景合同。 */
     val BUILTIN_IDS = REQUIRED_IDS + "basic_network"
+    /** 只进入合同目录审计，不得被运行引擎自动选择。 */
+    val AUDIT_ONLY_ASSET_PATHS = listOf("drafts/network_comprehensive_standard.json")
 
     private val json = Json { ignoreUnknownKeys = true }
 

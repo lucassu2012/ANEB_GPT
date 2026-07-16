@@ -1,10 +1,47 @@
 package com.aneb.probe.engine
 
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileCapabilityTest {
+    private val validV2Json = """{
+      "contract_version":"aneb-profile-v2",
+      "profile_id":"token_standard",
+      "version":"1.0.0-draft",
+      "mode_id":"token_simulation",
+      "execution_target":"aneb_probe_simulator",
+      "claim_scope":"application_end_to_end_to_probe_node",
+      "business":{
+        "category_id":"token_multimodal",
+        "label":"Token 多模态",
+        "behavior_feature_ids":["uplink_burst","streaming_downlink"],
+        "behavior_model_id":"token-model-v1",
+        "behavior_model_version":"0.1.0",
+        "behavior_model_hash":"sha256:test",
+        "calibration_status":"hypothesis",
+        "model_source_kind":"aneb_behavior_model"
+      },
+      "measurements":[{
+        "metric_id":"TOK-B01","label":"首 Token 时延","domain":"business","unit":"ms",
+        "measurement_level":"exact","formula_id":"ttft-v1","aggregation":"p95",
+        "direction":"lower_is_better","required_for_score":true,"minimum_sample_count":3,
+        "target_role":"quality","quality_target":{"operator":"lte","value":2000,
+        "required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}
+      }],
+      "live_presentation":{"primary_metric_id":"TOKENS_PER_SECOND_LIVE",
+        "secondary_metric_ids":["RTT_LIVE"],"window_ms":1000,"ui_refresh_ms":250,
+        "stale_after_ms":1500,"missing_behavior":"show_unavailable_never_zero"},
+      "evaluation":{"target_set_id":"token-targets-v1","score_policy_id":"token-score-v1",
+        "conclusion_policy_id":"token-conclusions-v1","required_metric_ids":["TOK-B01"],
+        "guardrail_metric_ids":[],"group_weights":{"responsiveness":1.0},
+        "missing_required_metric":"score_null","invalid_run":"retain_raw_suppress_score"},
+      "phases":[{"type":"behavior_trace","model_id":"token-model-v1",
+        "model_version":"0.1.0","model_hash":"sha256:test","seed":20260716}]
+    }"""
+
     private fun completeProfile(mode: String, phases: List<ProfilePhase>) = ScenarioProfile(
         profileId = "test",
         version = "1.0.0",
@@ -60,5 +97,97 @@ class ProfileCapabilityTest {
         )
         assertFalse(result.executable)
         assertTrue(result.contractIssues.isNotEmpty())
+    }
+
+    @Test
+    fun `approved v2 fields parse and remain fail closed until engine exists`() {
+        val profile = ProfileParser.parseSingle(validV2Json)
+        val result = ProfileCapability.assess(profile)
+
+        assertEquals(ScenarioProfile.CONTRACT_V2, profile.contractVersion)
+        assertEquals("token-model-v1", profile.business.behaviorModelId)
+        assertEquals("TOKENS_PER_SECOND_LIVE", profile.livePresentation.primaryMetricId)
+        assertTrue(result.contractIssues.isEmpty())
+        assertFalse(result.executable)
+        assertTrue(ProfilePhase.TYPE_BEHAVIOR_TRACE in result.unsupportedPhaseTypes)
+    }
+
+    @Test
+    fun `v2 required metric drift fails closed`() {
+        val profile = ProfileParser.parseSingle(validV2Json)
+        val drifted = profile.copy(
+            evaluation = profile.evaluation.copy(requiredMetricIds = emptyList()),
+        )
+
+        val result = ProfileCapability.assess(drifted)
+        assertFalse(result.executable)
+        assertTrue(result.contractIssues.any { it.contains("必需指标声明不一致") })
+    }
+
+    @Test
+    fun `v2 missing value behavior drift fails closed`() {
+        val profile = ProfileParser.parseSingle(validV2Json)
+        val drifted = profile.copy(
+            livePresentation = profile.livePresentation.copy(missingBehavior = "coerce_zero"),
+        )
+
+        val result = ProfileCapability.assess(drifted)
+        assertFalse(result.executable)
+        assertTrue(result.contractIssues.any { it.contains("show_unavailable_never_zero") })
+    }
+
+    @Test
+    fun `v2 required metric without quality target fails closed`() {
+        val profile = ProfileParser.parseSingle(validV2Json)
+        val drifted = profile.copy(
+            measurements = profile.measurements.map { it.copy(qualityTarget = null) },
+        )
+
+        val result = ProfileCapability.assess(drifted)
+        assertFalse(result.executable)
+        assertTrue(result.contractIssues.any { it.contains("必需指标缺少质量目标") })
+    }
+
+    @Test
+    fun `v2 quality target may delegate threshold to versioned policy`() {
+        val profile = ProfileParser.parseSingle(validV2Json)
+        val delegated = profile.copy(
+            measurements = profile.measurements.map { metric ->
+                metric.copy(
+                    qualityTarget = ProfileQualityTarget(
+                        operator = "deadline_by_artifact_size",
+                        policyId = "artifact-deadlines-v1",
+                    ),
+                )
+            },
+        )
+
+        val result = ProfileCapability.assess(delegated)
+        assertTrue(result.contractIssues.isEmpty())
+        assertFalse(result.executable)
+    }
+
+    @Test
+    fun `network comprehensive accepts no behavior model but remains non executable`() {
+        val network = ProfileParser.parseSingle(
+            validV2Json
+                .replace("\"profile_id\":\"token_standard\"", "\"profile_id\":\"network_standard\"")
+                .replace("\"mode_id\":\"token_simulation\"", "\"mode_id\":\"network_comprehensive\"")
+                .replace(
+                    "\"behavior_model_id\":\"token-model-v1\",\n        \"behavior_model_version\":\"0.1.0\",\n        \"behavior_model_hash\":\"sha256:test\",\n        \"calibration_status\":\"hypothesis\",\n        \"model_source_kind\":\"aneb_behavior_model\"",
+                    "\"behavior_model_id\":null,\n        \"behavior_model_version\":null,\n        \"behavior_model_hash\":null,\n        \"calibration_status\":\"not_applicable\",\n        \"model_source_kind\":null",
+                )
+                .replace(
+                    "{\"type\":\"behavior_trace\",\"model_id\":\"token-model-v1\",\n        \"model_version\":\"0.1.0\",\"model_hash\":\"sha256:test\",\"seed\":20260716}",
+                    "{\"type\":\"path_setup\"}",
+                ),
+        )
+
+        val result = ProfileCapability.assess(network)
+        assertNull(network.business.behaviorModelId)
+        assertEquals("not_applicable", network.business.calibrationStatus)
+        assertTrue(result.contractIssues.isEmpty())
+        assertFalse(result.executable)
+        assertTrue("path_setup" in result.unsupportedPhaseTypes)
     }
 }
