@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+)
+
+const (
+	profileContractV2 = "aneb-profile-v2"
+	probeTargetV2     = "aneb_probe_simulator"
+	probeClaimScopeV2 = "application_end_to_end_to_probe_node"
 )
 
 // TokenBytes 描述单 token 事件 payload 字节数的对数正态分布参数。
@@ -66,14 +73,45 @@ type Phase struct {
 
 // Profile 是版本化场景定义（发布即冻结，修改必须升版本号）。
 type Profile struct {
-	ProfileID    string              `json:"profile_id"`
-	Version      string              `json:"version"`
-	ModeID       string              `json:"mode_id,omitempty"`
-	KpiSet       string              `json:"kpi_set"`
-	Description  string              `json:"description,omitempty"`
-	EstDurationS float64             `json:"est_duration_s,omitempty"`
-	Presentation ProfilePresentation `json:"presentation,omitempty"`
-	Phases       []Phase             `json:"phases"`
+	ContractVersion string              `json:"contract_version,omitempty"`
+	ProfileID       string              `json:"profile_id"`
+	Version         string              `json:"version"`
+	ModeID          string              `json:"mode_id,omitempty"`
+	ExecutionTarget string              `json:"execution_target,omitempty"`
+	ClaimScope      string              `json:"claim_scope,omitempty"`
+	KpiSet          string              `json:"kpi_set"`
+	Description     string              `json:"description,omitempty"`
+	EstDurationS    float64             `json:"est_duration_s,omitempty"`
+	Presentation    ProfilePresentation `json:"presentation,omitempty"`
+	Phases          []Phase             `json:"phases"`
+
+	// rawJSON 是发布 Profile 的权威 wire 表示。Go 的 typed 字段只投影当前
+	// legacy /stream 引擎需要的部分；v2 的 business、measurements、
+	// live_presentation、evaluation、trace 及未来字段必须原样保留并下发。
+	rawJSON json.RawMessage
+}
+
+// UnmarshalJSON 同时建立运行时投影并保存完整 wire 文档。Profile 发布后冻结，
+// 因此 rawJSON 可以安全地作为后续 MarshalJSON 的权威来源。
+func (p *Profile) UnmarshalJSON(data []byte) error {
+	type profileProjection Profile
+	var decoded profileProjection
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = Profile(decoded)
+	p.rawJSON = append(p.rawJSON[:0], data...)
+	return nil
+}
+
+// MarshalJSON 对从磁盘加载的 Profile 做无损 wire 透传；测试或内部代码构造
+// 的 typed Profile 没有 rawJSON 时仍按现有结构编码。
+func (p Profile) MarshalJSON() ([]byte, error) {
+	if len(p.rawJSON) > 0 {
+		return p.rawJSON, nil
+	}
+	type profileProjection Profile
+	return json.Marshal(profileProjection(p))
 }
 
 // firstTokenStream 返回第 idx 个 token_stream phase（idx 从 0 计，只数 token_stream）。
@@ -111,8 +149,8 @@ func loadProfiles(dir string) (map[string]*Profile, error) {
 		if err := json.Unmarshal(data, &p); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		if p.ProfileID == "" || p.Version == "" {
-			return nil, fmt.Errorf("parse %s: missing profile_id or version", path)
+		if err := validateProfileEnvelope(&p); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
 		if _, dup := profiles[p.ProfileID]; dup {
 			return nil, fmt.Errorf("duplicate profile_id %q in %s", p.ProfileID, path)
@@ -120,6 +158,65 @@ func loadProfiles(dir string) (map[string]*Profile, error) {
 		profiles[p.ProfileID] = &p
 	}
 	return profiles, nil
+}
+
+// validateProfileEnvelope 在服务启动时锁住 wire 合同边界。legacy Profile
+// 保持兼容；一旦声明 contract_version，就必须是完整的 v2 顶层 envelope。
+// 指标公式、门限和评分语义仍由版本化 Schema/Kotlin 合同负责，本函数不建立
+// 第二套评分校验器。
+func validateProfileEnvelope(p *Profile) error {
+	if p.ProfileID == "" || p.Version == "" {
+		return fmt.Errorf("missing profile_id or version")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(p.rawJSON, &fields); err != nil {
+		return fmt.Errorf("decode profile envelope: %w", err)
+	}
+	if _, declaresContract := fields["contract_version"]; !declaresContract {
+		return nil
+	}
+	if p.ContractVersion != profileContractV2 {
+		return fmt.Errorf("unsupported contract_version %q", p.ContractVersion)
+	}
+	if p.ModeID == "" {
+		return fmt.Errorf("mode_id must be non-empty for %s", profileContractV2)
+	}
+	if p.ExecutionTarget != probeTargetV2 {
+		return fmt.Errorf("execution_target must be %q", probeTargetV2)
+	}
+	if p.ClaimScope != probeClaimScopeV2 {
+		return fmt.Errorf("claim_scope must be %q", probeClaimScopeV2)
+	}
+	for _, name := range []string{"business", "live_presentation", "evaluation"} {
+		if !isJSONObject(fields[name]) {
+			return fmt.Errorf("%s must be a non-null object", name)
+		}
+	}
+	for _, name := range []string{"measurements", "phases"} {
+		if !isNonEmptyJSONArray(fields[name]) {
+			return fmt.Errorf("%s must be a non-empty array", name)
+		}
+	}
+	return nil
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return false
+	}
+	var value map[string]json.RawMessage
+	return json.Unmarshal(raw, &value) == nil && value != nil
+}
+
+func isNonEmptyJSONArray(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '[' {
+		return false
+	}
+	var value []json.RawMessage
+	return json.Unmarshal(raw, &value) == nil && len(value) > 0
 }
 
 // handleProfiles GET /api/v1/profiles：下发全部 profile（含 profile_id/version）。
