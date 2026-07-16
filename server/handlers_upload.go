@@ -55,7 +55,7 @@ func (a *app) handleUpload(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			if errors.Is(err, io.EOF) {
+			if err == io.EOF {
 				break
 			}
 			// 只有 EOF 才证明请求体完整读完。连接截断或其它读取错误不能返回
@@ -117,7 +117,7 @@ func (a *app) handleToolLoop(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 				return
 			}
-			if errors.Is(err, io.EOF) {
+			if err == io.EOF {
 				break
 			}
 			// 与 /upload 同口径：请求体未完整读完时不进入模拟处理阶段，
