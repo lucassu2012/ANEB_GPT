@@ -462,10 +462,9 @@ class MainActivity : ComponentActivity() {
                                             screen = Screen.BasicResult(runId)
                                         },
                                     )
-                                    MainTab.Probe -> ApiProbeRoute(
+                                    MainTab.Probe -> ProfileCatalogRoute(
+                                        serverUrl = serverUrl,
                                         onBack = { tab = MainTab.Test },
-                                        onOpenReachBoard = { screen = Screen.ReachBoard },
-                                        showBack = false,
                                     )
                                     MainTab.Results -> HistoryRoute(
                                         onOpen = { runId ->
@@ -519,8 +518,8 @@ class MainActivity : ComponentActivity() {
                                         },
                                         injectActive = intentInject,
                                         onOpenServer = ::openServerScreen,
-                                        onOpenApiProbe = { tab = MainTab.Probe },
-                                        // 可达性看板已降为设置二级入口（下钻屏）。
+                                        onOpenApiProbe = { screen = Screen.ApiProbe },
+                                        // 可达性看板保留为设置二级入口；真实 API 探针不在正式设置入口展示。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
                                         onOpenProfiles = { screen = Screen.Profiles },
                                         onBack = { tab = MainTab.Test },

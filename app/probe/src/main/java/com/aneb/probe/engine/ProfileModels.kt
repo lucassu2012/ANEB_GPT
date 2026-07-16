@@ -43,9 +43,9 @@ data class ProfileBusiness(
     val label: String = "",
     @SerialName("archetype_labels") val archetypeLabels: List<String> = emptyList(),
     @SerialName("behavior_feature_ids") val behaviorFeatureIds: List<String> = emptyList(),
-    @SerialName("behavior_model_id") val behaviorModelId: String = "",
-    @SerialName("behavior_model_version") val behaviorModelVersion: String = "",
-    @SerialName("behavior_model_hash") val behaviorModelHash: String = "",
+    @SerialName("behavior_model_id") val behaviorModelId: String? = "",
+    @SerialName("behavior_model_version") val behaviorModelVersion: String? = "",
+    @SerialName("behavior_model_hash") val behaviorModelHash: String? = "",
     @SerialName("calibration_status") val calibrationStatus: String = "",
     @SerialName("model_source_kind") val modelSourceKind: String = "",
 )
@@ -131,9 +131,9 @@ data class ProfilePhase(
     @SerialName("down_bytes") val downBytes: Long = 0,
     @SerialName("server_proc_ms") val serverProcMs: Int = 0,
     // behavior_trace
-    @SerialName("model_id") val modelId: String = "",
-    @SerialName("model_version") val modelVersion: String = "",
-    @SerialName("model_hash") val modelHash: String = "",
+    @SerialName("model_id") val modelId: String? = "",
+    @SerialName("model_version") val modelVersion: String? = "",
+    @SerialName("model_hash") val modelHash: String? = "",
 ) {
     companion object {
         const val TYPE_CLOCK_SYNC = "clock_sync"
