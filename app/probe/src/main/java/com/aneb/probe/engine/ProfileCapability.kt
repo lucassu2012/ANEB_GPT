@@ -28,6 +28,7 @@ object ProfileCapability {
         ProfilePhase.TYPE_UPLOAD_THROUGHPUT,
     )
     private val tokenSimulationPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
+    private val realtimeSimulationPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
     private val tokenRequiredFormulaIds = setOf(
         "tok_b01-v1",
         "tok_b02-v1",
@@ -42,6 +43,21 @@ object ProfileCapability {
         "tok_n05-v1",
         "tok_n06-v1",
     )
+    private val realtimeRequiredFormulaIds = setOf(
+        "live_b01-v1",
+        "live_b02-v1",
+        "realtime-response-excess-v1",
+        "live_b05-v1",
+        "live_b06-v1",
+        "live_b07-v1",
+        "live_b08-v1",
+        "live_b09-v1",
+        "live_b10-v1",
+        "live_n01-v1",
+        "live_n02-v1",
+        "live_n03-v1",
+        "live_n04-v1",
+    )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
 
@@ -50,6 +66,7 @@ object ProfileCapability {
             ScenarioProfile.MODE_TOKEN_EXPERIENCE -> tokenPhases
             ScenarioProfile.MODE_NETWORK_BASIC -> basicPhases
             ScenarioProfile.MODE_TOKEN_SIMULATION -> tokenSimulationPhases
+            ScenarioProfile.MODE_AI_REALTIME_SIMULATION -> realtimeSimulationPhases
             // v2 引擎逐类接入；未接入前必须保持不可执行。
             else -> emptySet()
         }
@@ -145,6 +162,28 @@ object ProfileCapability {
                 if (!execution.artifactHash.startsWith("sha256:")) add("Token 执行计划缺少哈希")
                 if (execution.seed == 0L) add("Token 执行计划缺少 seed")
                 if (execution.variant != profile.evidenceTier) add("Token 执行计划与证据等级不一致")
+            }
+        }
+        if (profile.modeId == ScenarioProfile.MODE_AI_REALTIME_SIMULATION) {
+            if (profile.evaluation.scorePolicyId != "realtime-interaction-score-v1") add("实时交互评分策略未被当前引擎识别")
+            if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("实时交互评分锚点策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != "realtime-interaction-conclusions-v1") add("实时交互结论策略未被当前引擎识别")
+            val requiredFormulaIds = profile.measurements
+                .filter { it.requiredForScore }
+                .map { it.formulaId }
+                .toSet()
+            val unknown = requiredFormulaIds - realtimeRequiredFormulaIds
+            if (unknown.isNotEmpty()) add("实时交互必需指标公式未被识别: ${unknown.sorted().joinToString()}")
+            val execution = profile.executionPlan
+            if (profile.evidenceTier !in setOf("quick", "standard")) add("实时交互证据等级无效")
+            if (execution == null) {
+                add("实时交互缺少可执行计划")
+            } else {
+                if (execution.contractVersion != "aneb-realtime-runtime-plan-v1") add("实时交互执行计划合同不受支持")
+                if (execution.artifact != "runtime_plan.json") add("实时交互执行计划文件名不受支持")
+                if (!execution.artifactHash.startsWith("sha256:")) add("实时交互执行计划缺少哈希")
+                if (execution.seed == 0L) add("实时交互执行计划缺少 seed")
+                if (execution.variant != profile.evidenceTier) add("实时交互执行计划与证据等级不一致")
             }
         }
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")

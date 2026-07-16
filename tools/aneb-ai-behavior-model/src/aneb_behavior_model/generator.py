@@ -13,7 +13,8 @@ from .rng import Pcg32
 from .statistics import describe
 
 TRACE_CONTRACT = "aneb-behavior-trace-v1"
-RUNTIME_CONTRACT = "aneb-token-runtime-plan-v1"
+TOKEN_RUNTIME_CONTRACT = "aneb-token-runtime-plan-v1"
+REALTIME_RUNTIME_CONTRACT = "aneb-realtime-runtime-plan-v1"
 
 
 @dataclass(frozen=True)
@@ -30,13 +31,15 @@ def build_artifacts(model: dict[str, Any], seed: int) -> BuildArtifacts:
     if model["business_type"] == "token_multimodal":
         trace = _generate_token_trace(model, seed)
         runtime_plan = _build_token_runtime_plan(model, trace, seed)
+        runtime_plan["variant"] = "standard"
+        profile = export_profile(model, seed)
+        _bind_token_runtime_plan(profile, runtime_plan, seed, "standard")
     else:
         trace = _generate_realtime_trace(model, seed)
-        runtime_plan = None
-    profile = export_profile(model, seed)
-    if runtime_plan is not None:
+        runtime_plan = _build_realtime_runtime_plan(model, trace, seed)
         runtime_plan["variant"] = "standard"
-        _bind_runtime_plan(profile, runtime_plan, seed, "standard")
+        profile = export_profile(model, seed)
+        _bind_realtime_runtime_plan(profile, runtime_plan, seed, "standard")
     validation = validate_trace(model, trace)
     manifest = {
         "model.json": model_sha256(model),
@@ -44,8 +47,7 @@ def build_artifacts(model: dict[str, Any], seed: int) -> BuildArtifacts:
         "profile.json": _sha256_json(profile),
         "validation.json": _sha256_json(validation),
     }
-    if runtime_plan is not None:
-        manifest["runtime_plan.json"] = _sha256_json(runtime_plan)
+    manifest["runtime_plan.json"] = _sha256_json(runtime_plan)
     return BuildArtifacts(trace, runtime_plan, profile, validation, manifest)
 
 
@@ -54,7 +56,7 @@ def derive_token_runtime_variant(
     variant: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return a published standard or low-confidence quick runtime pair."""
-    if artifacts.runtime_plan is None:
+    if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != TOKEN_RUNTIME_CONTRACT:
         raise ValueError("token runtime variant requires token_multimodal artifacts")
     if variant not in {"standard", "quick"}:
         raise ValueError(f"unsupported runtime variant: {variant}")
@@ -78,11 +80,58 @@ def derive_token_runtime_variant(
         profile["profile_id"] = "token_multimodal_quick"
         profile.setdefault("business", {})["label"] = "多模态 Token 快测"
     plan["variant"] = variant
-    _bind_runtime_plan(profile, plan, int(plan["seed"]), variant)
+    _bind_token_runtime_plan(profile, plan, int(plan["seed"]), variant)
     return profile, plan
 
 
-def _bind_runtime_plan(
+def derive_realtime_runtime_variant(
+    artifacts: BuildArtifacts,
+    variant: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a published realtime standard or low-confidence quick pair."""
+    if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != REALTIME_RUNTIME_CONTRACT:
+        raise ValueError("realtime runtime variant requires ai_realtime_voice artifacts")
+    if variant not in {"standard", "quick"}:
+        raise ValueError(f"unsupported runtime variant: {variant}")
+    plan = deepcopy(artifacts.runtime_plan)
+    profile = deepcopy(artifacts.profile)
+    if variant == "quick":
+        source_sessions = plan["sessions"]
+        source = next(
+            (session for session in source_sessions if any(turn["interrupted"] for turn in session["turns"])),
+            source_sessions[0],
+        )
+        turns = source["turns"]
+        interrupted = next((turn for turn in turns if turn["interrupted"]), turns[0])
+        selected = turns[:2]
+        if interrupted not in selected:
+            selected.append(interrupted)
+        else:
+            selected = turns[:3]
+        selected = sorted(selected, key=lambda turn: int(turn["turn_index"]))
+        selected = deepcopy(selected)
+        for index, turn in enumerate(selected):
+            turn["turn_index"] = index
+            turn["turn_id"] = f"{source['session_id']}-quick-turn-{index + 1:04d}"
+        quick_session = deepcopy(source)
+        quick_session["start_after_previous_ms"] = 0.0
+        quick_session["turns"] = selected
+        quick_session["turn_count"] = len(selected)
+        quick_session["planned_duration_ms"] = round(
+            float(quick_session["setup_ms"])
+            + sum(float(turn["start_after_previous_ms"]) + float(turn["planned_duration_ms"]) for turn in selected),
+            3,
+        )
+        plan["sessions"] = [quick_session]
+        plan["session_count"] = 1
+        profile["profile_id"] = "ai_realtime_voice_quick"
+        profile.setdefault("business", {})["label"] = "AI 实时语音快测"
+    plan["variant"] = variant
+    _bind_realtime_runtime_plan(profile, plan, int(plan["seed"]), variant)
+    return profile, plan
+
+
+def _bind_token_runtime_plan(
     profile: dict[str, Any],
     runtime_plan: dict[str, Any],
     seed: int,
@@ -96,7 +145,33 @@ def _bind_runtime_plan(
     profile["evidence_tier"] = variant
     profile["est_duration_s"] = round(planned_ms / 1000.0, 1)
     profile["execution_plan"] = {
-        "contract_version": RUNTIME_CONTRACT,
+        "contract_version": TOKEN_RUNTIME_CONTRACT,
+        "artifact": "runtime_plan.json",
+        "artifact_hash": runtime_hash,
+        "seed": seed,
+        "variant": variant,
+    }
+    for phase in profile.get("phases", []):
+        if phase.get("type") == "behavior_trace":
+            phase["runtime_artifact"] = "runtime_plan.json"
+            phase["runtime_artifact_hash"] = runtime_hash
+
+
+def _bind_realtime_runtime_plan(
+    profile: dict[str, Any],
+    runtime_plan: dict[str, Any],
+    seed: int,
+    variant: str,
+) -> None:
+    runtime_hash = _sha256_json(runtime_plan)
+    planned_ms = sum(
+        float(session["start_after_previous_ms"]) + float(session["planned_duration_ms"])
+        for session in runtime_plan["sessions"]
+    )
+    profile["evidence_tier"] = variant
+    profile["est_duration_s"] = round(planned_ms / 1000.0, 1)
+    profile["execution_plan"] = {
+        "contract_version": REALTIME_RUNTIME_CONTRACT,
         "artifact": "runtime_plan.json",
         "artifact_hash": runtime_hash,
         "seed": seed,
@@ -172,7 +247,7 @@ def _build_token_runtime_plan(
         previous_complete_ms = float(complete["planned_offset_ms"])
 
     return {
-        "contract_version": RUNTIME_CONTRACT,
+        "contract_version": TOKEN_RUNTIME_CONTRACT,
         "model_id": model["model_id"],
         "model_version": model["model_version"],
         "model_hash": model_sha256(model),
@@ -298,76 +373,213 @@ def _generate_realtime_trace(model: dict[str, Any], seed: int) -> list[dict[str,
     generation = model["generation"]
     events: list[dict[str, Any]] = []
     frame_ms = int(generation["audio_frame_ms"])
-    turn_count = max(1, round(sample_empirical(generation["turn_count"], rng)))
+    session_count = max(
+        1,
+        round(
+            sample_empirical(
+                generation.get("session_count", {"type": "empirical", "values": [1]}),
+                rng,
+            )
+        ),
+    )
     interruption_probability = float(generation.get("interruption_probability", 0.15))
+    minimum_interruptions = max(0, int(generation.get("minimum_interruptions_per_session", 0)))
     now = 0.0
 
-    def append(event_type: str, turn: int | None, **extra: Any) -> None:
-        events.append(
-            _base_event(
-                model,
-                seed,
-                len(events),
-                business_type="ai_realtime_voice",
-                turn=turn,
-                event_type=event_type,
-                planned_offset_ms=round(now, 3),
-                **extra,
+    for session_index in range(session_count):
+        if session_index > 0:
+            now += sample_empirical(
+                generation.get("inter_session_silence_ms", {"type": "empirical", "values": [1000]}),
+                rng,
             )
-        )
+        session_id = f"session-{session_index + 1:04d}"
 
-    append("session_connect_start", None)
-    setup_ms = sample_empirical(generation.get("session_setup_ms", {"type": "empirical", "values": [250]}), rng)
-    now += setup_ms
-    append("session_ready_plan", None, setup_ms=setup_ms)
+        def append(event_type: str, turn: int | None, **extra: Any) -> None:
+            events.append(
+                _base_event(
+                    model,
+                    seed,
+                    len(events),
+                    business_type="ai_realtime_voice",
+                    session_id=session_id,
+                    session_index=session_index,
+                    turn=turn,
+                    event_type=event_type,
+                    planned_offset_ms=round(now, 3),
+                    **extra,
+                )
+            )
 
-    for turn in range(turn_count):
-        speech_ms = sample_empirical(generation["user_speech_ms"], rng)
-        response_wait_ms = sample_empirical(generation["response_wait_ms"], rng)
-        response_audio_ms = sample_empirical(generation["response_audio_ms"], rng)
-        append("speech_start_plan", turn)
-        uplink_frames = max(1, round(speech_ms / frame_ms))
-        for seq in range(uplink_frames):
-            append(
-                "audio_uplink_frame_plan",
-                turn,
-                seq=seq,
-                duration_ms=frame_ms,
-                bytes=int(generation.get("uplink_frame_bytes", 640)),
-            )
-            now += frame_ms
-        append("speech_end_plan", turn, speech_ms=uplink_frames * frame_ms)
-        append("response_wait_start_anchor", turn, anchor="speech_committed")
-        now += response_wait_ms
-        append("response_audio_start_plan", turn, response_wait_ms=response_wait_ms)
-        downlink_frames = max(1, round(response_audio_ms / frame_ms))
-        interrupted = rng.random() < interruption_probability
-        interruption_at = (
-            max(1, int(downlink_frames * float(generation.get("interruption_position", 0.45))))
-            if interrupted
-            else None
-        )
-        for seq in range(downlink_frames):
-            if interruption_at is not None and seq == interruption_at:
-                append("barge_in_plan", turn, after_frames=seq)
-                append("response_cancel_plan", turn, expected_stop_within_ms=300)
-                break
-            append(
-                "audio_downlink_frame_plan",
-                turn,
-                seq=seq,
-                duration_ms=frame_ms,
-                bytes=int(generation.get("downlink_frame_bytes", 960)),
-            )
-            now += frame_ms
-        append("turn_complete_plan", turn, interrupted=interrupted)
-        silence_ms = sample_empirical(
-            generation.get("inter_turn_silence_ms", {"type": "empirical", "values": [500]}),
+        append("session_connect_start", None)
+        setup_ms = sample_empirical(
+            generation.get("session_setup_ms", {"type": "empirical", "values": [250]}),
             rng,
         )
-        now += silence_ms
-    append("session_complete_plan", None, turns=turn_count)
+        now += setup_ms
+        append("session_ready_plan", None, setup_ms=setup_ms)
+        turn_count = max(1, round(sample_empirical(generation["turn_count"], rng)))
+        interruption_draws = [rng.random() for _ in range(turn_count)]
+        interrupted_turns = {
+            index for index, draw in enumerate(interruption_draws) if draw < interruption_probability
+        }
+        if len(interrupted_turns) < min(minimum_interruptions, turn_count):
+            for index in sorted(range(turn_count), key=lambda item: interruption_draws[item]):
+                interrupted_turns.add(index)
+                if len(interrupted_turns) >= min(minimum_interruptions, turn_count):
+                    break
+
+        for turn in range(turn_count):
+            speech_ms = sample_empirical(generation["user_speech_ms"], rng)
+            response_wait_ms = sample_empirical(generation["response_wait_ms"], rng)
+            response_audio_ms = sample_empirical(generation["response_audio_ms"], rng)
+            commit_mode = str(rng.choice(generation.get("commit_modes", ["vad"])))
+            append("speech_start_plan", turn)
+            uplink_frames = max(1, round(speech_ms / frame_ms))
+            for seq in range(uplink_frames):
+                append(
+                    "audio_uplink_frame_plan",
+                    turn,
+                    seq=seq,
+                    duration_ms=frame_ms,
+                    bytes=int(generation.get("uplink_frame_bytes", 640)),
+                )
+                now += frame_ms
+            append("speech_end_plan", turn, speech_ms=uplink_frames * frame_ms, commit_mode=commit_mode)
+            append("response_wait_start_anchor", turn, anchor="speech_committed")
+            now += response_wait_ms
+            planned_downlink_frames = max(1, round(response_audio_ms / frame_ms))
+            append(
+                "response_audio_start_plan",
+                turn,
+                response_wait_ms=response_wait_ms,
+                planned_downlink_frames=planned_downlink_frames,
+            )
+            interrupted = turn in interrupted_turns
+            interruption_at = (
+                max(
+                    1,
+                    min(
+                        planned_downlink_frames - 1,
+                        int(planned_downlink_frames * float(generation.get("interruption_position", 0.45))),
+                    ),
+                )
+                if interrupted and planned_downlink_frames > 1
+                else None
+            )
+            for seq in range(planned_downlink_frames):
+                if interruption_at is not None and seq == interruption_at:
+                    append("barge_in_plan", turn, after_frames=seq)
+                    append("response_cancel_plan", turn, expected_stop_within_ms=300)
+                    break
+                append(
+                    "audio_downlink_frame_plan",
+                    turn,
+                    seq=seq,
+                    duration_ms=frame_ms,
+                    bytes=int(generation.get("downlink_frame_bytes", 960)),
+                )
+                now += frame_ms
+            append("turn_complete_plan", turn, interrupted=interruption_at is not None)
+            now += sample_empirical(
+                generation.get("inter_turn_silence_ms", {"type": "empirical", "values": [500]}),
+                rng,
+            )
+        append(
+            "session_complete_plan",
+            None,
+            turns=turn_count,
+            interruptions=len(interrupted_turns),
+        )
     return events
+
+
+def _build_realtime_runtime_plan(
+    model: dict[str, Any],
+    trace: list[dict[str, Any]],
+    seed: int,
+) -> dict[str, Any]:
+    """Collapse the realtime golden trace into a compact full-duplex plan."""
+    by_session: dict[str, list[dict[str, Any]]] = {}
+    for event in trace:
+        session_id = event.get("session_id")
+        if session_id is not None:
+            by_session.setdefault(str(session_id), []).append(event)
+
+    sessions: list[dict[str, Any]] = []
+    previous_complete_ms: float | None = None
+    generation = model["generation"]
+    for session_id, session_events in by_session.items():
+        connect = _only_event(session_events, "session_connect_start")
+        ready = _only_event(session_events, "session_ready_plan")
+        complete = _only_event(session_events, "session_complete_plan")
+        connect_ms = float(connect["planned_offset_ms"])
+        start_gap_ms = 0.0 if previous_complete_ms is None else max(0.0, connect_ms - previous_complete_ms)
+        by_turn: dict[int, list[dict[str, Any]]] = {}
+        for event in session_events:
+            if event.get("turn") is not None:
+                by_turn.setdefault(int(event["turn"]), []).append(event)
+        turns: list[dict[str, Any]] = []
+        previous_turn_complete_ms = float(ready["planned_offset_ms"])
+        for turn_index, turn_events in sorted(by_turn.items()):
+            speech_start = _only_event(turn_events, "speech_start_plan")
+            speech_end = _only_event(turn_events, "speech_end_plan")
+            response_start = _only_event(turn_events, "response_audio_start_plan")
+            turn_complete = _only_event(turn_events, "turn_complete_plan")
+            uplink_frames = [event for event in turn_events if event["event_type"] == "audio_uplink_frame_plan"]
+            downlink_frames = [event for event in turn_events if event["event_type"] == "audio_downlink_frame_plan"]
+            barge = next((event for event in turn_events if event["event_type"] == "barge_in_plan"), None)
+            cancel = next((event for event in turn_events if event["event_type"] == "response_cancel_plan"), None)
+            turn_start_ms = float(speech_start["planned_offset_ms"])
+            turn_complete_ms = float(turn_complete["planned_offset_ms"])
+            turns.append(
+                {
+                    "turn_id": f"{session_id}-turn-{turn_index + 1:04d}",
+                    "turn_index": turn_index,
+                    "start_after_previous_ms": round(max(0.0, turn_start_ms - previous_turn_complete_ms), 3),
+                    "uplink_frames": len(uplink_frames),
+                    "uplink_frame_bytes": int(uplink_frames[0]["bytes"]),
+                    "response_wait_ms": round(float(response_start["response_wait_ms"]), 3),
+                    "planned_downlink_frames": int(response_start["planned_downlink_frames"]),
+                    "downlink_frames_before_stop": len(downlink_frames),
+                    "downlink_frame_bytes": int(downlink_frames[0]["bytes"]),
+                    "interrupted": barge is not None,
+                    "barge_in_after_frames": int(barge["after_frames"]) if barge else None,
+                    "expected_stop_within_ms": int(cancel["expected_stop_within_ms"]) if cancel else None,
+                    "speech_ms": round(float(speech_end["speech_ms"]), 3),
+                    "commit_mode": str(speech_end["commit_mode"]),
+                    "planned_duration_ms": round(turn_complete_ms - turn_start_ms, 3),
+                }
+            )
+            previous_turn_complete_ms = turn_complete_ms
+        complete_ms = float(complete["planned_offset_ms"])
+        sessions.append(
+            {
+                "session_id": session_id,
+                "start_after_previous_ms": round(start_gap_ms, 3),
+                "setup_ms": round(float(ready["setup_ms"]), 3),
+                "frame_ms": int(generation["audio_frame_ms"]),
+                "turn_count": len(turns),
+                "turns": turns,
+                "planned_duration_ms": round(complete_ms - connect_ms, 3),
+            }
+        )
+        previous_complete_ms = complete_ms
+
+    return {
+        "contract_version": REALTIME_RUNTIME_CONTRACT,
+        "model_id": model["model_id"],
+        "model_version": model["model_version"],
+        "model_hash": model_sha256(model),
+        "calibration_status": model["status"],
+        "seed": seed,
+        "session_count": len(sessions),
+        "sessions": sessions,
+        "claim": (
+            "product hypothesis; not a validated representation of any named provider"
+            if model["status"] == "hypothesis"
+            else "versioned business behavior plan; validation evidence is separate"
+        ),
+    }
 
 
 def validate_trace(model: dict[str, Any], trace: list[dict[str, Any]]) -> dict[str, Any]:

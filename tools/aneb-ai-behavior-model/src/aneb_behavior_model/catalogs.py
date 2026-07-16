@@ -153,6 +153,7 @@ NETWORK_COMPREHENSIVE_MEASUREMENTS: list[dict[str, Any]] = [
 CATALOGS: dict[str, list[dict[str, Any]]] = {
     "token-sim-measurements-v1": TOKEN_SIM_MEASUREMENTS,
     "token-sim-measurements-v1-draft": TOKEN_SIM_MEASUREMENTS,
+    "realtime-sim-measurements-v1": REALTIME_SIM_MEASUREMENTS,
     "realtime-sim-measurements-v1-draft": REALTIME_SIM_MEASUREMENTS,
     "network-comprehensive-measurements-v1-draft": NETWORK_COMPREHENSIVE_MEASUREMENTS,
 }

@@ -41,6 +41,18 @@ interface TokenSimulationResultDao {
 }
 
 @Dao
+interface RealtimeSimulationResultDao {
+    @Insert
+    suspend fun insert(result: RealtimeSimulationResultEntity)
+
+    @Query("SELECT * FROM realtime_simulation_result ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<RealtimeSimulationResultEntity>
+
+    @Query("SELECT * FROM realtime_simulation_result WHERE runId = :runId")
+    suspend fun byId(runId: String): RealtimeSimulationResultEntity?
+}
+
+@Dao
 interface ReportBodyDao {
     @Insert
     suspend fun insert(body: ReportBodyEntity)

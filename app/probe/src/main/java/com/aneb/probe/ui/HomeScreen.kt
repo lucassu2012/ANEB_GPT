@@ -131,6 +131,7 @@ fun HomeScreen(
                 when (testMode) {
                     AnebTestMode.NETWORK_BASIC -> "测试下载、上传、Ping、抖动与应用层请求失败"
                     AnebTestMode.TOKEN_SIMULATION -> "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
+                    AnebTestMode.AI_REALTIME_SIMULATION -> "模拟 GPT-Live 类双工语音、连续音频帧与用户打断"
                     AnebTestMode.TOKEN_EXPERIENCE -> "执行经典 Agent 场景取证与 AQS 评分"
                 },
                 fontSize = 10.5.sp,
@@ -268,6 +269,7 @@ fun HomeScreen(
                         value = when (testMode) {
                             AnebTestMode.NETWORK_BASIC -> "下载 · 上传 · Ping · 抖动"
                             AnebTestMode.TOKEN_SIMULATION -> "Quick 约 2 分钟 · Standard 约 23 分钟"
+                            AnebTestMode.AI_REALTIME_SIMULATION -> "Quick 约 25 秒 · Standard 约 22 分钟"
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
                         action = null,
@@ -293,7 +295,11 @@ private fun TestModeSwitch(
             .border(1.dp, colors.hairline, RoundedCornerShape(999.dp))
             .padding(3.dp),
     ) {
-        AnebTestMode.entries.forEach { mode ->
+        listOf(
+            AnebTestMode.NETWORK_BASIC,
+            AnebTestMode.TOKEN_SIMULATION,
+            AnebTestMode.AI_REALTIME_SIMULATION,
+        ).forEach { mode ->
             val active = mode == selected
             Text(
                 mode.label,

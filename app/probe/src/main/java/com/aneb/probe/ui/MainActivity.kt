@@ -48,6 +48,7 @@ import com.aneb.probe.apiprobe.ProviderPresets
 import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.RealtimeSimulationResultEntity
 import com.aneb.probe.data.TokenSimulationResultEntity
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.ScenarioResultEntity
@@ -172,6 +173,8 @@ class MainActivity : ComponentActivity() {
         data object BasicTesting : Screen
         data object TokenSimulationTesting : Screen
         data class TokenSimulationResult(val runId: String) : Screen
+        data object RealtimeSimulationTesting : Screen
+        data class RealtimeSimulationResult(val runId: String) : Screen
         data class BasicResult(val runId: String) : Screen
         data class Result(val runId: String, val fromHistory: Boolean) : Screen
         data object ApiProbe : Screen
@@ -218,6 +221,7 @@ class MainActivity : ComponentActivity() {
         intentTestModeOverride = when (intent?.getStringExtra("test_mode")?.lowercase()) {
             "network_basic", "basic" -> AnebTestMode.NETWORK_BASIC
             "token_simulation", "token" -> AnebTestMode.TOKEN_SIMULATION
+            "ai_realtime_simulation", "realtime", "live" -> AnebTestMode.AI_REALTIME_SIMULATION
             "token_experience", "legacy_token" -> AnebTestMode.TOKEN_EXPERIENCE
             else -> null
         }
@@ -268,6 +272,8 @@ class MainActivity : ComponentActivity() {
                     val basicTelemetry by ProbeRunService.basicTelemetry.collectAsStateWithLifecycle()
                     val tokenSimulationTelemetry by ProbeRunService.tokenSimulationTelemetry.collectAsStateWithLifecycle()
                     val tokenSimulationResult by ProbeRunService.tokenSimulationResult.collectAsStateWithLifecycle()
+                    val realtimeSimulationTelemetry by ProbeRunService.realtimeSimulationTelemetry.collectAsStateWithLifecycle()
+                    val realtimeSimulationResult by ProbeRunService.realtimeSimulationResult.collectAsStateWithLifecycle()
                     val specialRunSession by ProbeSpecialRunService.session.collectAsStateWithLifecycle()
                     val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
                     val running = runSession is ProbeRunSession.Running || auxiliaryRunning
@@ -290,6 +296,7 @@ class MainActivity : ComponentActivity() {
                             screen = when (testMode) {
                                 AnebTestMode.NETWORK_BASIC -> Screen.BasicTesting
                                 AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationTesting
+                                AnebTestMode.AI_REALTIME_SIMULATION -> Screen.RealtimeSimulationTesting
                                 AnebTestMode.TOKEN_EXPERIENCE -> Screen.Testing
                             }
                         }
@@ -390,6 +397,7 @@ class MainActivity : ComponentActivity() {
                                     screen = when (session.testMode) {
                                         AnebTestMode.NETWORK_BASIC -> Screen.BasicTesting
                                         AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationTesting
+                                        AnebTestMode.AI_REALTIME_SIMULATION -> Screen.RealtimeSimulationTesting
                                         AnebTestMode.TOKEN_EXPERIENCE -> Screen.Testing
                                     }
                                 }
@@ -399,6 +407,7 @@ class MainActivity : ComponentActivity() {
                                     screen = when (session.testMode) {
                                         AnebTestMode.NETWORK_BASIC -> Screen.BasicResult(session.runId)
                                         AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationResult(session.runId)
+                                        AnebTestMode.AI_REALTIME_SIMULATION -> Screen.RealtimeSimulationResult(session.runId)
                                         AnebTestMode.TOKEN_EXPERIENCE -> Screen.Result(session.runId, fromHistory = false)
                                     }
                                 }
@@ -488,6 +497,9 @@ class MainActivity : ComponentActivity() {
                                         onOpenTokenSimulation = { runId ->
                                             screen = Screen.TokenSimulationResult(runId)
                                         },
+                                        onOpenRealtimeSimulation = { runId ->
+                                            screen = Screen.RealtimeSimulationResult(runId)
+                                        },
                                         onGenerateReport = { screen = Screen.Report },
                                         onBack = { tab = MainTab.Test },
                                         showBack = false,
@@ -564,6 +576,18 @@ class MainActivity : ComponentActivity() {
                                     TokenSimulationResultRoute(
                                         runId = s.runId,
                                         liveResult = tokenSimulationResult,
+                                        onBack = { screen = Screen.Home },
+                                    )
+                                }
+                                is Screen.RealtimeSimulationTesting -> RealtimeSimulationTestingScreen(
+                                    telemetry = realtimeSimulationTelemetry,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    onCancel = ::cancelManualRun,
+                                )
+                                is Screen.RealtimeSimulationResult -> {
+                                    RealtimeSimulationResultRoute(
+                                        runId = s.runId,
+                                        liveResult = realtimeSimulationResult,
                                         onBack = { screen = Screen.Home },
                                     )
                                 }
@@ -757,10 +781,29 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun RealtimeSimulationResultRoute(
+        runId: String,
+        liveResult: com.aneb.probe.engine.RealtimeSimulationResult?,
+        onBack: () -> Unit,
+    ) {
+        val stored by produceState<RealtimeSimulationResultEntity?>(initialValue = null, runId) {
+            value = withContext(Dispatchers.IO) { db.realtimeSimulationResultDao().byId(runId) }
+        }
+        when {
+            liveResult?.runId == runId -> RealtimeSimulationResultScreen(result = liveResult, onBack = onBack)
+            stored != null -> RealtimeSimulationStoredResultScreen(result = checkNotNull(stored), onBack = onBack)
+            else -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text("未找到 AI 实时交互记录", color = AnebTheme.colors.muted)
+            }
+        }
+    }
+
+    @Composable
     private fun HistoryRoute(
         onOpen: (String) -> Unit,
         onOpenBasic: (String) -> Unit,
         onOpenTokenSimulation: (String) -> Unit,
+        onOpenRealtimeSimulation: (String) -> Unit,
         onGenerateReport: () -> Unit,
         onBack: () -> Unit,
         showBack: Boolean = true,
@@ -771,6 +814,7 @@ class MainActivity : ComponentActivity() {
                     tokenRuns = db.testRunDao().all(),
                     basicRuns = db.basicSpeedResultDao().all(),
                     tokenSimulationRuns = db.tokenSimulationResultDao().all(),
+                    realtimeSimulationRuns = db.realtimeSimulationResultDao().all(),
                 )
             }
         }
@@ -778,9 +822,11 @@ class MainActivity : ComponentActivity() {
             runs = history.tokenRuns,
             basicRuns = history.basicRuns,
             tokenSimulationRuns = history.tokenSimulationRuns,
+            realtimeSimulationRuns = history.realtimeSimulationRuns,
             onOpen = onOpen,
             onOpenBasic = onOpenBasic,
             onOpenTokenSimulation = onOpenTokenSimulation,
+            onOpenRealtimeSimulation = onOpenRealtimeSimulation,
             onGenerateReport = onGenerateReport,
             onBack = onBack,
             showBack = showBack,
@@ -791,6 +837,7 @@ class MainActivity : ComponentActivity() {
         val tokenRuns: List<TestRun> = emptyList(),
         val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
         val tokenSimulationRuns: List<TokenSimulationResultEntity> = emptyList(),
+        val realtimeSimulationRuns: List<RealtimeSimulationResultEntity> = emptyList(),
     )
 
     @Composable

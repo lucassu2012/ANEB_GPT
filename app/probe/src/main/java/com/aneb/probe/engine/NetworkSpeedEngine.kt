@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.LongAdder
 enum class AnebTestMode(val label: String) {
     NETWORK_BASIC("基本测速"),
     TOKEN_SIMULATION("Token 仿真"),
+    AI_REALTIME_SIMULATION("AI 实时"),
     TOKEN_EXPERIENCE("Agent 取证"),
 }
 

@@ -211,6 +211,8 @@ object ProfileParser {
     val PUBLISHED_V2_ASSET_PATHS = listOf(
         "published/token_multimodal_quick/profile.json",
         "published/token_multimodal_standard/profile.json",
+        "published/ai_realtime_voice_quick/profile.json",
+        "published/ai_realtime_voice_standard/profile.json",
     )
 
     private val json = Json { ignoreUnknownKeys = true }

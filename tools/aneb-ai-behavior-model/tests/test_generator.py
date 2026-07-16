@@ -4,7 +4,11 @@ import json
 import unittest
 from pathlib import Path
 
-from aneb_behavior_model.generator import build_artifacts, derive_token_runtime_variant
+from aneb_behavior_model.generator import (
+    build_artifacts,
+    derive_realtime_runtime_variant,
+    derive_token_runtime_variant,
+)
 from aneb_behavior_model.model import load_model
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +114,34 @@ class GeneratorTest(unittest.TestCase):
         self.assertGreaterEqual(plan["task_count"], 20)
         task_metric = next(metric for metric in profile["measurements"] if metric["metric_id"] == "TOK-B01")
         self.assertGreaterEqual(plan["task_count"], task_metric["minimum_sample_count"])
+
+    def test_realtime_standard_has_connection_and_interruption_evidence(self) -> None:
+        model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
+        artifacts = build_artifacts(model, 20260716)
+        profile, plan = derive_realtime_runtime_variant(artifacts, "standard")
+        self.assertEqual(plan["contract_version"], "aneb-realtime-runtime-plan-v1")
+        self.assertEqual(plan["session_count"], 10)
+        self.assertTrue(all(session["turn_count"] >= 12 for session in plan["sessions"]))
+        self.assertTrue(
+            all(sum(turn["interrupted"] for turn in session["turns"]) >= 2 for session in plan["sessions"])
+        )
+        connection_metric = next(
+            metric for metric in profile["measurements"] if metric["metric_id"] == "LIVE-B01"
+        )
+        self.assertGreaterEqual(plan["session_count"], connection_metric["minimum_sample_count"])
+        forbidden = {"arrival_ms", "network_delay_ms", "packet_loss", "measured_rtt_ms"}
+        self.assertFalse(forbidden.intersection(json.dumps(plan)))
+
+    def test_realtime_quick_is_short_and_contains_barge_in(self) -> None:
+        model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
+        artifacts = build_artifacts(model, 20260716)
+        profile, plan = derive_realtime_runtime_variant(artifacts, "quick")
+        self.assertEqual(profile["profile_id"], "ai_realtime_voice_quick")
+        self.assertEqual(profile["evidence_tier"], "quick")
+        self.assertEqual(plan["session_count"], 1)
+        self.assertLessEqual(plan["sessions"][0]["turn_count"], 3)
+        self.assertTrue(any(turn["interrupted"] for turn in plan["sessions"][0]["turns"]))
+        self.assertLess(profile["est_duration_s"], 90)
 
 
 if __name__ == "__main__":

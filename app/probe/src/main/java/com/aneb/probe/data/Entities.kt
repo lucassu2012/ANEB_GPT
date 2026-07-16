@@ -131,6 +131,36 @@ data class TokenSimulationResultEntity(
     val evidenceJson: String,
 )
 
+/** Profile v2 AI 实时交互仿真独立结果；固定负载证据冻结后落库，不并入旧 AQS。 */
+@Entity(
+    tableName = "realtime_simulation_result",
+    indices = [Index("startedAtEpochMs")],
+)
+data class RealtimeSimulationResultEntity(
+    @PrimaryKey val runId: String,
+    val startedAtEpochMs: Long,
+    val serverBase: String,
+    val claimScope: String,
+    val profileId: String,
+    val profileVersion: String,
+    val behaviorModelId: String,
+    val behaviorModelVersion: String,
+    val behaviorModelHash: String,
+    val calibrationStatus: String,
+    val variant: String,
+    val scorePolicyId: String,
+    val scoreAnchorPolicyId: String,
+    val conclusionPolicyId: String,
+    val totalScore: Double?,
+    val grade: String?,
+    val verdict: String,
+    val confidence: String,
+    val capReason: String?,
+    val metricsJson: String,
+    val conclusionsJson: String,
+    val evidenceJson: String,
+)
+
 @Entity(
     tableName = "token_event",
     indices = [Index("runId"), Index(value = ["runId", "scenarioKey", "streamIndex", "seq"])],

@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .fitting import fit_token_model
-from .generator import _sha256_json, build_artifacts, derive_token_runtime_variant
+from .generator import (
+    _sha256_json,
+    build_artifacts,
+    derive_realtime_runtime_variant,
+    derive_token_runtime_variant,
+)
 from .model import load_model, validate_model
 
 
@@ -77,9 +82,12 @@ def _fit_token(template_path: Path, observations_path: Path, output_path: Path) 
 def _publish_runtime(model_path: Path, seed: int, output_dir: Path, variant: str) -> int:
     model = load_model(model_path)
     artifacts = build_artifacts(model, seed)
-    if artifacts.runtime_plan is None:
-        raise ValueError("publish-runtime currently requires a token_multimodal model")
-    profile, runtime_plan = derive_token_runtime_variant(artifacts, variant)
+    if model["business_type"] == "token_multimodal":
+        profile, runtime_plan = derive_token_runtime_variant(artifacts, variant)
+    elif model["business_type"] == "ai_realtime_voice":
+        profile, runtime_plan = derive_realtime_runtime_variant(artifacts, variant)
+    else:
+        raise ValueError(f"unsupported runtime business_type: {model['business_type']}")
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "profile.json", profile)
     _write_json(output_dir / "runtime_plan.json", runtime_plan)

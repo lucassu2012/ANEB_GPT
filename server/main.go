@@ -1,5 +1,5 @@
 // aneb-server：ANEB Probe 的 Agent 流量仿真服务器（阶段 0）。
-// 仅标准库，无第三方依赖。设计依据：《ANEB Probe 开发设计文档》§4/§6
+// HTTP/SSE 主路径使用标准库；实时交互端点使用 gorilla/websocket。
 // 与《测量红队清单》R-04/R-06/R-07/R-08/R-17/R-20/R-23/R-24。
 package main
 
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.2.0"
+const serverVersion = "aneb-server/0.3.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -36,6 +36,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/v1/profiles", a.handleProfiles)
 	mux.HandleFunc("/api/v1/stream", a.handleStream)
 	mux.HandleFunc("/api/v1/token-sim", a.handleTokenSim)
+	mux.HandleFunc("/api/v1/realtime-sim", a.handleRealtimeSim)
 	mux.HandleFunc("/api/v1/download", a.handleDownload)
 	mux.HandleFunc("/api/v1/upload", a.handleUpload)
 	mux.HandleFunc("/api/v1/toolloop", a.handleToolLoop)

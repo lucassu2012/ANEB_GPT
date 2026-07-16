@@ -35,6 +35,7 @@ internal object ProbeSettingsCodec {
         testMode = when (testMode) {
             AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
             AnebTestMode.TOKEN_SIMULATION.name -> AnebTestMode.TOKEN_SIMULATION
+            AnebTestMode.AI_REALTIME_SIMULATION.name -> AnebTestMode.AI_REALTIME_SIMULATION
             AnebTestMode.TOKEN_EXPERIENCE.name -> AnebTestMode.TOKEN_EXPERIENCE
             else -> AnebTestMode.TOKEN_SIMULATION
         },

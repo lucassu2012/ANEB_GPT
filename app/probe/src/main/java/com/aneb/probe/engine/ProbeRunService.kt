@@ -60,7 +60,7 @@ internal object ProbeRunLogParser {
     private val runId = Regex("(?:^|\\s)run_id=(\\S+)")
 
     fun runId(line: String): String? =
-        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("TOKEN_V2_START ")) {
+        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("TOKEN_V2_START ") || line.startsWith("REALTIME_V1_START ")) {
             runId.find(line)?.groupValues?.get(1)
         } else {
             null
@@ -79,6 +79,9 @@ internal object ProbeRunLogParser {
         line.startsWith("TOKEN_V2_START ") -> "正在校验 Token 行为模型"
         line.startsWith("TOKEN_V2_TASK_START ") -> "正在模拟多模态 AI 任务"
         line.startsWith("TOKEN_V2_RESULT ") -> "正在生成 Token 质量结论"
+        line.startsWith("REALTIME_V1_START ") -> "正在校验实时交互模型"
+        line.startsWith("REALTIME_V1_SESSION_START ") -> "正在模拟双工语音会话"
+        line.startsWith("REALTIME_V1_RESULT ") -> "正在生成实时交互结论"
         else -> null
     }
 }
@@ -151,6 +154,8 @@ class ProbeRunService : Service() {
         _basicResult.value = null
         _tokenSimulationTelemetry.value = TokenSimulationTelemetry()
         _tokenSimulationResult.value = null
+        _realtimeSimulationTelemetry.value = RealtimeSimulationTelemetry()
+        _realtimeSimulationResult.value = null
         _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
 
         runJob = serviceScope.launch {
@@ -192,6 +197,22 @@ class ProbeRunService : Service() {
                         }
                         engine.run(
                             TokenSimulationEngine.Config(
+                                serverBase = config.serverBase,
+                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                transport = config.transport,
+                            ),
+                        )
+                    }
+                    AnebTestMode.AI_REALTIME_SIMULATION -> {
+                        val engine = RealtimeSimulationEngine(applicationContext)
+                        telemetryJob = serviceScope.launch {
+                            engine.telemetry.collect { _realtimeSimulationTelemetry.value = it }
+                        }
+                        resultJob = serviceScope.launch {
+                            engine.result.collect { _realtimeSimulationResult.value = it }
+                        }
+                        engine.run(
+                            RealtimeSimulationEngine.Config(
                                 serverBase = config.serverBase,
                                 variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
                                 transport = config.transport,
@@ -338,6 +359,10 @@ class ProbeRunService : Service() {
         internal val tokenSimulationTelemetry: StateFlow<TokenSimulationTelemetry> = _tokenSimulationTelemetry.asStateFlow()
         private val _tokenSimulationResult = MutableStateFlow<TokenSimulationResult?>(null)
         internal val tokenSimulationResult: StateFlow<TokenSimulationResult?> = _tokenSimulationResult.asStateFlow()
+        private val _realtimeSimulationTelemetry = MutableStateFlow(RealtimeSimulationTelemetry())
+        internal val realtimeSimulationTelemetry: StateFlow<RealtimeSimulationTelemetry> = _realtimeSimulationTelemetry.asStateFlow()
+        private val _realtimeSimulationResult = MutableStateFlow<RealtimeSimulationResult?>(null)
+        internal val realtimeSimulationResult: StateFlow<RealtimeSimulationResult?> = _realtimeSimulationResult.asStateFlow()
 
         internal fun start(context: Context, config: Config, autorun: Boolean) {
             val intent = Intent(context, ProbeRunService::class.java)

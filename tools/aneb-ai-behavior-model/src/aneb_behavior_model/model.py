@@ -92,9 +92,20 @@ def validate_model(model: dict[str, Any]) -> None:
             "response_audio_ms",
         ):
             _validate_distribution(generation.get(field), field)
+        if "session_count" in generation:
+            _validate_distribution(generation["session_count"], "session_count")
         frame_ms = generation.get("audio_frame_ms")
         if not isinstance(frame_ms, int) or frame_ms <= 0:
             raise ModelError("audio_frame_ms must be a positive integer")
+        interruption_probability = generation.get("interruption_probability", 0.15)
+        if not isinstance(interruption_probability, (int, float)) or not 0 <= float(interruption_probability) <= 1:
+            raise ModelError("interruption_probability must be between 0 and 1")
+        minimum_interruptions = generation.get("minimum_interruptions_per_session", 0)
+        if not isinstance(minimum_interruptions, int) or minimum_interruptions < 0:
+            raise ModelError("minimum_interruptions_per_session must be a non-negative integer")
+        commit_modes = generation.get("commit_modes", ["vad"])
+        if not isinstance(commit_modes, list) or not commit_modes or not set(commit_modes) <= {"vad", "manual"}:
+            raise ModelError("commit_modes must contain vad/manual values")
 
 
 def _validate_distribution(distribution: Any, name: str) -> None:

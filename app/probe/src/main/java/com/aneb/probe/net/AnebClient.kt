@@ -14,6 +14,8 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okio.Buffer
 import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
@@ -65,6 +67,9 @@ class AnebClient(bound: BoundNetwork? = null) {
     fun evictConnections() {
         client.connectionPool.evictAll()
     }
+
+    internal fun openWebSocket(url: String, listener: WebSocketListener): WebSocket =
+        client.newWebSocket(Request.Builder().url(url).build(), listener)
 
     // ------------------------------------------------------------------ echo
 
