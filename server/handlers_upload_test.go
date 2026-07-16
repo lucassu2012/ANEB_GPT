@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,53 @@ func TestToolLoop(t *testing.T) {
 	// 绝对 deadline 等待 proc_ms=50：处理时长必须 >= 50ms。
 	if dur := tsend - trecv; dur < 50_000 {
 		t.Fatalf("proc duration %dus < 50ms", dur)
+	}
+}
+
+var errInjectedBodyRead = errors.New("injected body read failure")
+
+// partialFailReader 模拟连接在已送达部分字节后异常终止。Read 同时返回
+// n>0 与非 EOF error 是 io.Reader 的合法行为，handler 必须保留字节证据但拒绝 2xx。
+type partialFailReader struct {
+	data []byte
+	done bool
+}
+
+func (r *partialFailReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), errInjectedBodyRead
+}
+
+func TestUploadRejectsPartialBodyReadFailure(t *testing.T) {
+	a := &app{profiles: map[string]*Profile{}, dataDir: t.TempDir()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", &partialFailReader{data: []byte("partial")})
+	rec := httptest.NewRecorder()
+
+	a.handleUpload(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want %d (body %q)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("body unreadable")) {
+		t.Fatalf("body %q does not describe unreadable request", rec.Body.String())
+	}
+}
+
+func TestToolLoopRejectsPartialBodyReadFailure(t *testing.T) {
+	a := &app{profiles: map[string]*Profile{}, dataDir: t.TempDir()}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/toolloop?proc_ms=0", &partialFailReader{data: []byte("partial")})
+	rec := httptest.NewRecorder()
+
+	a.handleToolLoop(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want %d (body %q)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("body unreadable")) {
+		t.Fatalf("body %q does not describe unreadable request", rec.Body.String())
 	}
 }
 
