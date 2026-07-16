@@ -26,6 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.ui.components.SectionLabel
+import com.aneb.probe.ui.components.AnebPageIntro
+import com.aneb.probe.ui.components.AnebSectionTitle
+import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebTheme
 
@@ -49,45 +52,60 @@ internal fun ServerScreen(
             .fillMaxSize()
             .background(colors.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 16.dp),
     ) {
-        Spacer(Modifier.height(8.dp))
-        GlassHeader("测试节点", onBack)
+        AnebTopBar(showBack = true, onBack = onBack)
+        AnebPageIntro(
+            eyebrow = "TEST SERVER",
+            title = "选择测试节点",
+            subtitle = "优先使用低延迟节点，结果更接近真实 AI 使用体验。",
+            modifier = Modifier.padding(top = 3.dp),
+        )
 
-        SectionLabel("已验证国内节点")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 17.dp, start = 10.dp, end = 10.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(colors.brand.copy(alpha = 0.08f)).border(1.dp, colors.brand.copy(alpha = 0.28f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
+                Text("ϟ", fontSize = 15.sp, color = colors.brand)
+            }
+            Column(Modifier.weight(1f).padding(start = 9.dp)) {
+                Text("自动选择最优", fontSize = 12.sp, color = colors.ink)
+                Text("每次测试前刷新可达性", fontSize = 10.sp, color = colors.muted)
+            }
+            Text(if (selected) "已启用" else "选择 E-01", fontSize = 10.sp, color = colors.brand, modifier = Modifier.pressable(onClick = onSelectE01))
+        }
+
+        AnebSectionTitle(
+            "附近节点",
+            action = if (refreshing) "检测中…" else "刷新",
+            onAction = onRefresh,
+            modifier = Modifier.padding(top = 5.dp, start = 4.dp, end = 4.dp, bottom = 7.dp),
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(colors.surface)
-                .border(1.dp, if (selected) colors.brand else colors.hairline, RoundedCornerShape(16.dp))
-                .pressable(onClick = onSelectE01)
-                .padding(14.dp),
+                .clip(RoundedCornerShape(17.dp))
+                .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(androidx.compose.ui.graphics.Color(0xD6191F3A), androidx.compose.ui.graphics.Color(0xDB0B0F21))))
+                .border(1.dp, colors.hairline, RoundedCornerShape(17.dp)),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(30.dp).clip(CircleShape).background(colors.brand.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("01", fontSize = 10.sp, fontWeight = FontWeight.Black, color = colors.brand2)
-                }
-                Column(modifier = Modifier.weight(1f).padding(start = 11.dp)) {
-                    Text(
-                        ProbeNodeCatalog.e01.displayName,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.ink,
-                    )
-                    Text(ProbeNodeCatalog.e01.provider, fontSize = 11.sp, color = colors.muted)
-                }
-                Text(if (selected) "✓ 已选择" else "选择", fontSize = 11.5.sp, color = colors.brand2)
-            }
-            Spacer(Modifier.height(11.dp))
-            Text(
-                "默认经 sslip.io 公共证书连接；检测到运营商 SNI-RST 时自动切换同节点 bare-IP。",
-                fontSize = 11.sp,
-                color = colors.muted,
+            NodeDesignRow(
+                selected = selected,
+                title = ProbeNodeCatalog.e01.displayName,
+                subtitle = "${ProbeNodeCatalog.e01.provider} · 自动旁路",
+                reach = bestReach(reach),
+                onClick = onSelectE01,
             )
+            if (!selected) {
+                HairlineDivider()
+                NodeDesignRow(
+                    selected = true,
+                    title = ProbeNodeCatalog.customLabel(currentUrl),
+                    subtitle = "自定义地址",
+                    reach = null,
+                    onClick = {},
+                )
+            }
         }
 
         SectionLabel("连接可达性")
@@ -96,25 +114,8 @@ internal fun ServerScreen(
             HairlineDivider()
             ReachRow("bare-IP", reach?.ip)
         }
-        Spacer(Modifier.height(10.dp))
-        IosFilledButton(
-            label = if (refreshing) "检测中…" else "刷新可达性",
-            onClick = onRefresh,
-            enabled = !refreshing,
-            modifier = Modifier.fillMaxWidth(),
-        )
         error?.let {
             Text(it, fontSize = 11.sp, color = colors.fair, modifier = Modifier.padding(top = 8.dp))
-        }
-
-        if (!selected) {
-            SectionLabel("当前自定义节点")
-            GroupedCard {
-                Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-                    Text(ProbeNodeCatalog.customLabel(currentUrl), fontSize = 13.sp, color = colors.ink)
-                    Text(currentUrl, fontSize = 10.5.sp, color = colors.muted)
-                }
-            }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -128,7 +129,44 @@ internal fun ServerScreen(
                 "AQS 只代表终端到所选节点的应用层路径。",
             fontSize = 10.5.sp,
             color = colors.faint,
-            modifier = Modifier.padding(top = 16.dp, bottom = 24.dp),
+            modifier = Modifier.padding(top = 16.dp, bottom = 84.dp),
+        )
+    }
+}
+
+private fun bestReach(reach: ReachabilityProbe.DualReach?): ReachabilityProbe.Reach? =
+    listOfNotNull(reach?.sni, reach?.ip).filter { it.status == "ok" }.minByOrNull { it.elapsedMs ?: Long.MAX_VALUE }
+
+@Composable
+private fun NodeDesignRow(
+    selected: Boolean,
+    title: String,
+    subtitle: String,
+    reach: ReachabilityProbe.Reach?,
+    onClick: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .background(if (selected) colors.brand.copy(alpha = 0.035f) else androidx.compose.ui.graphics.Color.Transparent)
+            .pressable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(20.dp).border(1.dp, if (selected) colors.brand else colors.hairline, CircleShape), contentAlignment = Alignment.Center) {
+            if (selected) Text("✓", fontSize = 10.sp, color = colors.brand)
+        }
+        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+            Text(subtitle, fontSize = 10.sp, color = colors.muted, modifier = Modifier.padding(top = 2.dp))
+        }
+        Text(
+            reach?.elapsedMs?.let { "$it ms" } ?: "—",
+            fontSize = 11.sp,
+            fontWeight = FontWeight(560),
+            color = if (reach?.status == "ok") colors.excellent else colors.muted,
         )
     }
 }

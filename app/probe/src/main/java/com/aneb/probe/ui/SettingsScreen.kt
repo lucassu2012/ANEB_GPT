@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.ui.components.GlassChrome
+import com.aneb.probe.ui.components.AnebPageIntro
+import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.SectionLabel
 import com.aneb.probe.ui.components.SegmentedControl
 import com.aneb.probe.ui.components.pressable
@@ -70,10 +73,37 @@ fun SettingsScreen(
     onOpenServer: () -> Unit,
     onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
+    onOpenProfiles: () -> Unit,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val colors = AnebTheme.colors
     var confirmDrive by remember { mutableStateOf(false) }
+
+    if (!showBack) {
+        SettingsRootScreen(
+            serverUrl = serverUrl,
+            onServerUrlChange = onServerUrlChange,
+            mode = mode,
+            onModeChange = onModeChange,
+            transport = transport,
+            onTransportChange = onTransportChange,
+            driveTest = driveTest,
+            onDriveRequest = { on -> if (on) confirmDrive = true else onDriveTestChange(false) },
+            injectActive = injectActive,
+            onOpenServer = onOpenServer,
+            onOpenApiProbe = onOpenApiProbe,
+            onOpenReachBoard = onOpenReachBoard,
+            onOpenProfiles = onOpenProfiles,
+        )
+        if (confirmDrive) {
+            DriveTestConfirmation(
+                onConfirm = { onDriveTestChange(true); confirmDrive = false },
+                onDismiss = { confirmDrive = false },
+            )
+        }
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -82,8 +112,18 @@ fun SettingsScreen(
             .padding(horizontal = 20.dp)
             .verticalScroll(rememberScrollState()),
     ) {
-        Spacer(Modifier.height(8.dp))
-        GlassHeader("设置", onBack)
+        if (showBack) {
+            Spacer(Modifier.height(8.dp))
+            GlassHeader("设置", onBack)
+        } else {
+            AnebTopBar(showMenu = false)
+            AnebPageIntro(
+                eyebrow = "PREFERENCES",
+                title = "设置",
+                subtitle = "测试行为、界面和数据偏好。",
+                modifier = Modifier.padding(top = 3.dp, bottom = 3.dp),
+            )
+        }
 
         // ---- 服务器 ----
         SectionLabel("测量服务器")
@@ -131,6 +171,16 @@ fun SettingsScreen(
             label = { if (it == TestEngine.Mode.QUICK) "快测（约 90s）" else "取证（多遍拉丁方）" },
             modifier = Modifier.fillMaxWidth(),
         )
+        Spacer(Modifier.height(10.dp))
+        GroupedCard {
+            OptionRow(
+                title = "Profile 与指标合同",
+                subtitle = "查看业务、实时指标、结论策略与引擎兼容状态",
+                selected = false,
+                showChevron = true,
+                onClick = onOpenProfiles,
+            )
+        }
 
         // ---- 传输 ----
         SectionLabel("传输通道")
@@ -255,6 +305,224 @@ fun SettingsScreen(
 }
 
 private data class ServerPreset(val label: String, val url: String)
+
+@Composable
+private fun SettingsRootScreen(
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
+    mode: TestEngine.Mode,
+    onModeChange: (TestEngine.Mode) -> Unit,
+    transport: TestEngine.TransportMode,
+    onTransportChange: (TestEngine.TransportMode) -> Unit,
+    driveTest: Boolean,
+    onDriveRequest: (Boolean) -> Unit,
+    injectActive: String?,
+    onOpenServer: () -> Unit,
+    onOpenApiProbe: () -> Unit,
+    onOpenReachBoard: () -> Unit,
+    onOpenProfiles: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+    ) {
+        com.aneb.probe.ui.components.AnebTopBar()
+        com.aneb.probe.ui.components.AnebPageIntro(
+            eyebrow = "PREFERENCES",
+            title = "设置",
+            subtitle = "测试行为、界面和数据偏好。",
+            modifier = Modifier.padding(top = 3.dp, bottom = 4.dp),
+        )
+
+        com.aneb.probe.ui.components.AnebSectionTitle(
+            "测试",
+            Modifier.padding(top = 15.dp, start = 4.dp, bottom = 7.dp),
+        )
+        SettingsDesignGroup {
+            SettingsDesignRow(
+                icon = "⌁",
+                tint = colors.brand,
+                title = "测试模式",
+                subtitle = "快测或多遍取证",
+            ) {
+                SegmentedControl(
+                    options = listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC),
+                    selected = mode,
+                    onSelect = onModeChange,
+                    label = { if (it == TestEngine.Mode.QUICK) "快测" else "取证" },
+                    modifier = Modifier.width(132.dp),
+                )
+            }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "◇",
+                tint = colors.brand2,
+                title = "Profile 与指标合同",
+                subtitle = "业务、动态指标与结论策略",
+                onClick = onOpenProfiles,
+            ) { Text("查看  ›", fontSize = 10.sp, color = colors.muted) }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "◎",
+                tint = colors.excellent,
+                title = "测试节点",
+                subtitle = ProbeNodeCatalog.labelForUrl(serverUrl),
+                onClick = onOpenServer,
+            ) { Text("自动  ›", fontSize = 10.sp, color = colors.muted) }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "⌁",
+                tint = colors.fair,
+                title = "包含 REACH 探测",
+                subtitle = "连接层口径，不进入 AQS",
+                onClick = onOpenReachBoard,
+            ) { Text("查看  ›", fontSize = 10.sp, color = colors.muted) }
+        }
+
+        com.aneb.probe.ui.components.AnebSectionTitle(
+            "网络与工具",
+            Modifier.padding(top = 17.dp, start = 4.dp, bottom = 7.dp),
+        )
+        SettingsDesignGroup {
+            SettingsDesignRow(
+                icon = "↗",
+                tint = colors.brand2,
+                title = "传输通道",
+                subtitle = "约束测试所使用的网络",
+            ) {
+                SegmentedControl(
+                    options = listOf(TestEngine.TransportMode.AUTO, TestEngine.TransportMode.WIFI, TestEngine.TransportMode.CELLULAR),
+                    selected = transport,
+                    onSelect = onTransportChange,
+                    label = { when (it) { TestEngine.TransportMode.AUTO -> "自动"; TestEngine.TransportMode.WIFI -> "WiFi"; TestEngine.TransportMode.CELLULAR -> "蜂窝" } },
+                    modifier = Modifier.width(154.dp),
+                )
+            }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "⌘",
+                tint = colors.brand,
+                title = "API 探针",
+                subtitle = "真实 LLM 端到端对照",
+                onClick = onOpenApiProbe,
+            ) { Text("›", fontSize = 18.sp, color = colors.faint) }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "⌖",
+                tint = colors.excellent,
+                title = "GPS 路测",
+                subtitle = "坐标只存本机，不上传",
+            ) {
+                Switch(
+                    checked = driveTest,
+                    onCheckedChange = onDriveRequest,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = colors.brand.copy(alpha = 0.58f),
+                        uncheckedTrackColor = colors.surface2,
+                        uncheckedBorderColor = colors.hairline,
+                    ),
+                )
+            }
+        }
+
+        com.aneb.probe.ui.components.AnebSectionTitle(
+            "高级",
+            Modifier.padding(top = 17.dp, start = 4.dp, bottom = 7.dp),
+        )
+        OutlinedTextField(
+            value = serverUrl,
+            onValueChange = onServerUrlChange,
+            label = { Text("自定义服务器地址") },
+            singleLine = true,
+            shape = AnebShapes.button,
+            colors = iosTextFieldColors(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        injectActive?.let {
+            Text(
+                "调试注入生效：$it（本次 run 不作为取证证据）",
+                fontSize = 10.sp,
+                color = colors.poor,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Text(
+            ResultFormat.CLAIM_SCOPE_TEXT,
+            fontSize = 9.sp,
+            lineHeight = 15.sp,
+            color = colors.faint,
+            modifier = Modifier.padding(top = 14.dp, bottom = 84.dp),
+        )
+    }
+}
+
+@Composable
+private fun SettingsDesignGroup(content: @Composable ColumnScope.() -> Unit) {
+    val colors = AnebTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(17.dp))
+            .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xD6191F3A), Color(0xDB0B0F21))))
+            .border(1.dp, colors.hairline, RoundedCornerShape(17.dp)),
+        content = content,
+    )
+}
+
+@Composable
+private fun SettingsDesignRow(
+    icon: String,
+    tint: Color,
+    title: String,
+    subtitle: String,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable RowScope.() -> Unit,
+) {
+    val colors = AnebTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .then(if (onClick != null) Modifier.pressable(onClick = onClick) else Modifier)
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(29.dp)
+                .height(29.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(tint.copy(alpha = 0.08f))
+                .border(1.dp, tint.copy(alpha = 0.28f), RoundedCornerShape(9.dp)),
+            contentAlignment = Alignment.Center,
+        ) { Text(icon, fontSize = 12.sp, color = tint) }
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+            Text(subtitle, fontSize = 10.sp, color = colors.muted, modifier = Modifier.padding(top = 2.dp), maxLines = 1)
+        }
+        trailing()
+    }
+}
+
+@Composable
+private fun DriveTestConfirmation(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val colors = AnebTheme.colors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("开启位置轨迹记录？", color = colors.ink) },
+        text = { Text("将以 1Hz 记录 GPS 坐标用于路测标注。坐标仅保存在本机，绝不上报服务器。", color = colors.muted, fontSize = 12.sp) },
+        containerColor = colors.surface,
+        shape = AnebShapes.card,
+        confirmButton = { TextButton(onClick = onConfirm) { Text("开启", color = colors.brand) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = colors.muted) } },
+    )
+}
 
 @Composable
 private fun OptionRow(

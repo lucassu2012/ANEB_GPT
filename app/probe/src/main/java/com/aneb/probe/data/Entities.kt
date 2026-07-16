@@ -72,6 +72,35 @@ data class TestRun(
     val ipReachMs: Long? = null,
 )
 
+/**
+ * 基础网络测速独立结果。它不进入 [TestRun] / AQS，避免把两种模式的评分口径混在一起。
+ * 失败或未测到的指标保持 null（R-10）；claimScope 始终限定到 App→指定节点应用层路径。
+ */
+@Entity(
+    tableName = "basic_speed_result",
+    indices = [Index("startedAtEpochMs")],
+)
+data class BasicSpeedResultEntity(
+    @PrimaryKey val runId: String,
+    val startedAtEpochMs: Long,
+    val serverBase: String,
+    val claimScope: String,
+    val profileId: String,
+    val profileVersion: String,
+    val conclusionPolicyId: String,
+    val status: String,
+    val downloadMbps: Double?,
+    val uploadMbps: Double?,
+    val pingMs: Double?,
+    val jitterMs: Double?,
+    val requestLossRate: Double?,
+    val postLoadPingMs: Double?,
+    val downloadBytes: Long,
+    val uploadBytes: Long,
+    /** 仅作诊断的换行分隔摘要；空串表示无错误，不参与任何分数或结论。 */
+    val transferErrors: String,
+)
+
 @Entity(
     tableName = "token_event",
     indices = [Index("runId"), Index(value = ["runId", "scenarioKey", "streamIndex", "seq"])],

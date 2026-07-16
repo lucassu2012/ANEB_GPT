@@ -9,19 +9,23 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -42,14 +46,21 @@ import com.aneb.probe.apiprobe.LlmProvider
 import com.aneb.probe.apiprobe.ProviderPresets
 import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
+import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.AbRunner
+import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.ContinuityRunner
 import com.aneb.probe.engine.ProbeRunService
 import com.aneb.probe.engine.ProbeRunSession
+import com.aneb.probe.engine.ProbeSpecialRunService
+import com.aneb.probe.engine.ProfileRepository
+import com.aneb.probe.engine.ScenarioProfile
+import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.radio.RadioCollector
@@ -79,8 +90,6 @@ import java.util.Locale
  */
 class MainActivity : ComponentActivity() {
 
-    private lateinit var continuityRunner: ContinuityRunner
-    private lateinit var abRunner: AbRunner
     private lateinit var radioCollector: RadioCollector
     private lateinit var db: AnebDatabase
     private lateinit var settingsStore: ProbeSettingsStore
@@ -88,6 +97,7 @@ class MainActivity : ComponentActivity() {
     private var intentServer: String? = null
     private var intentAutorun: Boolean = false
     private var intentModeOverride: TestEngine.Mode? = null
+    private var intentTestModeOverride: AnebTestMode? = null
     private var intentTransportOverride: TestEngine.TransportMode? = null
     private var intentInject: String? = null
     private var intentDriveTestOverride: Boolean? = null
@@ -157,17 +167,24 @@ class MainActivity : ComponentActivity() {
     private sealed interface Screen {
         data object Home : Screen
         data object Testing : Screen
+        data object BasicTesting : Screen
+        data class BasicResult(val runId: String) : Screen
         data class Result(val runId: String, val fromHistory: Boolean) : Screen
         data object ApiProbe : Screen
         data object ReachBoard : Screen
+        data object Profiles : Screen
         data object Servers : Screen
         data object Report : Screen
+        data class Share(val model: ShareCard.Model, val returnTo: Result) : Screen
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.rgb(1, 2, 7)),
+        )
         super.onCreate(savedInstanceState)
-        continuityRunner = ContinuityRunner(applicationContext)
-        abRunner = AbRunner(applicationContext)
+        window.isNavigationBarContrastEnforced = false
         radioCollector = RadioCollector(this)
         db = AnebDatabase.get(applicationContext)
         settingsStore = ProbeSettingsStore(applicationContext)
@@ -194,6 +211,11 @@ class MainActivity : ComponentActivity() {
             "cellular" -> TestEngine.TransportMode.CELLULAR
             else -> null
         }
+        intentTestModeOverride = when (intent?.getStringExtra("test_mode")?.lowercase()) {
+            "network_basic", "basic" -> AnebTestMode.NETWORK_BASIC
+            "token_experience", "token" -> AnebTestMode.TOKEN_EXPERIENCE
+            else -> null
+        }
         intentInject = if (BuildConfig.DEBUG) intent?.getStringExtra("inject") else null
         intentDriveTestOverride = if (intent?.hasExtra("drive_test") == true) {
             intent.getBooleanExtra("drive_test", false)
@@ -206,6 +228,7 @@ class MainActivity : ComponentActivity() {
             saved = settingsStore.load(),
             overrides = ProbeLaunchOverrides(
                 serverUrl = intentServer,
+                testMode = intentTestModeOverride,
                 mode = intentModeOverride,
                 transport = intentTransportOverride,
                 driveTest = intentDriveTestOverride,
@@ -217,28 +240,30 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AnebTheme {
-                // iOS chrome 接入点：应用底用 OLED 背景（--a #000 / 浅色 #F2F2F7），safe-area
-                // 内衬；各屏顶/底毛玻璃 chrome 由 GlassChrome 承载（内容留待下一阶段）。
+                // 只消费顶部状态栏。华为三键导航模式已经从 Activity 内容窗口排除了底栏，
+                // 若再消费 navigationBars inset，会把五栏导航的点击区裁到窗口之外。
                 Surface(
                     color = AnebTheme.colors.background,
-                    modifier = Modifier.fillMaxSize().safeDrawingPadding(),
+                    modifier = Modifier.fillMaxSize().statusBarsPadding(),
                 ) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
-                    // 底部 3-tab 外壳选中态（默认 Speed）；下钻只在 Home 哨兵下按 tab 决定根，
+                    // 底部 5-tab 外壳选中态（默认测试）；下钻只在 Home 哨兵下按 tab 决定根，
                     // 故切 tab 只发生在各 tab 根（切换前后 screen 均为 Home），子状态天然互不串扰。
                     var tab by rememberSaveable { mutableStateOf(MainTab.Test) }
                     var serverUrl by rememberSaveable {
                         mutableStateOf(launchSettings.serverUrl)
                     }
                     var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
+                    var testMode by rememberSaveable { mutableStateOf(launchSettings.testMode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
                     var driveTest by rememberSaveable { mutableStateOf(launchSettings.driveTest) }
                     val runSession by ProbeRunService.session.collectAsStateWithLifecycle()
                     val serviceLogs by ProbeRunService.logs.collectAsStateWithLifecycle()
                     val serviceTelemetry by ProbeRunService.telemetry.collectAsStateWithLifecycle()
-                    var auxiliaryRunning by remember { mutableStateOf(false) }
+                    val basicTelemetry by ProbeRunService.basicTelemetry.collectAsStateWithLifecycle()
+                    val specialRunSession by ProbeSpecialRunService.session.collectAsStateWithLifecycle()
+                    val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
                     val running = runSession is ProbeRunSession.Running || auxiliaryRunning
-                    val auxiliaryLogs = remember { mutableStateListOf<String>() }
                     var acceptManualSessions by remember { mutableStateOf(!launchRequestedAutorun) }
                     var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
                     var radioEvidenceLimited by remember { mutableStateOf(false) }
@@ -247,24 +272,21 @@ class MainActivity : ComponentActivity() {
                     var nodeReachRefreshing by remember { mutableStateOf(false) }
                     var nodeReachError by remember { mutableStateOf<String?>(null) }
 
-                    fun addLog(line: String) {
-                        android.util.Log.i("AnebProbe", line)
-                        auxiliaryLogs.add(line)
-                    }
-
                     // ---- 主 run 由前台 Service 持有；Activity 只发配置并观察状态 ----
                     fun startRun(fromAutorun: Boolean) {
                         if (running) return
                         homeNotice = null
-                        radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
+                        radioEvidenceLimited = testMode == AnebTestMode.TOKEN_EXPERIENCE &&
+                            !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
                             acceptManualSessions = true
-                            screen = Screen.Testing
+                            screen = if (testMode == AnebTestMode.NETWORK_BASIC) Screen.BasicTesting else Screen.Testing
                         }
                         ProbeRunService.start(
                             context = applicationContext,
                             config = ProbeRunService.Config(
                                 serverBase = serverUrl,
+                                testMode = testMode,
                                 mode = mode,
                                 transport = transport,
                                 inject = intentInject,
@@ -280,7 +302,7 @@ class MainActivity : ComponentActivity() {
                             return
                         }
                         val state = radioPermissionState()
-                        if (state.hasFullRadioEvidence) {
+                        if (testMode == AnebTestMode.NETWORK_BASIC || state.hasFullRadioEvidence) {
                             requestRunNotificationPermission { startRun(fromAutorun = false) }
                         } else {
                             permissionPrompt = RadioPermissionPrompt(
@@ -328,49 +350,23 @@ class MainActivity : ComponentActivity() {
 
                     fun startContinuityRun() {
                         if (running) return
-                        auxiliaryRunning = true
-                        addLog(">>> CONTINUITY transport=${transport.name.lowercase()} -> $serverUrl")
-                        lifecycleScope.launch {
-                            try {
-                                continuityRunner.run(
-                                    ContinuityRunner.Config(
-                                        serverBase = serverUrl,
-                                        transport = transport,
-                                        tokens = intentCTokens,
-                                        c3IdleSeconds = intentC3IdleS,
-                                    )
-                                ).collect { line -> addLog(line) }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                addLog("CONTINUITY_FAILED error=$e")
-                            } finally {
-                                auxiliaryRunning = false
-                            }
-                        }
+                        ProbeSpecialRunService.startContinuity(
+                            context = applicationContext,
+                            server = serverUrl,
+                            transport = transport,
+                            tokens = intentCTokens,
+                            c3IdleSeconds = intentC3IdleS,
+                        )
                     }
 
                     fun startAbRun() {
                         if (running) return
-                        auxiliaryRunning = true
-                        addLog(">>> AB pairs=$intentAbPairs -> $serverUrl")
-                        lifecycleScope.launch {
-                            try {
-                                abRunner.run(
-                                    AbRunner.Config(
-                                        serverBase = serverUrl,
-                                        pairs = intentAbPairs,
-                                        netlog = intentAbNetlog,
-                                    )
-                                ).collect { line -> addLog(line) }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                addLog("AB_FAILED error=$e")
-                            } finally {
-                                auxiliaryRunning = false
-                            }
-                        }
+                        ProbeSpecialRunService.startAb(
+                            context = applicationContext,
+                            server = serverUrl,
+                            pairs = intentAbPairs,
+                            netlog = intentAbNetlog,
+                        )
                     }
 
                     LaunchedEffect(runSession) {
@@ -378,13 +374,22 @@ class MainActivity : ComponentActivity() {
                             ProbeRunSession.Idle -> Unit
                             is ProbeRunSession.Running -> {
                                 if (acceptManualSessions && !session.autorun) {
-                                    radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
-                                    screen = Screen.Testing
+                                    radioEvidenceLimited = session.testMode == AnebTestMode.TOKEN_EXPERIENCE &&
+                                        !radioPermissionState().hasFullRadioEvidence
+                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
+                                        Screen.BasicTesting
+                                    } else {
+                                        Screen.Testing
+                                    }
                                 }
                             }
                             is ProbeRunSession.Completed -> {
                                 if (acceptManualSessions && !session.autorun) {
-                                    screen = Screen.Result(session.runId, fromHistory = false)
+                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
+                                        Screen.BasicResult(session.runId)
+                                    } else {
+                                        Screen.Result(session.runId, fromHistory = false)
+                                    }
                                 }
                             }
                             is ProbeRunSession.Failed -> {
@@ -413,27 +418,34 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // ---- SpeedTest 式底部 3-tab 外壳（测试 GO 凸起 / 历史 / 设置，[AnebTabBar]）----
+                    // ---- ANEB_UI 五栏外壳（测试 / 探针 / 结果 / 地图 / 设置）----
                     // 底栏仅在各 tab 根（screen==Home）显示；下钻屏（Testing/Result/ApiProbe/
                     // ReachBoard/Report）隐底栏、Testing 运行中保持全屏专注。contentWindowInsets 置 0：
-                    // Surface 已 safeDrawingPadding 统一吃系统条，避免二次内衬。
+                    // Surface 已消费顶部状态栏，Scaffold 不再重复消费系统 Insets。
                     val atRoot = screen is Screen.Home
+                    val showMainNav = atRoot || screen is Screen.Servers
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = AnebTheme.colors.background,
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                        bottomBar = {
-                            if (atRoot) {
-                                AnebTabBar(current = tab, onSelect = { tab = it })
-                            }
-                        },
                     ) { innerPadding ->
-                        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        // 根页面主动为五栏导航留白；首页/地图的抽屉则刻意延伸到导航背后，
+                        // 对齐 HTML 原型的覆盖关系，因此这里不消费 Scaffold bottom padding。
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .consumeWindowInsets(innerPadding),
+                        ) {
                             when (val s = screen) {
                                 // ---- 各 tab 根（显底栏）：测试=Home / 历史=History / 设置=Settings ----
                                 is Screen.Home -> when (tab) {
                                     MainTab.Test -> HomeRoute(
                                         running = running,
+                                        testMode = testMode,
+                                        onTestModeChange = {
+                                            testMode = it
+                                            settingsStore.saveTestMode(it)
+                                        },
                                         notice = homeNotice,
                                         connectionLabel = when (transport) {
                                             TestEngine.TransportMode.AUTO -> "自动选择网络"
@@ -446,14 +458,27 @@ class MainActivity : ComponentActivity() {
                                         onOpenResult = { runId ->
                                             screen = Screen.Result(runId, fromHistory = false)
                                         },
+                                        onOpenBasicResult = { runId ->
+                                            screen = Screen.BasicResult(runId)
+                                        },
                                     )
-                                    MainTab.History -> HistoryRoute(
+                                    MainTab.Probe -> ApiProbeRoute(
+                                        onBack = { tab = MainTab.Test },
+                                        onOpenReachBoard = { screen = Screen.ReachBoard },
+                                        showBack = false,
+                                    )
+                                    MainTab.Results -> HistoryRoute(
                                         onOpen = { runId ->
                                             screen = Screen.Result(runId, fromHistory = true)
                                         },
+                                        onOpenBasic = { runId ->
+                                            screen = Screen.BasicResult(runId)
+                                        },
                                         onGenerateReport = { screen = Screen.Report },
                                         onBack = { tab = MainTab.Test },
+                                        showBack = false,
                                     )
+                                    MainTab.Map -> ExperienceMapRoute()
                                     MainTab.Settings -> SettingsScreen(
                                         serverUrl = serverUrl,
                                         onServerUrlChange = {
@@ -494,10 +519,12 @@ class MainActivity : ComponentActivity() {
                                         },
                                         injectActive = intentInject,
                                         onOpenServer = ::openServerScreen,
-                                        onOpenApiProbe = { screen = Screen.ApiProbe },
+                                        onOpenApiProbe = { tab = MainTab.Probe },
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
+                                        onOpenProfiles = { screen = Screen.Profiles },
                                         onBack = { tab = MainTab.Test },
+                                        showBack = false,
                                     )
                                 }
                                 // ---- 下钻屏（隐底栏；各自返回键回当前 tab 根）----
@@ -510,19 +537,33 @@ class MainActivity : ComponentActivity() {
                                         onCancel = ::cancelManualRun,
                                     )
                                 }
+                                is Screen.BasicTesting -> BasicSpeedTestingScreen(
+                                    telemetry = basicTelemetry,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    onCancel = ::cancelManualRun,
+                                )
+                                is Screen.BasicResult -> {
+                                    BasicResultRoute(runId = s.runId, onBack = { screen = Screen.Home })
+                                }
                                 is Screen.Report -> ReportRoute(onBack = { screen = Screen.Home })
                                 is Screen.Result -> ResultRoute(
                                     runId = s.runId,
                                     // 回根：tab 已记住来路（测试 手动测/上次结果 或 历史 tab 下钻），
                                     // 回到 Home 哨兵即落回当前 tab 根。
                                     onBack = { screen = Screen.Home },
+                                    onOpenShare = { model -> screen = Screen.Share(model, s) },
                                 )
                                 is Screen.ApiProbe -> ApiProbeRoute(
                                     // 从设置根下钻而来：回 Home 哨兵即落回设置 tab 根。
                                     onBack = { screen = Screen.Home },
                                     onOpenReachBoard = { screen = Screen.ReachBoard },
+                                    showBack = true,
                                 )
                                 is Screen.ReachBoard -> ReachBoardRoute(onBack = { screen = Screen.Home })
+                                is Screen.Profiles -> ProfileCatalogRoute(
+                                    serverUrl = serverUrl,
+                                    onBack = { screen = Screen.Home },
+                                )
                                 is Screen.Servers -> ServerScreen(
                                     currentUrl = serverUrl,
                                     reach = nodeReach,
@@ -539,6 +580,33 @@ class MainActivity : ComponentActivity() {
                                         tab = MainTab.Settings
                                     },
                                     onBack = { screen = Screen.Home },
+                                )
+                                is Screen.Share -> SharePreviewScreen(
+                                    model = s.model,
+                                    onBack = { screen = s.returnTo },
+                                    onSave = {
+                                        lifecycleScope.launch(Dispatchers.IO) {
+                                            ShareCard.renderAndSave(applicationContext, s.model)
+                                        }
+                                    },
+                                    onShare = {
+                                        lifecycleScope.launch(Dispatchers.IO) {
+                                            val uri = ShareCard.renderAndSave(applicationContext, s.model)
+                                            withContext(Dispatchers.Main) {
+                                                ShareCard.launchShare(applicationContext, uri)
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                            if (showMainNav) {
+                                AnebTabBar(
+                                    current = tab,
+                                    onSelect = {
+                                        tab = it
+                                        if (screen !is Screen.Home) screen = Screen.Home
+                                    },
+                                    modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
                                 )
                             }
                         }
@@ -592,12 +660,15 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun HomeRoute(
         running: Boolean,
+        testMode: AnebTestMode,
+        onTestModeChange: (AnebTestMode) -> Unit,
         notice: String?,
         connectionLabel: String,
         nodeLabel: String,
         onStart: () -> Unit,
         onOpenServer: () -> Unit,
         onOpenResult: (String) -> Unit,
+        onOpenBasicResult: (String) -> Unit,
     ) {
         // 最近一次 run（run 结束 running→false 时刷新，带出上次结果 chip）
         val lastRun by produceState<TestRun?>(initialValue = null, running) {
@@ -605,8 +676,16 @@ class MainActivity : ComponentActivity() {
                 db.testRunDao().all().maxByOrNull { it.startedAtEpochMs }
             }
         }
+        val lastBasicRun by produceState<BasicSpeedResultEntity?>(initialValue = null, running) {
+            value = withContext(Dispatchers.IO) {
+                db.basicSpeedResultDao().all().maxByOrNull { it.startedAtEpochMs }
+            }
+        }
         HomeScreen(
             lastRun = lastRun,
+            lastBasicRun = lastBasicRun,
+            testMode = testMode,
+            onTestModeChange = onTestModeChange,
             running = running,
             notice = notice,
             connectionLabel = connectionLabel,
@@ -614,22 +693,147 @@ class MainActivity : ComponentActivity() {
             onStart = onStart,
             onOpenServer = onOpenServer,
             onOpenLastResult = onOpenResult,
+            onOpenLastBasicResult = onOpenBasicResult,
         )
+    }
+
+    @Composable
+    private fun BasicResultRoute(runId: String, onBack: () -> Unit) {
+        val result by produceState<com.aneb.probe.engine.BasicSpeedResult?>(initialValue = null, runId) {
+            value = withContext(Dispatchers.IO) { db.basicSpeedResultDao().byId(runId)?.toDomain() }
+        }
+        val loaded = result
+        if (loaded != null) {
+            BasicSpeedResultScreen(result = loaded, onBack = onBack)
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text("未找到基础测速记录", color = AnebTheme.colors.muted)
+            }
+        }
     }
 
     @Composable
     private fun HistoryRoute(
         onOpen: (String) -> Unit,
+        onOpenBasic: (String) -> Unit,
         onGenerateReport: () -> Unit,
         onBack: () -> Unit,
+        showBack: Boolean = true,
     ) {
-        val runs by produceState(initialValue = emptyList<TestRun>()) {
-            value = withContext(Dispatchers.IO) { db.testRunDao().all() }
+        val history by produceState(initialValue = HistoryData()) {
+            value = withContext(Dispatchers.IO) {
+                HistoryData(
+                    tokenRuns = db.testRunDao().all(),
+                    basicRuns = db.basicSpeedResultDao().all(),
+                )
+            }
         }
         HistoryScreen(
-            runs = runs,
+            runs = history.tokenRuns,
+            basicRuns = history.basicRuns,
             onOpen = onOpen,
+            onOpenBasic = onOpenBasic,
             onGenerateReport = onGenerateReport,
+            onBack = onBack,
+            showBack = showBack,
+        )
+    }
+
+    private data class HistoryData(
+        val tokenRuns: List<TestRun> = emptyList(),
+        val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
+    )
+
+    @Composable
+    private fun ExperienceMapRoute() {
+        val points by produceState(initialValue = emptyList<ExperienceMapPoint>()) {
+            value = withContext(Dispatchers.IO) {
+                val runs = db.testRunDao().all().associateBy { it.runId }
+                val rttByRun = db.scenarioResultDao().all()
+                    .groupBy { it.runId }
+                    .mapValues { (_, rows) -> rows.mapNotNull { it.n1RttP50Ms }.takeIf { it.isNotEmpty() }?.average() }
+                db.radioSampleDao().withCoordinates().mapNotNull { sample ->
+                    val runId = sample.runId ?: return@mapNotNull null
+                    val lat = sample.lat ?: return@mapNotNull null
+                    val lon = sample.lon ?: return@mapNotNull null
+                    ExperienceMapPoint(
+                        runId = runId,
+                        tsNanos = sample.tsNanos,
+                        lat = lat,
+                        lon = lon,
+                        accuracyM = sample.accuracyM,
+                        aqsScore = runs[runId]?.aqsScore,
+                        rttMs = rttByRun[runId],
+                    )
+                }
+            }
+        }
+        ExperienceMapScreen(points)
+    }
+
+    private data class ProfileCatalogData(
+        val profiles: List<ScenarioProfile> = emptyList(),
+        val source: String? = null,
+        val warnings: List<String> = emptyList(),
+        val loading: Boolean = true,
+        val error: String? = null,
+    )
+
+    @Composable
+    private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit) {
+        var refreshTick by rememberSaveable { mutableIntStateOf(0) }
+        val catalog by produceState(
+            initialValue = ProfileCatalogData(),
+            serverUrl,
+            refreshTick,
+        ) {
+            value = ProfileCatalogData(loading = true)
+            value = withContext(Dispatchers.IO) {
+                try {
+                    // Profile 目录属于配置读取，不参与测量或评分，但仍需复用 E-01 的
+                    // SNI-RST 双通道选路。否则测速能够自动走 bare-IP，目录页却会误退回
+                    // APK 副本，给用户造成“节点配置未核验”的假象。
+                    val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                    val reach = if (pair == null) {
+                        null
+                    } else {
+                        try {
+                            ReachabilityProbe().probeDual(pair.first, pair.second)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    val catalogBase = ReachabilityProbe.preferredMeasureBase(serverUrl, reach)
+                    if (catalogBase.trimEnd('/') != serverUrl.trim().trimEnd('/')) {
+                        android.util.Log.i(
+                            "AnebProbe",
+                            "PROFILE_CATALOG_ROUTE route=bare_ip reason=sni_rst_ip_ok",
+                        )
+                    }
+                    val loaded = ProfileRepository(applicationContext).load(AnebClient(), catalogBase)
+                    ProfileCatalogData(
+                        profiles = loaded.profiles.values.sortedWith(compareBy({ it.modeId }, { it.profileId })),
+                        source = loaded.source,
+                        warnings = loaded.warnings,
+                        loading = false,
+                    )
+                } catch (_: Exception) {
+                    ProfileCatalogData(
+                        loading = false,
+                        error = "Profile 目录读取失败，请检查节点或重新安装 APK。",
+                    )
+                }
+            }
+        }
+        ProfileCatalogScreen(
+            profiles = catalog.profiles,
+            source = catalog.source,
+            warnings = catalog.warnings,
+            loading = catalog.loading,
+            error = catalog.error,
+            onRefresh = { refreshTick += 1 },
             onBack = onBack,
         )
     }
@@ -714,7 +918,11 @@ class MainActivity : ComponentActivity() {
     )
 
     @Composable
-    private fun ResultRoute(runId: String, onBack: () -> Unit) {
+    private fun ResultRoute(
+        runId: String,
+        onBack: () -> Unit,
+        onOpenShare: (ShareCard.Model) -> Unit,
+    ) {
         val data by produceState(
             initialValue = ResultData(null, emptyList(), null, emptyList(), loaded = false),
             runId,
@@ -768,14 +976,7 @@ class MainActivity : ComponentActivity() {
                     exportStatus = it
                 }
             },
-            onShare = { model ->
-                // 分享成图：离屏 Canvas 渲染 + MediaStore 写盘属重 IO，必须离开主线程（与 doExport 同款）；
-                // 仅 startActivity 回主线程。KEY=SHARE。
-                lifecycleScope.launch(Dispatchers.IO) {
-                    val uri = ShareCard.renderAndSave(applicationContext, model)
-                    withContext(Dispatchers.Main) { ShareCard.launchShare(this@MainActivity, uri) }
-                }
-            },
+            onShare = onOpenShare,
         )
     }
 
@@ -804,7 +1005,11 @@ class MainActivity : ComponentActivity() {
     // ------------------------------------------------------------------
 
     @Composable
-    private fun ApiProbeRoute(onBack: () -> Unit, onOpenReachBoard: () -> Unit) {
+    private fun ApiProbeRoute(
+        onBack: () -> Unit,
+        onOpenReachBoard: () -> Unit,
+        showBack: Boolean = true,
+    ) {
         val keyStore = remember { ApiKeyStore(applicationContext) }
         var provider by rememberSaveable { mutableStateOf(keyStore.provider) }
         var baseUrl by rememberSaveable { mutableStateOf(keyStore.effectiveBaseUrl()) }
@@ -816,7 +1021,7 @@ class MainActivity : ComponentActivity() {
         var exportStatus by remember { mutableStateOf<String?>(null) }
         val logs = remember { mutableStateListOf<String>() }
         var results by remember { mutableStateOf(emptyList<com.aneb.probe.data.ApiProbeResultEntity>()) }
-        var resultsVersion by remember { mutableStateOf(0) }
+        var resultsVersion by remember { mutableIntStateOf(0) }
 
         LaunchedEffect(resultsVersion) {
             results = withContext(Dispatchers.IO) { db.apiProbeResultDao().recent(20) }
@@ -855,8 +1060,9 @@ class MainActivity : ComponentActivity() {
                 keyStore.baseUrlOverride = baseUrl.takeIf { it != provider.defaultBaseUrl }
                 keyStore.modelOverride = model.takeIf { it != provider.defaultModel }
                 if (keyInput.isNotBlank()) {
-                    keyStore.setApiKey(keyInput)
+                    val keySaved = keyStore.setApiKey(keyInput)
                     keyInput = ""
+                    if (!keySaved) addLog("APIPROBE_CONFIG key_rejected reason=secure_storage_unavailable")
                 }
                 hasStoredKey = keyStore.hasKey()
                 addLog("APIPROBE_CONFIG saved provider=${provider.id} key_present=$hasStoredKey")
@@ -920,6 +1126,7 @@ class MainActivity : ComponentActivity() {
             },
             onOpenReachBoard = onOpenReachBoard,
             onBack = onBack,
+            showBack = showBack,
         )
     }
 

@@ -25,7 +25,10 @@ import kotlin.random.Random
  * 传输层失败策略：echo/upload/toolloop 单样本失败记 null 继续；token_stream 传输错误
  * 即中止场景剩余 phase 并标 [ScenarioOutcome.abortReason]（流中断＝会话中断证据，5.3.8）。
  */
-class ScenarioRunner(private val client: AnebClient) {
+class ScenarioRunner(
+    private val client: AnebClient,
+    private val liveStreamObserver: LiveStreamObserver? = null,
+) {
 
     class ClockSyncOutcome(
         val phaseIndex: Int,
@@ -226,7 +229,16 @@ class ScenarioRunner(private val client: AnebClient) {
     ): Boolean {
         var url = "$base/api/v1/stream?profile=${outcome.profile.profileId}&phase=$streamOrdinal&run=$runId"
         if (!inject.isNullOrBlank()) url += "&inject=$inject" // C09 前置：debug 注入透传
-        val r = client.stream(url, expectedTokens = phase.tokens)
+        liveStreamObserver?.onStreamStarted(phase.rateTps, SystemClock.elapsedRealtimeNanos())
+        val r = try {
+            client.stream(
+                url,
+                expectedTokens = phase.tokens,
+                onEventArrival = liveStreamObserver?.let { observer -> observer::onEventArrival },
+            )
+        } finally {
+            liveStreamObserver?.onStreamFinished()
+        }
 
         val stream = r.stream
         val ttftMs: Double?

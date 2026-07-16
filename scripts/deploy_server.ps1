@@ -80,7 +80,7 @@ else
 fi
 mkdir -p /opt/aneb/bin /opt/aneb/profiles /opt/aneb/data /opt/aneb/tls/ip
 install -m 755 /tmp/aneb-server-linux /opt/aneb/bin/aneb-server
-mv -f /tmp/s1_chat.json /tmp/s2_coding_agent.json /tmp/s3_multimodal.json /opt/aneb/profiles/
+mv -f /tmp/s1_chat.json /tmp/s2_coding_agent.json /tmp/s3_multimodal.json /tmp/basic_network.json /opt/aneb/profiles/
 # SNI dual-path: install IP-SAN cert+key for the bare-IP cellular channel if shipped
 # (key 600, cert 644). Absent => keep whatever is already there (or none => server warns).
 if [ -f /tmp/aneb_ip_cert.pem ] && [ -f /tmp/aneb_ip_key.pem ]; then
@@ -116,6 +116,10 @@ echo ''
 echo '--- smoke: /api/v1/echo ---'
 curl -sk -X POST --data ping https://127.0.0.1:8443/api/v1/echo
 echo ''
+echo '--- smoke: /api/v1/download ---'
+bytes=$(curl -sk https://127.0.0.1:8443/api/v1/download?bytes=1024 | wc -c)
+test "$bytes" -eq 1024
+echo "download_bytes=$bytes"
 echo 'DEPLOY_OK'
 '@
 

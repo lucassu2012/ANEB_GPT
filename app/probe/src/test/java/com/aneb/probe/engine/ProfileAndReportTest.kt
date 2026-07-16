@@ -39,6 +39,26 @@ class ProfileAndReportTest {
     }
 
     @Test
+    fun `基本测速 profile 解析模式 实时指标与并发阶段`() {
+        val profile = ProfileParser.parseSingle(
+            """{
+              "profile_id":"basic_network","version":"0.1.0","mode_id":"network_basic",
+              "kpi_set":"basic-network-kpi-v0.1",
+              "presentation":{"live_metric_id":"phase_throughput_mbps","live_metric_unit":"Mbps",
+                "live_window_ms":1000,"ui_refresh_ms":250,"metric_ids":["D1","U1"],
+                "conclusion_policy_id":"network-basic-conclusions-v1"},
+              "phases":[{"type":"download_throughput","duration_ms":10000,"bytes":268435456,
+                "chunk_kb":256,"parallel":4}]
+            }""",
+        )
+        assertEquals(ScenarioProfile.MODE_NETWORK_BASIC, profile.modeId)
+        assertEquals("phase_throughput_mbps", profile.presentation.liveMetricId)
+        assertEquals(250, profile.presentation.uiRefreshMs)
+        assertEquals(ProfilePhase.TYPE_DOWNLOAD_THROUGHPUT, profile.phases.single().type)
+        assertEquals(4, profile.phases.single().parallel)
+    }
+
+    @Test
     fun `ITL 直方图桶界含全部门限锚点且计数守恒`() {
         assertTrue(ItlHistogram.EDGES_MS.containsAll(listOf(100.0, 200.0, 400.0, 1000.0)))
         assertEquals(ItlHistogram.EDGES_MS, ItlHistogram.EDGES_MS.sorted())

@@ -1,0 +1,23 @@
+{
+  "profile_id": "basic_network",
+  "version": "0.1.0",
+  "mode_id": "network_basic",
+  "kpi_set": "basic-network-kpi-v0.1",
+  "description": "基本网络性能：应用层下载、上传、时延、抖动与请求失败率，对标 SpeedTest 的基础测速项目",
+  "est_duration_s": 28,
+  "presentation": {
+    "live_metric_id": "phase_throughput_mbps",
+    "live_metric_label": "实时速率",
+    "live_metric_unit": "Mbps",
+    "live_window_ms": 1000,
+    "ui_refresh_ms": 250,
+    "metric_ids": ["D1", "U1", "N1", "N2", "L1"],
+    "conclusion_policy_id": "network-basic-conclusions-v1"
+  },
+  "phases": [
+    { "type": "clock_sync", "samples": 20 },
+    { "type": "download_throughput", "duration_ms": 10000, "bytes": 33554432, "chunk_kb": 256, "parallel": 4 },
+    { "type": "upload_throughput", "duration_ms": 10000, "bytes": 8388608, "chunk_kb": 256, "parallel": 2 },
+    { "type": "clock_sync", "samples": 20 }
+  ]
+}

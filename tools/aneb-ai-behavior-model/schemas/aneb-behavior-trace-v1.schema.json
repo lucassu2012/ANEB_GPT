@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aneb.local/schemas/aneb-behavior-trace-v1.schema.json",
+  "title": "ANEB Business Behavior Trace Event v1",
+  "type": "object",
+  "required": [
+    "trace_contract_version",
+    "model_id",
+    "model_version",
+    "seed",
+    "event_index",
+    "business_type",
+    "event_type",
+    "planned_offset_ms"
+  ],
+  "properties": {
+    "trace_contract_version": {"const": "aneb-behavior-trace-v1"},
+    "model_id": {"type": "string", "minLength": 1},
+    "model_version": {"type": "string", "minLength": 1},
+    "seed": {"type": "integer"},
+    "event_index": {"type": "integer", "minimum": 0},
+    "business_type": {"enum": ["token_multimodal", "ai_realtime_voice"]},
+    "event_type": {"type": "string", "minLength": 1},
+    "planned_offset_ms": {"type": "number", "minimum": 0}
+  },
+  "not": {
+    "anyOf": [
+      {"required": ["arrival_ms"]},
+      {"required": ["network_delay_ms"]},
+      {"required": ["packet_loss"]},
+      {"required": ["measured_rtt_ms"]}
+    ]
+  },
+  "additionalProperties": true
+}
+

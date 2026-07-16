@@ -1,6 +1,5 @@
 package com.aneb.probe.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -174,7 +173,8 @@ private val LightColorScheme = lightColorScheme(
  */
 @Composable
 fun AnebTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    // 2026.07.15-2 视觉基线只有深海军蓝主题；result-light 也明确保持统一深色主题。
+    darkTheme: Boolean = true,
     reducedMotion: Boolean = rememberReducedMotion(),
     content: @Composable () -> Unit,
 ) {

@@ -1,6 +1,7 @@
 package com.aneb.probe.ui
 
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.engine.AnebTestMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,10 +15,12 @@ class ProbeSettingsStoreTest {
             mode = "FORENSIC",
             transport = "CELLULAR",
             driveTest = true,
+            testMode = "NETWORK_BASIC",
         )
 
         assertEquals("http://10.0.2.2:8443/", decoded.serverUrl)
         assertEquals(TestEngine.Mode.FORENSIC, decoded.mode)
+        assertEquals(AnebTestMode.NETWORK_BASIC, decoded.testMode)
         assertEquals(TestEngine.TransportMode.CELLULAR, decoded.transport)
         assertTrue(decoded.driveTest)
     }
@@ -28,6 +31,7 @@ class ProbeSettingsStoreTest {
 
         assertEquals(ProbeSettings.DEFAULT_SERVER_URL, decoded.serverUrl)
         assertEquals(TestEngine.Mode.QUICK, decoded.mode)
+        assertEquals(AnebTestMode.TOKEN_EXPERIENCE, decoded.testMode)
         assertEquals(TestEngine.TransportMode.AUTO, decoded.transport)
         assertFalse(decoded.driveTest)
     }
@@ -36,6 +40,7 @@ class ProbeSettingsStoreTest {
     fun `manual launch restores saved values`() {
         val saved = ProbeSettings(
             serverUrl = "https://node.example:8443",
+            testMode = AnebTestMode.NETWORK_BASIC,
             mode = TestEngine.Mode.FORENSIC,
             transport = TestEngine.TransportMode.WIFI,
             driveTest = true,
@@ -59,6 +64,7 @@ class ProbeSettingsStoreTest {
             saved = saved,
             overrides = ProbeLaunchOverrides(
                 serverUrl = "https://automation.example",
+                testMode = AnebTestMode.NETWORK_BASIC,
                 transport = TestEngine.TransportMode.CELLULAR,
             ),
             autorun = true,
@@ -67,6 +73,7 @@ class ProbeSettingsStoreTest {
 
         assertEquals("https://automation.example", resolved.serverUrl)
         assertEquals(TestEngine.Mode.QUICK, resolved.mode)
+        assertEquals(AnebTestMode.NETWORK_BASIC, resolved.testMode)
         assertEquals(TestEngine.TransportMode.CELLULAR, resolved.transport)
         assertFalse(resolved.driveTest)
     }

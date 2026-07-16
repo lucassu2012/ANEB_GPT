@@ -14,6 +14,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.Buffer
 import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import java.io.IOException
@@ -154,7 +155,12 @@ class AnebClient(bound: BoundNetwork? = null) {
      * @param expectedTokens 调用方（ScenarioRunner）期望的 token 总数（profile 的 tokens 参数），
      *        用于尾部截断检测；seq 从 0 起，完整流应收到 seq ∈ [0, expectedTokens)。
      */
-    suspend fun stream(url: String, expectedTokens: Int): StreamResult {
+    suspend fun stream(
+        url: String,
+        expectedTokens: Int,
+        /** SSE 边界到达只读观察；仅供实时 UI，不能解析/阻塞/参与 KPI。 */
+        onEventArrival: ((Long) -> Unit)? = null,
+    ): StreamResult {
         val call = client.newCall(
             Request.Builder().url(url).header("Accept", "text/event-stream").get().build()
         )
@@ -172,7 +178,8 @@ class AnebClient(bound: BoundNetwork? = null) {
                     )
                 } else {
                     val stream = sseReader.readStream(
-                        checkNotNull(resp.body) { "empty body for 2xx" }.source()
+                        checkNotNull(resp.body) { "empty body for 2xx" }.source(),
+                        onEventArrival = onEventArrival,
                     )
                     val timing = timingFactory.recordFor(call)
 
@@ -209,6 +216,119 @@ class AnebClient(bound: BoundNetwork? = null) {
                 requestStartNanos, null, 0, 0, null, null, e.toString(),
                 timingFactory.recordFor(call), truncatedEarly = false,
             )
+        }
+    }
+
+    // ------------------------------------------------------ basic throughput
+
+    /** 基本性能模式的单条应用层传输结果；吞吐由上层按多个并发结果聚合。 */
+    data class TransferResult(
+        val startNanos: Long,
+        val endNanos: Long?,
+        val totalBytes: Long,
+        val httpCode: Int?,
+        val error: String?,
+        val timing: TimingRecord?,
+    )
+
+    /**
+     * 流式读取大对象下载。每次 body read 后调用 [onBytes]；回调必须常数时间、无阻塞，
+     * 只供独立遥测采样统计，不参与最终 HTTP 成功判定。
+     */
+    suspend fun downloadThroughput(
+        url: String,
+        onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
+    ): TransferResult {
+        val call = client.newCall(
+            Request.Builder()
+                .url(url)
+                .header("Accept", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
+                .get()
+                .build(),
+        )
+        val startNanos = SystemClock.elapsedRealtimeNanos()
+        return try {
+            executeCancellable(call) { resp ->
+                val timing = timingFactory.recordFor(call)
+                if (!resp.isSuccessful) {
+                    resp.body?.string()
+                    TransferResult(startNanos, null, 0L, resp.code, "http ${resp.code}", timing)
+                } else {
+                    val source = checkNotNull(resp.body) { "empty body for 2xx" }.source()
+                    val sink = Buffer()
+                    var total = 0L
+                    while (true) {
+                        val n = source.read(sink, THROUGHPUT_READ_BYTES)
+                        if (n == -1L) break
+                        sink.skip(n)
+                        total += n
+                        onBytes(n.toInt(), SystemClock.elapsedRealtimeNanos())
+                    }
+                    TransferResult(
+                        startNanos = startNanos,
+                        endNanos = SystemClock.elapsedRealtimeNanos(),
+                        totalBytes = total,
+                        httpCode = resp.code,
+                        error = null,
+                        timing = timing,
+                    )
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TransferResult(startNanos, null, 0L, null, e.toString(), timingFactory.recordFor(call))
+        }
+    }
+
+    /**
+     * 流式写入固定长度大对象上传。动态回调表示应用写入 OkHttp 网络 sink 的字节，
+     * 最终 goodput 仍以上层“成功响应的传输字节/阶段时长”口径收束。
+     */
+    suspend fun uploadThroughput(
+        url: String,
+        totalBytes: Long,
+        chunkBytes: Int,
+        onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
+    ): TransferResult {
+        require(totalBytes > 0L) { "totalBytes must be positive" }
+        require(chunkBytes > 0) { "chunkBytes must be positive" }
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength(): Long = totalBytes
+
+            override fun writeTo(sink: BufferedSink) {
+                val chunk = ByteArray(chunkBytes) { index -> ((index * 31 + 17) and 0xff).toByte() }
+                var remaining = totalBytes
+                while (remaining > 0L) {
+                    val n = minOf(chunk.size.toLong(), remaining).toInt()
+                    sink.write(chunk, 0, n)
+                    onBytes(n, SystemClock.elapsedRealtimeNanos())
+                    remaining -= n
+                }
+                sink.flush()
+            }
+        }
+        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val startNanos = SystemClock.elapsedRealtimeNanos()
+        return try {
+            executeCancellable(call) { resp ->
+                val timing = timingFactory.recordFor(call)
+                resp.body?.string()
+                TransferResult(
+                    startNanos = startNanos,
+                    endNanos = SystemClock.elapsedRealtimeNanos(),
+                    totalBytes = if (resp.isSuccessful) totalBytes else 0L,
+                    httpCode = resp.code,
+                    error = if (resp.isSuccessful) null else "http ${resp.code}",
+                    timing = timing,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TransferResult(startNanos, null, 0L, null, e.toString(), timingFactory.recordFor(call))
         }
     }
 
@@ -532,6 +652,7 @@ class AnebClient(bound: BoundNetwork? = null) {
     private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
 
     private companion object {
+        const val THROUGHPUT_READ_BYTES: Long = 64L * 1024L
         /** 服务端固定 "\n\n" 分隔（与 SseReader 同一 wire 约定） */
         private val SSE_EVENT_DELIMITER = "\n\n".encodeUtf8()
         private val SEQ_REGEX = Regex("\"seq\"\\s*:\\s*(\\d+)")

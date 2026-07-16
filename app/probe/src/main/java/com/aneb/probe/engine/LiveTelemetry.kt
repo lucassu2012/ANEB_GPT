@@ -1,6 +1,8 @@
 package com.aneb.probe.engine
 
 import com.aneb.probe.radio.RadioSample
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicLongArray
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -44,6 +46,15 @@ data class LiveTelemetry(
     val tokensReceived: Int = 0,
     /** 粗粒度 token 速率（token/s）＝累计 token / 累计到达跨度；不可算＝null */
     val tokenRatePerSec: Double? = null,
+    /**
+     * 最近 [LiveStreamWindow.DEFAULT_WINDOW_NANOS] 内的 SSE 事件边界到达速率（event/s）。
+     * 这是实时动画用的应用层代理量，不等于模型计费 token；非流式阶段或窗口不足＝null。
+     */
+    val streamArrivalRatePerSec: Double? = null,
+    /** 当前仿真 profile 声明的目标发送速率（event/s）；仅用于仪表量程，不参与 KPI/AQS。 */
+    val streamTargetRatePerSec: Double? = null,
+    /** 当前是否正在读取 token_stream；用于 UI 区分“尚未测量”和“速率为 0”。 */
+    val streamActive: Boolean = false,
 
     // ---------------- 进度 ----------------
     /** 当前场景+阶段标识（如 profileId#round）；未开始＝null */
@@ -101,6 +112,9 @@ data class LiveTelemetry(
                 stallCount = stall,
                 tokensReceived = s.tokensReceived,
                 tokenRatePerSec = rate,
+                streamArrivalRatePerSec = s.streamArrivalRatePerSec,
+                streamTargetRatePerSec = s.streamTargetRatePerSec,
+                streamActive = s.streamActive,
                 phase = s.phase,
                 fraction = s.fraction.coerceIn(0.0, 1.0),
                 aqsRunning = s.aqsRunning,
@@ -154,6 +168,12 @@ data class TelemetrySnapshot(
     val tokensReceived: Int = 0,
     /** 累计 token 到达跨度（秒，速率分母）；不可算＝null */
     val tokenElapsedSec: Double? = null,
+    /** 最近 1 秒 SSE 事件边界到达速率（event/s，实时展示代理量）；不可算＝null。 */
+    val streamArrivalRatePerSec: Double? = null,
+    /** 当前 token_stream 的 profile 目标速率（event/s）；非流式阶段＝null。 */
+    val streamTargetRatePerSec: Double? = null,
+    /** 当前是否处于 token_stream 读循环。 */
+    val streamActive: Boolean = false,
     /** 当前场景+阶段标识；未开始＝null */
     val phase: String? = null,
     /** 全局完成度 0..1 */
@@ -189,4 +209,101 @@ class TelemetrySource {
 
     /** run 结束/取消复位。 */
     fun reset() = ref.set(TelemetrySnapshot.NONE)
+}
+
+/**
+ * token_stream 的只读实时观察合同。
+ *
+ * [onEventArrival] 在 SSE 读线程的边界切分点调用，因此实现只能做常数时间、无阻塞记录；
+ * 禁止解析、落库、日志、Flow 发射或 UI 回调。采样/平滑由独立遥测协程完成，避免反压测量热路径。
+ */
+interface LiveStreamObserver {
+    fun onStreamStarted(targetRatePerSec: Double, startedAtNanos: Long)
+    fun onEventArrival(arrivalNanos: Long)
+    fun onStreamFinished()
+}
+
+/**
+ * 无锁固定容量滑窗：SSE 读线程只写到达戳，遥测协程按需读取最近窗口的事件速率。
+ *
+ * 计数对象是完整 SSE event 边界（含协议 prelude/summary），所以输出必须标为“流式到达速率/代理量”，
+ * 不能标为计费 Token。容量覆盖 1 秒内远高于当前 profile 的事件数，溢出时仅保留最新样本。
+ */
+class LiveStreamWindow(
+    private val windowNanos: Long = DEFAULT_WINDOW_NANOS,
+    capacity: Int = DEFAULT_CAPACITY,
+) : LiveStreamObserver {
+    init {
+        require(windowNanos > 0L) { "windowNanos must be positive" }
+        require(capacity > 0) { "capacity must be positive" }
+    }
+
+    data class Snapshot(
+        val active: Boolean,
+        val arrivalRatePerSec: Double?,
+        val targetRatePerSec: Double?,
+    )
+
+    private val capacity = capacity
+    private val arrivals = AtomicLongArray(capacity)
+    private val written = AtomicLong(0L)
+
+    @Volatile private var active = false
+    @Volatile private var startedAtNanos = 0L
+    @Volatile private var targetRatePerSec: Double? = null
+
+    override fun onStreamStarted(targetRatePerSec: Double, startedAtNanos: Long) {
+        active = false
+        written.set(0L)
+        this.startedAtNanos = startedAtNanos
+        this.targetRatePerSec = targetRatePerSec.takeIf { it > 0.0 }
+        active = true
+    }
+
+    override fun onEventArrival(arrivalNanos: Long) {
+        if (!active) return
+        // 单流单读线程写入：先发布槽位内容，再推进 written，采样线程不会读到尚未写入的新槽位。
+        val sequence = written.get()
+        arrivals.set((sequence % capacity).toInt(), arrivalNanos)
+        written.lazySet(sequence + 1L)
+    }
+
+    override fun onStreamFinished() {
+        active = false
+    }
+
+    fun snapshot(nowNanos: Long): Snapshot {
+        val isActive = active
+        val target = targetRatePerSec
+        if (!isActive) return Snapshot(active = false, arrivalRatePerSec = null, targetRatePerSec = target)
+
+        val elapsed = nowNanos - startedAtNanos
+        if (elapsed < MIN_SAMPLE_NANOS) {
+            return Snapshot(active = true, arrivalRatePerSec = null, targetRatePerSec = target)
+        }
+
+        val lowerBound = maxOf(startedAtNanos, nowNanos - windowNanos)
+        val sampleCount = minOf(written.get(), capacity.toLong()).toInt()
+        var inWindow = 0
+        for (i in 0 until sampleCount) {
+            val stamp = arrivals.get(i)
+            if (stamp in lowerBound..nowNanos) inWindow++
+        }
+        val denominatorNanos = minOf(windowNanos, elapsed).coerceAtLeast(MIN_SAMPLE_NANOS)
+        val rate = inWindow * 1_000_000_000.0 / denominatorNanos
+        return Snapshot(active = true, arrivalRatePerSec = rate, targetRatePerSec = target)
+    }
+
+    fun reset() {
+        active = false
+        written.set(0L)
+        startedAtNanos = 0L
+        targetRatePerSec = null
+    }
+
+    companion object {
+        const val DEFAULT_WINDOW_NANOS: Long = 1_000_000_000L
+        const val MIN_SAMPLE_NANOS: Long = 250_000_000L
+        const val DEFAULT_CAPACITY: Int = 2_048
+    }
 }

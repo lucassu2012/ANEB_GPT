@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -43,6 +44,11 @@ import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.ui.components.GlassChrome
+import com.aneb.probe.ui.components.AnebMetric
+import com.aneb.probe.ui.components.AnebMetricTrio
+import com.aneb.probe.ui.components.AnebPageIntro
+import com.aneb.probe.ui.components.AnebScoreRing
+import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.GradeChip
 import com.aneb.probe.ui.components.HalfGauge
 import com.aneb.probe.ui.components.KpiBar
@@ -100,16 +106,14 @@ fun ResultScreen(
     var viewMode by rememberSaveable { mutableStateOf(ResultViewMode.Simple) }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(horizontal = 20.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BackButton(onBack)
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("测试结果", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colors.ink)
-                if (run != null) Text(NetworkLabel.forRun(run), fontSize = 10.5.sp, color = colors.muted)
-            }
+        AnebTopBar(showBack = true, onBack = onBack, showMenu = true)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            AnebPageIntro(
+                eyebrow = "RESULT",
+                title = "测试结果",
+                subtitle = run?.let(NetworkLabel::forRun),
+                modifier = Modifier.weight(1f),
+            )
             SegmentedControl(
                 options = ResultViewMode.entries.toList(),
                 selected = viewMode,
@@ -198,14 +202,14 @@ private fun ActionButton(
     onClick: () -> Unit,
 ) {
     val colors = AnebTheme.colors
-    val container = if (primary) colors.brand else colors.surface2
-    val fg = if (primary) Color.White else colors.ink
+    val container = if (primary) Color(0xFF071118) else Color.Transparent
+    val fg = if (primary) colors.excellent else colors.ink.copy(alpha = 0.78f)
     Box(
         modifier = modifier
             .then(if (primary && enabled) Modifier.shadow(AnebElevation.level2, AnebShapes.button, clip = false) else Modifier)
             .clip(AnebShapes.button)
             .background(if (enabled) container else container.copy(alpha = 0.4f))
-            .then(if (!primary) Modifier.border(1.dp, colors.hairline, AnebShapes.button) else Modifier)
+            .border(1.dp, if (primary) colors.excellent.copy(alpha = 0.48f) else colors.hairline, AnebShapes.pill)
             .pressable(onClick = onClick, enabled = enabled)
             .padding(vertical = 13.dp),
         contentAlignment = Alignment.Center,
@@ -213,7 +217,7 @@ private fun ActionButton(
         Text(
             text = text,
             color = if (enabled) fg else fg.copy(alpha = 0.5f),
-            fontSize = 14.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
         )
@@ -240,6 +244,28 @@ private fun SimpleResultView(
     val u1 = rows["U1"]?.row
 
     val verdict = simpleVerdict(run, rows)
+    val codingScenarios = scenarios.filter { it.profileId == "s2_coding_agent" }
+    val codingHasUsable = codingScenarios.any { !it.validity.equals("invalid", ignoreCase = true) }
+    val codingValidity = when {
+        codingScenarios.isEmpty() -> null
+        codingHasUsable -> "valid"
+        else -> "invalid"
+    }
+    val conclusions = OutcomeConclusions.build(
+        OutcomeConclusions.Input(
+            runStatus = run.status,
+            score = run.aqsScore,
+            codingValidity = codingValidity,
+            codingInvalidReasons = codingScenarios.joinToString(",") { it.invalidReasons },
+            ttftMs = t1?.value,
+            ttftGrade = t1?.grade,
+            stallRate = t3?.value,
+            stallGrade = t3?.grade,
+            uploadMbps = u1?.value,
+            uploadGrade = u1?.grade,
+            sessionDropRate = run.aqsV02C1DropRate,
+        ),
+    )
 
     Column(
         modifier = Modifier
@@ -260,24 +286,15 @@ private fun SimpleResultView(
 
         Spacer(Modifier.height(20.dp))
 
-        // ---- 180° 半盘 + 中心 60px 大分 / 分档 / Agent 体验分 ----
-        HalfGauge(
-            fraction = ((score?.toFloat() ?: 0f) / 100f),
-            band = band,
-            modifier = Modifier.fillMaxWidth().aspectRatio(1.8f),
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    score?.roundToInt()?.toString() ?: "—",
-                    style = AnebType.DisplayScore,
-                    fontSize = 60.sp,
-                    color = band,
-                )
-                Text(grade?.labelFriendly ?: "未完成", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = band)
-                Spacer(Modifier.height(2.dp))
-                Text("Agent 体验分", fontSize = 11.sp, color = colors.muted)
-            }
-        }
+        // ---- 270° 1:1 结果圆环（与 result-simple.html 同构）----
+        AnebScoreRing(
+            score = score?.roundToInt(),
+            fraction = score?.let { (it / 100.0).toFloat() } ?: 0f,
+            accent = band,
+            label = grade?.labelFriendly ?: "未完成",
+            supporting = "AI 体验分",
+            modifier = Modifier.size(206.dp),
+        )
 
         Spacer(Modifier.height(14.dp))
         // ---- 结论句（关键结论小句分档色加粗）----
@@ -290,32 +307,64 @@ private fun SimpleResultView(
         )
 
         Spacer(Modifier.height(18.dp))
-        // ---- 结果大数字行（响应←T1 / 上传←U1 / 卡顿←T3，各带优良可差角标）----
-        StResults(
+        // ---- 结果页三指标；不把缺失值折成 0 ----
+        AnebMetricTrio(
             items = listOf(
-                StResItem(
-                    icon = ResIcon.Down,
-                    name = "响应",
-                    value = t1?.value?.let { "${it.roundToInt()}" } ?: "—",
-                    unit = if (t1?.value != null) "ms" else "",
-                    grade = Grade.fromKey(t1?.grade),
-                ),
-                StResItem(
-                    icon = ResIcon.Up,
-                    name = "上传",
-                    value = u1?.value?.let { "%.1f".format(it) } ?: "—",
-                    unit = if (u1?.value != null) "Mbps" else "",
-                    grade = Grade.fromKey(u1?.grade),
-                ),
-                StResItem(
-                    icon = ResIcon.Stall,
-                    name = "卡顿",
-                    value = stallTileValue(t3?.value),
-                    unit = "",
-                    grade = Grade.fromKey(t3?.grade),
-                ),
+                AnebMetric("首字响应", t1?.value?.let { String.format(java.util.Locale.ROOT, "%.2f", it / 1_000.0) } ?: "—", "秒", colors.gradeColor(Grade.fromKey(t1?.grade))),
+                AnebMetric("Token 间隔", rows["T2"]?.row?.value?.let { "${it.roundToInt()}" } ?: "—", "ms", colors.gradeColor(Grade.fromKey(rows["T2"]?.row?.grade))),
+                AnebMetric("卡顿", stallTileValue(t3?.value), "", colors.gradeColor(Grade.fromKey(t3?.grade))),
             ),
         )
+
+        Spacer(Modifier.height(18.dp))
+        OutcomeConclusionBlock(conclusions)
+    }
+}
+
+@Composable
+private fun OutcomeConclusionBlock(items: List<OutcomeConclusions.Item>) {
+    val colors = AnebTheme.colors
+    Column(Modifier.fillMaxWidth()) {
+        Text("本次结论", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+        Spacer(Modifier.height(9.dp))
+        items.forEachIndexed { index, item ->
+            val accent = when (item.evidence) {
+                OutcomeConclusions.Evidence.MEASURED -> colors.brand
+                OutcomeConclusions.Evidence.ESTIMATED -> colors.fair
+                OutcomeConclusions.Evidence.UNAVAILABLE -> colors.muted
+            }
+            val evidence = when (item.evidence) {
+                OutcomeConclusions.Evidence.MEASURED -> "实测"
+                OutcomeConclusions.Evidence.ESTIMATED -> "估算"
+                OutcomeConclusions.Evidence.UNAVAILABLE -> "待补数据"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(AnebShapes.xs)
+                    .background(Color(0x7A11162A))
+                    .border(1.dp, colors.hairline, AnebShapes.xs)
+                    .padding(horizontal = 12.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    evidence,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent,
+                    modifier = Modifier
+                        .border(1.dp, accent.copy(alpha = 0.32f), AnebShapes.pill)
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item.title, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                    Spacer(Modifier.height(3.dp))
+                    Text(item.body, fontSize = 10.sp, lineHeight = 15.sp, color = colors.muted)
+                }
+            }
+            if (index < items.lastIndex) Spacer(Modifier.height(7.dp))
+        }
     }
 }
 

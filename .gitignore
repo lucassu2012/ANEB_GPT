@@ -5,6 +5,8 @@ app/local.properties
 app/.idea/
 *.apk
 *.aab
+*.jks
+*.keystore
 
 # Go
 server/aneb-server
@@ -28,3 +30,11 @@ app/probe/build/
 
 # Kotlin build artifacts
 app/.kotlin/
+
+# Public cloud checkpoint: real-device databases/logs/screenshots stay local.
+evidence/
+
+# Bundled AI behavior-model generated artifacts are reproducible and not source.
+tools/aneb-ai-behavior-model/build/
+tools/aneb-ai-behavior-model/**/__pycache__/
+tools/aneb-ai-behavior-model/**/*.pyc

@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -64,10 +66,12 @@ enum class StepState { Done, On, Todo }
 /** 结果行图标语义：下行(箭头↓) / 上行(箭头↑) / 卡顿(ECG 脉冲)。 */
 enum class ResIcon { Down, Up, Stall }
 
-/** 底部主 tab：测试(GO 凸起) / 历史 / 设置。 */
+/** 底部主 tab：严格对应 ANEB_UI 的测试 / 探针 / 结果 / 地图 / 设置。 */
 enum class MainTab(val label: String) {
     Test("测试"),
-    History("历史"),
+    Probe("探针"),
+    Results("结果"),
+    Map("地图"),
     Settings("设置"),
 }
 
@@ -516,12 +520,12 @@ private fun ResIconGlyph(icon: ResIcon, tint: Color, size: Dp) {
 }
 
 // ---------------------------------------------------------------------------
-// AnebTabBar —— 底部主 tab（历史 · 测试 GO 凸起 · 设置）
+// AnebTabBar —— ANEB_UI 五栏底部导航
 // ---------------------------------------------------------------------------
 
 /**
- * 底部主 tab：中央「测试」为 [AnebColors.brand] 凸起 GO 圆钮（上移 + 抬升阴影），两侧历史/设置。
- * 外壳走 [GlassChrome] 毛玻璃 + 上缘发丝线；选中态品牌蓝、未选次文本灰，深浅色随主题。
+ * 原型在所有根页面都使用等宽五栏细线图标；选中为白色，未选为 62% 灰。
+ * 导航覆盖在页面内容之上，所以背景只做由透明到深海军蓝的渐变，不创建凸起 GO 按钮。
  */
 @Composable
 fun AnebTabBar(
@@ -530,30 +534,27 @@ fun AnebTabBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = AnebTheme.colors
-    GlassChrome(modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth()) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
-            Box(Modifier.fillMaxWidth()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SideTab(MainTab.History, current, onSelect, Modifier.weight(1f))
-                    Spacer(Modifier.weight(1f)) // 中央 GO 让位
-                    SideTab(MainTab.Settings, current, onSelect, Modifier.weight(1f))
-                }
-                GoButton(
-                    selected = current == MainTab.Test,
-                    onClick = { onSelect(MainTab.Test) },
-                    modifier = Modifier.align(Alignment.TopCenter).offset(y = (-18).dp),
-                )
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, colors.background.copy(alpha = 0.92f), colors.background),
+                ),
+            )
+            .padding(top = 6.dp, bottom = 4.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            MainTab.entries.forEach { tab ->
+                NavTab(tab, current, onSelect, Modifier.weight(1f))
             }
         }
     }
 }
 
 @Composable
-private fun SideTab(
+private fun NavTab(
     tab: MainTab,
     current: MainTab,
     onSelect: (MainTab) -> Unit,
@@ -561,83 +562,89 @@ private fun SideTab(
 ) {
     val colors = AnebTheme.colors
     val on = tab == current
-    val tint = if (on) colors.brand else colors.muted
-    Column(
-        modifier.pressable(onClick = { onSelect(tab) }),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    val tint = if (on) Color.White else colors.muted.copy(alpha = 0.82f)
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .pressable(onClick = { onSelect(tab) }),
+        contentAlignment = Alignment.Center,
     ) {
-        when (tab) {
-            MainTab.History -> TabGlyphClock(tint, 22.dp)
-            MainTab.Settings -> TabGlyphSettings(tint, 22.dp)
-            MainTab.Test -> Spacer(Modifier.size(22.dp)) // Test 由中央 GO 承载
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            TabGlyph(tab, tint, 20.dp)
+            Spacer(Modifier.height(4.dp))
+            Text(tab.label, fontSize = 9.sp, lineHeight = 10.sp, color = tint, fontWeight = FontWeight.Normal)
         }
-        Spacer(Modifier.height(3.dp))
-        Text(tab.label, fontSize = 10.5.sp, color = tint, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 
 @Composable
-private fun GoButton(
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = AnebTheme.colors
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .size(54.dp)
-                .shadow(AnebElevation.level2, CircleShape)
-                .clip(CircleShape)
-                .background(colors.brand)
-                .pressable(onClick = onClick),
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(20.dp)) {
-                val tri = Path().apply {
-                    moveTo(size.width * 0.34f, size.height * 0.24f)
-                    lineTo(size.width * 0.34f, size.height * 0.76f)
-                    lineTo(size.width * 0.78f, size.height * 0.5f)
-                    close()
-                }
-                drawPath(tri, Color.White)
-            }
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            MainTab.Test.label,
-            fontSize = 10.5.sp,
-            color = if (selected) colors.brand else colors.muted,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        )
-    }
-}
-
-/** 时钟图标（历史 tab）：圆 + 时/分针。 */
-@Composable
-private fun TabGlyphClock(tint: Color, size: Dp) {
-    Canvas(Modifier.size(size)) {
-        val r = this.size.minDimension * 0.4f
-        val c = Offset(this.size.width / 2f, this.size.height / 2f)
-        val st = this.size.minDimension * 0.08f
-        drawCircle(tint, r, c, style = Stroke(width = st))
-        drawLine(tint, c, Offset(c.x, c.y - r * 0.55f), strokeWidth = st, cap = StrokeCap.Round)
-        drawLine(tint, c, Offset(c.x + r * 0.42f, c.y + r * 0.12f), strokeWidth = st, cap = StrokeCap.Round)
-    }
-}
-
-/** 设置图标（设置 tab）：三条带旋钮的滑杆。 */
-@Composable
-private fun TabGlyphSettings(tint: Color, size: Dp) {
+private fun TabGlyph(tab: MainTab, tint: Color, size: Dp) {
     Canvas(Modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
-        val st = w * 0.08f
-        val ys = floatArrayOf(h * 0.28f, h * 0.5f, h * 0.72f)
-        val knob = floatArrayOf(w * 0.66f, w * 0.36f, w * 0.62f)
-        for (i in 0..2) {
-            drawLine(tint, Offset(w * 0.16f, ys[i]), Offset(w * 0.84f, ys[i]), strokeWidth = st, cap = StrokeCap.Round)
-            drawCircle(tint, w * 0.09f, Offset(knob[i], ys[i]))
+        val st = w * 0.072f
+        val c = Offset(w / 2f, h / 2f)
+        when (tab) {
+            MainTab.Test -> {
+                drawArc(
+                    tint,
+                    startAngle = 205f,
+                    sweepAngle = 130f,
+                    useCenter = false,
+                    topLeft = Offset(w * 0.12f, h * 0.18f),
+                    size = Size(w * 0.76f, h * 0.76f),
+                    style = Stroke(st, cap = StrokeCap.Round),
+                )
+                drawLine(tint, c, Offset(w * 0.69f, h * 0.34f), st, StrokeCap.Round)
+                drawCircle(tint, st * 0.9f, c)
+            }
+            MainTab.Probe -> {
+                val xs = floatArrayOf(w * 0.27f, w * 0.5f, w * 0.73f)
+                val tops = floatArrayOf(h * 0.56f, h * 0.28f, h * 0.43f)
+                xs.indices.forEach { i ->
+                    drawLine(tint, Offset(xs[i], h * 0.82f), Offset(xs[i], tops[i]), st, StrokeCap.Round)
+                    drawCircle(tint, st * 1.25f, Offset(xs[i], tops[i]))
+                }
+            }
+            MainTab.Results -> {
+                drawCircle(tint, w * 0.36f, c, style = Stroke(st))
+                val check = Path().apply {
+                    moveTo(w * 0.32f, h * 0.51f)
+                    lineTo(w * 0.45f, h * 0.64f)
+                    lineTo(w * 0.70f, h * 0.36f)
+                }
+                drawPath(check, tint, style = Stroke(st, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            MainTab.Map -> {
+                val p1 = Path().apply {
+                    moveTo(w * 0.16f, h * 0.25f); lineTo(w * 0.37f, h * 0.18f); lineTo(w * 0.37f, h * 0.78f); lineTo(w * 0.16f, h * 0.85f); close()
+                }
+                val p2 = Path().apply {
+                    moveTo(w * 0.37f, h * 0.18f); lineTo(w * 0.64f, h * 0.28f); lineTo(w * 0.64f, h * 0.88f); lineTo(w * 0.37f, h * 0.78f); close()
+                }
+                val p3 = Path().apply {
+                    moveTo(w * 0.64f, h * 0.28f); lineTo(w * 0.84f, h * 0.20f); lineTo(w * 0.84f, h * 0.80f); lineTo(w * 0.64f, h * 0.88f); close()
+                }
+                drawPath(p1, tint, style = Stroke(st, join = StrokeJoin.Round))
+                drawPath(p2, tint, style = Stroke(st, join = StrokeJoin.Round))
+                drawPath(p3, tint, style = Stroke(st, join = StrokeJoin.Round))
+            }
+            MainTab.Settings -> {
+                drawCircle(tint, w * 0.28f, c, style = Stroke(st))
+                drawCircle(tint, w * 0.08f, c, style = Stroke(st))
+                repeat(8) { i ->
+                    val a = Math.toRadians((i * 45).toDouble())
+                    val inner = w * 0.34f
+                    val outer = w * 0.43f
+                    drawLine(
+                        tint,
+                        Offset(c.x + kotlin.math.cos(a).toFloat() * inner, c.y + kotlin.math.sin(a).toFloat() * inner),
+                        Offset(c.x + kotlin.math.cos(a).toFloat() * outer, c.y + kotlin.math.sin(a).toFloat() * outer),
+                        st,
+                        StrokeCap.Round,
+                    )
+                }
+            }
         }
     }
 }

@@ -21,9 +21,9 @@ object AnebPalette {
 
     // ---- 品牌（iOS system blue；仅交互态） ----
     object Brand {
-        val Base = Color(0xFF0A84FF) // 深色 --brand
-        val Hover = Color(0xFF5EB0FF) // --brand2
-        val Press = Color(0xFF0060DF) // --brand-press
+        val Base = Color(0xFF43E1E6) // --cyan：主测试/交互
+        val Hover = Color(0xFF67EDCC) // --mint：主交互高亮
+        val Press = Color(0xFF3EB4F1) // --blue：按压态
         val LightBase = Color(0xFF007AFF) // 浅色 --brand
         val LightHover = Color(0xFF0A84FF)
     }
@@ -31,10 +31,10 @@ object AnebPalette {
     // ---- 四级语义色（iOS system colors；深色/浅色两调） ----
     object Semantic {
         // 深色
-        val Excellent = Color(0xFF30D158) // 优 · green
-        val Good = Color(0xFF64D2FF) // 良 · cyan
-        val Fair = Color(0xFFFF9F0A) // 可 · orange
-        val Poor = Color(0xFFFF453A) // 差 · red
+        val Excellent = Color(0xFF59E493) // 优 · green
+        val Good = Color(0xFF43E1E6) // 良 · cyan
+        val Fair = Color(0xFFEFCA72) // 可 · yellow
+        val Poor = Color(0xFFEB718D) // 差 · red
         // 浅色（更接近 iOS 默认）
         val ExcellentLight = Color(0xFF34C759)
         val GoodLight = Color(0xFF32ADE6)
@@ -43,19 +43,20 @@ object AnebPalette {
     }
 
     /** 无效/缺失/低置信中性灰（R-10 失败样本：绝不发语义色）——iOS systemGray */
-    val Neutral = Color(0xFF8E8E93)
+    val Neutral = Color(0xFF7B8BA4)
     val NeutralLight = Color(0xFFAEAEB2)
 
     // ---- App 内中性色（深色 / OLED 黑；phone 内容区 a* 口径） ----
     object Dark {
-        val Background = Color(0xFF000000) // --a 底（OLED 纯黑）
-        val Card = Color(0xFF1C1C1E) // --acard 卡片
-        val Card2 = Color(0xFF2C2C2E) // --acard2 卡片2 / 段控轨 / 进度条底
-        val Ink = Color(0xFFF5F5F7) // --aink 主文本
-        val Muted = Color(0x99EBEBF5) // --amut rgba(235,235,245,.6)
-        val Faint = Color(0x52EBEBF5) // --afaint rgba(235,235,245,.32)
-        val Hairline = Color(0x1AFFFFFF) // --ahair rgba(255,255,255,.1)
-        val Material = Color(0x99141416) // --amat 近似 rgba(20,20,22,.6)
+        val Background = Color(0xFF070A18) // suite.css --bg
+        val DeepBackground = Color(0xFF010207) // home.css --black
+        val Card = Color(0xE6131830) // --surface rgba(19,24,48,.9)
+        val Card2 = Color(0xD1191F3A) // --surface-2 rgba(25,31,58,.82)
+        val Ink = Color(0xFFF3F6FA) // --text
+        val Muted = Color(0xADD7E0ED) // --muted rgba(215,224,237,.68)
+        val Faint = Color(0x75C6D3E5) // --faint rgba(198,211,229,.46)
+        val Hairline = Color(0x24CADBF1) // --line rgba(202,219,241,.14)
+        val Material = Color(0xE60D1227) // 深海军蓝半透明材质
     }
 
     // ---- App 内中性色（浅色；跟随系统深浅色；phone.lightapp 口径） ----

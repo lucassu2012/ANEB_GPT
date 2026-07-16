@@ -52,9 +52,16 @@ class ProfileRepository(private val context: Context) {
         return Loaded(assets, "assets_fallback", warnings)
     }
 
+    /**
+     * 仅读取随 APK 发布的版本化 Profile，用于目录展示和离线审计。
+     * 不参与测量选路，也不会把本地副本伪装成已与节点核验的配置。
+     */
+    suspend fun loadBundled(): List<ScenarioProfile> =
+        loadAssets().values.sortedWith(compareBy({ it.modeId }, { it.profileId }))
+
     private suspend fun loadAssets(): Map<String, ScenarioProfile> = withContext(Dispatchers.IO) {
         // 同步磁盘 IO 显式落 IO 池（R-16；与 TestEngine.run 的 flowOn(IO) 双重兜底）
-        val profiles = ProfileParser.REQUIRED_IDS.map { id ->
+        val profiles = ProfileParser.BUILTIN_IDS.map { id ->
             context.assets.open("$id.json").use { input ->
                 ProfileParser.parseSingle(input.readBytes().toString(Charsets.UTF_8))
             }

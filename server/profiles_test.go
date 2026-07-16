@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-// 解析仓库内三个真实 profile 不得报错（两端共享合同）。
+// 解析仓库内四个真实 profile 不得报错（两端共享合同）。
 func TestLoadRealProfiles(t *testing.T) {
 	profiles, err := loadProfiles("../profiles")
 	if err != nil {
 		t.Fatalf("loadProfiles: %v", err)
 	}
-	want := []string{"s1_chat", "s2_coding_agent", "s3_multimodal"}
+	want := []string{"basic_network", "s1_chat", "s2_coding_agent", "s3_multimodal"}
 	if len(profiles) != len(want) {
 		t.Fatalf("got %d profiles, want %d", len(profiles), len(want))
 	}
@@ -48,6 +48,10 @@ func TestLoadRealProfiles(t *testing.T) {
 	if _, err := s2.tokenStreamPhase(2); err == nil {
 		t.Fatal("expected error for out-of-range token_stream index")
 	}
+	basic := profiles["basic_network"]
+	if basic.ModeID != "network_basic" || basic.Presentation.LiveMetricID != "phase_throughput_mbps" {
+		t.Fatalf("basic profile presentation wrong: %+v", basic)
+	}
 }
 
 func TestProfilesEndpoint(t *testing.T) {
@@ -77,7 +81,7 @@ func TestProfilesEndpoint(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(body.Profiles) != 3 {
+	if len(body.Profiles) != 4 {
 		t.Fatalf("got %d profiles", len(body.Profiles))
 	}
 	for _, p := range body.Profiles {

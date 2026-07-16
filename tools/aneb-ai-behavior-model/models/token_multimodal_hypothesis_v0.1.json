@@ -1,0 +1,128 @@
+{
+  "model_contract_version": "aneb-behavior-model-v1",
+  "model_id": "token-multimodal-behavior-v0.1",
+  "model_version": "0.1.0",
+  "business_type": "token_multimodal",
+  "status": "hypothesis",
+  "source": {
+    "kind": "product_requirement_hypothesis",
+    "content_retained": false,
+    "notes": "Kimi/DeepSeek/Qwen-like only as interaction archetypes; not provider performance data"
+  },
+  "prng": "pcg32-v1",
+  "generation": {
+    "gap_between_tasks_ms": {"type": "empirical", "values": [500, 800, 1200]},
+    "workloads": [
+      {
+        "kind": "text",
+        "repetitions": 4,
+        "payload_bytes": {"type": "empirical", "values": [2048, 8192, 16384]},
+        "chunk_bytes": 2048,
+        "upload_chunk_cadence_ms": 1,
+        "processing_delay_ms": {"type": "empirical", "values": [350, 500, 700, 900]},
+        "output_token_count": {"type": "empirical", "values": [180, 320, 600]},
+        "token_bytes": {"type": "empirical", "values": [72, 96, 120, 160, 220]},
+        "response_artifact_bytes": {"type": "empirical", "values": [0, 0, 0, 1048576]},
+        "artifact_chunk_bytes": 65536,
+        "token_interval_model": {
+          "type": "markov_empirical",
+          "states": {
+            "FAST": {"type": "empirical", "values": [8, 10, 12, 16, 20]},
+            "NORMAL": {"type": "empirical", "values": [25, 35, 50, 80, 120]},
+            "PAUSE": {"type": "empirical", "values": [250, 400, 800]}
+          },
+          "start_probabilities": {"FAST": 0.2, "NORMAL": 0.75, "PAUSE": 0.05},
+          "transition_probabilities": {
+            "FAST": {"FAST": 0.7, "NORMAL": 0.28, "PAUSE": 0.02},
+            "NORMAL": {"FAST": 0.18, "NORMAL": 0.78, "PAUSE": 0.04},
+            "PAUSE": {"FAST": 0.25, "NORMAL": 0.75, "PAUSE": 0.0}
+          }
+        }
+      },
+      {
+        "kind": "document",
+        "repetitions": 3,
+        "payload_bytes": {"type": "empirical", "values": [1048576, 5242880, 10485760]},
+        "chunk_bytes": 65536,
+        "upload_chunk_cadence_ms": 1,
+        "processing_delay_ms": {"type": "empirical", "values": [900, 1400, 2200, 3500]},
+        "output_token_count": {"type": "empirical", "values": [600, 1000, 1600]},
+        "token_bytes": {"type": "empirical", "values": [72, 96, 120, 160, 220]},
+        "response_artifact_bytes": {"type": "empirical", "values": [0, 1048576, 5242880]},
+        "artifact_chunk_bytes": 65536,
+        "token_interval_model": {
+          "type": "markov_empirical",
+          "states": {
+            "FAST": {"type": "empirical", "values": [8, 12, 16, 20]},
+            "NORMAL": {"type": "empirical", "values": [25, 40, 60, 100, 160]},
+            "PAUSE": {"type": "empirical", "values": [300, 600, 1200]}
+          },
+          "start_probabilities": {"FAST": 0.1, "NORMAL": 0.8, "PAUSE": 0.1},
+          "transition_probabilities": {
+            "FAST": {"FAST": 0.65, "NORMAL": 0.32, "PAUSE": 0.03},
+            "NORMAL": {"FAST": 0.15, "NORMAL": 0.78, "PAUSE": 0.07},
+            "PAUSE": {"FAST": 0.2, "NORMAL": 0.78, "PAUSE": 0.02}
+          }
+        }
+      },
+      {
+        "kind": "image",
+        "repetitions": 3,
+        "payload_bytes": {"type": "empirical", "values": [5242880, 10485760, 15728640]},
+        "chunk_bytes": 65536,
+        "upload_chunk_cadence_ms": 1,
+        "processing_delay_ms": {"type": "empirical", "values": [1200, 2000, 3500, 5000]},
+        "output_token_count": {"type": "empirical", "values": [300, 600, 1000]},
+        "token_bytes": {"type": "empirical", "values": [72, 96, 120, 160, 220]},
+        "response_artifact_bytes": {"type": "empirical", "values": [0, 10485760, 20971520]},
+        "artifact_chunk_bytes": 65536,
+        "token_interval_model": {
+          "type": "markov_empirical",
+          "states": {
+            "FAST": {"type": "empirical", "values": [10, 12, 16, 20]},
+            "NORMAL": {"type": "empirical", "values": [30, 50, 80, 120, 180]},
+            "PAUSE": {"type": "empirical", "values": [300, 800, 1500]}
+          },
+          "start_probabilities": {"FAST": 0.1, "NORMAL": 0.75, "PAUSE": 0.15},
+          "transition_probabilities": {
+            "FAST": {"FAST": 0.6, "NORMAL": 0.36, "PAUSE": 0.04},
+            "NORMAL": {"FAST": 0.12, "NORMAL": 0.78, "PAUSE": 0.1},
+            "PAUSE": {"FAST": 0.15, "NORMAL": 0.8, "PAUSE": 0.05}
+          }
+        }
+      }
+    ]
+  },
+  "profile_export": {
+    "contract_version": "aneb-profile-v2",
+    "profile_id": "token_multimodal_standard",
+    "version": "1.0.0-draft",
+    "mode_id": "token_simulation",
+    "execution_target": "aneb_probe_simulator",
+    "claim_scope": "application_end_to_end_to_probe_node",
+    "measurement_catalog_id": "token-sim-measurements-v1-draft",
+    "business": {
+      "category_id": "token_multimodal",
+      "label": "多模态 Token 业务",
+      "archetype_labels": ["kimi_like", "deepseek_like", "qwen_like"],
+      "behavior_feature_ids": ["uplink_burst", "low_latency_start", "stream_continuity", "large_downlink_optional"]
+    },
+    "live_presentation": {
+      "primary_metric_id": "SIM_TPS_LIVE",
+      "secondary_metric_ids": ["RTT_LIVE", "UP_LIVE", "ON_TIME_RATIO_LIVE"],
+      "window_ms": 1000,
+      "ui_refresh_ms": 250,
+      "missing_behavior": "show_unavailable_never_zero"
+    },
+    "evaluation": {
+      "target_set_id": "token-sim-targets-v1-draft",
+      "score_policy_id": "token-sim-score-v1-draft",
+      "conclusion_policy_id": "token-sim-conclusions-v1-draft",
+      "required_metric_ids": ["TOK-B01", "TOK-B02", "TOK-B05", "TOK-B07", "TOK-B09", "TOK-B10", "TOK-B11", "TOK-B14", "TOK-N03", "TOK-N04", "TOK-N05", "TOK-N06"],
+      "guardrail_metric_ids": ["TOK-B10"],
+      "group_weights": {"task_completion": 0.25, "interaction": 0.30, "multimodal_transfer": 0.25, "network_stability": 0.15, "efficiency": 0.05},
+      "missing_required_metric": "score_null",
+      "invalid_run": "retain_raw_suppress_score"
+    }
+  }
+}

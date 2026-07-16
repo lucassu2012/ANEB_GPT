@@ -56,8 +56,8 @@ import kotlin.math.sin
 fun HalfGauge(
     fraction: Float,
     band: Color,
-    idle: Boolean = false,
     modifier: Modifier = Modifier,
+    idle: Boolean = false,
     center: @Composable BoxScope.() -> Unit = {},
 ) {
     val colors = AnebTheme.colors

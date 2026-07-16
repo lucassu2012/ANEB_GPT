@@ -2,6 +2,7 @@ package com.aneb.probe.apiprobe
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
@@ -23,11 +24,9 @@ enum class LlmProvider(val id: String, val defaultBaseUrl: String, val defaultMo
  * API key 与探针配置存储（E-03：真实 LLM API key，用户自填）。
  *
  * **隐私红线**：
- *  - 首选 [EncryptedSharedPreferences]（androidx.security-crypto，AES256-GCM，主密钥入
- *    Android Keystore）；构造失败（个别 ROM Keystore 损坏 / keyset 解密失败）时**降级为
- *    应用私有明文 SharedPreferences**——取舍：私有目录本就受应用沙箱保护（非 root 不可
- *    读），且 key 是用户自己的低额度实验 key；降级状态经 [encrypted] 暴露给 UI 明示。
- *    降级时清掉损坏 keyset 重建的复杂路径不做（研究自用工具，损坏概率极低）。
+ *  - API key 只允许进入 [EncryptedSharedPreferences]（AES256-GCM，主密钥入 Android
+ *    Keystore）。Keystore 构造失败时 fail-closed：配置仍可保存，但禁止持久化 key；旧版
+ *    私有明文 fallback 会被主动清空。降级状态经 [encrypted] 暴露给 UI。
  *  - key **绝不写日志/上报体/导出文件**：本类不提供 toString 泄漏面；出口侧由
  *    [ApiKeyRedactor] 兜底 + JVM 单测锚定（导出/上报不含 key 字符串）。
  */
@@ -35,11 +34,14 @@ class ApiKeyStore(context: Context) {
 
     private val appContext = context.applicationContext
 
-    /** true=EncryptedSharedPreferences；false=降级私有明文 prefs（UI 须明示） */
+    /** true=EncryptedSharedPreferences 可用；false=安全存储不可用，API key 禁止持久化。 */
     var encrypted: Boolean = false
         private set
 
-    private val prefs: SharedPreferences = try {
+    private val configPrefs: SharedPreferences =
+        appContext.getSharedPreferences("apiprobe_config", Context.MODE_PRIVATE)
+
+    private val securePrefs: SharedPreferences? = try {
         val masterKey = MasterKey.Builder(appContext)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
@@ -50,38 +52,48 @@ class ApiKeyStore(context: Context) {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         ).also { encrypted = true }
-    } catch (e: Exception) {
-        // 降级路径（见类 KDoc 取舍）；encrypted=false 供 UI 明示
-        appContext.getSharedPreferences("apiprobe_plain_fallback", Context.MODE_PRIVATE)
+    } catch (_: Exception) {
+        null
     }
 
-    fun apiKey(): String? = prefs.getString(KEY_API_KEY, null)?.takeIf { it.isNotBlank() }
+    init {
+        // v0.1 曾允许私有明文 fallback；升级后无条件擦除，避免安全策略升级留下旧 key。
+        appContext.getSharedPreferences(LEGACY_PLAIN_PREFS, Context.MODE_PRIVATE)
+            .edit { clear() }
+    }
 
-    fun setApiKey(key: String?) {
-        prefs.edit().apply {
-            if (key.isNullOrBlank()) remove(KEY_API_KEY) else putString(KEY_API_KEY, key.trim())
-        }.apply()
+    fun apiKey(): String? = securePrefs?.getString(KEY_API_KEY, null)?.takeIf { it.isNotBlank() }
+
+    /** 返回 false 表示安全存储不可用且非空 key 未被保存。 */
+    fun setApiKey(key: String?): Boolean {
+        if (key.isNullOrBlank()) {
+            securePrefs?.edit { remove(KEY_API_KEY) }
+            return true
+        }
+        val prefs = securePrefs ?: return false
+        prefs.edit { putString(KEY_API_KEY, key.trim()) }
+        return true
     }
 
     /** E-03 就绪判定：无 key 时探针入口禁用置灰（缺 key 降级设计，主线不受阻）。 */
     fun hasKey(): Boolean = apiKey() != null
 
     var provider: LlmProvider
-        get() = LlmProvider.fromId(prefs.getString(KEY_PROVIDER, null))
-        set(value) = prefs.edit().putString(KEY_PROVIDER, value.id).apply()
+        get() = LlmProvider.fromId(configPrefs.getString(KEY_PROVIDER, null))
+        set(value) = configPrefs.edit { putString(KEY_PROVIDER, value.id) }
 
     /** base URL 覆盖（空=用 provider 默认）；联调时可指向本机 mock（10.0.2.2:port） */
     var baseUrlOverride: String?
-        get() = prefs.getString(KEY_BASE_URL, null)?.takeIf { it.isNotBlank() }
-        set(value) = prefs.edit().apply {
+        get() = configPrefs.getString(KEY_BASE_URL, null)?.takeIf { it.isNotBlank() }
+        set(value) = configPrefs.edit {
             if (value.isNullOrBlank()) remove(KEY_BASE_URL) else putString(KEY_BASE_URL, value.trim())
-        }.apply()
+        }
 
     var modelOverride: String?
-        get() = prefs.getString(KEY_MODEL, null)?.takeIf { it.isNotBlank() }
-        set(value) = prefs.edit().apply {
+        get() = configPrefs.getString(KEY_MODEL, null)?.takeIf { it.isNotBlank() }
+        set(value) = configPrefs.edit {
             if (value.isNullOrBlank()) remove(KEY_MODEL) else putString(KEY_MODEL, value.trim())
-        }.apply()
+        }
 
     fun effectiveBaseUrl(): String = baseUrlOverride ?: provider.defaultBaseUrl
 
@@ -92,6 +104,7 @@ class ApiKeyStore(context: Context) {
         const val KEY_PROVIDER = "provider"
         const val KEY_BASE_URL = "base_url"
         const val KEY_MODEL = "model"
+        const val LEGACY_PLAIN_PREFS = "apiprobe_plain_fallback"
     }
 }
 

@@ -26,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -33,10 +34,25 @@ import kotlinx.coroutines.launch
 /** Activity 可重建、应用切后台时仍可观察的主测量会话状态。 */
 internal sealed interface ProbeRunSession {
     data object Idle : ProbeRunSession
-    data class Running(val autorun: Boolean, val runId: String? = null) : ProbeRunSession
-    data class Completed(val autorun: Boolean, val runId: String) : ProbeRunSession
-    data class Failed(val autorun: Boolean, val message: String) : ProbeRunSession
-    data class Cancelled(val autorun: Boolean) : ProbeRunSession
+    data class Running(
+        val autorun: Boolean,
+        val runId: String? = null,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+    ) : ProbeRunSession
+    data class Completed(
+        val autorun: Boolean,
+        val runId: String,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+    ) : ProbeRunSession
+    data class Failed(
+        val autorun: Boolean,
+        val message: String,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+    ) : ProbeRunSession
+    data class Cancelled(
+        val autorun: Boolean,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
+    ) : ProbeRunSession
 }
 
 /** 只解析既有日志合同，不新增或改写任何测量日志 KEY。 */
@@ -44,13 +60,22 @@ internal object ProbeRunLogParser {
     private val runId = Regex("(?:^|\\s)run_id=(\\S+)")
 
     fun runId(line: String): String? =
-        if (line.startsWith("RUN_START ")) runId.find(line)?.groupValues?.get(1) else null
+        if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ")) {
+            runId.find(line)?.groupValues?.get(1)
+        } else {
+            null
+        }
 
     fun progressText(line: String): String? = when {
         line.startsWith("RUN_START ") -> "正在验证环境和测试节点"
         line.startsWith("SCENARIO_START ") -> "正在执行网络场景"
         line.startsWith("SCENARIO_KPI ") -> "正在整理场景指标"
         line.startsWith("AQS ") -> "正在生成体验结果"
+        line.startsWith("BASIC_START ") -> "正在准备基本网络测速"
+        line.startsWith("BASIC_PHASE ") && line.contains("phase=latency") -> "正在测量时延与抖动"
+        line.startsWith("BASIC_PHASE ") && line.contains("phase=download") -> "正在测量下载速度"
+        line.startsWith("BASIC_PHASE ") && line.contains("phase=upload") -> "正在测量上传速度"
+        line.startsWith("BASIC_RESULT ") -> "正在生成基本测速结论"
         else -> null
     }
 }
@@ -62,6 +87,7 @@ internal object ProbeRunLogParser {
 class ProbeRunService : Service() {
     internal data class Config(
         val serverBase: String,
+        val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
         val mode: TestEngine.Mode,
         val transport: TestEngine.TransportMode,
         val inject: String?,
@@ -71,6 +97,7 @@ class ProbeRunService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var runJob: Job? = null
     private var telemetryJob: Job? = null
+    private var resultJob: Job? = null
     private var cancelRequested = false
 
     override fun onCreate() {
@@ -91,10 +118,15 @@ class ProbeRunService : Service() {
     private fun startRun(intent: Intent) {
         if (runJob?.isActive == true) return
         val autorun = intent.getBooleanExtra(EXTRA_AUTORUN, false)
+        val testMode = enumValueOrDefault(
+            intent.getStringExtra(EXTRA_TEST_MODE),
+            AnebTestMode.TOKEN_EXPERIENCE,
+        )
         val config = Config(
             serverBase = intent.getStringExtra(EXTRA_SERVER)
                 ?.takeIf { it.isNotBlank() }
-                ?: return failBeforeRun(autorun, "测试节点地址为空。请在设置中选择节点。"),
+                ?: return failBeforeRun(autorun, "测试节点地址为空。请在设置中选择节点。", testMode),
+            testMode = testMode,
             mode = enumValueOrDefault(intent.getStringExtra(EXTRA_MODE), TestEngine.Mode.QUICK),
             transport = enumValueOrDefault(
                 intent.getStringExtra(EXTRA_TRANSPORT),
@@ -112,48 +144,67 @@ class ProbeRunService : Service() {
         cancelRequested = false
         _logs.value = emptyList()
         _telemetry.value = LiveTelemetry()
-        _session.value = ProbeRunSession.Running(autorun)
+        _basicTelemetry.value = BasicSpeedTelemetry()
+        _basicResult.value = null
+        _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
 
-        val engine = TestEngine(applicationContext)
-        telemetryJob = serviceScope.launch {
-            engine.telemetry.collect { _telemetry.value = it }
-        }
         runJob = serviceScope.launch {
             var runId: String? = null
             try {
-                engine.run(
-                    TestEngine.RunConfig(
-                        serverBase = config.serverBase,
-                        mode = config.mode,
-                        transport = config.transport,
-                        inject = config.inject,
-                        driveTest = config.driveTest,
-                    ),
-                ).collect { line ->
+                val lines: Flow<String> = when (config.testMode) {
+                    AnebTestMode.TOKEN_EXPERIENCE -> {
+                        val engine = TestEngine(applicationContext)
+                        telemetryJob = serviceScope.launch {
+                            engine.telemetry.collect { _telemetry.value = it }
+                        }
+                        engine.run(
+                            TestEngine.RunConfig(
+                                serverBase = config.serverBase,
+                                mode = config.mode,
+                                transport = config.transport,
+                                inject = config.inject,
+                                driveTest = config.driveTest,
+                            ),
+                        )
+                    }
+                    AnebTestMode.NETWORK_BASIC -> {
+                        val engine = NetworkSpeedEngine(applicationContext)
+                        telemetryJob = serviceScope.launch {
+                            engine.telemetry.collect { _basicTelemetry.value = it }
+                        }
+                        resultJob = serviceScope.launch {
+                            engine.result.collect { _basicResult.value = it }
+                        }
+                        engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
+                    }
+                }
+                lines.collect { line ->
                     addLog(line)
                     ProbeRunLogParser.runId(line)?.let { id ->
                         runId = id
-                        _session.value = ProbeRunSession.Running(autorun, id)
+                        _session.value = ProbeRunSession.Running(autorun, id, config.testMode)
                     }
                     ProbeRunLogParser.progressText(line)?.let(::updateNotification)
                 }
                 val completedId = runId
                 _session.value = if (completedId != null) {
-                    ProbeRunSession.Completed(autorun, completedId)
+                    ProbeRunSession.Completed(autorun, completedId, config.testMode)
                 } else {
-                    ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。")
+                    ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
                 }
             } catch (e: CancellationException) {
                 if (cancelRequested) {
-                    _session.value = ProbeRunSession.Cancelled(autorun)
+                    _session.value = ProbeRunSession.Cancelled(autorun, config.testMode)
                 }
                 throw e
             } catch (e: Exception) {
                 addLog("RUN_FAILED error=$e")
-                _session.value = ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e))
+                _session.value = ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e), config.testMode)
             } finally {
                 telemetryJob?.cancel()
                 telemetryJob = null
+                resultJob?.cancel()
+                resultJob = null
                 runJob = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -166,8 +217,8 @@ class ProbeRunService : Service() {
         runJob?.cancel(CancellationException("user_cancelled")) ?: stopSelf()
     }
 
-    private fun failBeforeRun(autorun: Boolean, message: String) {
-        _session.value = ProbeRunSession.Failed(autorun, message)
+    private fun failBeforeRun(autorun: Boolean, message: String, testMode: AnebTestMode) {
+        _session.value = ProbeRunSession.Failed(autorun, message, testMode)
         stopSelf()
     }
 
@@ -229,7 +280,11 @@ class ProbeRunService : Service() {
     override fun onDestroy() {
         if (_session.value is ProbeRunSession.Running && !cancelRequested) {
             val running = _session.value as ProbeRunSession.Running
-            _session.value = ProbeRunSession.Failed(running.autorun, "测试服务被系统停止，请重新测试。")
+            _session.value = ProbeRunSession.Failed(
+                running.autorun,
+                "测试服务被系统停止，请重新测试。",
+                running.testMode,
+            )
         }
         serviceScope.cancel()
         super.onDestroy()
@@ -239,6 +294,7 @@ class ProbeRunService : Service() {
         private const val ACTION_START = "com.aneb.probe.action.START_RUN"
         private const val ACTION_CANCEL = "com.aneb.probe.action.CANCEL_RUN"
         private const val EXTRA_SERVER = "server"
+        private const val EXTRA_TEST_MODE = "test_mode"
         private const val EXTRA_MODE = "mode"
         private const val EXTRA_TRANSPORT = "transport"
         private const val EXTRA_INJECT = "inject"
@@ -253,11 +309,16 @@ class ProbeRunService : Service() {
         internal val logs: StateFlow<List<String>> = _logs.asStateFlow()
         private val _telemetry = MutableStateFlow(LiveTelemetry())
         internal val telemetry: StateFlow<LiveTelemetry> = _telemetry.asStateFlow()
+        private val _basicTelemetry = MutableStateFlow(BasicSpeedTelemetry())
+        internal val basicTelemetry: StateFlow<BasicSpeedTelemetry> = _basicTelemetry.asStateFlow()
+        private val _basicResult = MutableStateFlow<BasicSpeedResult?>(null)
+        internal val basicResult: StateFlow<BasicSpeedResult?> = _basicResult.asStateFlow()
 
         internal fun start(context: Context, config: Config, autorun: Boolean) {
             val intent = Intent(context, ProbeRunService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SERVER, config.serverBase)
+                .putExtra(EXTRA_TEST_MODE, config.testMode.name)
                 .putExtra(EXTRA_MODE, config.mode.name)
                 .putExtra(EXTRA_TRANSPORT, config.transport.name)
                 .putExtra(EXTRA_INJECT, config.inject)

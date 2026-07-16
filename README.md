@@ -11,6 +11,7 @@
   - 《DECISION_LOG》：决策日志（D-xx）、否决记录、外部依赖清单（E-xx）
   - 《参考_ChatGPT侧ANEB_AndroidEcho方案与进展》：并行姊妹项目制度借鉴（只读参考）
 - `profiles/` — 版本化测试场景配置 v0.2.0（客户端/服务端共享，发布即冻结，改动须升版本）
+  - `basic_network.json` 网络基本性能（下载、上传、时延、抖动、应用层请求失败率）
   - `s1_chat.json` 对话流（对照组）
   - `s2_coding_agent.json` 编码 Agent 流（主场景）
   - `s3_multimodal.json` 多模态流
@@ -20,13 +21,12 @@
 
 **命名消歧**：本项目对外称 **ANEB Probe**；并行姊妹项目（Application Echo RTT 垂直切片）称 **ANEB Android Echo 切片**，两者同属 ANEB 研究计划、范围互补。
 
-## 当前状态（2026-07-13，as-built）
+## 当前状态（2026-07-16，0.2.0）
 
-阶段 0–3 本地可完成部分全部收口，四态证据账本：
+- Android 客户端已按 `ANEB_UI` 重构，并提供“网络基本性能 / Token 体验”双模式、SpeedTest 风格真实动态仪表、业务结论、统一历史、真实 GPS 地图、Profile Registry 和新 App 图标。
+- E-01 已部署 4 个 Profile；P40 Pro 真机已完成 Basic 与 Token 动态、结果、历史回看、地图和 SNI-RST 自动旁路验收。
+- 主测试、Continuity 与 Protocol A/B 均由前台 Service 持有；Room 已到 v12；Release 网络安全和签名门禁已完成。
+- 最终质量门：387 JVM tests、0 failures；Android Lint 0 errors；Go tests PASS；Debug APK 已生成。
+- 完整交接、真机证据、APK 哈希和维护入口见 `docs/CODEX_V0.2.0_HANDOFF_2026-07-16.md`。
 
-- 阶段 0（骨架与计时联调）：17 PASS + 1 FAIL（D-18 判据修订后带内 PASS，并列留档）— `evidence/phase0/STATUS.json`
-- 阶段 1（MVP：三场景/KPI/AQS/守卫全接线）：9/9 PASS — `evidence/phase1/STATUS.json`
-- 阶段 2（连续性/H3/Cronet A/B/API 探针）：5 PASS + 1 BLOCKED_EXTERNAL — `evidence/phase2/STATUS.json`
-- 阶段 3（看板/netem 灵敏度与跨境剖面/GPS 路测）：5 PASS + 1 FAIL（P3-C05 检测器误报如实入册）+ 3 BLOCKED_EXTERNAL — `evidence/phase3/STATUS.json`
-
-后续推进悬于外部依赖（解锁清单见设计文档 §10）：**E-02** 真机+SIM（蜂窝测量证据与规模化数据回流）、**E-06**+UDP 8443（E-01 TLS/H3 切换与公网 QUIC A/B）、**E-04** 海外节点、**E-05** CAMARA QoD、**E-03** LLM API key。首轮实测锚点已回写 KPI 文档 5.2（agent-qoe-kpi v0.2.1 修注版）。
+0.2.0 之后的外部扩展项：**E-06** 公共域名/公共 CA + UDP 8443（公网 Cronet QUIC A/B）、**E-04** 海外节点、**E-05** CAMARA QoD、**E-03** 真实 LLM API key。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。

@@ -17,6 +17,18 @@ interface TestRunDao {
 }
 
 @Dao
+interface BasicSpeedResultDao {
+    @Insert
+    suspend fun insert(result: BasicSpeedResultEntity)
+
+    @Query("SELECT * FROM basic_speed_result ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<BasicSpeedResultEntity>
+
+    @Query("SELECT * FROM basic_speed_result WHERE runId = :runId")
+    suspend fun byId(runId: String): BasicSpeedResultEntity?
+}
+
+@Dao
 interface ReportBodyDao {
     @Insert
     suspend fun insert(body: ReportBodyEntity)
@@ -45,6 +57,9 @@ interface ScenarioResultDao {
 
     @Query("SELECT * FROM scenario_result WHERE runId = :runId ORDER BY orderIndex")
     suspend fun forRun(runId: String): List<ScenarioResultEntity>
+
+    @Query("SELECT * FROM scenario_result ORDER BY runId, orderIndex")
+    suspend fun all(): List<ScenarioResultEntity>
 }
 
 @Dao
@@ -122,4 +137,7 @@ interface RadioSampleDao {
 
     @Query("SELECT COUNT(*) FROM radio_sample WHERE runId = :runId AND stale = 1")
     suspend fun staleCountForRun(runId: String): Long
+
+    @Query("SELECT * FROM radio_sample WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY tsNanos")
+    suspend fun withCoordinates(): List<RadioSampleEntity>
 }

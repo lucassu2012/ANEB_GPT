@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  正式变体全局禁明文。E-01 bare-IP 使用项目自有 IP-SAN 证书；其 CA 公钥随 APK 钉住，
+  用于 D-22/D-25 的 SNI-RST 双通道。系统根仍保留，未来换公共证书无需发版。
+  debug 变体以 src/debug 同名资源覆盖，并额外允许已知本地联调地址的明文流量。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">120.79.148.0</domain>
+        <trust-anchors>
+            <certificates src="@raw/aneb_ip_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

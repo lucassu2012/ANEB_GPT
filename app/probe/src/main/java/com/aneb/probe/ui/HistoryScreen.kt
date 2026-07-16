@@ -2,164 +2,265 @@ package com.aneb.probe.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
-import com.aneb.probe.ui.components.GradeChip
+import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.ui.components.AnebGradientCard
+import com.aneb.probe.ui.components.AnebPageIntro
+import com.aneb.probe.ui.components.AnebSectionTitle
+import com.aneb.probe.ui.components.AnebSparkline
+import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.pressable
-import com.aneb.probe.ui.theme.AnebElevation
-import com.aneb.probe.ui.theme.AnebShapes
 import com.aneb.probe.ui.theme.AnebTheme
 import com.aneb.probe.ui.theme.AnebType
 import com.aneb.probe.ui.theme.Grade
-import com.aneb.probe.ui.theme.lowConf
-import com.aneb.probe.ui.theme.onGrade
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/**
- * 历史页（重设计，设计稿 §历史，iOS 化）：Room TestRun 列表——每行 grade 色分数徽标（tabular）
- * + iOS soft grade chip + 时间/模式/传输 + 状态；点击进对应结果页，整卡按压缩放。
- * 数据全部来自 Room（本层不重算）。LazyColumn key 保留（runId）。
- */
+/** 历史页：真实 Room 数据投影到 `history.html` 的趋势卡与记录行。 */
 @Composable
 fun HistoryScreen(
     runs: List<TestRun>,
+    basicRuns: List<BasicSpeedResultEntity>,
     onOpen: (String) -> Unit,
+    onOpenBasic: (String) -> Unit,
     onGenerateReport: () -> Unit,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val colors = AnebTheme.colors
-    val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.US)
-    Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(horizontal = 20.dp)) {
-        Spacer(Modifier.height(8.dp))
-        GlassHeader("测试历史 (${runs.size})", onBack) {
-            Text(
-                text = "生成报告",
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.brand2,
-                modifier = Modifier
-                    .clip(AnebShapes.pill)
-                    .background(colors.surfaceMuted)
-                    .border(1.dp, colors.hairline, AnebShapes.pill)
-                    .then(Modifier.pressable(onClick = onGenerateReport))
-                    .padding(horizontal = 12.dp, vertical = 7.dp),
+    val ordered = remember(runs, basicRuns) {
+        buildList<HistoryEntry> {
+            runs.forEach { add(HistoryEntry.Token(it)) }
+            basicRuns.forEach { add(HistoryEntry.Basic(it)) }
+        }.sortedByDescending { it.startedAtEpochMs }
+    }
+    val scored = remember(runs) { runs.mapNotNull { it.aqsScore }.filter { it.isFinite() } }
+    val avg = scored.takeIf { it.isNotEmpty() }?.average()?.roundToInt()
+    val best = scored.maxOrNull()?.roundToInt()
+    val worst = scored.minOrNull()?.roundToInt()
+    val trend = scored.asReversed().map { (it / 100.0).toFloat().coerceIn(0f, 1f) }
+
+    Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
+        AnebTopBar(showBack = showBack, onBack = onBack, showMenu = !showBack)
+        AnebPageIntro(
+            eyebrow = "RESULTS",
+            title = "测试历史",
+            subtitle = if (ordered.isEmpty()) {
+                "完成首次测试后，这里会显示真实体验趋势。"
+            } else {
+                "共 ${ordered.size} 次测试，其中 ${scored.size} 个有效 AI 体验分。"
+            },
+            modifier = Modifier.padding(top = 3.dp, start = 1.dp, bottom = 14.dp),
+        )
+
+        TrendCard(avg = avg, best = best, worst = worst, trend = trend)
+
+        AnebSectionTitle(
+            text = "全部记录",
+            action = "生成报告",
+            onAction = onGenerateReport,
+            modifier = Modifier.padding(top = 17.dp, start = 4.dp, end = 4.dp, bottom = 7.dp),
+        )
+
+        if (ordered.isEmpty()) {
+            AnebGradientCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("暂无测试记录", fontSize = 13.sp, color = colors.ink)
+                    Text("从“测试”页开始一次真实测量", fontSize = 10.sp, color = colors.muted, modifier = Modifier.padding(top = 5.dp))
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = if (showBack) 18.dp else 76.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(count = ordered.size, key = { ordered[it].key }) { index ->
+                    when (val item = ordered[index]) {
+                        is HistoryEntry.Token -> HistoryRecord(item.run, onOpen)
+                        is HistoryEntry.Basic -> BasicHistoryRecord(item.result, onOpenBasic)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private sealed interface HistoryEntry {
+    val startedAtEpochMs: Long
+    val key: String
+
+    data class Token(val run: TestRun) : HistoryEntry {
+        override val startedAtEpochMs = run.startedAtEpochMs
+        override val key = "token:${run.runId}"
+    }
+
+    data class Basic(val result: BasicSpeedResultEntity) : HistoryEntry {
+        override val startedAtEpochMs = result.startedAtEpochMs
+        override val key = "basic:${result.runId}"
+    }
+}
+
+@Composable
+private fun TrendCard(avg: Int?, best: Int?, worst: Int?, trend: List<Float>) {
+    val colors = AnebTheme.colors
+    AnebGradientCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("体验分趋势", fontSize = 11.sp, color = colors.muted)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (avg == null) "尚无有效成绩" else "平均 $avg",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight(560),
+                    color = if (avg == null) colors.muted else colors.excellent,
+                )
+            }
+            AnebSparkline(
+                values = trend,
+                color = colors.excellent,
+                fill = true,
+                modifier = Modifier.fillMaxWidth().height(78.dp).padding(top = 10.dp),
             )
-        }
-        if (runs.isEmpty()) {
-            Text("暂无历史记录", color = colors.muted, modifier = Modifier.padding(top = 24.dp))
-        }
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(top = 10.dp, bottom = 16.dp),
-        ) {
-            items(count = runs.size, key = { i -> runs[i].runId }) { i ->
-                HistoryRow(runs[i], fmt, onOpen)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 9.dp).border(0.dp, colors.hairline),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                listOf("最佳" to best, "平均" to avg, "最低" to worst).forEachIndexed { index, item ->
+                    if (index > 0) Box(Modifier.width(1.dp).height(42.dp).background(colors.hairline))
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(item.first, fontSize = 10.sp, color = colors.muted)
+                        Text(
+                            item.second?.toString() ?: "—",
+                            style = AnebType.StatValue,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight(540),
+                            color = when (item.first) { "最佳" -> colors.excellent; "最低" -> colors.fair; else -> colors.ink },
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HistoryRow(run: TestRun, fmt: SimpleDateFormat, onOpen: (String) -> Unit) {
+private fun HistoryRecord(run: TestRun, onOpen: (String) -> Unit) {
     val colors = AnebTheme.colors
     val score = run.aqsScore
     val grade = score?.let { Grade.fromAqsScore(it) }
-    val gradeColor = colors.gradeColor(grade)
+    val accent = colors.gradeColor(grade)
+    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.US) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp)
-            .shadow(AnebElevation.level1, AnebShapes.card, clip = false)
-            .clip(AnebShapes.card)
-            .background(colors.surface)
-            .border(1.dp, colors.hairline, AnebShapes.card)
-            .then(Modifier.pressable(onClick = { onOpen(run.runId) }))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .height(61.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(androidx.compose.ui.graphics.Color(0xB811162C))
+            .border(1.dp, colors.hairline, RoundedCornerShape(14.dp))
+            .pressable(onClick = { onOpen(run.runId) })
+            .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(44.dp).clip(AnebShapes.tile).background(gradeColor),
+            Modifier.size(41.dp).clip(CircleShape).border(1.dp, accent.copy(alpha = 0.48f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                score?.roundToInt()?.toString() ?: "—",
-                style = AnebType.StatValue,
-                fontSize = 17.sp,
-                // 徽标底色为分级色：文字反色按底色亮度择近黑/近白，保证深浅主题对比（token 化）。
-                color = colors.onGrade(grade),
-            )
+            Text(score?.roundToInt()?.toString() ?: "—", style = AnebType.StatValue, fontSize = 15.sp, color = accent)
         }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    grade?.labelFriendly ?: "未完成",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (grade != null) gradeColor else colors.muted,
-                )
-                if (grade != null) {
-                    Spacer(Modifier.width(7.dp))
-                    GradeChip(grade)
-                }
-                if (run.aqsLowConfidence == true) {
-                    Spacer(Modifier.width(6.dp))
-                    LowConfChip()
-                }
-            }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
             Text(
-                "${fmt.format(Date(run.startedAtEpochMs))} · ${run.mode} · ${run.transport}",
-                fontSize = 11.5.sp,
-                color = colors.muted,
-                modifier = Modifier.padding(top = 2.dp),
+                NetworkLabel.forRun(run).substringBeforeLast(" · "),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.ink,
+                maxLines = 1,
             )
             Text(
-                "status=${run.status ?: "?"} report=${run.reportStatus ?: "—"}",
+                "${fmt.format(Date(run.startedAtEpochMs))} · ${grade?.labelFriendly ?: "未完成"}${if (run.aqsLowConfidence == true) " · 低置信" else ""}",
                 fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = colors.faint,
+                color = colors.muted,
+                modifier = Modifier.padding(top = 3.dp),
+                maxLines = 1,
             )
         }
-        Text("›", fontSize = 20.sp, color = colors.faint)
+        Text("›", fontSize = 18.sp, color = colors.faint)
     }
 }
 
-/** 低置信 soft chip（iOS 柔和底角标；沿用结果页 fair 语义色）。 */
 @Composable
-private fun LowConfChip() {
+private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) -> Unit) {
     val colors = AnebTheme.colors
-    Text(
-        text = "低置信",
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        color = colors.lowConf,
+    val accent = when (result.status) {
+        "completed" -> colors.brand
+        "partial" -> colors.fair
+        else -> colors.poor
+    }
+    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.US) }
+    Row(
         modifier = Modifier
-            .clip(AnebShapes.xs)
-            .background(colors.fairSoft)
-            .padding(horizontal = 6.dp, vertical = 3.dp),
-    )
+            .fillMaxWidth()
+            .height(61.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(androidx.compose.ui.graphics.Color(0xB811162C))
+            .border(1.dp, colors.hairline, RoundedCornerShape(14.dp))
+            .pressable(onClick = { onOpen(result.runId) })
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(41.dp).clip(CircleShape).border(1.dp, accent.copy(alpha = 0.48f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("↕", style = AnebType.StatValue, fontSize = 16.sp, color = accent)
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "基础测速 · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.ink,
+                maxLines = 1,
+            )
+            val down = result.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+            val up = result.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+            Text(
+                "${fmt.format(Date(result.startedAtEpochMs))} · ↓$down ↑$up Mbps",
+                fontSize = 10.sp,
+                color = colors.muted,
+                modifier = Modifier.padding(top = 3.dp),
+                maxLines = 1,
+            )
+        }
+        Text("›", fontSize = 18.sp, color = colors.faint)
+    }
 }

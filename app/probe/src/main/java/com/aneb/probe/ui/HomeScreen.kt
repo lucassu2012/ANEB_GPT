@@ -1,15 +1,22 @@
 package com.aneb.probe.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,46 +28,48 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
-import com.aneb.probe.ui.components.HalfGauge
-import com.aneb.probe.ui.components.SegmentedControl
-import com.aneb.probe.ui.components.StBanner
+import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
-import com.aneb.probe.ui.components.pulseRing
-import com.aneb.probe.ui.theme.AnebElevation
+import com.aneb.probe.ui.theme.AnebPalette
 import com.aneb.probe.ui.theme.AnebTheme
 import com.aneb.probe.ui.theme.AnebType
 import com.aneb.probe.ui.theme.Grade
-import com.aneb.probe.ui.theme.onGrade
+import com.aneb.probe.ui.theme.LocalReducedMotion
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/**
- * 首页（Claude Design v2 · SpeedTest 式首页）：bare 顶栏（A/NEB 字标 + 简洁/专业段控）+ 连接横幅
- * [StBanner] + 180° 半盘 [HalfGauge] idle 待机（中心承载 GO 播放按钮 + 三层脉冲环）+ gohint +
- * 上次成绩 chip（[lastRun]）。
- *
- * 纯 UI 层：数据经参数注入（[lastRun] 由 MainActivity 查 Room），[onStart] 触发既有 startRun
- * 编排（测量语义不动）。历史/设置导航已由底部 [com.aneb.probe.ui.components.AnebTabBar] 承载，
- * 顶栏不再挂副入口；横幅右侧动作透传至 [onOpenServer]（进入真实节点页）。
- */
+/** 首页：原生复刻 `ANEB_UI/screens/home.html` 的 idle 状态与三档网络抽屉。 */
 @Composable
 fun HomeScreen(
     lastRun: TestRun?,
+    lastBasicRun: BasicSpeedResultEntity?,
+    testMode: AnebTestMode,
+    onTestModeChange: (AnebTestMode) -> Unit,
     running: Boolean,
     notice: String? = null,
     connectionLabel: String,
@@ -68,176 +77,379 @@ fun HomeScreen(
     onStart: () -> Unit,
     onOpenServer: () -> Unit,
     onOpenLastResult: (String) -> Unit,
+    onOpenLastBasicResult: (String) -> Unit,
 ) {
     val colors = AnebTheme.colors
-    // 顶栏 简洁/专业 段控：控制上次成绩 chip 的信息密度（简洁只给分档，专业补网络副行）。
-    var density by rememberSaveable { mutableStateOf(HomeDensity.Simple) }
+    var sheetSnap by remember { mutableStateOf(SheetSnap.Collapsed) }
+    var dragTotal by remember { mutableFloatStateOf(0f) }
+    var dragDeltaDp by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val collapsedHeight = 150.dp
+    val halfHeight = 250.dp
+    val expandedHeight = 340.dp
+    val anchorHeight = when (sheetSnap) {
+        SheetSnap.Collapsed -> collapsedHeight
+        SheetSnap.Half -> halfHeight
+        SheetSnap.Expanded -> expandedHeight
+    }
+    val animatedSheetHeight by animateDpAsState(
+        targetValue = anchorHeight,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 430f),
+        label = "home-network-sheet",
+    )
+    val sheetHeight = if (isDragging) {
+        (anchorHeight + dragDeltaDp.dp).coerceIn(collapsedHeight, expandedHeight)
+    } else {
+        animatedSheetHeight
+    }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.background)
-            .padding(horizontal = 20.dp),
+            .background(AnebPalette.Dark.DeepBackground),
     ) {
-        // ---- bare 顶栏：A/NEB 字标 + 简洁/专业段控 ----
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        AnebWordmark(
+            Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp),
+        )
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("A", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.ink)
-                Text("NEB", fontSize = 20.sp, fontWeight = FontWeight.Black, color = colors.brand2)
-            }
-            Spacer(Modifier.weight(1f))
-            SegmentedControl(
-                options = HomeDensity.entries,
-                selected = density,
-                onSelect = { density = it },
-                label = { it.label },
+            Spacer(Modifier.height(78.dp))
+            TestModeSwitch(
+                selected = testMode,
+                enabled = !running,
+                onSelect = onTestModeChange,
+            )
+            Spacer(Modifier.height(27.dp))
+            IdleStartRing(running = running, onStart = onStart)
+            Text(
+                if (testMode == AnebTestMode.NETWORK_BASIC) {
+                    "测试下载、上传、Ping、抖动与应用层请求失败"
+                } else {
+                    "评估网络是否适合 AI 对话、编码和文件上传"
+                },
+                fontSize = 10.5.sp,
+                lineHeight = 16.sp,
+                textAlign = TextAlign.Center,
+                color = colors.faint,
+                modifier = Modifier.padding(top = 13.dp, start = 34.dp, end = 34.dp),
             )
         }
 
-        Spacer(Modifier.height(10.dp))
+        notice?.let {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 20.dp, end = 20.dp, bottom = sheetHeight + 10.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0xF20D121B))
+                    .border(1.dp, colors.hairline, RoundedCornerShape(999.dp))
+                    .padding(horizontal = 13.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(colors.fair))
+                Spacer(Modifier.width(8.dp))
+                Text(it, fontSize = 10.sp, color = colors.ink)
+            }
+        }
 
-        // ---- 连接横幅（当前传输偏好 + 真实节点；动作进入节点页）----
-        StBanner(
-            isp = connectionLabel,
-            sub = "$nodeLabel · 轻触 GO 开始测试",
-            action = "节点",
-            onAction = onOpenServer,
-            dotColor = if (lastRun != null) colors.excellent else colors.neutral,
-        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(sheetHeight)
+                .padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF191D39), Color(0xFF0C0F22)),
+                    ),
+                )
+                .border(
+                    1.dp,
+                    Color(0x1F9DB4DA),
+                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                ),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(22.dp)
+                    .pointerInput(sheetSnap) {
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                dragTotal = 0f
+                                dragDeltaDp = 0f
+                                isDragging = true
+                            },
+                            onVerticalDrag = { change, amount ->
+                                change.consume()
+                                dragTotal += amount
+                                dragDeltaDp = -dragTotal / density.density
+                            },
+                            onDragEnd = {
+                                val releasedHeight = (anchorHeight + dragDeltaDp.dp)
+                                    .coerceIn(collapsedHeight, expandedHeight)
+                                sheetSnap = when {
+                                    releasedHeight < (collapsedHeight + halfHeight) / 2f -> SheetSnap.Collapsed
+                                    releasedHeight < (halfHeight + expandedHeight) / 2f -> SheetSnap.Half
+                                    else -> SheetSnap.Expanded
+                                }
+                                isDragging = false
+                                dragTotal = 0f
+                                dragDeltaDp = 0f
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                dragTotal = 0f
+                                dragDeltaDp = 0f
+                            },
+                        )
+                    }
+                    .pressable(onClick = { sheetSnap = sheetSnap.next() }),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.width(36.dp).height(3.dp).clip(CircleShape).background(Color(0x52CAD6EA)))
+            }
 
-        if (notice != null) {
-            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(colors.fairSoft)
-                    .border(1.dp, colors.fair.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .height(53.dp)
+                    .pressable(onClick = { sheetSnap = sheetSnap.next() })
+                    .padding(start = 14.dp, end = 13.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(colors.fair))
+                NetworkGlyph()
                 Spacer(Modifier.width(9.dp))
-                Text(notice, fontSize = 11.5.sp, color = colors.ink, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text(connectionLabel, fontSize = 14.sp, fontWeight = FontWeight(450), color = colors.ink, maxLines = 1)
+                    Text("$nodeLabel · 真实测试节点", fontSize = 10.sp, color = colors.muted, maxLines = 1)
+                }
+                Text(if (sheetSnap == SheetSnap.Expanded) "⌄" else "⌃", fontSize = 14.sp, color = colors.muted)
+            }
+
+            if (sheetSnap != SheetSnap.Collapsed) {
+                SheetDetailRow(
+                    symbol = "◎",
+                    label = "测试节点",
+                    value = nodeLabel,
+                    action = "更换",
+                    onAction = onOpenServer,
+                )
+                if (testMode == AnebTestMode.NETWORK_BASIC && lastBasicRun != null) {
+                    val down = lastBasicRun.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+                    val up = lastBasicRun.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+                    SheetDetailRow(
+                        symbol = "↕",
+                        label = "上次基础测速",
+                        value = "↓ $down  ↑ $up Mbps",
+                        action = "查看",
+                        onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
+                    )
+                } else if (lastRun != null && testMode == AnebTestMode.TOKEN_EXPERIENCE) {
+                    val grade = lastRun.aqsScore?.let { Grade.fromAqsScore(it) }
+                    SheetDetailRow(
+                        symbol = "↗",
+                        label = "上次成绩",
+                        value = "${lastRun.aqsScore?.roundToInt() ?: "—"} · ${grade?.labelFriendly ?: "未完成"}",
+                        action = "查看",
+                        onAction = { onOpenLastResult(lastRun.runId) },
+                    )
+                } else if (sheetSnap == SheetSnap.Expanded) {
+                    SheetDetailRow(
+                        symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
+                        label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "上次成绩",
+                        value = if (testMode == AnebTestMode.NETWORK_BASIC) {
+                            "下载 · 上传 · Ping · 抖动"
+                        } else {
+                            "完成首次测试后显示"
+                        },
+                        action = null,
+                        onAction = {},
+                    )
+                }
             }
         }
-
-        Spacer(Modifier.weight(1f))
-
-        // ---- 180° 半盘 idle + 中心 GO（三层脉冲环）----
-        HalfGauge(
-            fraction = 0f,
-            band = colors.neutral,
-            idle = true,
-            modifier = Modifier.fillMaxWidth().aspectRatio(1.8f),
-        ) {
-            GoButton(running = running, onStart = onStart)
-        }
-        Text(
-            "轻触开始 · 约 90 秒",
-            fontSize = 12.5.sp,
-            color = colors.muted,
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp),
-        )
-
-        Spacer(Modifier.weight(1f))
-
-        // ---- 上次成绩 chip ----
-        if (lastRun != null) {
-            LastResultChip(
-                run = lastRun,
-                detailed = density == HomeDensity.Pro,
-                onClick = { onOpenLastResult(lastRun.runId) },
-            )
-        }
-        Spacer(Modifier.height(20.dp))
     }
 }
 
-/** 首页信息密度段控：简洁（只给分档）/ 专业（补网络副行）。纯展示，不碰测量。 */
-enum class HomeDensity(val label: String) { Simple("简洁"), Pro("专业") }
-
-/** 中心 GO 播放按钮（品牌圆钮 + 白三角 + GO 字 + 三层脉冲环）；[running] 时禁用。 */
 @Composable
-private fun BoxScope.GoButton(running: Boolean, onStart: () -> Unit) {
+private fun TestModeSwitch(
+    selected: AnebTestMode,
+    enabled: Boolean,
+    onSelect: (AnebTestMode) -> Unit,
+) {
     val colors = AnebTheme.colors
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color(0xA80B1020))
+            .border(1.dp, colors.hairline, RoundedCornerShape(999.dp))
+            .padding(3.dp),
+    ) {
+        AnebTestMode.entries.forEach { mode ->
+            val active = mode == selected
+            Text(
+                mode.label,
+                fontSize = 10.sp,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (active) colors.ink else colors.muted,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (active) colors.brand.copy(alpha = 0.16f) else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (active) colors.brand.copy(alpha = 0.28f) else Color.Transparent,
+                        RoundedCornerShape(999.dp),
+                    )
+                    .pressable(enabled = enabled, onClick = { onSelect(mode) })
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+            )
+        }
+    }
+}
+
+private enum class SheetSnap {
+    Collapsed, Half, Expanded;
+
+    fun up() = when (this) { Collapsed -> Half; Half -> Expanded; Expanded -> Expanded }
+    fun down() = when (this) { Expanded -> Half; Half -> Collapsed; Collapsed -> Collapsed }
+    fun next() = when (this) { Collapsed -> Half; Half -> Expanded; Expanded -> Collapsed }
+}
+
+@Composable
+private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
+    val colors = AnebTheme.colors
+    val reducedMotion = LocalReducedMotion.current
+    val transition = rememberInfiniteTransition(label = "idle-start-ring")
+    val breath by transition.animateFloat(
+        initialValue = 0.985f,
+        targetValue = 1.025f,
+        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+        label = "idle-start-breath",
+    )
+    val glow by transition.animateFloat(
+        initialValue = 0.16f,
+        targetValue = 0.46f,
+        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+        label = "idle-start-glow",
+    )
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
+        label = "idle-start-rotation",
+    )
     Box(
         modifier = Modifier
-            .size(88.dp)
-            .pulseRing(colors.brand)
-            .shadow(AnebElevation.level2, CircleShape)
-            .clip(CircleShape)
-            .background(colors.brand)
+            .size(198.dp)
+            .scale(if (reducedMotion) 1f else breath)
             .pressable(onClick = onStart, enabled = !running),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Canvas(Modifier.size(28.dp)) {
-                val tri = Path().apply {
-                    moveTo(size.width * 0.34f, size.height * 0.22f)
-                    lineTo(size.width * 0.34f, size.height * 0.78f)
-                    lineTo(size.width * 0.80f, size.height * 0.5f)
-                    close()
-                }
-                drawPath(tri, Color.White)
+        Canvas(Modifier.matchParentSize()) {
+            val stroke = 1.25.dp.toPx()
+            drawCircle(
+                color = Color(0xFF43E1E6).copy(alpha = if (reducedMotion) 0.18f else glow),
+                radius = size.minDimension / 2f - stroke,
+                style = Stroke(8.dp.toPx(), cap = StrokeCap.Round),
+            )
+            rotate(if (reducedMotion) 0f else rotation, pivot = center) {
+                drawCircle(
+                    brush = Brush.sweepGradient(
+                        listOf(Color(0xFF67EDCC), Color(0xFF43E1E6), Color(0xFF3EB4F1), Color(0xFF67EDCC)),
+                        center = center,
+                    ),
+                    radius = size.minDimension / 2f - stroke,
+                    style = Stroke(stroke, cap = StrokeCap.Round),
+                )
             }
-            Text("GO", fontSize = 13.sp, fontWeight = FontWeight.Black, color = Color.White)
+        }
+        Text(
+            if (running) "进行中" else "开始",
+            fontSize = 33.sp,
+            fontWeight = FontWeight(320),
+            letterSpacing = (-1.3).sp,
+            color = colors.ink,
+        )
+    }
+}
+
+@Composable
+private fun NetworkGlyph() {
+    val colors = AnebTheme.colors
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .border(1.dp, colors.hairline, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(15.dp)) {
+            val c = Offset(size.width / 2f, size.height * 0.66f)
+            repeat(3) { i ->
+                val r = size.width * (0.18f + i * 0.16f)
+                drawArc(
+                    colors.muted.copy(alpha = 0.72f - i * 0.12f),
+                    startAngle = 205f,
+                    sweepAngle = 130f,
+                    useCenter = false,
+                    topLeft = Offset(c.x - r, c.y - r),
+                    size = androidx.compose.ui.geometry.Size(r * 2f, r * 2f),
+                    style = Stroke(0.85.dp.toPx(), cap = StrokeCap.Round),
+                )
+            }
+            drawCircle(colors.muted, 1.1.dp.toPx(), c)
         }
     }
 }
 
 @Composable
-private fun LastResultChip(run: TestRun, detailed: Boolean, onClick: () -> Unit) {
+private fun SheetDetailRow(
+    symbol: String,
+    label: String,
+    value: String,
+    action: String?,
+    onAction: () -> Unit,
+) {
     val colors = AnebTheme.colors
-    val score = run.aqsScore
-    val grade = score?.let { Grade.fromAqsScore(it) }
-    val gradeColor = colors.gradeColor(grade)
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
-            .background(colors.surfaceMuted)
-            .border(1.dp, colors.hairline, RoundedCornerShape(13.dp))
-            .pressable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(gradeColor),
+            Modifier.size(28.dp).clip(CircleShape).border(1.dp, colors.hairline, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
+            Text(symbol, fontSize = 11.sp, color = colors.muted)
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, fontSize = 9.sp, color = colors.muted)
+            Text(value, fontSize = 12.sp, fontWeight = FontWeight(450), color = colors.ink, maxLines = 1)
+        }
+        if (action != null) {
             Text(
-                text = score?.roundToInt()?.toString() ?: "—",
-                style = AnebType.StatValue,
-                fontSize = 14.sp,
-                // 徽标底色为分级色：文字反色按底色亮度择近黑/近白，保证深浅主题对比（token 化）。
-                color = colors.onGrade(grade),
+                action,
+                fontSize = 9.sp,
+                color = colors.brand,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .border(1.dp, colors.brand.copy(alpha = 0.2f), RoundedCornerShape(999.dp))
+                    .pressable(onClick = onAction)
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
             )
         }
-        Spacer(Modifier.width(11.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-            Text(
-                "上次：${grade?.labelFriendly ?: "未完成"}",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.ink,
-            )
-            if (detailed) {
-                Text(
-                    NetworkLabel.forRun(run),
-                    fontSize = 11.sp,
-                    color = colors.muted,
-                )
-            }
-        }
-        Text("›", fontSize = 18.sp, color = colors.faint)
     }
 }
 
-/** run 网络/时间副标题（"电信 5G SA · 深圳 · 昨天"占位口径；无地理信息只显 transport+时间）。 */
+/** run 网络/时间副标题；只使用真实 transport、节点和本机时间。 */
 internal object NetworkLabel {
     private val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.US)
 

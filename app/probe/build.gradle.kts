@@ -7,6 +7,21 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val releaseStorePath = providers.gradleProperty("aneb.release.storeFile").orNull
+    ?: System.getenv("ANEB_RELEASE_STORE_FILE")
+val releaseStorePassword = providers.gradleProperty("aneb.release.storePassword").orNull
+    ?: System.getenv("ANEB_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = providers.gradleProperty("aneb.release.keyAlias").orNull
+    ?: System.getenv("ANEB_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = providers.gradleProperty("aneb.release.keyPassword").orNull
+    ?: System.getenv("ANEB_RELEASE_KEY_PASSWORD")
+val releaseSigningReady = listOf(
+    releaseStorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.aneb.probe"
     compileSdk = 35
@@ -15,14 +30,32 @@ android {
         applicationId = "com.aneb.probe"
         minSdk = 29 // CellInfoNr / 5G API 需要（设计文档 §5）
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-phase0"
+        versionCode = 20
+        versionName = "0.2.0"
+    }
+
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
     }
 
     buildTypes {
         release {
-            // 阶段 0 不混淆；阶段 1 前配置 signingConfig（自管 keystore，密钥不入库）
+            // 首次公开发布先保留可审计堆栈；R8 在建立 release 回归基线后单独启用。
             isMinifyEnabled = false
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -58,6 +91,27 @@ android {
         }
     }
 }
+
+ksp {
+    // Room schema 纳入版本库；迁移评审不再只依赖手写 SQL 与运行时发现。
+    arg("room.schemaLocation", file("$projectDir/schemas").path)
+    arg("room.incremental", "true")
+}
+
+val verifyReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Fail closed when release signing ownership has not been configured."
+    doLast {
+        check(releaseSigningReady) {
+            "Release signing is not configured. Set ANEB_RELEASE_STORE_FILE, " +
+                "ANEB_RELEASE_STORE_PASSWORD, ANEB_RELEASE_KEY_ALIAS and ANEB_RELEASE_KEY_PASSWORD."
+        }
+        check(file(releaseStorePath!!).isFile) { "Release keystore does not exist: $releaseStorePath" }
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" || it.name == "installRelease" }
+    .configureEach { dependsOn(verifyReleaseSigning) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

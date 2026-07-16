@@ -19,6 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ContinuityResultEntity::class,
         ApiProbeResultEntity::class,
         AbResultEntity::class,
+        BasicSpeedResultEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -34,8 +35,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     //      可空列（run 前连接可达性探测：带 SNI vs bare-IP 的 TLS 握手结果+耗时，additive）
     // v11：阶段3 真机跨网迁移修复——continuity_result 增 c2CrossNetworkRecoveries 可空列
     //      （真机硬切换拆除原绑定网后迁到新默认网恢复的样本数，两种 C2 语义，D-23，additive）
-    version = 11,
-    exportSchema = false, // TODO(阶段1 后续): 开 schema 导出并纳入版本管理
+    // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
+    version = 12,
+    exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
     abstract fun testRunDao(): TestRunDao
@@ -48,6 +50,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun continuityResultDao(): ContinuityResultDao
     abstract fun apiProbeResultDao(): ApiProbeResultDao
     abstract fun abResultDao(): AbResultDao
+    abstract fun basicSpeedResultDao(): BasicSpeedResultDao
 
     companion object {
         @Volatile
@@ -219,6 +222,37 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        /** v11→v12：只新增基础测速结果表与时间索引，既有取证数据原样保留。 */
+        internal val MIGRATION_11_12_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `basic_speed_result` (" +
+                "`runId` TEXT NOT NULL, " +
+                "`startedAtEpochMs` INTEGER NOT NULL, " +
+                "`serverBase` TEXT NOT NULL, " +
+                "`claimScope` TEXT NOT NULL, " +
+                "`profileId` TEXT NOT NULL, " +
+                "`profileVersion` TEXT NOT NULL, " +
+                "`conclusionPolicyId` TEXT NOT NULL, " +
+                "`status` TEXT NOT NULL, " +
+                "`downloadMbps` REAL, " +
+                "`uploadMbps` REAL, " +
+                "`pingMs` REAL, " +
+                "`jitterMs` REAL, " +
+                "`requestLossRate` REAL, " +
+                "`postLoadPingMs` REAL, " +
+                "`downloadBytes` INTEGER NOT NULL, " +
+                "`uploadBytes` INTEGER NOT NULL, " +
+                "`transferErrors` TEXT NOT NULL, " +
+                "PRIMARY KEY(`runId`))",
+            "CREATE INDEX IF NOT EXISTS `index_basic_speed_result_startedAtEpochMs` " +
+                "ON `basic_speed_result` (`startedAtEpochMs`)",
+        )
+
+        internal val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_11_12_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -230,6 +264,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     // 不可静默丢弃）——v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11 见上方（均 additive）。
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+                        MIGRATION_11_12,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

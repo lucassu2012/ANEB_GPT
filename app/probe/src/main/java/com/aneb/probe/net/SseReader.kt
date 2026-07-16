@@ -104,7 +104,13 @@ class RawSseStream(
  * 有状态、非线程安全：一次流一个实例，读循环单线程内调用（OkHttp 读线程或
  * Cronet callback executor 单线程）。
  */
-class SseBoundaryScanner {
+class SseBoundaryScanner(
+    /**
+     * 可选只读观察回调：每切出一个完整 SSE event 后仅传到达戳，不传内容、不做协议解析。
+     * 调用发生在读线程，回调实现必须为常数时间且无阻塞。
+     */
+    private val onEventArrival: ((Long) -> Unit)? = null,
+) {
     private val acc = Buffer()
     private val events = ArrayList<RawSseEvent>(1024)
     private var readCount = 0
@@ -134,6 +140,7 @@ class SseBoundaryScanner {
                     sameReadBatch = eventsInThisRead > 0,
                 )
             )
+            onEventArrival?.invoke(arrivalNanos)
             eventsInThisRead++
         }
     }
@@ -182,9 +189,9 @@ class SseReader(
      * 批读打戳层（阶段 2 抽出，供 LLM API 探针复用）：只做 read → 打戳 → `\n\n`
      * 切边界 → 存原始字节，绝不解析。语义与原 readStream 读循环完全一致。
      */
-    fun readRaw(source: BufferedSource): RawSseStream {
+    fun readRaw(source: BufferedSource, onEventArrival: ((Long) -> Unit)? = null): RawSseStream {
         // 切边界/打戳语义收敛在 SseBoundaryScanner（P2-C05：Cronet 路径共用同一实现）
-        val scanner = SseBoundaryScanner()
+        val scanner = SseBoundaryScanner(onEventArrival)
         val readBuf = Buffer()
 
         // ---- 读循环：read → 打戳 → 切边界 → 存原始字节，别的都不做 ----
@@ -205,8 +212,8 @@ class SseReader(
      * 测量职责，同步等待不改任何打点语义——eofNanos 仍在读线程 EOF 处打，
      * parseEndNanos 在解析线程解析完成处打，同一单调钟）。
      */
-    fun readStream(source: BufferedSource): SseStreamResult {
-        val raw = readRaw(source)
+    fun readStream(source: BufferedSource, onEventArrival: ((Long) -> Unit)? = null): SseStreamResult {
+        val raw = readRaw(source, onEventArrival)
         return SseParseThread.execute { parseRaw(raw) }
     }
 

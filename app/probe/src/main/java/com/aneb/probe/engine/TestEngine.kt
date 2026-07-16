@@ -187,6 +187,8 @@ class TestEngine(private val context: Context) {
         val radioBuf = ConcurrentLinkedQueue<RadioSample>()
         // 实时遥测投影源（观测通道，非测量）：引擎在既有记录点追加式填充，采样协程只读。
         val telemetrySource = TelemetrySource()
+        // SSE 读线程仅写 event 到达戳；独立遥测协程读取 1 秒滑窗，绝不反压测量热路径。
+        val liveStreamWindow = LiveStreamWindow()
         val invalidReason = AtomicReference<String?>(null)
         val currentScenario = AtomicReference<Job?>(null)
         fun invalidate(reason: String) {
@@ -249,7 +251,13 @@ class TestEngine(private val context: Context) {
             // 发射。绝不在 SSE 读线程/计时回调发射（R-16）；随 collectors 在 finally 统一取消。
             collectors += launch(Dispatchers.Default) {
                 while (true) {
-                    _telemetry.value = LiveTelemetry.derive(telemetrySource.read(latestRadio.get()))
+                    val liveStream = liveStreamWindow.snapshot(SystemClock.elapsedRealtimeNanos())
+                    val snapshot = telemetrySource.read(latestRadio.get()).copy(
+                        streamArrivalRatePerSec = liveStream.arrivalRatePerSec,
+                        streamTargetRatePerSec = liveStream.targetRatePerSec,
+                        streamActive = liveStream.active,
+                    )
+                    _telemetry.value = LiveTelemetry.derive(snapshot)
                     delay(TELEMETRY_SAMPLE_MS)
                 }
             }
@@ -260,7 +268,7 @@ class TestEngine(private val context: Context) {
                 Mode.QUICK -> LatinSquare.quickOrder(ids.size)
                 Mode.FORENSIC -> LatinSquare.orders(ids.size)
             }
-            val runner = ScenarioRunner(client)
+            val runner = ScenarioRunner(client, liveStreamWindow)
             val kpiByScenario = LinkedHashMap<String, MutableList<KpiResult>>()
             var orderIndex = 0
             // 实时遥测累计投影（观测通道，非测量）：总场景数用于进度分母；ITL/token 累计
@@ -518,6 +526,7 @@ class TestEngine(private val context: Context) {
             radioShareJob?.cancel() // C07：shareIn 共享协程收尸，run flow 才能正常完成
             // 遥测观测通道复位（run 结束/取消）：采样协程已随 collectors 取消，最终态置空
             telemetrySource.reset()
+            liveStreamWindow.reset()
             _telemetry.value = LiveTelemetry.EMPTY
             pathWatch.stop()
             envMonitors.stop()

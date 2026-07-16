@@ -1,11 +1,14 @@
 package com.aneb.probe.ui
 
 import android.content.Context
+import androidx.core.content.edit
+import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.TestEngine
 
 /** 可跨进程重启恢复的非敏感测量设置。API key 仍由独立的加密存储负责。 */
 internal data class ProbeSettings(
     val serverUrl: String = DEFAULT_SERVER_URL,
+    val testMode: AnebTestMode = AnebTestMode.TOKEN_EXPERIENCE,
     val mode: TestEngine.Mode = TestEngine.Mode.QUICK,
     val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
     val driveTest: Boolean = false,
@@ -25,9 +28,14 @@ internal object ProbeSettingsCodec {
         mode: String?,
         transport: String?,
         driveTest: Boolean,
+        testMode: String? = null,
     ): ProbeSettings = ProbeSettings(
         serverUrl = serverUrl?.trim().takeUnless { it.isNullOrEmpty() }
             ?: ProbeSettings.DEFAULT_SERVER_URL,
+        testMode = when (testMode) {
+            AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
+            else -> AnebTestMode.TOKEN_EXPERIENCE
+        },
         mode = when (mode) {
             TestEngine.Mode.FORENSIC.name -> TestEngine.Mode.FORENSIC
             else -> TestEngine.Mode.QUICK
@@ -43,6 +51,7 @@ internal object ProbeSettingsCodec {
 
 internal data class ProbeLaunchOverrides(
     val serverUrl: String? = null,
+    val testMode: AnebTestMode? = null,
     val mode: TestEngine.Mode? = null,
     val transport: TestEngine.TransportMode? = null,
     val driveTest: Boolean? = null,
@@ -61,6 +70,7 @@ internal fun resolveLaunchSettings(
     val base = if (autorun) ProbeSettings() else saved
     return ProbeSettings(
         serverUrl = overrides.serverUrl ?: base.serverUrl,
+        testMode = overrides.testMode ?: base.testMode,
         mode = overrides.mode ?: base.mode,
         transport = overrides.transport ?: base.transport,
         driveTest = (overrides.driveTest ?: base.driveTest) && hasFullRadioEvidence,
@@ -75,28 +85,34 @@ internal class ProbeSettingsStore(context: Context) {
         mode = prefs.getString(KEY_MODE, null),
         transport = prefs.getString(KEY_TRANSPORT, null),
         driveTest = prefs.getBoolean(KEY_DRIVE_TEST, false),
+        testMode = prefs.getString(KEY_TEST_MODE, null),
     )
 
     fun saveServerUrl(value: String) {
-        prefs.edit().putString(KEY_SERVER_URL, value.trim()).apply()
+        prefs.edit { putString(KEY_SERVER_URL, value.trim()) }
     }
 
     fun saveMode(value: TestEngine.Mode) {
-        prefs.edit().putString(KEY_MODE, value.name).apply()
+        prefs.edit { putString(KEY_MODE, value.name) }
+    }
+
+    fun saveTestMode(value: AnebTestMode) {
+        prefs.edit { putString(KEY_TEST_MODE, value.name) }
     }
 
     fun saveTransport(value: TestEngine.TransportMode) {
-        prefs.edit().putString(KEY_TRANSPORT, value.name).apply()
+        prefs.edit { putString(KEY_TRANSPORT, value.name) }
     }
 
     fun saveDriveTest(value: Boolean) {
-        prefs.edit().putBoolean(KEY_DRIVE_TEST, value).apply()
+        prefs.edit { putBoolean(KEY_DRIVE_TEST, value) }
     }
 
     private companion object {
         const val PREFS_NAME = "probe_settings_v1"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_MODE = "mode"
+        const val KEY_TEST_MODE = "test_mode"
         const val KEY_TRANSPORT = "transport"
         const val KEY_DRIVE_TEST = "drive_test"
     }

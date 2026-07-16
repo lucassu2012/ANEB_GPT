@@ -8,11 +8,15 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.RadialGradient
+import android.graphics.LinearGradient
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
-import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.toColorInt
 import java.io.OutputStream
 
 /**
@@ -71,117 +75,103 @@ object ShareCard {
 
     /** 纯离屏渲染（可在无 Activity 上下文时单独取 Bitmap，便于预览/调试）。 */
     fun render(model: Model): Bitmap {
-        val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val bmp = createBitmap(W, H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        c.drawColor(Color.parseColor("#0A0E17"))
+        val bg = "#080B18".toColorInt()
+        c.drawColor(bg)
 
-        val ink = Color.parseColor("#EEF2F8")
-        val muted = Color.parseColor("#8B96AC")
-        val hair = Color.parseColor("#26314A")
-        val brand2 = Color.parseColor("#7D7FFB")
+        val ink = "#F3F6FA".toColorInt()
+        val muted = "#A3ADBF".toColorInt()
+        val faint = "#738094".toColorInt()
+        val hair = "#26334B".toColorInt()
         val grade = model.gradeColorArgb
 
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         val black = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
 
+        // ANEB_UI 分享卡：深海军蓝斜向材质 + 右上分档柔光。
+        p.shader = LinearGradient(0f, 0f, W.toFloat(), H.toFloat(), "#121A32".toColorInt(), bg, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, W.toFloat(), H.toFloat(), p)
+        p.shader = RadialGradient(W * 0.82f, H * 0.16f, W * 0.38f, Color.argb(54, Color.red(grade), Color.green(grade), Color.blue(grade)), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+        c.drawCircle(W * 0.82f, H * 0.16f, W * 0.38f, p)
+        p.shader = null
+
         // 品牌头
         p.typeface = black
-        p.textSize = 46f
-        p.color = ink
-        c.drawText("A", 72f, 110f, p)
-        val aW = p.measureText("A")
-        p.color = brand2
-        c.drawText("NEB", 72f + aW, 110f, p)
+        p.textSize = 40f
+        p.letterSpacing = 0.08f
+        p.color = muted
+        c.drawText("ANEB PROBE", 72f, 104f, p)
+        p.typeface = Typeface.SANS_SERIF
+        p.letterSpacing = 0.12f
+        p.textSize = 24f
+        p.textAlign = Paint.Align.RIGHT
+        p.color = faint
+        c.drawText("AI NETWORK EXPERIENCE", W - 72f, 104f, p)
+
+        // 中心分数
+        val cx = W / 2f
+        p.typeface = black
+        p.textSize = 250f
+        p.color = grade
+        p.textAlign = Paint.Align.CENTER
+        c.drawText(model.score?.toString() ?: "—", cx, 440f, p)
+        p.textSize = 42f
+        p.typeface = bold
+        c.drawText("${model.gradeLabel} · AI 体验分", cx, 515f, p)
         p.typeface = Typeface.SANS_SERIF
         p.textSize = 28f
         p.color = muted
-        c.drawText("智能体网络测试 · Agent 体验分", 72f, 152f, p)
-
-        // 脉冲环
-        val cx = W / 2f
-        val cy = 470f
-        val r = 250f
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 8f
-        p.color = hair
-        c.drawCircle(cx, cy, r, p)
-        val frac = ((model.score ?: 0).coerceIn(0, 100)) / 100f
-        p.color = grade
-        p.strokeWidth = 20f
-        p.strokeCap = Paint.Cap.ROUND
-        c.drawArc(RectF(cx - r, cy - r, cx + r, cy + r), -90f, 360f * frac, false, p)
-        // 环刻度
-        p.style = Paint.Style.STROKE
-        p.strokeWidth = 4f
-        val ticks = 60
-        for (i in 0 until ticks) {
-            val a = Math.toRadians(-90.0 + i.toDouble() / (ticks - 1) * 360.0)
-            val lit = i.toFloat() / (ticks - 1) <= frac
-            p.color = if (lit) grade else hair
-            val r1 = r - 16f
-            val r2 = r + 16f
-            c.drawLine(
-                cx + Math.cos(a).toFloat() * r1, cy + Math.sin(a).toFloat() * r1,
-                cx + Math.cos(a).toFloat() * r2, cy + Math.sin(a).toFloat() * r2, p,
-            )
-        }
-        p.style = Paint.Style.FILL
-
-        // 中心分数
-        p.typeface = black
-        p.textSize = 200f
-        p.color = grade
-        p.textAlign = Paint.Align.CENTER
-        c.drawText(model.score?.toString() ?: "—", cx, cy + 55f, p)
-        p.textSize = 44f
-        p.typeface = bold
-        c.drawText(model.gradeLabel, cx, cy + 150f, p)
-        p.textAlign = Paint.Align.LEFT
+        c.drawText(model.networkLine, cx, 564f, p)
 
         // 结论文案（自动换行）
+        p.textAlign = Paint.Align.LEFT
         p.typeface = Typeface.SANS_SERIF
-        p.textSize = 38f
-        p.color = ink
-        drawWrapped(c, p, model.verdict, 72f, 830f, W - 144f, 52f)
+        p.textSize = 36f
+        p.color = Color.argb(196, Color.red(ink), Color.green(ink), Color.blue(ink))
+        drawWrapped(c, p, model.verdict, 96f, 690f, W - 192f, 52f)
 
-        // 三瓦片
+        // 三指标：只有真实展示态值；缺失仍为破折号。
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 2f
+        p.color = hair
+        c.drawLine(72f, 780f, W - 72f, 780f, p)
+        c.drawLine(72f, 965f, W - 72f, 965f, p)
         val tiles = model.tiles.take(3)
-        val gap = 24f
-        val tileW = (W - 144f - gap * 2) / 3f
-        val tileY = 990f
-        val tileH = 180f
+        val tileW = (W - 144f) / 3f
         tiles.forEachIndexed { i, t ->
-            val x = 72f + i * (tileW + gap)
-            p.style = Paint.Style.FILL
-            p.color = Color.parseColor("#161D2B")
-            c.drawRoundRect(RectF(x, tileY, x + tileW, tileY + tileH), 24f, 24f, p)
-            p.style = Paint.Style.STROKE
-            p.strokeWidth = 2f
-            p.color = hair
-            c.drawRoundRect(RectF(x, tileY, x + tileW, tileY + tileH), 24f, 24f, p)
+            val x = 72f + i * tileW
+            if (i > 0) {
+                p.style = Paint.Style.STROKE
+                p.color = hair
+                c.drawLine(x, 818f, x, 925f, p)
+            }
             p.style = Paint.Style.FILL
             p.textAlign = Paint.Align.CENTER
             p.typeface = bold
-            p.textSize = 52f
+            p.textSize = 48f
             p.color = t.colorArgb
-            c.drawText(t.value, x + tileW / 2f, tileY + 90f, p)
+            c.drawText(t.value, x + tileW / 2f, 872f, p)
             p.typeface = Typeface.SANS_SERIF
-            p.textSize = 28f
+            p.textSize = 25f
             p.color = muted
-            c.drawText(t.label, x + tileW / 2f, tileY + 140f, p)
+            c.drawText(t.label, x + tileW / 2f, 920f, p)
             p.textAlign = Paint.Align.LEFT
         }
 
-        // 网络行 + 水印
-        p.textSize = 30f
-        p.color = muted
-        c.drawText(model.networkLine, 72f, 1260f, p)
+        // 口径边界 + 本机生成标识（不伪造二维码）。
+        p.typeface = Typeface.SANS_SERIF
+        p.textSize = 27f
+        p.color = faint
+        c.drawText("由 ANEB Probe 在本机生成", 72f, 1188f, p)
+        c.drawText("应用层路径体验 · 非运营商全网评级", 72f, 1230f, p)
         p.textAlign = Paint.Align.RIGHT
-        p.color = brand2
+        p.color = muted
         p.typeface = bold
-        c.drawText("ANEB Probe", W - 72f, 1260f, p)
+        c.drawText("AN", W - 72f, 1230f, p)
         p.textAlign = Paint.Align.LEFT
+        p.letterSpacing = 0f
 
         return bmp
     }
@@ -208,9 +198,7 @@ object ShareCard {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ANEB")
-            }
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ANEB")
         }
         val resolver = context.contentResolver
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null

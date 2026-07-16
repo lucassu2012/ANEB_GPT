@@ -13,10 +13,10 @@ import androidx.compose.ui.unit.dp
  * 数值与设计稿逐一对齐，跨屏统一取用（各屏依赖本基座）。
  */
 object AnebShapes {
-    val xl = RoundedCornerShape(28.dp) // --r-xl 大浮层/弹窗
-    val card = RoundedCornerShape(22.dp) // --r-card 卡片
-    val tile = RoundedCornerShape(18.dp) // --r-tile 瓦片
-    val button = RoundedCornerShape(16.dp) // --r-btn 按钮
+    val xl = RoundedCornerShape(24.dp) // 分享卡/大浮层
+    val card = RoundedCornerShape(18.dp) // suite-card 17px，原生取整 18dp
+    val tile = RoundedCornerShape(14.dp) // 记录/节点行
+    val button = RoundedCornerShape(14.dp) // 控件/连接卡
     val sm = RoundedCornerShape(12.dp) // --r-sm
     val xs = RoundedCornerShape(9.dp) // --r-xs 小角标
     val pill = RoundedCornerShape(percent = 50) // --r-pill 胶囊（999）

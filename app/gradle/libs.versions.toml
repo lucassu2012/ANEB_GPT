@@ -1,10 +1,11 @@
 # ANEB Probe — 版本目录（供应链钉死：全部精确版本，禁止 +/动态版本/区间）
-# 兼容性矩阵：AGP 8.5.2 需 Gradle 8.7+（wrapper 已钉 8.7）；Kotlin 2.0.21 配套
+# 兼容性矩阵：AGP 8.13.0 需 Gradle 8.13（wrapper 已钉 8.13），支持 API 36.1；
+# Kotlin 2.0.21 与 Compose/KSP 继续同版配套。
 # Compose 编译器插件（org.jetbrains.kotlin.plugin.compose，与 Kotlin 同版本）；
 # KSP 2.0.21-1.0.28 与 Kotlin 2.0.21 严格对应；Room 2.6.1 支持 KSP2。
 
 [versions]
-agp = "8.5.2"
+agp = "8.13.0"
 kotlin = "2.0.21"
 ksp = "2.0.21-1.0.28"
 coreKtx = "1.13.1"

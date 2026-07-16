@@ -1,0 +1,58 @@
+{
+  "model_contract_version": "aneb-behavior-model-v1",
+  "model_id": "ai-realtime-voice-behavior-v0.1",
+  "model_version": "0.1.0",
+  "business_type": "ai_realtime_voice",
+  "status": "hypothesis",
+  "source": {
+    "kind": "product_requirement_hypothesis",
+    "content_retained": false,
+    "notes": "GPT-Live-like full-duplex interaction archetype; not provider performance data"
+  },
+  "prng": "pcg32-v1",
+  "generation": {
+    "audio_frame_ms": 20,
+    "uplink_frame_bytes": 640,
+    "downlink_frame_bytes": 960,
+    "turn_count": {"type": "empirical", "values": [12, 16, 20]},
+    "session_setup_ms": {"type": "empirical", "values": [180, 250, 400, 700]},
+    "user_speech_ms": {"type": "empirical", "values": [1200, 1800, 2600, 4200, 6500]},
+    "response_wait_ms": {"type": "empirical", "values": [350, 500, 700, 1000]},
+    "response_audio_ms": {"type": "empirical", "values": [1800, 3000, 4500, 7000]},
+    "inter_turn_silence_ms": {"type": "empirical", "values": [300, 500, 800, 1200]},
+    "interruption_probability": 0.18,
+    "interruption_position": 0.45
+  },
+  "profile_export": {
+    "contract_version": "aneb-profile-v2",
+    "profile_id": "ai_realtime_voice_standard",
+    "version": "1.0.0-draft",
+    "mode_id": "ai_realtime_simulation",
+    "execution_target": "aneb_probe_simulator",
+    "claim_scope": "application_end_to_end_to_probe_node",
+    "measurement_catalog_id": "realtime-sim-measurements-v1-draft",
+    "business": {
+      "category_id": "ai_realtime_voice",
+      "label": "AI 实时语音交互",
+      "archetype_labels": ["gpt_live_like"],
+      "behavior_feature_ids": ["full_duplex", "continuous_small_uplink", "low_latency_response", "barge_in", "stream_continuity"]
+    },
+    "live_presentation": {
+      "primary_metric_id": "AUDIO_ON_TIME_RATIO_2S",
+      "secondary_metric_ids": ["PLAYOUT_HEADROOM_LIVE", "RTT_LIVE", "UP_KBPS_LIVE", "DOWN_KBPS_LIVE"],
+      "window_ms": 2000,
+      "ui_refresh_ms": 100,
+      "missing_behavior": "show_unavailable_never_zero"
+    },
+    "evaluation": {
+      "target_set_id": "realtime-interaction-targets-v1-draft",
+      "score_policy_id": "realtime-interaction-score-v1-draft",
+      "conclusion_policy_id": "realtime-interaction-conclusions-v1-draft",
+      "required_metric_ids": ["LIVE-B01", "LIVE-B02", "LIVE-B04", "LIVE-B05", "LIVE-B06", "LIVE-B07", "LIVE-B08", "LIVE-B09", "LIVE-B10", "LIVE-N01", "LIVE-N02", "LIVE-N03", "LIVE-N04"],
+      "guardrail_metric_ids": ["LIVE-B01", "LIVE-B06", "LIVE-B09"],
+      "group_weights": {"conversation_response": 0.35, "playout_continuity": 0.35, "session_reliability": 0.20, "network_readiness": 0.10},
+      "missing_required_metric": "score_null",
+      "invalid_run": "retain_raw_suppress_score"
+    }
+  }
+}
