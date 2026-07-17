@@ -319,6 +319,7 @@ private fun phaseLabel(type: String): String = when (type) {
     ProfilePhase.TYPE_UPLOAD_BURST -> "上行突发"
     ProfilePhase.TYPE_THINK_PAUSE -> "思考停顿"
     ProfilePhase.TYPE_TOKEN_STREAM -> "流式输出"
+    ProfilePhase.TYPE_DOWNLOAD_BURST -> "下行大对象"
     ProfilePhase.TYPE_TOOL_LOOP -> "工具循环"
     ProfilePhase.TYPE_DOWNLOAD_THROUGHPUT -> "下载"
     ProfilePhase.TYPE_UPLOAD_THROUGHPUT -> "上传"

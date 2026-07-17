@@ -1,4 +1,4 @@
-# ANEB Probe 0.4.5 release build
+# ANEB Probe 0.4.6 release build
 
 ## Ownership boundary
 
@@ -40,7 +40,7 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.4.5` (`versionCode=27`)
+- Version: `0.4.6` (`versionCode=28`)
 - Room schema: version 15, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
-- Debug APK SHA-256: `43B44316337B6560FCC73F5C44A4C7B4AF397FDE620546BEA7B37CE92916821A` (debug artifacts are not release evidence).
+- Debug APK SHA-256: `756FCDC314D1D897953267A93DEAB192B9DEF28DAE304A7EC7E5BCF27A73BB2A` (debug artifacts are not release evidence).

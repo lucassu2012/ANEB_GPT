@@ -48,6 +48,25 @@ func TestLoadRealProfiles(t *testing.T) {
 	if _, err := s2.tokenStreamPhase(2); err == nil {
 		t.Fatal("expected error for out-of-range token_stream index")
 	}
+	s3 := profiles["s3_multimodal"]
+	if s3.Version != "0.3.0" || s3.EstDurationS != 82 || len(s3.Phases) != 10 {
+		t.Fatalf("s3 contract header wrong: version=%s duration=%v phases=%d", s3.Version, s3.EstDurationS, len(s3.Phases))
+	}
+	wantS3Types := []string{
+		"clock_sync", "upload_burst", "think_pause", "token_stream", "download_burst",
+		"upload_burst", "think_pause", "token_stream", "download_burst", "clock_sync",
+	}
+	for i, wantType := range wantS3Types {
+		if got := s3.Phases[i].Type; got != wantType {
+			t.Fatalf("s3 phase %d type = %q, want %q", i, got, wantType)
+		}
+	}
+	for _, i := range []int{4, 8} {
+		phase := s3.Phases[i]
+		if phase.Bytes != 12582912 || phase.ChunkKB != 256 {
+			t.Fatalf("s3 download phase %d wrong: %+v", i, phase)
+		}
+	}
 	basic := profiles["basic_network"]
 	if basic.ModeID != "network_basic" || basic.Presentation.LiveMetricID != "phase_throughput_mbps" {
 		t.Fatalf("basic profile presentation wrong: %+v", basic)

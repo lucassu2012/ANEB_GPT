@@ -79,6 +79,22 @@ class ProfileCapabilityTest {
     }
 
     @Test
+    fun `legacy multimodal download burst is executable`() {
+        val result = ProfileCapability.assess(
+            completeProfile(
+                ScenarioProfile.MODE_TOKEN_EXPERIENCE,
+                listOf(
+                    ProfilePhase(ProfilePhase.TYPE_TOKEN_STREAM, tokens = 200),
+                    ProfilePhase(ProfilePhase.TYPE_DOWNLOAD_BURST, bytes = 12_582_912, chunkKb = 256),
+                ),
+            ),
+        )
+
+        assertTrue(result.executable)
+        assertTrue(result.unsupportedPhaseTypes.isEmpty())
+    }
+
+    @Test
     fun `unknown phase requires an engine plugin`() {
         val result = ProfileCapability.assess(
             completeProfile(

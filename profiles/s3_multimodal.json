@@ -1,10 +1,10 @@
 {
   "profile_id": "s3_multimodal",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "mode_id": "token_experience",
   "kpi_set": "agent-qoe-kpi-v0.2",
   "description": "多模态流：周期性大图上行 + token 流下行交替，对标截图转代码类视觉 agentic",
-  "est_duration_s": 75,
+  "est_duration_s": 82,
   "presentation": {
     "live_metric_id": "stream_arrival_eps",
     "live_metric_label": "AI 流式到达速率",
@@ -22,12 +22,14 @@
       "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
       "burst": null,
       "seed": 3001 },
+    { "type": "download_burst", "bytes": 12582912, "chunk_kb": 256 },
     { "type": "upload_burst", "bytes": 1048576, "chunk_kb": 64 },
     { "type": "think_pause", "duration_ms": 2500 },
     { "type": "token_stream", "tokens": 200, "rate_tps": 40,
       "token_bytes": { "dist": "lognormal", "median": 120, "sigma": 0.6 },
       "burst": null,
       "seed": 3002 },
+    { "type": "download_burst", "bytes": 12582912, "chunk_kb": 256 },
     { "type": "clock_sync", "samples": 20 }
   ]
 }

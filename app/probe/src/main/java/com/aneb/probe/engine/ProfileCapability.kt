@@ -18,6 +18,7 @@ object ProfileCapability {
     private val tokenPhases = setOf(
         ProfilePhase.TYPE_CLOCK_SYNC,
         ProfilePhase.TYPE_UPLOAD_BURST,
+        ProfilePhase.TYPE_DOWNLOAD_BURST,
         ProfilePhase.TYPE_THINK_PAUSE,
         ProfilePhase.TYPE_TOKEN_STREAM,
         ProfilePhase.TYPE_TOOL_LOOP,

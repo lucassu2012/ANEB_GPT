@@ -111,7 +111,25 @@ systemctl restart aneb-server
 sleep 1
 systemctl is-active aneb-server
 echo '--- smoke: /api/v1/profiles ---'
-curl -sk https://127.0.0.1:8443/api/v1/profiles
+curl -sk https://127.0.0.1:8443/api/v1/profiles | tee /tmp/aneb_profiles_smoke.json
+python3 - <<'PY'
+import json
+with open('/tmp/aneb_profiles_smoke.json', encoding='utf-8') as f:
+    body = json.load(f)
+profiles = {item['profile_id']: item for item in body['profiles']}
+assert set(profiles) == {'basic_network', 's1_chat', 's2_coding_agent', 's3_multimodal'}, profiles.keys()
+s3 = profiles['s3_multimodal']
+assert s3['version'] == '0.3.0', s3['version']
+assert [p['type'] for p in s3['phases']] == [
+    'clock_sync', 'upload_burst', 'think_pause', 'token_stream', 'download_burst',
+    'upload_burst', 'think_pause', 'token_stream', 'download_burst', 'clock_sync',
+]
+for index in (4, 8):
+    assert s3['phases'][index]['bytes'] == 12582912, s3['phases'][index]
+    assert s3['phases'][index]['chunk_kb'] == 256, s3['phases'][index]
+print('profile_contract=s3_multimodal@0.3.0 phases=10 downloads=2')
+PY
+rm -f /tmp/aneb_profiles_smoke.json
 echo ''
 echo '--- smoke: /api/v1/echo ---'
 curl -sk -X POST --data ping https://127.0.0.1:8443/api/v1/echo

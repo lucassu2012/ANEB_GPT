@@ -159,6 +159,7 @@ data class ProfilePhase(
     companion object {
         const val TYPE_CLOCK_SYNC = "clock_sync"
         const val TYPE_UPLOAD_BURST = "upload_burst"
+        const val TYPE_DOWNLOAD_BURST = "download_burst"
         const val TYPE_THINK_PAUSE = "think_pause"
         const val TYPE_TOKEN_STREAM = "token_stream"
         const val TYPE_TOOL_LOOP = "tool_loop"

@@ -7,12 +7,14 @@ import kotlin.random.Random
 
 /**
  * profile 驱动的场景执行器（P1 范围 1）：按 [ScenarioProfile.phases] 依次执行
- * clock_sync / upload_burst / think_pause / token_stream / tool_loop。
+ * clock_sync / upload_burst / download_burst / think_pause / token_stream / tool_loop。
  *
  * - clock_sync：/echo × samples，前 [ECHO_WARMUP] 个 warmup 丢弃（5.3.2），样本间
  *   100–300ms 随机间隔去相关（R-23）；Cristian min-RTT 样本收敛 offset。
  * - upload_burst：bytes/chunk_kb 逐块打戳（claim=写入本地协议栈，R-07 辅助诊断），
  *   U1 终点=2xx 响应头；服务端逐块到达序列（权威）随响应返回。
+ * - download_burst：读取到响应体最后一字节才算完成；D1 原始 goodput 只在字节数精确匹配时出值。
+ *   该新增原始量不改变旧版 token-experience AQS 的评分合同。
  * - token_stream：GET /stream?profile=&phase=<token_stream 序号>&run=，SseReader 收流；
  *   TTFT=请求头发完→首 token 到达 − 服务端已知注入时延（首 token sched − prelude srv_ts，
  *   R-20 三段法第一段）；prelude 缺失时 TTFT 记 null（无法剥离 dwell 的样本不出值，R-10）。
@@ -53,6 +55,26 @@ class ScenarioRunner(
             }
     }
 
+    class DownloadOutcome(
+        val index: Int,
+        val profileBytes: Long,
+        val result: AnebClient.TransferResult,
+    ) {
+        val complete: Boolean =
+            result.error == null &&
+                (result.httpCode ?: 0) in 200..299 &&
+                result.endNanos != null &&
+                result.totalBytes == profileBytes
+
+        /** D1 计时终点＝成功排空精确长度的响应体；失败/截断为 null，绝不填 0。 */
+        val durationNanos: Long? =
+            if (complete) result.endNanos?.minus(result.startNanos)?.takeIf { it > 0L } else null
+
+        val goodputMbps: Double? = durationNanos
+            ?.takeIf { it > 0L }
+            ?.let { profileBytes * 8.0 / (it / 1e9) / 1e6 }
+    }
+
     class StreamOutcome(
         val streamIndex: Int,
         val expectedTokens: Int,
@@ -67,6 +89,7 @@ class ScenarioRunner(
     class ScenarioOutcome(val profile: ScenarioProfile, val scenarioKey: String) {
         val clockSyncs = ArrayList<ClockSyncOutcome>()
         val uploads = ArrayList<UploadOutcome>()
+        val downloads = ArrayList<DownloadOutcome>()
         val streams = ArrayList<StreamOutcome>()
         val toolLoops = ArrayList<ToolLoopOutcome>()
 
@@ -114,6 +137,9 @@ class ScenarioRunner(
                     ProfilePhase.TYPE_UPLOAD_BURST ->
                         runUpload(base, runId, phase, outcome, emit)
 
+                    ProfilePhase.TYPE_DOWNLOAD_BURST ->
+                        runDownload(base, phase, outcome, emit)
+
                     ProfilePhase.TYPE_THINK_PAUSE -> {
                         emit("THINK_PAUSE scenario=${outcome.scenarioKey} duration_ms=${phase.durationMs}")
                         delay(phase.durationMs.toLong())
@@ -141,6 +167,33 @@ class ScenarioRunner(
         } finally {
             outcome.endedAtNanos = SystemClock.elapsedRealtimeNanos()
         }
+    }
+
+    // -------------------------------------------------------- download_burst
+
+    private suspend fun runDownload(
+        base: String,
+        phase: ProfilePhase,
+        outcome: ScenarioOutcome,
+        emit: suspend (String) -> Unit,
+    ) {
+        val bytes = phase.bytes.coerceAtLeast(1L)
+        val chunkKb = phase.chunkKb.coerceAtLeast(1)
+        val idx = outcome.downloads.size
+        val result = client.downloadThroughput(
+            "$base/api/v1/download?bytes=$bytes&chunk_kb=$chunkKb",
+            onBytes = { _, _ -> },
+        )
+        val download = DownloadOutcome(idx, bytes, result)
+        outcome.downloads.add(download)
+        val durationMs = download.durationNanos?.let { "%.2f".format(it / 1e6) } ?: "null"
+        val goodput = download.goodputMbps?.let { "%.3f".format(it) } ?: "null"
+        val error = result.error ?: if (download.complete) "none" else "incomplete_body"
+        emit(
+            "DOWNLOAD scenario=${outcome.scenarioKey} idx=$idx expected_bytes=$bytes " +
+                "actual_bytes=${result.totalBytes} chunk_kb=$chunkKb http=${result.httpCode ?: "null"} " +
+                "dur_ms=$durationMs goodput_mbps=$goodput complete=${download.complete} error=$error"
+        )
     }
 
     // ------------------------------------------------------------ clock_sync

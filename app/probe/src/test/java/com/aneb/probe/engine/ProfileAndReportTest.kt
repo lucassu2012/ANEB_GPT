@@ -1,6 +1,9 @@
 package com.aneb.probe.engine
 
+import com.aneb.probe.net.AnebClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -104,5 +107,40 @@ class ProfileAndReportTest {
             ScenarioRunner.parsePreludeSrvTsUs("""prelude {"srv_ts_us":123456789,"anchor_wall_unix_ns":1}"""),
         )
         assertEquals(null, ScenarioRunner.parsePreludeSrvTsUs("prelude {}"))
+    }
+
+    @Test
+    fun `download burst only exposes goodput after exact body drain`() {
+        val complete = ScenarioRunner.DownloadOutcome(
+            index = 0,
+            profileBytes = 12_582_912,
+            result = AnebClient.TransferResult(
+                startNanos = 1_000_000_000,
+                endNanos = 3_000_000_000,
+                totalBytes = 12_582_912,
+                httpCode = 200,
+                error = null,
+                timing = null,
+            ),
+        )
+        assertTrue(complete.complete)
+        assertEquals(2_000_000_000L, complete.durationNanos)
+        assertEquals(50.331648, complete.goodputMbps!!, 1e-9)
+
+        val truncated = ScenarioRunner.DownloadOutcome(
+            index = 1,
+            profileBytes = 12_582_912,
+            result = AnebClient.TransferResult(
+                startNanos = 1_000_000_000,
+                endNanos = 2_000_000_000,
+                totalBytes = 6_291_456,
+                httpCode = 200,
+                error = null,
+                timing = null,
+            ),
+        )
+        assertFalse(truncated.complete)
+        assertNull(truncated.durationNanos)
+        assertNull(truncated.goodputMbps)
     }
 }
