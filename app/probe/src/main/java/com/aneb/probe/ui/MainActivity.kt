@@ -201,6 +201,7 @@ class MainActivity : ComponentActivity() {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
             "stress" -> TestEngine.Mode.STRESS
+            "recovery" -> TestEngine.Mode.STRESS
             else -> null
         }
         intentContinuity = intent?.getStringExtra("mode")?.lowercase() == "continuity"
@@ -265,7 +266,13 @@ class MainActivity : ComponentActivity() {
                     }
                     var mode by rememberSaveable {
                         mutableStateOf(
-                            if (launchSettings.mode == TestEngine.Mode.STRESS && launchSettings.testMode != AnebTestMode.TOKEN_SIMULATION) {
+                            if (
+                                launchSettings.mode == TestEngine.Mode.STRESS &&
+                                launchSettings.testMode !in setOf(
+                                    AnebTestMode.TOKEN_SIMULATION,
+                                    AnebTestMode.AI_REALTIME_SIMULATION,
+                                )
+                            ) {
                                 TestEngine.Mode.QUICK
                             } else {
                                 launchSettings.mode
@@ -475,7 +482,12 @@ class MainActivity : ComponentActivity() {
                                         onTestModeChange = {
                                             testMode = it
                                             settingsStore.saveTestMode(it)
-                                            if (it != AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
+                                            if (
+                                                it !in setOf(
+                                                    AnebTestMode.TOKEN_SIMULATION,
+                                                    AnebTestMode.AI_REALTIME_SIMULATION,
+                                                ) && mode == TestEngine.Mode.STRESS
+                                            ) {
                                                 mode = TestEngine.Mode.QUICK
                                                 settingsStore.saveMode(mode)
                                             }

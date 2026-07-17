@@ -289,7 +289,8 @@ private fun RealtimeResultContent(
 private fun RealtimePhaseRow(phase: RealtimeSimulationPhase) {
     val colors = AnebTheme.colors
     val active = when (phase) {
-        RealtimeSimulationPhase.IDLE, RealtimeSimulationPhase.PREPARING, RealtimeSimulationPhase.CONNECTING, RealtimeSimulationPhase.CLOCK_SYNC -> 0
+        RealtimeSimulationPhase.IDLE, RealtimeSimulationPhase.PREPARING, RealtimeSimulationPhase.CONNECTING,
+        RealtimeSimulationPhase.RECOVERING, RealtimeSimulationPhase.CLOCK_SYNC -> 0
         RealtimeSimulationPhase.SPEAKING, RealtimeSimulationPhase.WAITING -> 1
         RealtimeSimulationPhase.PLAYING -> 2
         RealtimeSimulationPhase.BARGE_IN -> 3
@@ -309,6 +310,7 @@ private fun RealtimePhaseRow(phase: RealtimeSimulationPhase) {
 private fun realtimePhaseLabel(phase: RealtimeSimulationPhase) = when (phase) {
     RealtimeSimulationPhase.IDLE, RealtimeSimulationPhase.PREPARING -> "校验模型"
     RealtimeSimulationPhase.CONNECTING -> "建立会话"
+    RealtimeSimulationPhase.RECOVERING -> "恢复会话"
     RealtimeSimulationPhase.CLOCK_SYNC -> "同步时钟"
     RealtimeSimulationPhase.SPEAKING -> "模拟说话"
     RealtimeSimulationPhase.WAITING -> "等待首帧"

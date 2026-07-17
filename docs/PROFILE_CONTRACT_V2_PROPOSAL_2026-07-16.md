@@ -310,6 +310,17 @@ Stress 只评价一次明确的大对象容量与负载响应性任务，使用�
 - Standard 未达到所有必需指标最低样本量时最多给出 `MEDIUM/INCONCLUSIVE`，只有完整覆盖才允许 `HIGH/PASS|FAIL`；
 - P40 Pro Quick run `019f6bbd-e628-76bb-b88e-26edf9f502b8` 冻结 21 项指标和 79 次 loaded RTT 尝试：会话 RTT P95 42.8ms、loaded RTT P95 54.2ms、上/下行 P05 0.257/0.383Mbps。Quick 仍固定 `LOW/INCONCLUSIVE`，不形成 95% 长期稳定性承诺。
 
+### 5.7 受控恢复 Profile 与 Score v2（已实现）
+
+`ai_realtime_voice_recovery@1.2.0` 与 Standard 隔离，claim scope 为 `controlled_server_disconnect_recovery_to_probe_node`：
+
+- 4 个短会话中安排 2 次受控服务端连接中断；节点先完整提交指定轮次证据，再只关闭该 WebSocket；
+- 两个恢复会话的首轮都使用行为模型中同一份最小合法刺激：1.2s 上行语音 + 350ms 模型等待，禁止不同说话时长污染恢复比较；
+- 恢复时延仍按“客户端检出中断→下一成功会话首个有效音频帧”计时，并同时披露 1550ms 业务计划基线；
+- `realtime-recovery-score-v2` 只用恢复后会话计算必需的 LIVE-B05/B09/N02，最低样本为 400 帧、6 轮、10 个 RTT；LIVE-B11 必须覆盖 2 次恢复尝试，失败尝试按未达标计入而不是丢弃；
+- 权重：恢复路径 65%（中断观察 20%、恢复完成 30%、恢复时延 50%），恢复后质量 35%（准时帧 60%、轮次成功 25%、RTT 15%）；未观察全部中断或未全部恢复时总分封顶 54；
+- P40 Pro run `019f6df2-adf6-7e63-bf4d-7db123d8e58a`：2/2 中断观察并恢复，原始恢复 2468.4/2814.1ms、P95 2796.8ms，恢复后 467/467 帧准时、6/6 轮成功、10/10 RTT≤100ms，100/A、`HIGH/PASS`；该结果不得外推为蜂窝断网、跨网迁移或第三方 AI 服务可用性。
+
 ## 6. 网络综合性能 Profile
 
 ### 6.1 业务类型和阶段
@@ -436,7 +447,7 @@ Token 准时到达率当前为 92%，未达 95% 目标。
 - `golden_trace.jsonl`：同模型同 seed 必须生成完全一致的事件序列；
 - `validation.json`：训练/留出样本、分位数误差、状态转移误差和接受判据；
 - `profile.json`：候选 ANEB Profile v2；
-- `manifest.sha256`：上述文件哈希。
+- `manifest.sha256`：上述产物的 SHA-256；JSON/JSONL 采用 UTF-8、键序与分隔符规范化后的语义哈希，排版变化不影响绑定，因此不等同于 pretty-printed 文件的原始字节哈希。
 
 ### 9.2 模型状态
 

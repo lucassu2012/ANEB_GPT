@@ -12,7 +12,7 @@ class RealtimeRuntimeIntegrityTest {
 
     @Test
     fun `published realtime assets are executable hash bound and contain barge in`() {
-        listOf("quick", "standard").forEach { variant ->
+        listOf("quick", "standard", "recovery").forEach { variant ->
             val base = repositoryRoot().resolve("profiles/published/ai_realtime_voice_$variant")
             val profileText = Files.readAllBytes(base.resolve("profile.json")).toString(Charsets.UTF_8)
             val planText = Files.readAllBytes(base.resolve("runtime_plan.json")).toString(Charsets.UTF_8)
@@ -35,7 +35,89 @@ class RealtimeRuntimeIntegrityTest {
             )
             assertEquals("AUDIO_ON_TIME_RATIO_2S", profile.livePresentation.primaryMetricId)
             assertTrue(profile.livePresentation.secondaryMetricIds.contains("RTT_LIVE"))
+            if (variant == "recovery") {
+                assertEquals("realtime-recovery-score-v2", profile.evaluation.scorePolicyId)
+                assertEquals("fixed_model_derived_minimum_speech_plus_wait_v1", plan.recoveryProbeContract)
+                assertEquals(2, plan.sessions.count { it.controlledDisconnectAfterTurn != null })
+            } else {
+                assertTrue(plan.sessions.none { it.controlledDisconnectAfterTurn != null })
+            }
         }
+    }
+
+    @Test
+    fun `controlled recovery consumes only the adjacent attempt even when it fails`() {
+        val firstFaultEnd = 1_000L
+        val afterFirstFault = nextRealtimeRecoveryStartNanos(
+            controlledPairing = true,
+            currentStartNanos = null,
+            isControlledFault = true,
+            isRecoveryAttempt = false,
+            unexpectedDisconnect = true,
+            sessionEndNanos = firstFaultEnd,
+            recoveryMs = null,
+        )
+        assertEquals(firstFaultEnd, afterFirstFault)
+
+        val afterFailedRecovery = nextRealtimeRecoveryStartNanos(
+            controlledPairing = true,
+            currentStartNanos = afterFirstFault,
+            isControlledFault = false,
+            isRecoveryAttempt = true,
+            unexpectedDisconnect = true,
+            sessionEndNanos = 2_000L,
+            recoveryMs = null,
+        )
+        assertEquals(null, afterFailedRecovery)
+
+        val secondFaultEnd = 3_000L
+        val afterSecondFault = nextRealtimeRecoveryStartNanos(
+            controlledPairing = true,
+            currentStartNanos = afterFailedRecovery,
+            isControlledFault = true,
+            isRecoveryAttempt = false,
+            unexpectedDisconnect = true,
+            sessionEndNanos = secondFaultEnd,
+            recoveryMs = null,
+        )
+        assertEquals(secondFaultEnd, afterSecondFault)
+    }
+
+    @Test
+    fun `natural recovery retains the first disconnect until audio returns`() {
+        val firstFaultEnd = 4_000L
+        val afterFault = nextRealtimeRecoveryStartNanos(
+            controlledPairing = false,
+            currentStartNanos = null,
+            isControlledFault = false,
+            isRecoveryAttempt = false,
+            unexpectedDisconnect = true,
+            sessionEndNanos = firstFaultEnd,
+            recoveryMs = null,
+        )
+        val afterSecondFailure = nextRealtimeRecoveryStartNanos(
+            controlledPairing = false,
+            currentStartNanos = afterFault,
+            isControlledFault = false,
+            isRecoveryAttempt = true,
+            unexpectedDisconnect = true,
+            sessionEndNanos = 5_000L,
+            recoveryMs = null,
+        )
+        assertEquals(firstFaultEnd, afterSecondFailure)
+
+        assertEquals(
+            null,
+            nextRealtimeRecoveryStartNanos(
+                controlledPairing = false,
+                currentStartNanos = afterSecondFailure,
+                isControlledFault = false,
+                isRecoveryAttempt = true,
+                unexpectedDisconnect = false,
+                sessionEndNanos = 6_000L,
+                recoveryMs = 1_200.0,
+            ),
+        )
     }
 
     private fun repositoryRoot(): Path {

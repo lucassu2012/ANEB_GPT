@@ -35,6 +35,7 @@ data class RealtimeRuntimeSession(
     @SerialName("turn_count") val turnCount: Int,
     val turns: List<RealtimeRuntimeTurn>,
     @SerialName("planned_duration_ms") val plannedDurationMs: Double,
+    @SerialName("controlled_disconnect_after_turn") val controlledDisconnectAfterTurn: Int? = null,
 )
 
 @Serializable
@@ -46,6 +47,7 @@ data class RealtimeRuntimePlan(
     @SerialName("calibration_status") val calibrationStatus: String,
     val seed: Long,
     val variant: String,
+    @SerialName("recovery_probe_contract") val recoveryProbeContract: String? = null,
     @SerialName("session_count") val sessionCount: Int,
     val sessions: List<RealtimeRuntimeSession>,
     val claim: String,
@@ -60,7 +62,7 @@ class RealtimeRuntimeRepository(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun load(variant: String): LoadedRealtimeRuntime = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard")) { "unsupported_realtime_variant:$variant" }
+        require(variant in setOf("quick", "standard", "recovery")) { "unsupported_realtime_variant:$variant" }
         val base = "published/ai_realtime_voice_$variant"
         val profileText = context.assets.open("$base/profile.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val planText = context.assets.open("$base/runtime_plan.json").use { it.readBytes().toString(Charsets.UTF_8) }
@@ -84,10 +86,25 @@ class RealtimeRuntimeRepository(private val context: Context) {
         require(plan.modelHash == profile.business.behaviorModelHash) { "realtime_runtime_model_hash_mismatch" }
         require(plan.calibrationStatus == profile.business.calibrationStatus) { "realtime_runtime_calibration_mismatch" }
         require(plan.seed == execution.seed && plan.variant == execution.variant) { "realtime_runtime_seed_or_variant_mismatch" }
+        if (plan.variant == "recovery") {
+            require(plan.recoveryProbeContract == "fixed_model_derived_minimum_speech_plus_wait_v1") {
+                "realtime_runtime_recovery_probe_contract_invalid"
+            }
+        } else {
+            require(plan.recoveryProbeContract == null) { "realtime_runtime_unexpected_recovery_probe_contract" }
+        }
         require(plan.sessionCount == plan.sessions.size && plan.sessions.isNotEmpty()) { "realtime_runtime_session_count_invalid" }
         plan.sessions.forEach { session ->
             require(session.sessionId.isNotBlank() && session.frameMs in 10..100) { "realtime_runtime_session_invalid" }
             require(session.turnCount == session.turns.size && session.turns.isNotEmpty()) { "realtime_runtime_turn_count_invalid" }
+            if (plan.variant == "recovery") {
+                require(
+                    session.controlledDisconnectAfterTurn == null ||
+                        session.controlledDisconnectAfterTurn in session.turns.indices,
+                ) { "realtime_runtime_controlled_disconnect_invalid" }
+            } else {
+                require(session.controlledDisconnectAfterTurn == null) { "realtime_runtime_unexpected_controlled_disconnect" }
+            }
             session.turns.forEachIndexed { index, turn ->
                 require(turn.turnIndex == index && turn.turnId.isNotBlank()) { "realtime_runtime_turn_identity_invalid" }
                 require(turn.uplinkFrames > 0 && turn.plannedDownlinkFrames > 0) { "realtime_runtime_frame_count_invalid" }
@@ -100,6 +117,18 @@ class RealtimeRuntimeRepository(private val context: Context) {
                     require(turn.bargeInAfterFrames == null && turn.expectedStopWithinMs == null) { "realtime_runtime_unexpected_barge" }
                 }
             }
+        }
+        if (plan.variant == "recovery") {
+            val faultIndexes = plan.sessions.indices.filter { plan.sessions[it].controlledDisconnectAfterTurn != null }
+            require(faultIndexes.size >= 2) {
+                "realtime_runtime_recovery_samples_insufficient"
+            }
+            require(
+                faultIndexes.all { index ->
+                    index + 1 in plan.sessions.indices &&
+                        plan.sessions[index + 1].controlledDisconnectAfterTurn == null
+                },
+            ) { "realtime_runtime_recovery_pairing_invalid" }
         }
     }
 }

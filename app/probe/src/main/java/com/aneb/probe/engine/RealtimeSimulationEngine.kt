@@ -44,7 +44,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-enum class RealtimeSimulationPhase { IDLE, PREPARING, CONNECTING, CLOCK_SYNC, SPEAKING, WAITING, PLAYING, BARGE_IN, FINALIZING, COMPLETE, FAILED }
+enum class RealtimeSimulationPhase { IDLE, PREPARING, CONNECTING, RECOVERING, CLOCK_SYNC, SPEAKING, WAITING, PLAYING, BARGE_IN, FINALIZING, COMPLETE, FAILED }
 
 data class RealtimeSimulationTelemetry(
     val phase: RealtimeSimulationPhase = RealtimeSimulationPhase.IDLE,
@@ -137,7 +137,8 @@ class RealtimeSimulationEngine(private val context: Context) {
             var completedTurns = 0
             var recoveryStartNanos: Long? = null
             for ((sessionIndex, session) in plan.sessions.withIndex()) {
-                val isRecoveryAttempt = recoveryStartNanos != null
+                val isControlledFault = session.controlledDisconnectAfterTurn != null
+                val isRecoveryAttempt = recoveryStartNanos != null && !isControlledFault
                 val offsetUs = AtomicLong(Long.MIN_VALUE)
                 val onTimeWindow = ConcurrentLinkedQueue<Pair<Long, Boolean>>()
                 val downlinkWindow = ConcurrentLinkedQueue<Pair<Long, Int>>()
@@ -167,7 +168,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                 }
                 val sessionStartProgress = completedTurns.toDouble() / totalTurns
                 _telemetry.value = _telemetry.value.copy(
-                    phase = RealtimeSimulationPhase.CONNECTING,
+                    phase = if (isRecoveryAttempt) RealtimeSimulationPhase.RECOVERING else RealtimeSimulationPhase.CONNECTING,
                     sessionIndex = sessionIndex + 1,
                     sessionCount = plan.sessionCount,
                     turnIndex = 0,
@@ -204,8 +205,17 @@ class RealtimeSimulationEngine(private val context: Context) {
                 val uplinkStarted = ConcurrentHashMap<Int, Long>()
                 val commitByTurn = ConcurrentHashMap<Int, Long>()
                 val firstDownlinkTurns = ConcurrentHashMap.newKeySet<Int>()
+                val sessionWsUrl = session.controlledDisconnectAfterTurn?.let { turn ->
+                    "$wsUrl?controlled_disconnect_after_turn=$turn"
+                } ?: wsUrl
+                if (session.controlledDisconnectAfterTurn != null) {
+                    log(
+                        "REALTIME_V1_CONTROLLED_DISCONNECT run_id=$runId session=${session.sessionId} " +
+                            "after_turn=${session.controlledDisconnectAfterTurn}",
+                    )
+                }
                 val wire = RealtimeSimulationWire(client).runSession(
-                    wsUrl,
+                    sessionWsUrl,
                     wirePlan,
                     session.startAfterPreviousMs,
                     RealtimeWireCallbacks(
@@ -269,6 +279,12 @@ class RealtimeSimulationEngine(private val context: Context) {
                     loadedRttSamplesMs = loadedRttSnapshot,
                     recoveryMs = recoveryMs,
                     reconnectEvents = if (isRecoveryAttempt) 1 else 0,
+                    controlledDisconnectExpected = session.controlledDisconnectAfterTurn != null,
+                    recoveryStimulusBaselineMs = if (isRecoveryAttempt) {
+                        session.turns.firstOrNull()?.let { it.speechMs + it.responseWaitMs }
+                    } else {
+                        null
+                    },
                 )
                 evidence += measured
                 if (isRecoveryAttempt) {
@@ -277,11 +293,15 @@ class RealtimeSimulationEngine(private val context: Context) {
                             "recovery_ms=${recoveryMs ?: "null"} established=${measured.established}",
                     )
                 }
-                recoveryStartNanos = when {
-                    measured.unexpectedDisconnect -> recoveryStartNanos ?: wire.endNanos
-                    recoveryMs != null -> null
-                    else -> recoveryStartNanos
-                }
+                recoveryStartNanos = nextRealtimeRecoveryStartNanos(
+                    controlledPairing = plan.variant == "recovery",
+                    currentStartNanos = recoveryStartNanos,
+                    isControlledFault = isControlledFault,
+                    isRecoveryAttempt = isRecoveryAttempt,
+                    unexpectedDisconnect = measured.unexpectedDisconnect,
+                    sessionEndNanos = wire.endNanos,
+                    recoveryMs = recoveryMs,
+                )
                 if (wire.ready?.contractVersion != "aneb-realtime-session-v1") invalidReason = "node_contract_mismatch"
                 completedTurns += session.turnCount
                 _telemetry.value = _telemetry.value.copy(progress = completedTurns.toDouble() / totalTurns)
@@ -289,7 +309,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             }
             _telemetry.value = _telemetry.value.copy(phase = RealtimeSimulationPhase.FINALIZING, progress = 0.98)
             val runEvidence = RealtimeRunEvidence(config.variant, evidence, invalidReason)
-            val score = RealtimeSimulationScorer.score(runEvidence)
+            val score = RealtimeSimulationScorer.score(runEvidence, profile.evaluation.scorePolicyId)
             val result = RealtimeSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
                 plan.modelId, plan.modelVersion, plan.modelHash, plan.calibrationStatus,
@@ -350,6 +370,8 @@ class RealtimeSimulationEngine(private val context: Context) {
         loadedRttSamplesMs: List<Double?>,
         recoveryMs: Double?,
         reconnectEvents: Int,
+        controlledDisconnectExpected: Boolean,
+        recoveryStimulusBaselineMs: Double?,
     ): RealtimeSessionEvidence {
         val offset = medianLong(wire.rttSamples.map { it.offsetUs })
         val measuredTurns = session.turns.mapIndexed { turnIndex, turn ->
@@ -423,6 +445,10 @@ class RealtimeSimulationEngine(private val context: Context) {
             loadedRttSamplesMs = loadedRttSamplesMs,
             recoveryMs = recoveryMs,
             reconnectEvents = reconnectEvents,
+            controlledDisconnectExpected = controlledDisconnectExpected,
+            controlledDisconnectObserved = controlledDisconnectExpected &&
+                (wire.error != null || wire.summary?.protocolOk != true),
+            recoveryStimulusBaselineMs = recoveryStimulusBaselineMs,
         )
     }
 
@@ -543,6 +569,9 @@ class RealtimeSimulationEngine(private val context: Context) {
                     put("loaded_rtt_samples_ms", JsonArray(session.loadedRttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
                     putNullableDouble("recovery_ms", session.recoveryMs)
                     put("reconnect_events", session.reconnectEvents)
+                    put("controlled_disconnect_expected", session.controlledDisconnectExpected)
+                    put("controlled_disconnect_observed", session.controlledDisconnectObserved)
+                    putNullableDouble("recovery_stimulus_baseline_ms", session.recoveryStimulusBaselineMs)
                     put("turns", buildJsonArray {
                         session.turns.forEach { turn ->
                             add(buildJsonObject {
@@ -580,5 +609,27 @@ class RealtimeSimulationEngine(private val context: Context) {
         const val PLAYOUT_DEADLINE_MS = 150.0
         const val LOADED_ECHO_GAP_MS = 250L
         const val LOADED_ECHO_IDLE_GAP_MS = 50L
+    }
+}
+
+internal fun nextRealtimeRecoveryStartNanos(
+    controlledPairing: Boolean,
+    currentStartNanos: Long?,
+    isControlledFault: Boolean,
+    isRecoveryAttempt: Boolean,
+    unexpectedDisconnect: Boolean,
+    sessionEndNanos: Long,
+    recoveryMs: Double?,
+): Long? = if (controlledPairing) {
+    when {
+        isControlledFault && unexpectedDisconnect -> sessionEndNanos
+        isRecoveryAttempt -> null
+        else -> null
+    }
+} else {
+    when {
+        unexpectedDisconnect -> currentStartNanos ?: sessionEndNanos
+        recoveryMs != null -> null
+        else -> currentStartNanos
     }
 }

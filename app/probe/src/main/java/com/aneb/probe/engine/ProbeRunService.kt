@@ -231,7 +231,11 @@ class ProbeRunService : Service() {
                         engine.run(
                             RealtimeSimulationEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                variant = when (config.mode) {
+                                    TestEngine.Mode.QUICK -> "quick"
+                                    TestEngine.Mode.FORENSIC -> "standard"
+                                    TestEngine.Mode.STRESS -> "recovery"
+                                },
                                 transport = config.transport,
                             ),
                         )

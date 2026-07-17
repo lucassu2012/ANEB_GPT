@@ -40,7 +40,7 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.3.0` (`versionCode=21`)
+- Version: `0.4.4` (`versionCode=26`)
 - Room schema: version 15, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
 - Debug APK SHA-256: `6FE1F071174DD7E2DF4C06E33C9B632B423075E8247C6244F2123F9B2FEF544B` (debug artifacts are not release evidence).

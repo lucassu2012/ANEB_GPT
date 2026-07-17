@@ -1,0 +1,479 @@
+{
+  "contract_version": "aneb-profile-v2",
+  "profile_id": "ai_realtime_voice_recovery",
+  "version": "1.2.0",
+  "mode_id": "ai_realtime_simulation",
+  "execution_target": "aneb_probe_simulator",
+  "claim_scope": "controlled_server_disconnect_recovery_to_probe_node",
+  "business": {
+    "category_id": "ai_realtime_voice",
+    "label": "AI 实时语音受控恢复",
+    "archetype_labels": [
+      "gpt_live_like"
+    ],
+    "behavior_feature_ids": [
+      "full_duplex",
+      "continuous_small_uplink",
+      "low_latency_response",
+      "barge_in",
+      "stream_continuity",
+      "controlled_server_disconnect_recovery"
+    ],
+    "behavior_model_id": "ai-realtime-voice-behavior-v0.2",
+    "behavior_model_version": "0.2.0",
+    "behavior_model_hash": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6",
+    "calibration_status": "hypothesis",
+    "model_source_kind": "product_requirement_hypothesis"
+  },
+  "live_presentation": {
+    "primary_metric_id": "AUDIO_ON_TIME_RATIO_2S",
+    "secondary_metric_ids": [
+      "PLAYOUT_HEADROOM_LIVE",
+      "RTT_LIVE",
+      "UP_KBPS_LIVE",
+      "DOWN_KBPS_LIVE"
+    ],
+    "window_ms": 2000,
+    "ui_refresh_ms": 100,
+    "stale_after_ms": 1500,
+    "missing_behavior": "show_unavailable_never_zero"
+  },
+  "evaluation": {
+    "target_set_id": "realtime-recovery-targets-v1",
+    "score_policy_id": "realtime-recovery-score-v2",
+    "score_anchor_policy_id": "compliance-anchors-v1",
+    "conclusion_policy_id": "realtime-recovery-conclusions-v2",
+    "required_metric_ids": [
+      "LIVE-B05",
+      "LIVE-B09",
+      "LIVE-B11",
+      "LIVE-N02"
+    ],
+    "guardrail_metric_ids": [
+      "LIVE-B11"
+    ],
+    "group_weights": {
+      "recovery_path": 0.65,
+      "recovered_quality": 0.35
+    },
+    "missing_required_metric": "score_null",
+    "invalid_run": "retain_raw_suppress_score"
+  },
+  "measurements": [
+    {
+      "metric_id": "LIVE-B01",
+      "label": "会话建立成功率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b01-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.99,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B02",
+      "label": "会话建立时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_b02-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 2000,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B03",
+      "label": "轮次响应时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_b03-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte_model_p95_plus_ms",
+        "value": 200,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B04",
+      "label": "响应超额时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "realtime-response-excess-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 200,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B05",
+      "label": "音频准时帧率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b05-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 400,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.99,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B06",
+      "label": "音频卡顿率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b06-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 500,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.01,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B07",
+      "label": "音频掩盖样本率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b07-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 500,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.01,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B08",
+      "label": "打断响应时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_b08-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 2,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 300,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B09",
+      "label": "轮次成功率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b09-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 6,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.99,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B10",
+      "label": "会话中断率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b10-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.01,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B11",
+      "label": "恢复时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_b11-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 2,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 3000,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-B12",
+      "label": "非计划对讲重叠率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_b12-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.01,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N01",
+      "label": "WebSocket 握手时延",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_n01-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 1000,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N02",
+      "label": "会话内 RTT",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_n02-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 100,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N03",
+      "label": "帧到达变化",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "live_n03-v1",
+      "aggregation": "p95_minus_p50",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 30,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N04",
+      "label": "应用音频帧未返回率",
+      "domain": "network",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "live_n04-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 500,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.01,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N05",
+      "label": "连续未返回帧最大长度",
+      "domain": "network",
+      "unit": "frame",
+      "measurement_level": "derived",
+      "formula_id": "live_n05-v1",
+      "aggregation": "max",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 500,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 3,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N06",
+      "label": "双向持续有效速率",
+      "domain": "network",
+      "unit": "Mbps",
+      "measurement_level": "derived",
+      "formula_id": "live_n06-v1",
+      "aggregation": "p05_by_direction",
+      "direction": "higher_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.5,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N07",
+      "label": "负载中 RTT",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "live_n07-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 150,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "LIVE-N08",
+      "label": "重连/迁移事件",
+      "domain": "network",
+      "unit": "count",
+      "measurement_level": "exact",
+      "formula_id": "live_n08-v1",
+      "aggregation": "counts",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "diagnostic",
+      "quality_target": null
+    },
+    {
+      "metric_id": "LIVE-R01",
+      "label": "无线层协变量",
+      "domain": "radio_covariate",
+      "unit": "mixed",
+      "measurement_level": "exact",
+      "formula_id": "live_r01-v1",
+      "aggregation": "time_series",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "covariate",
+      "quality_target": null
+    }
+  ],
+  "measurement_catalog_id": "realtime-sim-measurements-v1",
+  "trace": {
+    "contract_version": "aneb-behavior-trace-v1",
+    "seed": 20260716,
+    "prng": "pcg32-v1"
+  },
+  "phases": [
+    {
+      "type": "behavior_trace",
+      "model_id": "ai-realtime-voice-behavior-v0.2",
+      "model_version": "0.2.0",
+      "model_hash": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6",
+      "seed": 20260716,
+      "runtime_artifact": "runtime_plan.json",
+      "runtime_artifact_hash": "sha256:81bb1eb51717ce103fa013b4e167187dd2c88c73e4bef35852766913a29afa59"
+    }
+  ],
+  "evidence_tier": "recovery",
+  "est_duration_s": 30.7,
+  "execution_plan": {
+    "contract_version": "aneb-realtime-runtime-plan-v1",
+    "artifact": "runtime_plan.json",
+    "artifact_hash": "sha256:81bb1eb51717ce103fa013b4e167187dd2c88c73e4bef35852766913a29afa59",
+    "seed": 20260716,
+    "variant": "recovery"
+  }
+}

@@ -64,6 +64,7 @@ object ProfileCapability {
         "live_b08-v1",
         "live_b09-v1",
         "live_b10-v1",
+        "live_b11-v1",
         "live_n01-v1",
         "live_n02-v1",
         "live_n03-v1",
@@ -191,9 +192,13 @@ object ProfileCapability {
             }
         }
         if (profile.modeId == ScenarioProfile.MODE_AI_REALTIME_SIMULATION) {
-            if (profile.evaluation.scorePolicyId != "realtime-interaction-score-v1") add("实时交互评分策略未被当前引擎识别")
+            val realtimePolicies = mapOf(
+                "realtime-interaction-score-v1" to "realtime-interaction-conclusions-v1",
+                "realtime-recovery-score-v2" to "realtime-recovery-conclusions-v2",
+            )
+            if (profile.evaluation.scorePolicyId !in realtimePolicies) add("实时交互评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("实时交互评分锚点策略未被当前引擎识别")
-            if (profile.evaluation.conclusionPolicyId != "realtime-interaction-conclusions-v1") add("实时交互结论策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != realtimePolicies[profile.evaluation.scorePolicyId]) add("实时交互结论策略未被当前引擎识别")
             val requiredFormulaIds = profile.measurements
                 .filter { it.requiredForScore }
                 .map { it.formulaId }
@@ -201,7 +206,7 @@ object ProfileCapability {
             val unknown = requiredFormulaIds - realtimeRequiredFormulaIds
             if (unknown.isNotEmpty()) add("实时交互必需指标公式未被识别: ${unknown.sorted().joinToString()}")
             val execution = profile.executionPlan
-            if (profile.evidenceTier !in setOf("quick", "standard")) add("实时交互证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "recovery")) add("实时交互证据等级无效")
             if (execution == null) {
                 add("实时交互缺少可执行计划")
             } else {

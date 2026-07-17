@@ -101,10 +101,10 @@ def derive_realtime_runtime_variant(
     artifacts: BuildArtifacts,
     variant: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return a published realtime standard or low-confidence quick pair."""
+    """Return a published realtime standard, quick, or controlled-recovery pair."""
     if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != REALTIME_RUNTIME_CONTRACT:
         raise ValueError("realtime runtime variant requires ai_realtime_voice artifacts")
-    if variant not in {"standard", "quick"}:
+    if variant not in {"standard", "quick", "recovery"}:
         raise ValueError(f"unsupported runtime variant: {variant}")
     plan = deepcopy(artifacts.runtime_plan)
     profile = deepcopy(artifacts.profile)
@@ -139,6 +139,76 @@ def derive_realtime_runtime_variant(
         plan["session_count"] = 1
         profile["profile_id"] = "ai_realtime_voice_quick"
         profile.setdefault("business", {})["label"] = "AI 实时语音快测"
+    elif variant == "recovery":
+        # Recovery is deliberately separate from Standard. The business model
+        # remains untouched; this derived artifact adds only auditable test actions.
+        selected_sessions: list[dict[str, Any]] = []
+        recovery_probe_template = min(
+            (turn for session in plan["sessions"] for turn in session["turns"]),
+            key=lambda turn: (
+                float(turn["speech_ms"]) + float(turn["response_wait_ms"]),
+                float(turn["planned_duration_ms"]),
+            ),
+        )
+        for session_index, source in enumerate(plan["sessions"][:4]):
+            controlled_failure = session_index % 2 == 0
+            if controlled_failure:
+                selected_turns = deepcopy(
+                    sorted(source["turns"], key=lambda turn: float(turn["planned_duration_ms"]))[:1]
+                )
+            else:
+                selected_turns = [
+                    deepcopy(recovery_probe_template),
+                    *deepcopy(
+                        sorted(source["turns"], key=lambda turn: float(turn["planned_duration_ms"]))[:2]
+                    ),
+                ]
+            for turn_index, turn in enumerate(selected_turns):
+                turn["turn_index"] = turn_index
+                turn["turn_id"] = f"recovery-session-{session_index + 1:04d}-turn-{turn_index + 1:04d}"
+                turn["start_after_previous_ms"] = 0.0 if turn_index == 0 else min(
+                    300.0,
+                    float(turn["start_after_previous_ms"]),
+                )
+            session = deepcopy(source)
+            session["session_id"] = f"recovery-session-{session_index + 1:04d}"
+            session["start_after_previous_ms"] = 0.0
+            session["turns"] = selected_turns
+            session["turn_count"] = len(selected_turns)
+            session["planned_duration_ms"] = round(
+                float(session["setup_ms"])
+                + sum(
+                    float(turn["start_after_previous_ms"]) + float(turn["planned_duration_ms"])
+                    for turn in selected_turns
+                ),
+                3,
+            )
+            session["controlled_disconnect_after_turn"] = 0 if controlled_failure else None
+            selected_sessions.append(session)
+        plan["sessions"] = selected_sessions
+        plan["session_count"] = len(selected_sessions)
+        profile["profile_id"] = "ai_realtime_voice_recovery"
+        profile["version"] = "1.2.0"
+        profile["claim_scope"] = "controlled_server_disconnect_recovery_to_probe_node"
+        business = profile.setdefault("business", {})
+        business["label"] = "AI 实时语音受控恢复"
+        features = business.setdefault("behavior_feature_ids", [])
+        if "controlled_server_disconnect_recovery" not in features:
+            features.append("controlled_server_disconnect_recovery")
+        evaluation = profile.setdefault("evaluation", {})
+        evaluation["target_set_id"] = "realtime-recovery-targets-v1"
+        evaluation["score_policy_id"] = "realtime-recovery-score-v2"
+        evaluation["conclusion_policy_id"] = "realtime-recovery-conclusions-v2"
+        evaluation["required_metric_ids"] = ["LIVE-B05", "LIVE-B09", "LIVE-B11", "LIVE-N02"]
+        evaluation["guardrail_metric_ids"] = ["LIVE-B11"]
+        evaluation["group_weights"] = {"recovery_path": 0.65, "recovered_quality": 0.35}
+        required_minimums = {"LIVE-B05": 400, "LIVE-B09": 6, "LIVE-B11": 2, "LIVE-N02": 10}
+        for metric in profile["measurements"]:
+            metric_id = metric["metric_id"]
+            metric["required_for_score"] = metric_id in required_minimums
+            if metric_id in required_minimums:
+                metric["minimum_sample_count"] = required_minimums[metric_id]
+        plan["recovery_probe_contract"] = "fixed_model_derived_minimum_speech_plus_wait_v1"
     plan["variant"] = variant
     _bind_realtime_runtime_plan(profile, plan, int(plan["seed"]), variant)
     return profile, plan

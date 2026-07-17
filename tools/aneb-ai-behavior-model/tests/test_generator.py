@@ -164,6 +164,59 @@ class GeneratorTest(unittest.TestCase):
         self.assertTrue(any(turn["interrupted"] for turn in plan["sessions"][0]["turns"]))
         self.assertLess(profile["est_duration_s"], 90)
 
+    def test_realtime_recovery_isolated_faults_are_hash_bound_test_actions(self) -> None:
+        model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
+        artifacts = build_artifacts(model, 20260716)
+        profile, plan = derive_realtime_runtime_variant(artifacts, "recovery")
+
+        self.assertEqual(profile["profile_id"], "ai_realtime_voice_recovery")
+        self.assertEqual(profile["evidence_tier"], "recovery")
+        self.assertEqual(profile["claim_scope"], "controlled_server_disconnect_recovery_to_probe_node")
+        self.assertEqual(profile["evaluation"]["score_policy_id"], "realtime-recovery-score-v2")
+        self.assertEqual(plan["variant"], "recovery")
+        self.assertEqual(
+            plan["recovery_probe_contract"],
+            "fixed_model_derived_minimum_speech_plus_wait_v1",
+        )
+        self.assertEqual(plan["session_count"], 4)
+        self.assertEqual(
+            [session.get("controlled_disconnect_after_turn") for session in plan["sessions"]],
+            [0, None, 0, None],
+        )
+        self.assertLess(profile["est_duration_s"], 120)
+        expected_frames = sum(
+            turn["downlink_frames_before_stop"] if turn["interrupted"] else turn["planned_downlink_frames"]
+            for session in plan["sessions"]
+            for turn in session["turns"]
+        )
+        self.assertGreaterEqual(expected_frames, 500)
+        recovered_frames = sum(
+            turn["downlink_frames_before_stop"] if turn["interrupted"] else turn["planned_downlink_frames"]
+            for session in plan["sessions"]
+            if session.get("controlled_disconnect_after_turn") is None
+            for turn in session["turns"]
+        )
+        self.assertGreaterEqual(recovered_frames, 400)
+        recovery_stimuli = [
+            (session["turns"][0]["speech_ms"], session["turns"][0]["response_wait_ms"])
+            for session in plan["sessions"]
+            if session.get("controlled_disconnect_after_turn") is None
+        ]
+        self.assertEqual(recovery_stimuli, [(1200.0, 350.0), (1200.0, 350.0)])
+        required = {
+            metric["metric_id"] for metric in profile["measurements"] if metric["required_for_score"]
+        }
+        self.assertEqual(required, {"LIVE-B05", "LIVE-B09", "LIVE-B11", "LIVE-N02"})
+        minimums = {
+            metric["metric_id"]: metric["minimum_sample_count"]
+            for metric in profile["measurements"]
+            if metric["required_for_score"]
+        }
+        self.assertEqual(minimums, {"LIVE-B05": 400, "LIVE-B09": 6, "LIVE-B11": 2, "LIVE-N02": 10})
+        serialized = json.dumps(plan)
+        forbidden = {"arrival_ms", "network_delay_ms", "packet_loss", "measured_rtt_ms"}
+        self.assertFalse(forbidden.intersection(serialized))
+
 
 if __name__ == "__main__":
     unittest.main()

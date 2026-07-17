@@ -89,6 +89,7 @@ fun HomeScreen(
     var dragDeltaDp by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
     var confirmStress by remember { mutableStateOf(false) }
+    var confirmRecovery by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val collapsedHeight = 150.dp
     val halfHeight = 250.dp
@@ -136,6 +137,8 @@ fun HomeScreen(
                 onStart = {
                     if (testMode == AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
                         confirmStress = true
+                    } else if (testMode == AnebTestMode.AI_REALTIME_SIMULATION && mode == TestEngine.Mode.STRESS) {
+                        confirmRecovery = true
                     } else {
                         onStart()
                     }
@@ -149,7 +152,11 @@ fun HomeScreen(
                     } else {
                         "模拟文本、文档与图片 AI 互动，动态测量 Token 到达"
                     }
-                    AnebTestMode.AI_REALTIME_SIMULATION -> "模拟 GPT-Live 类双工语音、连续音频帧与用户打断"
+                    AnebTestMode.AI_REALTIME_SIMULATION -> if (mode == TestEngine.Mode.STRESS) {
+                        "执行两次受控服务端中断，动态测量重连到首个有效音频帧"
+                    } else {
+                        "模拟 GPT-Live 类双工语音、连续音频帧与用户打断"
+                    }
                     AnebTestMode.TOKEN_EXPERIENCE -> "执行经典 Agent 场景取证与 AQS 评分"
                 },
                 fontSize = 10.5.sp,
@@ -291,7 +298,11 @@ fun HomeScreen(
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 23 分钟"
                                 TestEngine.Mode.STRESS -> "当前：压力 · 约 2–5 分钟 · 约 200MiB 流量"
                             }
-                            AnebTestMode.AI_REALTIME_SIMULATION -> modeSummary(mode, "约 25 秒", "约 22 分钟")
+                            AnebTestMode.AI_REALTIME_SIMULATION -> when (mode) {
+                                TestEngine.Mode.QUICK -> "当前：快测 · 约 25 秒"
+                                TestEngine.Mode.FORENSIC -> "当前：标准 · 约 22 分钟"
+                                TestEngine.Mode.STRESS -> "当前：恢复 · 约 1 分钟 · 2 次受控中断"
+                            }
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
                         action = null,
@@ -316,6 +327,25 @@ fun HomeScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { confirmStress = false }) { Text("取消") }
+                },
+            )
+        }
+
+        if (confirmRecovery) {
+            AlertDialog(
+                onDismissRequest = { confirmRecovery = false },
+                title = { Text("开始受控恢复测试？") },
+                text = {
+                    Text(
+                        "ANEB 节点将只对本次测试连接执行两次受控中断，并测量客户端重新建立会话后到首个有效音频帧的时间。" +
+                            "这不会切换手机网络，也不会影响其他 App；结论不代表蜂窝断网或跨网迁移能力。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { confirmRecovery = false; onStart() }) { Text("开始恢复测试") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmRecovery = false }) { Text("取消") }
                 },
             )
         }

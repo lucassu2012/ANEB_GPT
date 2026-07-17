@@ -33,7 +33,11 @@ def main(argv: list[str] | None = None) -> int:
     publish.add_argument("--model", required=True, type=Path)
     publish.add_argument("--seed", required=True, type=int)
     publish.add_argument("--out", required=True, type=Path)
-    publish.add_argument("--variant", choices=("quick", "standard", "stress"), default="standard")
+    publish.add_argument(
+        "--variant",
+        choices=("quick", "standard", "stress", "recovery"),
+        default="standard",
+    )
 
     fit = subparsers.add_parser("fit-token", help="fit token model from session JSONL")
     fit.add_argument("--template", required=True, type=Path)

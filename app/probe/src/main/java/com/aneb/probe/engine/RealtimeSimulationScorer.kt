@@ -34,6 +34,9 @@ data class RealtimeSessionEvidence(
     val loadedRttSamplesMs: List<Double?> = emptyList(),
     val recoveryMs: Double? = null,
     val reconnectEvents: Int = 0,
+    val controlledDisconnectExpected: Boolean = false,
+    val controlledDisconnectObserved: Boolean = false,
+    val recoveryStimulusBaselineMs: Double? = null,
 )
 
 data class RealtimeRunEvidence(
@@ -95,7 +98,17 @@ object RealtimeSimulationScorer {
         "LIVE-R01" to Spec(1, 0.0),
     )
 
-    fun score(evidence: RealtimeRunEvidence): RealtimeScoreResult {
+    private val recoveryMinimums = mapOf(
+        "LIVE-B05" to 400,
+        "LIVE-B09" to 6,
+        "LIVE-B11" to 2,
+        "LIVE-N02" to 10,
+    )
+
+    fun score(
+        evidence: RealtimeRunEvidence,
+        scorePolicyId: String = "realtime-interaction-score-v1",
+    ): RealtimeScoreResult {
         if (evidence.invalidReason != null) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
@@ -105,14 +118,16 @@ object RealtimeSimulationScorer {
         }
         val sessions = evidence.sessions
         val turns = sessions.flatMap { it.turns }
-        val framesExpected = turns.sumOf { it.expectedFrames }
-        val framesUnique = turns.sumOf { it.uniqueFrames }
-        val onTimeFrames = turns.sumOf { it.onTimeFrames }
-        val stallFrames = turns.sumOf { it.stallFrames }
-        val concealFrames = turns.sumOf { it.concealFrames }
+        val scoringSessions = if (evidence.variant == "recovery") sessions.filter { it.reconnectEvents > 0 } else sessions
+        val scoringTurns = scoringSessions.flatMap { it.turns }
+        val framesExpected = scoringTurns.sumOf { it.expectedFrames }
+        val framesUnique = scoringTurns.sumOf { it.uniqueFrames }
+        val onTimeFrames = scoringTurns.sumOf { it.onTimeFrames }
+        val stallFrames = scoringTurns.sumOf { it.stallFrames }
+        val concealFrames = scoringTurns.sumOf { it.concealFrames }
         val variations = turns.flatMap { it.arrivalVariationMs }
         val barge = turns.filter { it.interrupted }.mapNotNull { it.bargeResponseMs }
-        val rtt = sessions.flatMap { it.rttSamplesMs }
+        val rtt = scoringSessions.flatMap { it.rttSamplesMs }
         val loadedRttAttempts = sessions.flatMap { it.loadedRttSamplesMs }
         val loadedRtt = loadedRttAttempts.filterNotNull()
 
@@ -124,8 +139,9 @@ object RealtimeSimulationScorer {
             components: Map<String, Double> = emptyMap(),
         ): RealtimeMetricEvidence {
             val spec = checkNotNull(specs[id])
+            val minimum = if (evidence.variant == "recovery") recoveryMinimums[id] ?: spec.minimum else spec.minimum
             return RealtimeMetricEvidence(
-                id, value, compliance?.coerceIn(0.0, 1.0), count, spec.minimum, spec.targetCompliance,
+                id, value, compliance?.coerceIn(0.0, 1.0), count, minimum, spec.targetCompliance,
                 compliance?.let(TokenSimulationScorer::complianceScore),
                 components,
             )
@@ -141,7 +157,7 @@ object RealtimeSimulationScorer {
         val stallRate = framesExpected.takeIf { it > 0 }?.let { stallFrames.toDouble() / it }
         val concealRate = framesExpected.takeIf { it > 0 }?.let { concealFrames.toDouble() / it }
         val bargePass = barge.map { it <= 300.0 }
-        val turnSuccess = ratio(turns.map { it.success })
+        val turnSuccess = ratio(scoringTurns.map { it.success })
         val sessionContinuity = ratio(sessions.map { !it.unexpectedDisconnect })
         val handshake = sessions.mapNotNull { it.handshakeMs }
         val handshakePass = sessions.map { (it.handshakeMs ?: Double.POSITIVE_INFINITY) <= 1_000.0 }
@@ -153,7 +169,14 @@ object RealtimeSimulationScorer {
         }
         val completeness = framesExpected.takeIf { it > 0 }?.let { framesUnique.toDouble() / it }
         val recoveries = sessions.mapNotNull { it.recoveryMs }
+        val expectedRecoveries = sessions.count { it.controlledDisconnectExpected }
         val recoveryPass = recoveries.map { it <= 3_000.0 }
+        val recoveryStimulusBaselines = sessions.mapNotNull { it.recoveryStimulusBaselineMs }
+        val recoveryCompliance = if (evidence.variant == "recovery" && expectedRecoveries > 0) {
+            recoveryPass.count { it }.toDouble() / expectedRecoveries
+        } else {
+            ratio(recoveryPass)
+        }
         val overlaps = turns.mapNotNull { it.unplannedOverlap }
         val overlapRate = overlaps.takeIf { it.isNotEmpty() }?.let { values -> values.count { it }.toDouble() / values.size }
         val missingRuns = turns.mapNotNull { it.maxMissingRunFrames }
@@ -179,9 +202,23 @@ object RealtimeSimulationScorer {
             "LIVE-B06" to metric("LIVE-B06", stallRate, stallRate?.let { 1.0 - it }, framesExpected),
             "LIVE-B07" to metric("LIVE-B07", concealRate, concealRate?.let { 1.0 - it }, framesExpected),
             "LIVE-B08" to metric("LIVE-B08", percentile(barge, 0.95), ratio(bargePass), barge.size),
-            "LIVE-B09" to metric("LIVE-B09", turnSuccess, turnSuccess, turns.size),
+            "LIVE-B09" to metric("LIVE-B09", turnSuccess, turnSuccess, scoringTurns.size),
             "LIVE-B10" to metric("LIVE-B10", sessionContinuity?.let { 1.0 - it }, sessionContinuity, sessions.size),
-            "LIVE-B11" to metric("LIVE-B11", percentile(recoveries, 0.95), ratio(recoveryPass), recoveries.size),
+            "LIVE-B11" to metric(
+                "LIVE-B11",
+                percentile(recoveries, 0.95),
+                recoveryCompliance,
+                if (evidence.variant == "recovery") expectedRecoveries else recoveries.size,
+                if (evidence.variant == "recovery") {
+                    mapOf(
+                        "expected_recoveries" to expectedRecoveries.toDouble(),
+                        "successful_recoveries" to recoveries.size.toDouble(),
+                        "probe_business_baseline_p95_ms" to (percentile(recoveryStimulusBaselines, 0.95) ?: 0.0),
+                    )
+                } else {
+                    emptyMap()
+                },
+            ),
             "LIVE-B12" to metric("LIVE-B12", overlapRate, overlapRate?.let { 1.0 - it }, overlaps.size),
             "LIVE-N01" to metric("LIVE-N01", percentile(handshake, 0.95), ratio(handshakePass), sessions.size),
             "LIVE-N02" to metric("LIVE-N02", percentile(rtt, 0.95), ratio(rttPass), rtt.size),
@@ -201,9 +238,32 @@ object RealtimeSimulationScorer {
                 goodputComponents,
             ),
             "LIVE-N07" to metric("LIVE-N07", percentile(loadedRtt, 0.95), ratio(loadedPass), loadedRttAttempts.size),
-            "LIVE-N08" to metric("LIVE-N08", sessions.sumOf { it.reconnectEvents }.toDouble(), null, sessions.size),
+            "LIVE-N08" to metric(
+                "LIVE-N08",
+                sessions.sumOf { it.reconnectEvents }.toDouble(),
+                null,
+                sessions.size,
+                if (evidence.variant == "recovery") {
+                    mapOf(
+                        "controlled_expected" to expectedRecoveries.toDouble(),
+                        "controlled_observed" to sessions.count { it.controlledDisconnectObserved }.toDouble(),
+                    )
+                } else {
+                    emptyMap()
+                },
+            ),
             "LIVE-R01" to metric("LIVE-R01", null, null, 0),
         )
+        if (scorePolicyId == "realtime-recovery-score-v2") {
+            return scoreRecovery(evidence, metrics)
+        }
+        if (scorePolicyId != "realtime-interaction-score-v1") {
+            return RealtimeScoreResult(
+                null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
+                emptyMap(), metrics, "unsupported_score_policy:$scorePolicyId",
+                listOf("评分策略不受当前引擎支持；原始证据已保留。"),
+            )
+        }
         val requiredIds = specs.filterValues { it.required }.keys
         val requiredMetrics = requiredIds.mapNotNull(metrics::get)
         val confidence = confidence(evidence.variant, requiredMetrics)
@@ -268,6 +328,107 @@ object RealtimeSimulationScorer {
             metrics = metrics,
             capReason = capReason,
             conclusions = conclusions(evidence.variant, metrics, verdict, confidence, capReason),
+        )
+    }
+
+    private fun scoreRecovery(
+        evidence: RealtimeRunEvidence,
+        metrics: Map<String, RealtimeMetricEvidence>,
+    ): RealtimeScoreResult {
+        val sessions = evidence.sessions
+        val expected = sessions.count { it.controlledDisconnectExpected }
+        val observed = sessions.count { it.controlledDisconnectObserved }
+        val successful = sessions.count { it.recoveryMs != null }
+        val requiredMetrics = recoveryMinimums.keys.mapNotNull(metrics::get)
+        val coverage = requiredMetrics.map { it.sampleCount.toDouble() / it.minimumSampleCount }
+        val confidence = when {
+            expected >= 2 && coverage.all { it >= 1.0 } -> TokenConfidence.HIGH
+            expected > 0 && coverage.all { it >= 0.5 } -> TokenConfidence.MEDIUM
+            else -> TokenConfidence.LOW
+        }
+        val missing = recoveryMinimums.keys.filter { metrics[it]?.complianceRatio == null }
+        if (expected == 0 || missing.isNotEmpty()) {
+            return RealtimeScoreResult(
+                null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
+                listOf("受控恢复必需证据缺失：${(missing + if (expected == 0) listOf("controlled_disconnect") else emptyList()).joinToString()}。"),
+            )
+        }
+
+        val observedRatio = observed.toDouble() / expected
+        val completionRatio = successful.toDouble() / expected
+        val faultScore = TokenSimulationScorer.complianceScore(observedRatio)
+        val completionScore = TokenSimulationScorer.complianceScore(completionRatio)
+        val latencyScore = metrics.getValue("LIVE-B11").score ?: 0.0
+
+        val recoveredSessions = sessions.filter { it.reconnectEvents > 0 }
+        val recoveredTurns = recoveredSessions.flatMap { it.turns }
+        val recoveredFrames = recoveredTurns.sumOf { it.expectedFrames }
+        val recoveredOnTime = recoveredFrames.takeIf { it > 0 }?.let {
+            recoveredTurns.sumOf { turn -> turn.onTimeFrames }.toDouble() / it
+        } ?: 0.0
+        val recoveredTurnSuccess = ratio(recoveredTurns.map { it.success }) ?: 0.0
+        val recoveredRtt = recoveredSessions.flatMap { it.rttSamplesMs }
+        val recoveredRttCompliance = ratio(recoveredRtt.map { it <= 100.0 }) ?: 0.0
+
+        val groups = linkedMapOf(
+            "recovery_path" to weighted(
+                faultScore to 0.20,
+                completionScore to 0.30,
+                latencyScore to 0.50,
+            ),
+            "recovered_quality" to weighted(
+                TokenSimulationScorer.complianceScore(recoveredOnTime) to 0.60,
+                TokenSimulationScorer.complianceScore(recoveredTurnSuccess) to 0.25,
+                TokenSimulationScorer.complianceScore(recoveredRttCompliance) to 0.15,
+            ),
+        )
+        var total = weighted(
+            groups.getValue("recovery_path") to 0.65,
+            groups.getValue("recovered_quality") to 0.35,
+        )
+        val capReason = when {
+            observed < expected -> "受控中断未全部被客户端观察"
+            successful < expected -> "受控中断后未全部恢复到有效音频"
+            else -> null
+        }
+        if (capReason != null) total = minOf(total, 54.0)
+        val allTargetsMet = requiredMetrics.all { metric ->
+            metric.complianceRatio?.let { it + 1e-12 >= metric.targetComplianceRatio } == true
+        }
+        val verdict = when {
+            confidence != TokenConfidence.HIGH -> TokenVerdict.INCONCLUSIVE
+            capReason != null || !allTargetsMet -> TokenVerdict.FAIL
+            else -> TokenVerdict.PASS
+        }
+        val recoveryP95 = metrics["LIVE-B11"]?.value
+        val recoveryBaselineP95 = metrics["LIVE-B11"]
+            ?.componentValues
+            ?.get("probe_business_baseline_p95_ms")
+        val conclusions = buildList {
+            add("结论：${verdict.name}；受控恢复证据置信度 ${confidence.name}。")
+            add("计划受控中断 $expected 次，客户端观察到 $observed 次，成功恢复到有效音频 $successful 次。")
+            add(
+                "恢复到首个有效音频 P95 ${format(recoveryP95, "ms")}（目标 ≤3000ms，达标 " +
+                    "${metrics["LIVE-B11"]?.complianceRatio?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) } ?: "不可用"}）。",
+            )
+            add("固定恢复刺激的业务计划基线 P95 ${format(recoveryBaselineP95, "ms")}（1.2 秒语音 + 350ms 模型等待）。")
+            add(
+                "恢复后音频准时率 ${String.format(Locale.ROOT, "%.1f%%", recoveredOnTime * 100)}，" +
+                    "轮次成功率 ${String.format(Locale.ROOT, "%.1f%%", recoveredTurnSuccess * 100)}，" +
+                    "RTT≤100ms 比例 ${String.format(Locale.ROOT, "%.1f%%", recoveredRttCompliance * 100)}。",
+            )
+            add("本结论只适用于 ANEB 节点受控服务端中断后的应用恢复，不代表蜂窝断网、跨网迁移或目标 AI 服务可用性。")
+            if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
+        }
+        return RealtimeScoreResult(
+            totalScore = (total * 10.0).roundToInt() / 10.0,
+            grade = grade(total),
+            verdict = verdict,
+            confidence = confidence,
+            groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
+            metrics = metrics,
+            capReason = capReason,
+            conclusions = conclusions,
         )
     }
 

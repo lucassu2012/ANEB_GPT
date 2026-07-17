@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -91,6 +92,11 @@ func (a *app) handleRealtimeSim(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	controlledDisconnectAfterTurn, err := realtimeControlledDisconnectAfterTurn(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	conn, err := realtimeUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -161,6 +167,12 @@ func (a *app) handleRealtimeSim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		summaries = append(summaries, summary)
+		if controlledDisconnectAfterTurn != nil && turn.TurnIndex == *controlledDisconnectAfterTurn {
+			// This is an opt-in recovery experiment. Close the underlying transport
+			// without a WebSocket close frame so the client must observe a failure.
+			_ = conn.UnderlyingConn().Close()
+			return
+		}
 	}
 	_ = realtimeWriteJSON(conn, map[string]any{
 		"type":        "session_summary",
@@ -169,6 +181,18 @@ func (a *app) handleRealtimeSim(w http.ResponseWriter, r *http.Request) {
 		"protocol_ok": allRealtimeTurnsOK(summaries),
 		"complete_us": nowMicros(),
 	})
+}
+
+func realtimeControlledDisconnectAfterTurn(r *http.Request) (*int, error) {
+	raw := r.URL.Query().Get("controlled_disconnect_after_turn")
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value >= realtimeMaxTurns {
+		return nil, fmt.Errorf("invalid controlled_disconnect_after_turn")
+	}
+	return &value, nil
 }
 
 func realtimeRunTurn(

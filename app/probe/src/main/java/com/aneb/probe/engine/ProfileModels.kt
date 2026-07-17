@@ -228,6 +228,7 @@ object ProfileParser {
         "published/token_multimodal_stress/profile.json",
         "published/ai_realtime_voice_quick/profile.json",
         "published/ai_realtime_voice_standard/profile.json",
+        "published/ai_realtime_voice_recovery/profile.json",
         "published/network_comprehensive_quick/profile.json",
         "published/network_comprehensive_standard/profile.json",
     )

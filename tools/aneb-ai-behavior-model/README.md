@@ -21,8 +21,9 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 - 多模态上传、模拟处理、Token 流和返回文件金轨迹；
 - 独立 Token Stress 运行计划：100MiB 视频上传 + 100MiB 大对象返回，不与 Standard 混分；
 - 实时语音 20ms 双向帧、轮次、等待和打断金轨迹；
+- 独立实时语音 Recovery 运行计划：固定模型派生恢复刺激 + 2 次可审计受控中断，不污染 Standard；
 - session JSONL → calibrated Token 模型拟合；
-- Profile v2、验证报告和 SHA-256 manifest 导出；
+- Profile v2、验证报告和 SHA-256 manifest 导出；JSON/JSONL 条目使用 UTF-8 规范化语义哈希，排版变化不影响绑定，不等同于 pretty-printed 文件的原始字节哈希；
 - 业务轨迹禁止包含网络时延、丢包和实测 RTT。
 
 详细合同见：
@@ -68,6 +69,12 @@ python -m aneb_behavior_model.cli publish-runtime `
   --variant stress `
   --seed 20260716 `
   --out ..\..\profiles\published\token_multimodal_stress
+
+python -m aneb_behavior_model.cli publish-runtime `
+  --model models\ai_realtime_voice_hypothesis_v0.2.json `
+  --variant recovery `
+  --seed 20260716 `
+  --out ..\..\profiles\published\ai_realtime_voice_recovery
 ```
 
 输出目录固定包含：`model.json`、`golden_trace.jsonl`、`profile.json`、

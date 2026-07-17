@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.5.0"
+const serverVersion = "aneb-server/0.5.1"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {

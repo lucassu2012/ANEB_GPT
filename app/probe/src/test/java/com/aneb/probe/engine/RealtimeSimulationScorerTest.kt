@@ -91,6 +91,58 @@ class RealtimeSimulationScorerTest {
         assertTrue(result.conclusions.any { it.contains("连接恢复 P95") })
     }
 
+    @Test
+    fun `controlled recovery passes only with two observed timely recoveries`() {
+        val result = RealtimeSimulationScorer.score(
+            controlledRecoveryEvidence(),
+            "realtime-recovery-score-v2",
+        )
+
+        assertEquals(100.0, result.totalScore!!, 1e-9)
+        assertEquals(TokenConfidence.HIGH, result.confidence)
+        assertEquals(TokenVerdict.PASS, result.verdict)
+        assertEquals(1_785.0, result.metrics.getValue("LIVE-B11").value!!, 1e-9)
+        assertEquals(2.0, result.metrics.getValue("LIVE-N08").value!!, 1e-9)
+        assertTrue(result.conclusions.any { it.contains("计划受控中断 2 次") })
+        assertTrue(result.conclusions.any { it.contains("不代表蜂窝断网") })
+    }
+
+    @Test
+    fun `controlled recovery failure is measured zero rather than missing`() {
+        val base = controlledRecoveryEvidence()
+        val sessions = base.sessions.toMutableList()
+        sessions[3] = sessions[3].copy(recoveryMs = null, reconnectEvents = 1)
+
+        val result = RealtimeSimulationScorer.score(
+            base.copy(sessions = sessions),
+            "realtime-recovery-score-v2",
+        )
+
+        assertEquals(TokenConfidence.HIGH, result.confidence)
+        assertEquals(TokenVerdict.FAIL, result.verdict)
+        assertTrue(result.totalScore!! <= 54.0)
+        assertEquals(0.5, result.metrics.getValue("LIVE-B11").complianceRatio!!, 1e-9)
+        assertNotNull(result.capReason)
+    }
+
+    private fun controlledRecoveryEvidence(): RealtimeRunEvidence {
+        val base = goodEvidence("recovery", 4, 3)
+        return base.copy(
+            sessions = base.sessions.mapIndexed { index, session ->
+                when (index) {
+                    0, 2 -> session.copy(
+                        unexpectedDisconnect = true,
+                        error = "controlled_transport_close",
+                        controlledDisconnectExpected = true,
+                        controlledDisconnectObserved = true,
+                    )
+                    1 -> session.copy(recoveryMs = 1_500.0, reconnectEvents = 1, recoveryStimulusBaselineMs = 1_550.0)
+                    else -> session.copy(recoveryMs = 1_800.0, reconnectEvents = 1, recoveryStimulusBaselineMs = 1_550.0)
+                }
+            },
+        )
+    }
+
     private fun goodEvidence(variant: String, sessionCount: Int, turnsPerSession: Int): RealtimeRunEvidence =
         RealtimeRunEvidence(
             variant = variant,
