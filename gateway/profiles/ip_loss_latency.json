@@ -1,0 +1,15 @@
+{
+  "contract_version": "aneb-gateway-profile-v1",
+  "profile_id": "ip_loss_latency",
+  "version": "1.0.0",
+  "label": "网络层双向受控丢包与时延",
+  "kind": "continuous",
+  "claim_scope": "dedicated_gateway_ip_forwarding",
+  "impairment_layer": "ip_forwarding",
+  "duration_ms": 60000,
+  "activation_delay_ms": 500,
+  "uplink": {"rate_mbps": 2, "delay_ms": 50, "jitter_ms": 10, "loss_pct": 1},
+  "downlink": {"rate_mbps": 5, "delay_ms": 50, "jitter_ms": 10, "loss_pct": 1},
+  "excluded_from_impairment": ["radio_rsrp", "radio_rsrq", "radio_sinr", "base_station_scheduler", "actual_route_change"],
+  "evidence_tier": "gateway_lab"
+}

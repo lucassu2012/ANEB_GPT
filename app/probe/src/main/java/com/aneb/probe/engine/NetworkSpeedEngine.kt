@@ -6,6 +6,7 @@ import android.os.SystemClock
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.net.AnebClient
+import com.aneb.probe.net.AnebGatewayClient
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
 import com.aneb.probe.net.NetGuard
@@ -24,6 +25,7 @@ import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -76,6 +79,9 @@ data class BasicSpeedTelemetry(
     val syntheticOutageActive: Boolean = false,
     /** Non-null only for an explicitly declared synthetic run. */
     val syntheticImpairmentLabel: String? = null,
+    /** Non-null only for a dedicated IP-forwarding gateway lab run. */
+    val gatewayImpairmentLabel: String? = null,
+    val networkLayerOutage: Boolean = false,
 )
 
 data class BasicSpeedResult(
@@ -124,11 +130,25 @@ data class BasicSpeedResult(
     val recoveryTimeMs: Double? = null,
     val recoveryFailureCount: Int = 0,
     val postRecoverySuccessRatio: Double? = null,
+    val gatewayImpairment: Boolean = false,
+    val gatewayExperimentId: String? = null,
+    val gatewayProfileFingerprint: String? = null,
+    val gatewayManagementBase: String? = null,
+    val gatewayImpairmentLayer: String? = null,
+    val gatewayAcknowledged: Boolean = false,
+    val gatewayCleanupAcknowledged: Boolean = false,
+    val gatewayBypassObserved: Boolean = false,
+    val gatewayUplinkDelayMs: Int? = null,
+    val gatewayDownlinkDelayMs: Int? = null,
+    val gatewayUplinkLossPct: Double? = null,
+    val gatewayDownlinkLossPct: Double? = null,
 )
 
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
     suspend fun load(variant: String): ScenarioProfile = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery")) { "unsupported_network_variant:$variant" }
+        require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery", "gateway_loss", "gateway_recovery")) {
+            "unsupported_network_variant:$variant"
+        }
         val path = "published/network_comprehensive_$variant/profile.json"
         val text = context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
         val profile = ProfileParser.parseSingle(text)
@@ -139,11 +159,15 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         val expectedTier = when (variant) {
             "weak_capacity_latency" -> "standard"
             "weak_recovery" -> "recovery"
+            "gateway_loss", "gateway_recovery" -> "gateway_lab"
             else -> variant
         }
         require(profile.evidenceTier == expectedTier) { "network_profile_variant_mismatch" }
         require((profile.syntheticImpairment != null) == (variant in setOf("weak_capacity_latency", "weak_recovery"))) {
             "network_profile_impairment_mismatch"
+        }
+        require((profile.gatewayImpairment != null) == (variant in setOf("gateway_loss", "gateway_recovery"))) {
+            "network_profile_gateway_mismatch"
         }
         profile
     }
@@ -155,9 +179,11 @@ private class NetworkEndpointContext(
     profileId: String,
     profileVersion: String,
     val impairment: ProfileSyntheticImpairment?,
+    gatewayImpairment: Boolean = false,
     private val sequence: AtomicInteger = AtomicInteger(0),
 ) {
     val expectedAcknowledgement: String? = impairment?.let { "$profileId@$profileVersion" }
+    val requiresServerAcknowledgedUpload: Boolean = impairment != null || gatewayImpairment
 
     fun url(pathAndQuery: String): String {
         val spec = impairment ?: return base + pathAndQuery
@@ -198,6 +224,8 @@ class NetworkSpeedEngine(private val context: Context) {
         val serverBase: String,
         val variant: String = "quick",
         val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
+        val gatewayBase: String? = null,
+        val gatewayToken: String? = null,
     )
 
     private data class RecoveryRunObservation(
@@ -205,6 +233,15 @@ class NetworkSpeedEngine(private val context: Context) {
         val declaredOutageMs: Int,
         val outageFailureCount: Int,
         val recoveryTimeMs: Double?,
+        val gatewayBypassObserved: Boolean = false,
+    )
+
+    private data class GatewayRuntimeEvidence(
+        val experimentId: String,
+        val profileFingerprint: String,
+        val acknowledged: Boolean,
+        val cleanupAcknowledged: Boolean = false,
+        val bypassObserved: Boolean = false,
     )
 
     private val _telemetry = MutableStateFlow(BasicSpeedTelemetry())
@@ -232,6 +269,10 @@ class NetworkSpeedEngine(private val context: Context) {
 
         var bound: BoundNetwork? = null
         var pathMonitor: PathMonitor? = null
+        var gatewayClient: AnebGatewayClient? = null
+        var activeGatewayExperimentId: String? = null
+        var gatewayCleanupAcknowledged = false
+        var gatewaySpecForCleanup: ProfileGatewayImpairment? = null
         val invalidReason = AtomicReference<String?>(null)
         try {
             bound = acquireBoundNetwork(config.transport, guard.metadata["active_transports"])
@@ -248,6 +289,19 @@ class NetworkSpeedEngine(private val context: Context) {
         try {
             val profile = NetworkComprehensiveProfileRepository(context).load(config.variant)
             val client = AnebClient(bound)
+            val gatewaySpec = profile.gatewayImpairment
+            gatewaySpecForCleanup = gatewaySpec
+            if (gatewaySpec != null) {
+                val gatewayBase = config.gatewayBase?.trim()?.trimEnd('/').orEmpty()
+                val gatewayToken = config.gatewayToken.orEmpty()
+                require(gatewayBase.isNotBlank() && gatewayToken.isNotBlank()) { "gateway_credentials_required" }
+                gatewayClient = AnebGatewayClient(gatewayBase, gatewayToken, bound)
+                _telemetry.value = _telemetry.value.copy(gatewayImpairmentLabel = gatewayLabel(gatewaySpec))
+                log(
+                    "NET_V1_GATEWAY requested=${gatewaySpec.profileRef} fingerprint=${gatewaySpec.profileFingerprint} " +
+                        "layer=${gatewaySpec.impairmentLayer} excluded=${gatewaySpec.excludedFromImpairment.joinToString(",")}",
+                )
+            }
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
@@ -261,8 +315,20 @@ class NetworkSpeedEngine(private val context: Context) {
                 profileId = profile.profileId,
                 profileVersion = profile.version,
                 impairment = profile.syntheticImpairment,
+                gatewayImpairment = gatewaySpec != null,
             )
             val acknowledgement = SyntheticAcknowledgementTracker(endpoints.expectedAcknowledgement)
+            var gatewayEvidence: GatewayRuntimeEvidence? = null
+            if (gatewaySpec != null && config.variant == "gateway_loss") {
+                val started = startGatewayExperiment(checkNotNull(gatewayClient), runId, gatewaySpec)
+                activeGatewayExperimentId = started.experimentId
+                gatewayEvidence = GatewayRuntimeEvidence(
+                    experimentId = started.experimentId,
+                    profileFingerprint = started.profileFingerprint,
+                    acknowledged = true,
+                )
+                log("NET_V1_GATEWAY_ACTIVE experiment=${started.experimentId} layer=${started.impairmentLayer}")
+            }
             profile.syntheticImpairment?.let { impairment ->
                 val outage = impairment.outageDurationMs.takeIf { it > 0 }?.let { " · 中断 ${it}ms" }.orEmpty()
                 _telemetry.value = _telemetry.value.copy(
@@ -287,6 +353,7 @@ class NetworkSpeedEngine(private val context: Context) {
             val postPhase = phase(ProfilePhase.TYPE_POST_LOAD_LATENCY)
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.HANDSHAKE, progress = 0.02)
+            gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
             val handshakes = measureHandshakes(client, endpoints, acknowledgement, handshakePhase.attempts) { index ->
                 _telemetry.value = _telemetry.value.copy(progress = 0.02 + 0.06 * index / handshakePhase.attempts.coerceAtLeast(1))
             }
@@ -306,9 +373,11 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_PHASE run_id=$runId phase=idle_latency samples=${idle.size}")
 
             log("NET_V1_PHASE run_id=$runId phase=download_loaded duration_ms=${downloadPhase.durationMs}")
+            gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
             val download = runTransferPhase(client, endpoints, acknowledgement, runId, downloadPhase, TransferDirection.DOWNLOAD, idleP50, 0.21, 0.48)
             _telemetry.value = _telemetry.value.copy(downloadMbps = download.averageMbps)
             log("NET_V1_PHASE run_id=$runId phase=upload_loaded duration_ms=${uploadPhase.durationMs}")
+            gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
             val upload = runTransferPhase(client, endpoints, acknowledgement, runId, uploadPhase, TransferDirection.UPLOAD, idleP50, 0.49, 0.76)
             _telemetry.value = _telemetry.value.copy(uploadMbps = upload.averageMbps)
 
@@ -323,11 +392,34 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_PHASE run_id=$runId phase=udp sent=${udp.packetsSent} received=${udp.receivedSeqs.distinct().size} error=${udp.error ?: "none"}")
 
             val recovery = recoveryPhase?.let { phase ->
-                runRecoveryPhase(client, endpoints, acknowledgement, phase, profile.syntheticImpairment?.outageDurationMs ?: 0).also {
+                val observation = if (gatewaySpec != null) {
+                    runGatewayRecoveryPhase(
+                        client = client,
+                        endpoints = endpoints,
+                        gateway = checkNotNull(gatewayClient),
+                        runId = runId,
+                        spec = gatewaySpec,
+                        phase = phase,
+                        onExperimentStarted = { id -> activeGatewayExperimentId = id },
+                    ).also { (runtime, _) ->
+                        gatewayEvidence = runtime
+                        gatewayCleanupAcknowledged = runtime.cleanupAcknowledged
+                        activeGatewayExperimentId = null
+                    }.second
+                } else {
+                    runRecoveryPhase(
+                        client,
+                        endpoints,
+                        acknowledgement,
+                        phase,
+                        profile.syntheticImpairment?.outageDurationMs ?: 0,
+                    )
+                }
+                observation.also {
                     log(
                         "NET_V1_PHASE run_id=$runId phase=controlled_outage_recovery " +
                             "trigger_ack=${it.triggerAcknowledged} failures=${it.outageFailureCount} " +
-                            "recovery_ms=${it.recoveryTimeMs ?: "null"}",
+                            "recovery_ms=${it.recoveryTimeMs ?: "null"} bypass=${it.gatewayBypassObserved}",
                     )
                 }
             }
@@ -336,10 +428,25 @@ class NetworkSpeedEngine(private val context: Context) {
             _telemetry.value = _telemetry.value.copy(
                 phase = BasicSpeedPhase.FINALIZING,
                 syntheticOutageActive = false,
+                networkLayerOutage = false,
                 progress = postStart,
             )
             val post = measureEcho(client, endpoints, acknowledgement, postPhase.samples) { index, _ ->
                 _telemetry.value = _telemetry.value.copy(progress = postStart + (0.99 - postStart) * index / postPhase.samples.coerceAtLeast(1))
+            }
+
+            if (gatewaySpec != null && config.variant == "gateway_loss") {
+                ensureGatewayActive(checkNotNull(gatewayClient), checkNotNull(activeGatewayExperimentId), runId, gatewaySpec)
+                val terminal = stopAndAwaitGatewayCleanup(
+                    checkNotNull(gatewayClient),
+                    checkNotNull(activeGatewayExperimentId),
+                    gatewaySpec,
+                    runId,
+                )
+                gatewayCleanupAcknowledged = true
+                activeGatewayExperimentId = null
+                gatewayEvidence = checkNotNull(gatewayEvidence).copy(cleanupAcknowledged = true)
+                log("NET_V1_GATEWAY_CLEARED experiment=${terminal.experimentId} reason=${terminal.stopReason}")
             }
 
             if (profile.syntheticImpairment != null && !acknowledgement.acknowledged) {
@@ -350,6 +457,15 @@ class NetworkSpeedEngine(private val context: Context) {
                     "NET_V1_IMPAIRMENT acknowledged=${acknowledgement.acknowledged} " +
                         "server_profile=${endpoints.expectedAcknowledgement}",
                 )
+            }
+            if (gatewaySpec != null && gatewayEvidence?.acknowledged != true) {
+                invalidReason.compareAndSet(null, "gateway_experiment_not_acknowledged")
+            }
+            if (gatewaySpec != null && !gatewayCleanupAcknowledged) {
+                invalidReason.compareAndSet(null, "gateway_cleanup_not_acknowledged")
+            }
+            if (gatewayEvidence?.bypassObserved == true) {
+                invalidReason.compareAndSet(null, "gateway_bypass_observed")
             }
 
             val loaded = download.loadedRttMs + upload.loadedRttMs
@@ -381,6 +497,22 @@ class NetworkSpeedEngine(private val context: Context) {
                         serverAcknowledged = acknowledgement.acknowledged,
                     )
                 },
+                gatewayImpairment = gatewaySpec?.let { gateway ->
+                    gatewayEvidence?.let { runtime ->
+                        GatewayNetworkEvidence(
+                            experimentId = runtime.experimentId,
+                            profileRef = gateway.profileRef,
+                            profileFingerprint = runtime.profileFingerprint,
+                            impairmentLayer = gateway.impairmentLayer,
+                            downlink = gateway.downlink,
+                            uplink = gateway.uplink,
+                            excludedFromImpairment = gateway.excludedFromImpairment,
+                            gatewayAcknowledged = runtime.acknowledged,
+                            cleanupAcknowledged = runtime.cleanupAcknowledged,
+                            bypassObserved = runtime.bypassObserved,
+                        )
+                    }
+                },
                 invalidReason = invalidReason.get(),
             )
             val capacityScore = NetworkComprehensiveScorer.score(evidence)
@@ -393,6 +525,8 @@ class NetworkSpeedEngine(private val context: Context) {
                     recoveryTimeMs = it.recoveryTimeMs,
                     postRecoveryRttMs = post,
                     invalidReason = invalidReason.get(),
+                    impairmentLayer = gatewaySpec?.impairmentLayer ?: "application_http",
+                    bypassObserved = it.gatewayBypassObserved,
                 )
             }
             val score = recoveryEvidence?.let(NetworkRecoveryScorer::score) ?: capacityScore
@@ -416,18 +550,43 @@ class NetworkSpeedEngine(private val context: Context) {
                 BasicSpeedMath.percentile(post.filterNotNull(), 0.50), download.totalBytes, upload.totalBytes, errors,
                 metrics, score.groupScores, score.conclusions, evidenceJson(evidence, recoveryEvidence),
                 syntheticImpairment = profile.syntheticImpairment != null,
-                impairmentProfileId = profile.syntheticImpairment?.let { profile.profileId },
-                impairmentProfileVersion = profile.syntheticImpairment?.let { profile.version },
-                impairmentDownlinkMbps = profile.syntheticImpairment?.downlinkMbps,
-                impairmentUplinkMbps = profile.syntheticImpairment?.uplinkMbps,
-                impairmentAddedRttMs = profile.syntheticImpairment?.addedRttMs,
-                impairmentJitterMs = profile.syntheticImpairment?.jitterMs,
-                impairmentOutageDurationMs = profile.syntheticImpairment?.outageDurationMs?.takeIf { it > 0 },
-                impairmentExcludedFromShaping = profile.syntheticImpairment?.excludedFromShaping.orEmpty(),
-                impairmentAcknowledged = profile.syntheticImpairment != null && acknowledgement.acknowledged,
+                impairmentProfileId = when {
+                    profile.syntheticImpairment != null -> profile.profileId
+                    gatewaySpec != null -> gatewaySpec.gatewayProfileId
+                    else -> null
+                },
+                impairmentProfileVersion = when {
+                    profile.syntheticImpairment != null -> profile.version
+                    gatewaySpec != null -> gatewaySpec.gatewayProfileVersion
+                    else -> null
+                },
+                impairmentDownlinkMbps = profile.syntheticImpairment?.downlinkMbps ?: gatewaySpec?.downlink?.rateMbps,
+                impairmentUplinkMbps = profile.syntheticImpairment?.uplinkMbps ?: gatewaySpec?.uplink?.rateMbps,
+                impairmentAddedRttMs = profile.syntheticImpairment?.addedRttMs
+                    ?: gatewaySpec?.let { it.downlink.delayMs + it.uplink.delayMs },
+                impairmentJitterMs = profile.syntheticImpairment?.jitterMs
+                    ?: gatewaySpec?.let { maxOf(it.downlink.jitterMs, it.uplink.jitterMs) },
+                impairmentOutageDurationMs = profile.syntheticImpairment?.outageDurationMs?.takeIf { it > 0 }
+                    ?: gatewaySpec?.durationMs?.takeIf { gatewaySpec.kind == "outage" },
+                impairmentExcludedFromShaping = profile.syntheticImpairment?.excludedFromShaping
+                    ?: gatewaySpec?.excludedFromImpairment.orEmpty(),
+                impairmentAcknowledged = (profile.syntheticImpairment != null && acknowledgement.acknowledged) ||
+                    gatewayEvidence?.acknowledged == true,
                 recoveryTimeMs = recovery?.recoveryTimeMs,
                 recoveryFailureCount = recovery?.outageFailureCount ?: 0,
                 postRecoverySuccessRatio = post.takeIf { recovery != null && it.isNotEmpty() }?.let { values -> values.count { it != null }.toDouble() / values.size },
+                gatewayImpairment = gatewaySpec != null,
+                gatewayExperimentId = gatewayEvidence?.experimentId,
+                gatewayProfileFingerprint = gatewayEvidence?.profileFingerprint,
+                gatewayManagementBase = config.gatewayBase?.trim()?.trimEnd('/'),
+                gatewayImpairmentLayer = gatewaySpec?.impairmentLayer,
+                gatewayAcknowledged = gatewayEvidence?.acknowledged == true,
+                gatewayCleanupAcknowledged = gatewayEvidence?.cleanupAcknowledged == true,
+                gatewayBypassObserved = gatewayEvidence?.bypassObserved == true,
+                gatewayUplinkDelayMs = gatewaySpec?.uplink?.delayMs,
+                gatewayDownlinkDelayMs = gatewaySpec?.downlink?.delayMs,
+                gatewayUplinkLossPct = gatewaySpec?.uplink?.lossPct,
+                gatewayDownlinkLossPct = gatewaySpec?.downlink?.lossPct,
             )
             publishResult(result, log)
             _telemetry.value = _telemetry.value.copy(
@@ -444,6 +603,18 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("NET_V1_END run_id=$runId status=error")
         } finally {
+            val cleanupId = activeGatewayExperimentId
+            val cleanupClient = gatewayClient
+            val cleanupSpec = gatewaySpecForCleanup
+            if (cleanupId != null && cleanupClient != null && cleanupSpec != null && !gatewayCleanupAcknowledged) {
+                runCatching {
+                    withContext(NonCancellable) {
+                        stopAndAwaitGatewayCleanup(cleanupClient, cleanupId, cleanupSpec, runId)
+                    }
+                }
+                    .onSuccess { log("NET_V1_GATEWAY_FAILSAFE_CLEARED experiment=$cleanupId") }
+                    .onFailure { log("NET_V1_GATEWAY_FAILSAFE_FAILED experiment=$cleanupId error=${it.message}") }
+            }
             pathMonitor?.stop()
             bound?.release()
         }
@@ -513,6 +684,174 @@ class NetworkSpeedEngine(private val context: Context) {
             if (index + 1 < samples) delay(ECHO_GAP_MS)
         }
         return values
+    }
+
+    private suspend fun startGatewayExperiment(
+        gateway: AnebGatewayClient,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+    ): AnebGatewayClient.Experiment {
+        val scheduled = gateway.start(runId, spec.profileRef)
+        validateGatewayExperiment(scheduled, runId, spec)
+        return try {
+            withTimeout((spec.activationDelayMs + GATEWAY_TRANSITION_TIMEOUT_MS).toLong()) {
+                var current = scheduled
+                while (current.phase == "scheduled") {
+                    delay(GATEWAY_POLL_MS)
+                    current = gateway.get(current.experimentId)
+                    validateGatewayExperiment(current, runId, spec)
+                }
+                require(current.phase == "active") { "gateway_activation_failed:${current.phase}" }
+                require(current.error.isBlank()) { "gateway_activation_error" }
+                current
+            }
+        } catch (error: Throwable) {
+            runCatching {
+                withContext(NonCancellable) {
+                    stopAndAwaitGatewayCleanup(gateway, scheduled.experimentId, spec, runId)
+                }
+            }
+            throw error
+        }
+    }
+
+    private suspend fun ensureGatewayActive(
+        gateway: AnebGatewayClient,
+        experimentId: String,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+    ) {
+        val current = gateway.get(experimentId)
+        validateGatewayExperiment(current, runId, spec)
+        require(current.phase == "active" && current.error.isBlank()) { "gateway_not_active:${current.phase}" }
+    }
+
+    private suspend fun stopAndAwaitGatewayCleanup(
+        gateway: AnebGatewayClient,
+        experimentId: String,
+        spec: ProfileGatewayImpairment,
+        runId: String,
+    ): AnebGatewayClient.Experiment {
+        val stopping = gateway.stop(experimentId)
+        validateGatewayExperiment(stopping, runId, spec)
+        return withTimeout(GATEWAY_CLEANUP_TIMEOUT_MS) {
+            var current = stopping
+            while (current.phase in setOf("scheduled", "active", "clearing")) {
+                delay(GATEWAY_POLL_MS)
+                current = gateway.get(experimentId)
+                validateGatewayExperiment(current, runId, spec)
+            }
+            require(current.phase == "completed") { "gateway_cleanup_failed:${current.phase}" }
+            require(current.clearedAt != null && current.error.isBlank()) { "gateway_cleanup_not_confirmed" }
+            current
+        }
+    }
+
+    private fun validateGatewayExperiment(
+        experiment: AnebGatewayClient.Experiment,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+    ) {
+        require(experiment.runId == runId) { "gateway_run_id_mismatch" }
+        require(experiment.profileRef == spec.profileRef) { "gateway_profile_ref_mismatch" }
+        require(experiment.profileFingerprint == spec.profileFingerprint) { "gateway_profile_fingerprint_mismatch" }
+        require(experiment.impairmentLayer == spec.impairmentLayer) { "gateway_impairment_layer_mismatch" }
+        require(experiment.claimScope == "dedicated_gateway_ip_forwarding") { "gateway_claim_scope_mismatch" }
+    }
+
+    private suspend fun runGatewayRecoveryPhase(
+        client: AnebClient,
+        endpoints: NetworkEndpointContext,
+        gateway: AnebGatewayClient,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+        phase: ProfilePhase,
+        onExperimentStarted: (String) -> Unit,
+    ): Pair<GatewayRuntimeEvidence, RecoveryRunObservation> {
+        _telemetry.value = _telemetry.value.copy(
+            phase = BasicSpeedPhase.RECOVERY,
+            currentMbps = null,
+            phaseAverageMbps = null,
+            recoveryElapsedMs = 0.0,
+            recoveryFailureCount = 0,
+            syntheticOutageActive = false,
+            networkLayerOutage = false,
+            progress = 0.91,
+        )
+        val active = startGatewayExperiment(gateway, runId, spec)
+        onExperimentStarted(active.experimentId)
+        val startedNanos = SystemClock.elapsedRealtimeNanos()
+        var failures = 0
+        var recoveryTimeMs: Double? = null
+        var bypassObserved = false
+        var cleanupAcknowledged = false
+        try {
+            val attempts = phase.samples.coerceAtLeast(1)
+            for (index in 0 until attempts) {
+                val before = gateway.get(active.experimentId)
+                validateGatewayExperiment(before, runId, spec)
+                if (before.phase == "failed") error("gateway_experiment_failed")
+                _telemetry.value = _telemetry.value.copy(networkLayerOutage = before.phase == "active")
+                val echo = client.echo(endpoints.url("/api/v1/echo"), GATEWAY_ECHO_TIMEOUT_MS)
+                val after = gateway.get(active.experimentId)
+                validateGatewayExperiment(after, runId, spec)
+                if (after.phase == "failed") error("gateway_experiment_failed")
+                val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1e6
+                val success = echo.error == null
+                if (success && after.phase == "active") {
+                    bypassObserved = true
+                    break
+                }
+                if (!success && before.phase == "active") failures += 1
+                if (after.phase == "completed") {
+                    cleanupAcknowledged = after.clearedAt != null && after.error.isBlank()
+                    if (success) {
+                        recoveryTimeMs = elapsedMs
+                        break
+                    }
+                }
+                _telemetry.value = _telemetry.value.copy(
+                    recoveryElapsedMs = elapsedMs,
+                    recoveryFailureCount = failures,
+                    networkLayerOutage = after.phase == "active",
+                    loadedRttMs = echo.rttUs?.takeIf { success }?.div(1_000.0),
+                    progress = 0.91 + 0.06 * (index + 1) / attempts,
+                )
+                if (index + 1 < attempts) delay(phase.echoIntervalMs.coerceAtLeast(50).toLong())
+            }
+            if (!cleanupAcknowledged) {
+                stopAndAwaitGatewayCleanup(gateway, active.experimentId, spec, runId)
+                cleanupAcknowledged = true
+            }
+            val runtime = GatewayRuntimeEvidence(
+                experimentId = active.experimentId,
+                profileFingerprint = active.profileFingerprint,
+                acknowledged = true,
+                cleanupAcknowledged = cleanupAcknowledged,
+                bypassObserved = bypassObserved,
+            )
+            val observation = RecoveryRunObservation(
+                triggerAcknowledged = true,
+                declaredOutageMs = spec.durationMs,
+                outageFailureCount = failures,
+                recoveryTimeMs = recoveryTimeMs,
+                gatewayBypassObserved = bypassObserved,
+            )
+            return runtime to observation
+        } finally {
+            if (!cleanupAcknowledged) runCatching {
+                withContext(NonCancellable) {
+                    stopAndAwaitGatewayCleanup(gateway, active.experimentId, spec, runId)
+                }
+            }
+        }
+    }
+
+    private fun gatewayLabel(spec: ProfileGatewayImpairment): String = if (spec.kind == "outage") {
+        "网络层网关恢复 · 双向中断 ${spec.durationMs}ms · 不改变 RSRP/SINR"
+    } else {
+        "网络层网关实验 · ↓${spec.downlink.rateMbps.toInt()} ↑${spec.uplink.rateMbps.toInt()} Mbps · " +
+            "双向丢包 ${spec.downlink.lossPct.toInt()}% · 不改变 RSRP/SINR"
     }
 
     private suspend fun runRecoveryPhase(
@@ -656,15 +995,15 @@ class NetworkSpeedEngine(private val context: Context) {
                         TransferDirection.UPLOAD -> client.uploadThroughput(
                             endpoints.url("/api/v1/upload?run=$runId-net-$workerIndex"), transferBytes, chunkBytes,
                         ) { count, _ ->
-                            // Synthetic runs count only bytes acknowledged by the server. Local socket writes
+                            // Impaired runs count only bytes acknowledged by the server. Local socket writes
                             // can run ahead of a constrained uplink and would otherwise overstate goodput.
-                            if (endpoints.impairment == null) totalBytes.add(count.toLong())
+                            if (!endpoints.requiresServerAcknowledgedUpload) totalBytes.add(count.toLong())
                         }
                     }
                     acknowledgement.observe(transfer.syntheticImpairment)
                     if (
                         direction == TransferDirection.UPLOAD &&
-                        endpoints.impairment != null &&
+                        endpoints.requiresServerAcknowledgedUpload &&
                         transfer.error == null
                     ) {
                         totalBytes.add(transfer.totalBytes)
@@ -703,6 +1042,10 @@ class NetworkSpeedEngine(private val context: Context) {
                     result.impairmentJitterMs, result.impairmentOutageDurationMs,
                     result.impairmentExcludedFromShaping.joinToString(","), result.impairmentAcknowledged,
                     result.recoveryTimeMs, result.recoveryFailureCount, result.postRecoverySuccessRatio,
+                    result.gatewayImpairment, result.gatewayExperimentId, result.gatewayProfileFingerprint,
+                    result.gatewayManagementBase, result.gatewayImpairmentLayer, result.gatewayAcknowledged,
+                    result.gatewayCleanupAcknowledged, result.gatewayBypassObserved, result.gatewayUplinkDelayMs,
+                    result.gatewayDownlinkDelayMs, result.gatewayUplinkLossPct, result.gatewayDownlinkLossPct,
                 ),
             )
         }
@@ -790,6 +1133,33 @@ class NetworkSpeedEngine(private val context: Context) {
                 put("server_acknowledged", synthetic.serverAcknowledged)
             }
         } ?: JsonNull)
+        put("gateway_impairment", e.gatewayImpairment?.let { gateway ->
+            buildJsonObject {
+                put("contract_version", "aneb-gateway-evidence-v1")
+                put("experiment_id", gateway.experimentId)
+                put("profile_ref", gateway.profileRef)
+                put("profile_fingerprint", gateway.profileFingerprint)
+                put("impairment_layer", gateway.impairmentLayer)
+                put("gateway_acknowledged", gateway.gatewayAcknowledged)
+                put("cleanup_acknowledged", gateway.cleanupAcknowledged)
+                put("bypass_observed", gateway.bypassObserved)
+                put("uplink", buildJsonObject {
+                    put("rate_mbps", gateway.uplink.rateMbps)
+                    put("delay_ms", gateway.uplink.delayMs)
+                    put("jitter_ms", gateway.uplink.jitterMs)
+                    put("loss_pct", gateway.uplink.lossPct)
+                })
+                put("downlink", buildJsonObject {
+                    put("rate_mbps", gateway.downlink.rateMbps)
+                    put("delay_ms", gateway.downlink.delayMs)
+                    put("jitter_ms", gateway.downlink.jitterMs)
+                    put("loss_pct", gateway.downlink.lossPct)
+                })
+                put("excluded_from_impairment", buildJsonArray {
+                    gateway.excludedFromImpairment.forEach { add(JsonPrimitive(it)) }
+                })
+            }
+        } ?: JsonNull)
         put("recovery", recovery?.let { r ->
             buildJsonObject {
                 put("contract_version", "aneb-network-recovery-evidence-v1")
@@ -799,6 +1169,8 @@ class NetworkSpeedEngine(private val context: Context) {
                 put("outage_failure_count", r.outageFailureCount)
                 put("recovery_time_ms", r.recoveryTimeMs?.let(::JsonPrimitive) ?: JsonNull)
                 put("post_recovery_rtt_ms", nullableArray(r.postRecoveryRttMs))
+                put("impairment_layer", r.impairmentLayer)
+                put("bypass_observed", r.bypassObserved)
             }
         } ?: JsonNull)
         put("invalid_reason", e.invalidReason?.let(::JsonPrimitive) ?: JsonNull)
@@ -815,6 +1187,10 @@ class NetworkSpeedEngine(private val context: Context) {
         private const val TELEMETRY_MS = 100L
         private const val HISTORY_POINTS = 40
         private const val MAX_PARALLEL = 8
+        private const val GATEWAY_POLL_MS = 100L
+        private const val GATEWAY_TRANSITION_TIMEOUT_MS = 10_000
+        private const val GATEWAY_CLEANUP_TIMEOUT_MS = 12_000L
+        private const val GATEWAY_ECHO_TIMEOUT_MS = 350L
     }
 }
 

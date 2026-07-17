@@ -312,12 +312,14 @@ fun HomeScreen(
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 23 分钟"
                                 TestEngine.Mode.STRESS -> "当前：压力 · 约 2–5 分钟 · 约 200MiB 流量"
                                 TestEngine.Mode.NETWORK_RECOVERY -> "当前：不可用于 Token 仿真"
+                                TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY -> "当前：仅用于调试版网关实验"
                             }
                             AnebTestMode.AI_REALTIME_SIMULATION -> when (mode) {
                                 TestEngine.Mode.QUICK -> "当前：快测 · 约 25 秒"
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 22 分钟"
                                 TestEngine.Mode.STRESS -> "当前：恢复 · 约 1 分钟 · 2 次受控中断"
                                 TestEngine.Mode.NETWORK_RECOVERY -> "当前：不可用于 AI 实时"
+                                TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY -> "当前：仅用于调试版网关实验"
                             }
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
@@ -411,6 +413,8 @@ private fun modeSummary(mode: TestEngine.Mode, quick: String, standard: String):
     TestEngine.Mode.FORENSIC -> "当前：标准 · $standard"
     TestEngine.Mode.STRESS -> "当前：快测 · $quick"
     TestEngine.Mode.NETWORK_RECOVERY -> "当前：恢复测试"
+    TestEngine.Mode.GATEWAY_LOSS -> "当前：网络层网关实验"
+    TestEngine.Mode.GATEWAY_RECOVERY -> "当前：网络层恢复实验"
 }
 
 @Composable

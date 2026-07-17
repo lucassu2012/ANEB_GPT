@@ -62,6 +62,8 @@
 
 | D-49 | 2026-07-17 | **受控请求中断恢复必须是独立 Profile、独立路由与独立评分，不与无故障 Standard 或容量/时延弱网混分。** `aneb-server/0.7.0` 新增 `network_comprehensive_weak_recovery@1.0.0` / `weak-recovery-v1`：每个 run 仅能武装一次 2000ms 应用请求不可用窗口；窗口内只有同 run 请求返回带服务端确认头的 503，其他 run 与正常路由保持 200，窗口后自动恢复。合成基线为 ↓5/↑2Mbps、附加 RTT 80±20ms；DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 均排除。恢复时间固定为 trigger 202 回执到首个成功 echo，独立 `network-recovery-score-v1` 按恢复 45%、连续性 30%、响应性 25% 评分；中断未观察、恢复失败或必需样本缺失时硬失败/抑制分数；单次事件即使达标仍固定 LOW/INCONCLUSIVE。App 0.4.8/Room v17 增加 100ms 动态恢复仪表、回执核验与恢复证据字段。P40 4 次独立 run 恢复 2084.4–2227.3ms、中断失败 8–9 次、恢复后成功率均 100%，末次 RTT P95 152.6ms；动态序列捕获 1063.2ms/5 次失败/中断指针。结论只适用于 E-01 声明的应用请求中断，不外推真实蜂窝断网。 | `network_comprehensive_weak_recovery@1.0.0`；`docs/P40_WEAK_RECOVERY_VALIDATION_2026-07-17.md`；Room v17 原始结果 |
 
+| D-50 | 2026-07-17 | **网络层弱网必须由独占转发网关实施，禁止在 E-01、开发 PC 或共享路由接口挂全局 qdisc。** `aneb-gateway/0.1.0` 只执行版本化白名单，以 WAN egress + WAN ingress→IFB 分别控制上/下行；TLS+Bearer 管理面留在未整形 LAN，强制专用设备证明、单实验、120s 上限、状态审计与启动/结束/信号/systemd 多重清理。App 0.4.9 Debug 以 Profile 指纹、run id、claim scope、激活/清理回执和 active 期旁路探测形成 fail-closed 证据；Room v18 冻结。命名空间实测 0.061→105.260→0.054ms、100% 中断恢复与宿主 qdisc 不变均通过；因尚无独占双网口 Linux/AP，P40 网络层项必须保持 BLOCKED_EXTERNAL。该能力不改变 RSRP/RSRQ/SINR、基站调度或真实切网。 | `gateway/`；`network_comprehensive_gateway_loss@1.0.0`；`network_comprehensive_gateway_recovery@1.0.0`；`docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md` |
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

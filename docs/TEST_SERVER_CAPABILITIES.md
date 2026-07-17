@@ -13,7 +13,7 @@
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-17 15:19 CST；节点本机、公网 smoke、正常/弱网相邻对照与 P40 Pro 合成恢复均通过 |
+| 最近验证 | 2026-07-17 16:18 CST；专用网关命名空间复验后 E-01 仍为 0.7.0、默认 qdisc 未变化、无临时命名空间；既有公网 smoke 与 P40 合成恢复结论不变 |
 
 所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
@@ -74,6 +74,8 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 - 禁止修改 `chrony`、系统墙钟纪律、现有 node/mongod/python 服务。
 - 禁止把故障注入参数开启在生产/取证服务上。
 - 不得只替换 Profile 而跳过合同测试和公网 smoke。
+
+专用网络层弱网能力位于仓库 `gateway/`，不是 E-01 服务端功能，也不得安装到 E-01。其权威边界和验证记录见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`；Claude 可读取该文档了解网关 API/Profile，但 E-01 部署合同与版本不因此改变。
 
 每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、两个合成弱网合同的目录/回执/精确字节、恢复触发后同 run 503/其他 run 200/正常路由 200/窗口后同 run 200、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
 

@@ -12,6 +12,8 @@ data class NetworkRecoveryEvidence(
     val recoveryTimeMs: Double?,
     val postRecoveryRttMs: List<Double?>,
     val invalidReason: String? = null,
+    val impairmentLayer: String = "application_http",
+    val bypassObserved: Boolean = false,
 )
 
 /**
@@ -26,6 +28,7 @@ object NetworkRecoveryScorer {
             !evidence.serverAcknowledged -> "synthetic_impairment_not_acknowledged"
             !evidence.triggerAcknowledged -> "outage_trigger_not_acknowledged"
             evidence.declaredOutageMs <= 0 -> "outage_duration_not_declared"
+            evidence.bypassObserved -> "gateway_bypass_observed"
             else -> null
         }
         if (invalid != null) {
@@ -102,16 +105,23 @@ object NetworkRecoveryScorer {
         verdict: TokenVerdict,
         missing: List<String>,
     ) = buildList {
-        add("结论：${verdict.name}，证据置信度 LOW；仅完成 1 次确定性的应用请求中断，不能证明长期恢复率。")
+        val layerLabel = if (evidence.impairmentLayer == "ip_forwarding") "IP 转发层" else "应用请求层"
+        add("结论：${verdict.name}，证据置信度 LOW；仅完成 1 次确定性的${layerLabel}中断，不能证明长期恢复率。")
         add(
-            "本次模拟 ${evidence.declaredOutageMs}ms 应用请求不可用窗口；观察到 ${evidence.outageFailureCount} 次带服务器中断回执的失败，" +
-                "触发响应到首个成功请求 ${evidence.recoveryTimeMs?.let { "%.0fms".format(it) } ?: "未恢复"}。",
+            "本次模拟 ${evidence.declaredOutageMs}ms ${layerLabel}不可用窗口；观察到 ${evidence.outageFailureCount} 次失败，" +
+                "中断激活确认到首个成功请求 ${evidence.recoveryTimeMs?.let { "%.0fms".format(it) } ?: "未恢复"}。",
         )
         val success = metrics["RCV-B03"]?.value
         val rtt = metrics["RCV-B04"]?.value
         add("恢复后请求成功率 ${success?.let { "%.1f%%".format(it * 100.0) } ?: "不可用"}；恢复后 RTT P95 ${rtt?.let { "%.1fms".format(it) } ?: "不可用"}。")
         add("建议目标：恢复用时 ≤3000ms；恢复后请求成功率 ≥95%；恢复后 RTT ≤300ms 的样本比例 ≥95%。")
-        add("边界：这是 ANEB HTTP 请求可用性模拟，不是 IP 断网、丢包、切网、RSRP 或 SINR 变化。")
+        add(
+            if (evidence.impairmentLayer == "ip_forwarding") {
+                "边界：这是专用网关的 IP 转发层受控中断，不是无线切网，也未改变 RSRP、RSRQ 或 SINR。"
+            } else {
+                "边界：这是 ANEB HTTP 请求可用性模拟，不是 IP 断网、丢包、切网、RSRP 或 SINR 变化。"
+            },
+        )
         if (missing.isNotEmpty()) add("必需指标缺失：${missing.joinToString()}；按合同总分不可计算。")
     }
 

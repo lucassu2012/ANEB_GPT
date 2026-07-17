@@ -31,7 +31,7 @@ func main() {
 	// mode=local（默认）：既有本地联调证书（SAN IP:10.0.2.2/127.0.0.1 + DNS:localhost）。
 	// mode=ip：阶段 3 bare-IP 蜂窝通道自签 IP-SAN 证书（SAN IP:<-ip>），
 	//   兼作叶证书（服务端 -tls-cert-ip）与客户端信任锚（debug res/raw/aneb_ip_ca.pem）。
-	mode := flag.String("mode", "local", "certificate mode: local (dev loopback SAN) or ip (bare-IP IP-SAN)")
+	mode := flag.String("mode", "local", "certificate mode: local, ip (E-01), or gateway (dedicated lab gateway)")
 	ipStr := flag.String("ip", "120.79.148.0", "public IP for IP-SAN in -mode=ip (E-01 bare-IP cellular path)")
 	flag.Parse()
 
@@ -73,8 +73,17 @@ func main() {
 		tmpl.IPAddresses = []net.IP{ip}
 		certName, keyName = "aneb_ip_cert.pem", "aneb_ip_key.pem"
 		sanDesc = "IP:" + *ipStr
+	case "gateway":
+		ip := net.ParseIP(*ipStr)
+		if ip == nil || !ip.IsPrivate() {
+			log.Fatalf("mode=gateway: -ip must be a private management IP, got %q", *ipStr)
+		}
+		tmpl.Subject = pkix.Name{CommonName: "ANEB Dedicated Gateway Lab CA (" + *ipStr + ")", Organization: []string{"ANEB"}}
+		tmpl.IPAddresses = []net.IP{ip}
+		certName, keyName = "aneb_gateway_cert.pem", "aneb_gateway_key.pem"
+		sanDesc = "IP:" + *ipStr
 	default:
-		log.Fatalf("unknown -mode %q (want local|ip)", *mode)
+		log.Fatalf("unknown -mode %q (want local|ip|gateway)", *mode)
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)

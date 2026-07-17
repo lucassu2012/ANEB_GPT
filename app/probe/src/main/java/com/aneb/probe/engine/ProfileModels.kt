@@ -195,6 +195,32 @@ data class ProfileSyntheticImpairment(
 )
 
 @Serializable
+data class ProfileGatewayDirection(
+    @SerialName("rate_mbps") val rateMbps: Double = 0.0,
+    @SerialName("delay_ms") val delayMs: Int = 0,
+    @SerialName("jitter_ms") val jitterMs: Int = 0,
+    @SerialName("loss_pct") val lossPct: Double = 0.0,
+)
+
+/** Immutable binding from an app Profile to an allowlisted dedicated-gateway Profile. */
+@Serializable
+data class ProfileGatewayImpairment(
+    @SerialName("contract_version") val contractVersion: String,
+    @SerialName("gateway_profile_id") val gatewayProfileId: String,
+    @SerialName("gateway_profile_version") val gatewayProfileVersion: String,
+    @SerialName("profile_fingerprint") val profileFingerprint: String,
+    val kind: String,
+    @SerialName("impairment_layer") val impairmentLayer: String,
+    @SerialName("duration_ms") val durationMs: Int,
+    @SerialName("activation_delay_ms") val activationDelayMs: Int,
+    val uplink: ProfileGatewayDirection,
+    val downlink: ProfileGatewayDirection,
+    @SerialName("excluded_from_impairment") val excludedFromImpairment: List<String>,
+) {
+    val profileRef: String get() = "$gatewayProfileId@$gatewayProfileVersion"
+}
+
+@Serializable
 data class ScenarioProfile(
     @SerialName("profile_id") val profileId: String,
     val version: String,
@@ -214,6 +240,7 @@ data class ScenarioProfile(
     @SerialName("evidence_tier") val evidenceTier: String = "",
     @SerialName("execution_plan") val executionPlan: ProfileExecutionPlan? = null,
     @SerialName("synthetic_impairment") val syntheticImpairment: ProfileSyntheticImpairment? = null,
+    @SerialName("gateway_impairment") val gatewayImpairment: ProfileGatewayImpairment? = null,
     /** v1 兼容字段；v2 只能用于显示旧 Profile，不能替代 live_presentation/evaluation。 */
     val presentation: ProfilePresentation = ProfilePresentation(),
     val phases: List<ProfilePhase> = emptyList(),
@@ -254,6 +281,8 @@ object ProfileParser {
         "published/network_comprehensive_standard/profile.json",
         "published/network_comprehensive_weak_capacity_latency/profile.json",
         "published/network_comprehensive_weak_recovery/profile.json",
+        "published/network_comprehensive_gateway_loss/profile.json",
+        "published/network_comprehensive_gateway_recovery/profile.json",
     )
 
     private val json = Json { ignoreUnknownKeys = true }

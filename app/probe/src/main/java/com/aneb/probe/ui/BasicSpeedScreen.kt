@@ -78,7 +78,7 @@ fun BasicSpeedTestingScreen(
         label = "basic-speed-needle",
     )
     val phaseColor = when {
-        recoveryActive && telemetry.syntheticOutageActive -> colors.poor
+        recoveryActive && (telemetry.syntheticOutageActive || telemetry.networkLayerOutage) -> colors.poor
         recoveryActive -> colors.fair
         telemetry.phase == BasicSpeedPhase.UPLOAD -> colors.brand2
         else -> colors.brand
@@ -113,12 +113,21 @@ fun BasicSpeedTestingScreen(
                 }
             }
         }
+        telemetry.gatewayImpairmentLabel?.let { label ->
+            AnebGradientCard(Modifier.fillMaxWidth().padding(bottom = 10.dp), radius = 14.dp) {
+                Column(Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
+                    Text("专用网关实验正在生效", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.brand2)
+                    Text(label, fontSize = 10.sp, color = colors.ink, modifier = Modifier.padding(top = 3.dp))
+                    Text("网关状态与清理双回执校验中 · 仅 IP 转发层", fontSize = 9.sp, color = colors.muted, modifier = Modifier.padding(top = 3.dp))
+                }
+            }
+        }
 
         AnebMetricTrio(if (recoveryActive) {
             listOf(
                 AnebMetric("恢复计时", telemetry.recoveryElapsedMs.oneOrDash(), "ms", phaseColor),
                 AnebMetric("中断失败", telemetry.recoveryFailureCount.toString(), "次"),
-                AnebMetric("请求状态", if (telemetry.syntheticOutageActive) "中断" else "探测", "", phaseColor),
+                AnebMetric("请求状态", if (telemetry.syntheticOutageActive || telemetry.networkLayerOutage) "中断" else "探测", "", phaseColor),
             )
         } else {
             listOf(
@@ -142,7 +151,11 @@ fun BasicSpeedTestingScreen(
             accent = phaseColor,
             label = if (recoveryActive) "ms" else if (live != null) "Mbps" else phaseLabel(telemetry.phase),
             supporting = if (recoveryActive) {
-                if (telemetry.syntheticOutageActive) "服务器已确认请求中断 · 等待恢复" else "正在核验恢复状态"
+                when {
+                    telemetry.networkLayerOutage -> "网关已确认网络层中断 · 等待恢复"
+                    telemetry.syntheticOutageActive -> "服务器已确认请求中断 · 等待恢复"
+                    else -> "正在核验恢复状态"
+                }
             } else if (live != null) {
                 "${phaseLabel(telemetry.phase)} · 1 秒实时窗口"
             } else {
@@ -215,7 +228,7 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 @Composable
 fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
     val colors = AnebTheme.colors
-    val recoveryResult = result.variant == "weak_recovery"
+    val recoveryResult = result.variant in setOf("weak_recovery", "gateway_recovery")
     val accent = when (result.verdict) {
         TokenVerdict.PASS -> colors.excellent
         TokenVerdict.FAIL -> colors.poor
@@ -233,9 +246,15 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
         Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("AI 业务路径综合能力", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
             Text(
-                "${if (recoveryResult) "合成恢复" else if (result.syntheticImpairment) "合成弱网" else result.variant.uppercase()} · ${confidenceLabel(result.confidence)}",
+                "${when {
+                    result.variant == "gateway_recovery" -> "网络层恢复"
+                    result.gatewayImpairment -> "网络层网关实验"
+                    recoveryResult -> "合成恢复"
+                    result.syntheticImpairment -> "合成弱网"
+                    else -> result.variant.uppercase()
+                }} · ${confidenceLabel(result.confidence)}",
                 fontSize = 10.sp,
-                color = if (result.syntheticImpairment) colors.fair else colors.muted,
+                color = if (result.syntheticImpairment || result.gatewayImpairment) colors.fair else colors.muted,
                 modifier = Modifier.align(Alignment.Start).padding(top = 4.dp),
             )
             if (result.syntheticImpairment) {
@@ -258,6 +277,35 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                         Text(
                             if (recoveryResult) "不含 IP 断网/丢包/切网及 DNS/TCP/TLS/UDP/RSRP/SINR 整形。" else
                                 "不含 DNS/TCP/TLS/UDP/RSRP/SINR 整形；无线样本仅作现场协变量。",
+                            fontSize = 9.sp,
+                            lineHeight = 14.sp,
+                            color = colors.muted,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
+            if (result.gatewayImpairment) {
+                AnebGradientCard(Modifier.fillMaxWidth().padding(top = 10.dp), radius = 14.dp) {
+                    Column(Modifier.padding(12.dp)) {
+                        val validGateway = result.gatewayAcknowledged && result.gatewayCleanupAcknowledged && !result.gatewayBypassObserved
+                        Text(
+                            if (validGateway) "网关实验与清理均已确认" else "网关证据不完整，评分已抑制",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (validGateway) colors.brand2 else colors.poor,
+                        )
+                        Text(
+                            "↓${result.impairmentDownlinkMbps.oneOrDash()} Mbps · ↑${result.impairmentUplinkMbps.oneOrDash()} Mbps · " +
+                                "双向时延 ${result.gatewayDownlinkDelayMs ?: "—"}/${result.gatewayUplinkDelayMs ?: "—"} ms · " +
+                                "丢包 ${result.gatewayDownlinkLossPct.oneOrDash()}%/${result.gatewayUplinkLossPct.oneOrDash()}%" +
+                                (result.impairmentOutageDurationMs?.let { " · 网络层中断 ${it}ms" } ?: ""),
+                            fontSize = 10.sp,
+                            color = colors.ink,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        Text(
+                            "专用网关只控制 IP 转发层；RSRP、RSRQ、SINR 与基站调度未被改变，也不代表真实切网。",
                             fontSize = 9.sp,
                             lineHeight = 14.sp,
                             color = colors.muted,
@@ -436,6 +484,18 @@ internal fun NetworkComprehensiveResultEntity.toDomain(): BasicSpeedResult = Bas
     recoveryTimeMs = recoveryTimeMs,
     recoveryFailureCount = recoveryFailureCount,
     postRecoverySuccessRatio = postRecoverySuccessRatio,
+    gatewayImpairment = gatewayImpairment,
+    gatewayExperimentId = gatewayExperimentId,
+    gatewayProfileFingerprint = gatewayProfileFingerprint,
+    gatewayManagementBase = gatewayManagementBase,
+    gatewayImpairmentLayer = gatewayImpairmentLayer,
+    gatewayAcknowledged = gatewayAcknowledged,
+    gatewayCleanupAcknowledged = gatewayCleanupAcknowledged,
+    gatewayBypassObserved = gatewayBypassObserved,
+    gatewayUplinkDelayMs = gatewayUplinkDelayMs,
+    gatewayDownlinkDelayMs = gatewayDownlinkDelayMs,
+    gatewayUplinkLossPct = gatewayUplinkLossPct,
+    gatewayDownlinkLossPct = gatewayDownlinkLossPct,
 )
 
 private fun parseNetworkMetrics(raw: String): Map<String, NetworkMetricEvidence> = runCatching {

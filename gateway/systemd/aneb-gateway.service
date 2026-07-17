@@ -1,0 +1,44 @@
+[Unit]
+Description=ANEB dedicated network impairment gateway
+Documentation=file:/opt/aneb-gateway/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aneb-gateway
+Group=aneb-gateway
+EnvironmentFile=/etc/aneb-gateway/gateway.env
+ExecStart=/opt/aneb-gateway/bin/aneb-gateway \
+  -listen=${ANEB_GATEWAY_LISTEN} \
+  -profiles=/etc/aneb-gateway/profiles \
+  -wan=${ANEB_GATEWAY_WAN} \
+  -ifb=${ANEB_GATEWAY_IFB} \
+  -attestation=/etc/aneb-gateway/dedicated-gateway.json \
+  -token-file=/etc/aneb-gateway/token \
+  -audit=/var/lib/aneb-gateway/audit.jsonl \
+  -tls-cert=/etc/aneb-gateway/tls/cert.pem \
+  -tls-key=/etc/aneb-gateway/tls/key.pem
+ExecStopPost=/opt/aneb-gateway/bin/aneb-gateway-clear ${ANEB_GATEWAY_WAN} ${ANEB_GATEWAY_IFB}
+Restart=on-failure
+RestartSec=1s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+ReadOnlyPaths=/etc/aneb-gateway /opt/aneb-gateway
+ReadWritePaths=/var/lib/aneb-gateway
+
+[Install]
+WantedBy=multi-user.target

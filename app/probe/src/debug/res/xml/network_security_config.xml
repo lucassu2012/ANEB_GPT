@@ -31,4 +31,13 @@
             <certificates src="system" />
         </trust-anchors>
     </domain-config>
+    <!-- 专用网络层弱网实验网关：固定管理地址仅用于 debug 实验；控制面始终 TLS，
+         私钥位于 gateway/tls（git-ignored），不随 APK 或源码发布。 -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">192.168.77.1</domain>
+        <trust-anchors>
+            <certificates src="@raw/aneb_gateway_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

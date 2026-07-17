@@ -104,6 +104,8 @@ class MainActivity : ComponentActivity() {
     private var intentTransportOverride: TestEngine.TransportMode? = null
     private var intentInject: String? = null
     private var intentDriveTestOverride: Boolean? = null
+    private var intentGatewayBase: String? = null
+    private var intentGatewayToken: String? = null
 
     private var intentContinuity: Boolean = false
     private var intentCTokens: Int = ContinuityRunner.DEFAULT_TOKENS
@@ -203,6 +205,8 @@ class MainActivity : ComponentActivity() {
             "stress" -> TestEngine.Mode.STRESS
             "recovery" -> TestEngine.Mode.STRESS
             "network_recovery", "weak_recovery" -> TestEngine.Mode.NETWORK_RECOVERY
+            "gateway_loss" -> TestEngine.Mode.GATEWAY_LOSS
+            "gateway_recovery" -> TestEngine.Mode.GATEWAY_RECOVERY
             else -> null
         }
         intentContinuity = intent?.getStringExtra("mode")?.lowercase() == "continuity"
@@ -229,6 +233,9 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
         intentInject = if (BuildConfig.DEBUG) intent?.getStringExtra("inject") else null
+        intentGatewayBase = if (BuildConfig.DEBUG) intent?.getStringExtra("gateway_base") else null
+        intentGatewayToken = if (BuildConfig.DEBUG) intent?.getStringExtra("gateway_token") else null
+        intent?.removeExtra("gateway_token")
         intentDriveTestOverride = if (intent?.hasExtra("drive_test") == true) {
             intent.getBooleanExtra("drive_test", false)
         } else {
@@ -273,7 +280,11 @@ class MainActivity : ComponentActivity() {
                                     AnebTestMode.NETWORK_BASIC,
                                     AnebTestMode.TOKEN_SIMULATION,
                                     AnebTestMode.AI_REALTIME_SIMULATION,
-                                )) || (launchSettings.mode == TestEngine.Mode.NETWORK_RECOVERY &&
+                                )) || (launchSettings.mode in setOf(
+                                    TestEngine.Mode.NETWORK_RECOVERY,
+                                    TestEngine.Mode.GATEWAY_LOSS,
+                                    TestEngine.Mode.GATEWAY_RECOVERY,
+                                ) &&
                                     launchSettings.testMode != AnebTestMode.NETWORK_BASIC)
                             ) {
                                 TestEngine.Mode.QUICK
@@ -328,6 +339,8 @@ class MainActivity : ComponentActivity() {
                                 transport = transport,
                                 inject = intentInject,
                                 driveTest = driveTest,
+                                gatewayBase = intentGatewayBase,
+                                gatewayToken = intentGatewayToken,
                             ),
                             autorun = fromAutorun,
                         )

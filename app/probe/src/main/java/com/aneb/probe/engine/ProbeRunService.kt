@@ -105,6 +105,8 @@ class ProbeRunService : Service() {
         val transport: TestEngine.TransportMode,
         val inject: String?,
         val driveTest: Boolean,
+        val gatewayBase: String? = null,
+        val gatewayToken: String? = null,
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -147,6 +149,8 @@ class ProbeRunService : Service() {
             ),
             inject = intent.getStringExtra(EXTRA_INJECT).takeIf { BuildConfig.DEBUG },
             driveTest = intent.getBooleanExtra(EXTRA_DRIVE_TEST, false),
+            gatewayBase = intent.getStringExtra(EXTRA_GATEWAY_BASE).takeIf { BuildConfig.DEBUG },
+            gatewayToken = takePendingGatewayToken().takeIf { BuildConfig.DEBUG },
         )
 
         startForeground(
@@ -200,8 +204,12 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "weak_capacity_latency"
                                     TestEngine.Mode.NETWORK_RECOVERY -> "weak_recovery"
+                                    TestEngine.Mode.GATEWAY_LOSS -> "gateway_loss"
+                                    TestEngine.Mode.GATEWAY_RECOVERY -> "gateway_recovery"
                                 },
                                 transport = config.transport,
+                                gatewayBase = config.gatewayBase,
+                                gatewayToken = config.gatewayToken,
                             ),
                         )
                     }
@@ -220,7 +228,8 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.QUICK -> "quick"
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "stress"
-                                    TestEngine.Mode.NETWORK_RECOVERY -> error("network_recovery_requires_network_test")
+                                    TestEngine.Mode.NETWORK_RECOVERY, TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY ->
+                                        error("network_lab_mode_requires_network_test")
                                 },
                                 transport = config.transport,
                             ),
@@ -241,7 +250,8 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.QUICK -> "quick"
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "recovery"
-                                    TestEngine.Mode.NETWORK_RECOVERY -> error("network_recovery_requires_network_test")
+                                    TestEngine.Mode.NETWORK_RECOVERY, TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY ->
+                                        error("network_lab_mode_requires_network_test")
                                 },
                                 transport = config.transport,
                             ),
@@ -370,6 +380,7 @@ class ProbeRunService : Service() {
         private const val EXTRA_INJECT = "inject"
         private const val EXTRA_DRIVE_TEST = "drive_test"
         private const val EXTRA_AUTORUN = "autorun"
+        private const val EXTRA_GATEWAY_BASE = "gateway_base"
         private const val CHANNEL_ID = "probe_measurement"
         private const val NOTIFICATION_ID = 4101
 
@@ -391,8 +402,10 @@ class ProbeRunService : Service() {
         internal val realtimeSimulationTelemetry: StateFlow<RealtimeSimulationTelemetry> = _realtimeSimulationTelemetry.asStateFlow()
         private val _realtimeSimulationResult = MutableStateFlow<RealtimeSimulationResult?>(null)
         internal val realtimeSimulationResult: StateFlow<RealtimeSimulationResult?> = _realtimeSimulationResult.asStateFlow()
+        @Volatile private var pendingGatewayToken: String? = null
 
         internal fun start(context: Context, config: Config, autorun: Boolean) {
+            pendingGatewayToken = config.gatewayToken
             val intent = Intent(context, ProbeRunService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SERVER, config.serverBase)
@@ -402,8 +415,12 @@ class ProbeRunService : Service() {
                 .putExtra(EXTRA_INJECT, config.inject)
                 .putExtra(EXTRA_DRIVE_TEST, config.driveTest)
                 .putExtra(EXTRA_AUTORUN, autorun)
+                .putExtra(EXTRA_GATEWAY_BASE, config.gatewayBase)
             ContextCompat.startForegroundService(context, intent)
         }
+
+        @Synchronized
+        private fun takePendingGatewayToken(): String? = pendingGatewayToken.also { pendingGatewayToken = null }
 
         internal fun cancel(context: Context) {
             context.startService(Intent(context, ProbeRunService::class.java).setAction(ACTION_CANCEL))

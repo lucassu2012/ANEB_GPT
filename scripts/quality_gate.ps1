@@ -21,6 +21,15 @@ if (-not $env:ANDROID_HOME -or -not (Test-Path $env:ANDROID_HOME)) {
 }
 
 Push-Location (Join-Path $repo 'app')
+$sqliteTmp = Join-Path $env:TEMP ("aneb-sqlite-" + [guid]::NewGuid().ToString('N'))
+$previousJavaToolOptions = $env:JAVA_TOOL_OPTIONS
+New-Item -ItemType Directory -Path $sqliteTmp -Force | Out-Null
+$sqliteOption = "-Dorg.sqlite.tmpdir=$sqliteTmp"
+$env:JAVA_TOOL_OPTIONS = if ([string]::IsNullOrWhiteSpace($previousJavaToolOptions)) {
+    $sqliteOption
+} else {
+    "$previousJavaToolOptions $sqliteOption"
+}
 try {
     # Room's KSP verifier loads sqlite-jdbc native code. Serial workers plus in-process,
     # non-incremental KSP avoid Windows DLL and lookup-cache races during parallel development.
@@ -38,6 +47,10 @@ try {
     }
 }
 finally {
+    $env:JAVA_TOOL_OPTIONS = $previousJavaToolOptions
+    if (Test-Path -LiteralPath $sqliteTmp) {
+        Remove-Item -LiteralPath $sqliteTmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
 }
 
@@ -75,6 +88,17 @@ if (-not $SkipServer) {
         & $goExe test -count=1 ./...
         if ($LASTEXITCODE -ne 0) {
             throw "Go server tests failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Push-Location (Join-Path $repo 'gateway')
+    try {
+        & $goExe test -count=1 ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "Go gateway tests failed with exit code $LASTEXITCODE."
         }
     }
     finally {

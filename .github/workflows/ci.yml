@@ -54,6 +54,27 @@ jobs:
         working-directory: server
         run: go test -count=1 ./...
 
+  gateway:
+    name: Dedicated gateway tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+          cache: false
+      - name: Install namespace test dependencies
+        run: sudo apt-get update && sudo apt-get install -y iproute2 iputils-ping curl python3
+      - name: Test gateway control plane
+        working-directory: gateway
+        run: go test -count=1 -race ./...
+      - name: Build and test isolated network namespace
+        working-directory: gateway
+        run: |
+          CGO_ENABLED=0 go build -o aneb-gateway-linux ./cmd/aneb-gateway
+          sudo ANEB_GATEWAY_BINARY="$PWD/aneb-gateway-linux" ./scripts/namespace_integration_test.sh
+
   behavior-model:
     name: AI behavior model tests
     runs-on: ubuntu-latest

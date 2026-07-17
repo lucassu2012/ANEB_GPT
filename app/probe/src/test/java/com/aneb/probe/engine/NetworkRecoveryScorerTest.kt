@@ -32,6 +32,14 @@ class NetworkRecoveryScorerTest {
         assertNull(result.totalScore)
     }
 
+    @Test fun gatewayBypassSuppressesScoreAsInvalid() {
+        val result = NetworkRecoveryScorer.score(
+            healthy().copy(impairmentLayer = "ip_forwarding", bypassObserved = true),
+        )
+        assertEquals(TokenVerdict.INVALID, result.verdict)
+        assertNull(result.totalScore)
+    }
+
     private fun healthy() = NetworkRecoveryEvidence(
         serverAcknowledged = true,
         triggerAcknowledged = true,

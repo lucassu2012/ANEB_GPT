@@ -25,6 +25,19 @@ data class SyntheticNetworkEvidence(
     val serverAcknowledged: Boolean,
 )
 
+data class GatewayNetworkEvidence(
+    val experimentId: String,
+    val profileRef: String,
+    val profileFingerprint: String,
+    val impairmentLayer: String,
+    val downlink: ProfileGatewayDirection,
+    val uplink: ProfileGatewayDirection,
+    val excludedFromImpairment: List<String>,
+    val gatewayAcknowledged: Boolean,
+    val cleanupAcknowledged: Boolean,
+    val bypassObserved: Boolean,
+)
+
 data class NetworkComprehensiveEvidence(
     val variant: String,
     val idleRttMs: List<Double?>,
@@ -38,6 +51,7 @@ data class NetworkComprehensiveEvidence(
     val udpUnavailableReason: String?,
     val handshakes: List<NetworkHandshakeEvidence>,
     val syntheticImpairment: SyntheticNetworkEvidence? = null,
+    val gatewayImpairment: GatewayNetworkEvidence? = null,
     val invalidReason: String? = null,
 )
 
@@ -200,6 +214,18 @@ object NetworkComprehensiveScorer {
             add(
                 "未模拟 ${synthetic.excludedFromShaping.joinToString("、")}；" +
                     "真实 RSRP/SINR 与 UDP 指标仅作现场协变量，不代表受控无线弱网。",
+            )
+        }
+        evidence.gatewayImpairment?.let { gateway ->
+            add(
+                "本次为专用网关确认的 IP 转发层弱网：下行 ${gateway.downlink.rateMbps.toDisplay()}Mbps、" +
+                    "上行 ${gateway.uplink.rateMbps.toDisplay()}Mbps、双向单程附加时延 " +
+                    "${gateway.downlink.delayMs}/${gateway.uplink.delayMs}ms、丢包 " +
+                    "${gateway.downlink.lossPct.toDisplay()}%/${gateway.uplink.lossPct.toDisplay()}%。",
+            )
+            add(
+                "网关实验与清理均有回执；未改变 ${gateway.excludedFromImpairment.joinToString("、")}，" +
+                    "因此不得把本结果解释为真实无线信号或基站调度变化。",
             )
         }
         if (evidence.variant == "quick") add("快测样本不足以证明 95% 长期稳定性，只允许方向性判断。")

@@ -73,7 +73,7 @@ class TestEngine(private val context: Context) {
     private val _telemetry = MutableStateFlow(LiveTelemetry.EMPTY)
     val telemetry: StateFlow<LiveTelemetry> = _telemetry.asStateFlow()
 
-    enum class Mode { QUICK, FORENSIC, STRESS, NETWORK_RECOVERY }
+    enum class Mode { QUICK, FORENSIC, STRESS, NETWORK_RECOVERY, GATEWAY_LOSS, GATEWAY_RECOVERY }
 
     /** transport 策略（P1 范围 3）：AUTO=不绑定仅监控（模拟器用 AUTO） */
     enum class TransportMode { AUTO, WIFI, CELLULAR }
@@ -268,7 +268,8 @@ class TestEngine(private val context: Context) {
                 Mode.QUICK -> LatinSquare.quickOrder(ids.size)
                 Mode.FORENSIC -> LatinSquare.orders(ids.size)
                 Mode.STRESS -> error("stress_not_supported_for_legacy_engine")
-                Mode.NETWORK_RECOVERY -> error("network_recovery_not_supported_for_legacy_engine")
+                Mode.NETWORK_RECOVERY, Mode.GATEWAY_LOSS, Mode.GATEWAY_RECOVERY ->
+                    error("network_lab_mode_not_supported_for_legacy_engine")
             }
             val runner = ScenarioRunner(client, liveStreamWindow)
             val kpiByScenario = LinkedHashMap<String, MutableList<KpiResult>>()

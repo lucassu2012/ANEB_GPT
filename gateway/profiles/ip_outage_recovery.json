@@ -1,0 +1,15 @@
+{
+  "contract_version": "aneb-gateway-profile-v1",
+  "profile_id": "ip_outage_recovery",
+  "version": "1.0.0",
+  "label": "网络层双向 2 秒中断与恢复",
+  "kind": "outage",
+  "claim_scope": "dedicated_gateway_ip_forwarding",
+  "impairment_layer": "ip_forwarding",
+  "duration_ms": 2000,
+  "activation_delay_ms": 500,
+  "uplink": {"loss_pct": 100},
+  "downlink": {"loss_pct": 100},
+  "excluded_from_impairment": ["radio_rsrp", "radio_rsrq", "radio_sinr", "base_station_scheduler", "actual_route_change"],
+  "evidence_tier": "gateway_lab"
+}

@@ -152,6 +152,18 @@ data class NetworkComprehensiveResultEntity(
     val recoveryTimeMs: Double? = null,
     val recoveryFailureCount: Int = 0,
     val postRecoverySuccessRatio: Double? = null,
+    val gatewayImpairment: Boolean = false,
+    val gatewayExperimentId: String? = null,
+    val gatewayProfileFingerprint: String? = null,
+    val gatewayManagementBase: String? = null,
+    val gatewayImpairmentLayer: String? = null,
+    val gatewayAcknowledged: Boolean = false,
+    val gatewayCleanupAcknowledged: Boolean = false,
+    val gatewayBypassObserved: Boolean = false,
+    val gatewayUplinkDelayMs: Int? = null,
+    val gatewayDownlinkDelayMs: Int? = null,
+    val gatewayUplinkLossPct: Double? = null,
+    val gatewayDownlinkLossPct: Double? = null,
 )
 
 /** Profile v2 Token 仿真独立结果；不进入 TestRun/AQS，完整证据以版本化 JSON 保留。 */

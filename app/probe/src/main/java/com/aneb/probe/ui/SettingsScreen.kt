@@ -716,4 +716,6 @@ private fun modeLabel(mode: TestEngine.Mode, testMode: AnebTestMode): String = w
         else -> "压力"
     }
     TestEngine.Mode.NETWORK_RECOVERY -> "恢复"
+    TestEngine.Mode.GATEWAY_LOSS -> "网关弱网"
+    TestEngine.Mode.GATEWAY_RECOVERY -> "网关恢复"
 }

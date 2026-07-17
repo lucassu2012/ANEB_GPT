@@ -1,0 +1,78 @@
+{
+  "contract_version": "aneb-profile-v2",
+  "profile_id": "network_comprehensive_gateway_recovery",
+  "version": "1.0.0",
+  "mode_id": "network_comprehensive",
+  "execution_target": "aneb_probe_simulator",
+  "claim_scope": "application_end_to_end_to_probe_node_through_dedicated_gateway_with_ip_outage",
+  "business": {
+    "category_id": "network_recovery",
+    "label": "专用网关 IP 层中断与恢复测试",
+    "archetype_labels": ["ai_application_path", "dedicated_gateway_ip_outage"],
+    "behavior_feature_ids": ["ip_forwarding_blackout", "low_latency_recovery", "post_recovery_stability"],
+    "behavior_model_id": null,
+    "calibration_status": "not_applicable"
+  },
+  "live_presentation": {
+    "primary_metric_id": "RECOVERY_ELAPSED_LIVE",
+    "secondary_metric_ids": ["IP_OUTAGE_STATE_LIVE", "POST_RECOVERY_RTT_LIVE", "FAILED_PROBE_COUNT_LIVE"],
+    "window_ms": 1000,
+    "ui_refresh_ms": 100,
+    "stale_after_ms": 1500,
+    "missing_behavior": "show_unavailable_never_zero"
+  },
+  "evaluation": {
+    "target_set_id": "network-gateway-recovery-targets-v1",
+    "score_policy_id": "network-gateway-recovery-score-v1",
+    "score_anchor_policy_id": "compliance-anchors-v1",
+    "conclusion_policy_id": "network-gateway-recovery-conclusions-v1",
+    "required_metric_ids": ["RCV-B01", "RCV-B02", "RCV-B03", "RCV-B04"],
+    "guardrail_metric_ids": ["RCV-B01", "RCV-B02", "RCV-B03"],
+    "group_weights": {"recovery": 0.45, "continuity": 0.30, "responsiveness": 0.25},
+    "grade_bands": {"excellent": 85, "good": 70, "fair": 55},
+    "missing_required_metric": "score_null",
+    "invalid_run": "retain_raw_suppress_score"
+  },
+  "measurements": [
+    {"metric_id":"RCV-B01","label":"网络层受控中断已观察","domain":"business","unit":"boolean","measurement_level":"exact","formula_id":"gateway-ip-outage-observed-v1","aggregation":"gateway_active_with_failed_probe","direction":"higher_is_better","required_for_score":true,"minimum_sample_count":1,"target_role":"guardrail","quality_target":{"operator":"eq","value":1,"required_compliance_ratio":1.0,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"RCV-B02","label":"网络层恢复用时","domain":"business","unit":"ms","measurement_level":"exact","formula_id":"gateway-active-to-first-success-v1","aggregation":"single_event","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":1,"target_role":"guardrail","quality_target":{"operator":"lte","value":3000,"required_compliance_ratio":1.0,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"RCV-B03","label":"恢复后请求成功率","domain":"business","unit":"ratio","measurement_level":"derived","formula_id":"post-gateway-recovery-request-success-ratio-v1","aggregation":"ratio","direction":"higher_is_better","required_for_score":true,"minimum_sample_count":12,"target_role":"guardrail","quality_target":{"operator":"gte","value":0.95,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"RCV-B04","label":"恢复后 RTT","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"post-gateway-recovery-echo-rtt-v1","aggregation":"p95","direction":"lower_is_better","required_for_score":true,"minimum_sample_count":12,"target_role":"quality","quality_target":{"operator":"lte","value":300,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B01","label":"下载持续有效速率","domain":"network","unit":"Mbps","measurement_level":"derived","formula_id":"window-goodput-p05-v1","aggregation":"p05","direction":"descriptive","required_for_score":false,"minimum_sample_count":5,"target_role":"context","quality_target":{"operator":"gte","value":25,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B02","label":"上传持续有效速率","domain":"network","unit":"Mbps","measurement_level":"derived","formula_id":"window-goodput-p05-v1","aggregation":"p05","direction":"descriptive","required_for_score":false,"minimum_sample_count":5,"target_role":"context","quality_target":{"operator":"gte","value":10,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B03","label":"空闲 RTT","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"echo-rtt-v1","aggregation":"p95","direction":"descriptive","required_for_score":false,"minimum_sample_count":12,"target_role":"context","quality_target":{"operator":"lte","value":100,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B04","label":"负载中 RTT","domain":"network","unit":"ms","measurement_level":"exact","formula_id":"loaded-echo-rtt-v1","aggregation":"p95","direction":"descriptive","required_for_score":false,"minimum_sample_count":12,"target_role":"context","quality_target":{"operator":"lte","value":200,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B05","label":"负载时延增量","domain":"network","unit":"ms","measurement_level":"derived","formula_id":"loaded-p95-minus-idle-p50-v1","aggregation":"loaded_p95_minus_idle_p50","direction":"descriptive","required_for_score":false,"minimum_sample_count":12,"target_role":"context","quality_target":{"operator":"lte","value":100,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B06","label":"RTT 变化","domain":"network","unit":"ms","measurement_level":"derived","formula_id":"rtt-p95-minus-p50-v1","aggregation":"p95_minus_p50","direction":"descriptive","required_for_score":false,"minimum_sample_count":12,"target_role":"context","quality_target":{"operator":"lte","value":30,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B07","label":"吞吐稳定性","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"goodput-robust-cv-v1","aggregation":"robust_cv","direction":"descriptive","required_for_score":false,"minimum_sample_count":5,"target_role":"context","quality_target":{"operator":"lte","value":0.2,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B09","label":"非中断阶段应用请求失败率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"application-request-failure-ratio-v1","aggregation":"ratio","direction":"descriptive","required_for_score":false,"minimum_sample_count":12,"target_role":"context","quality_target":{"operator":"lte","value":0.02,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B10","label":"UDP 数据报未返回率","domain":"network","unit":"ratio","measurement_level":"derived","formula_id":"sequenced-udp-nonreturn-ratio-v1","aggregation":"ratio","direction":"descriptive","required_for_score":false,"minimum_sample_count":100,"target_role":"context","quality_target":{"operator":"lte","value":0.01,"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-B12","label":"DNS/TCP/TLS 握手达标率","domain":"network","unit":"ratio","measurement_level":"exact","formula_id":"connection-stage-timing-v1","aggregation":"compliance_ratio","direction":"descriptive","required_for_score":false,"minimum_sample_count":3,"target_role":"context","quality_target":{"operator":"stage_lte","values":{"dns":500,"tcp":500,"tls":1000},"required_compliance_ratio":0.95,"provenance":"aneb_product_provisional_v1"}},
+    {"metric_id":"NET-R01","label":"无线层协变量","domain":"radio_covariate","unit":"mixed","measurement_level":"exact","formula_id":"public-radio-snapshot-v1","aggregation":"time_series","direction":"descriptive","required_for_score":false,"minimum_sample_count":1,"target_role":"covariate","quality_target":null}
+  ],
+  "measurement_catalog_id": "network-gateway-recovery-measurements-v1",
+  "gateway_impairment": {
+    "contract_version": "aneb-gateway-binding-v1",
+    "gateway_profile_id": "ip_outage_recovery",
+    "gateway_profile_version": "1.0.0",
+    "profile_fingerprint": "208f2acdd13e15b799e1f5e27e0cad525c8750f6355f66eb7ea9ad78a87673d8",
+    "kind": "outage",
+    "impairment_layer": "ip_forwarding",
+    "duration_ms": 2000,
+    "activation_delay_ms": 500,
+    "uplink": {"loss_pct":100},
+    "downlink": {"loss_pct":100},
+    "excluded_from_impairment": ["radio_rsrp", "radio_rsrq", "radio_sinr", "base_station_scheduler", "actual_route_change"]
+  },
+  "phases": [
+    {"type":"path_setup","attempts":3},
+    {"type":"idle_latency","samples":12},
+    {"type":"download_loaded","duration_ms":8000,"bytes":16777216,"chunk_kb":256,"parallel":3,"echo_interval_ms":250},
+    {"type":"upload_loaded","duration_ms":8000,"bytes":131072,"chunk_kb":64,"parallel":2,"echo_interval_ms":250},
+    {"type":"udp_sequence","packets":100,"packet_bytes":256,"rate_per_second":50},
+    {"type":"controlled_outage_recovery","samples":30,"duration_ms":2000,"echo_interval_ms":100},
+    {"type":"post_load_latency","samples":12}
+  ],
+  "evidence_tier": "gateway_lab",
+  "est_duration_s": 30
+}

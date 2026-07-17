@@ -86,6 +86,10 @@ object ProfileCapability {
         "trigger-ack-to-first-success-v1",
         "post-recovery-request-success-ratio-v1",
         "post-recovery-echo-rtt-v1",
+        "gateway-ip-outage-observed-v1",
+        "gateway-active-to-first-success-v1",
+        "post-gateway-recovery-request-success-ratio-v1",
+        "post-gateway-recovery-echo-rtt-v1",
     )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
@@ -224,9 +228,22 @@ object ProfileCapability {
             }
         }
         if (profile.modeId == ScenarioProfile.MODE_NETWORK_COMPREHENSIVE) {
-            val recoveryProfile = profile.profileId == "network_comprehensive_weak_recovery"
-            val expectedScorePolicy = if (recoveryProfile) "network-recovery-score-v1" else "network-comprehensive-score-v1"
-            val expectedConclusionPolicy = if (recoveryProfile) "network-recovery-conclusions-v1" else "network-comprehensive-conclusions-v1"
+            val syntheticRecovery = profile.profileId == "network_comprehensive_weak_recovery"
+            val gatewayLoss = profile.profileId == "network_comprehensive_gateway_loss"
+            val gatewayRecovery = profile.profileId == "network_comprehensive_gateway_recovery"
+            val recoveryProfile = syntheticRecovery || gatewayRecovery
+            val expectedScorePolicy = when {
+                gatewayRecovery -> "network-gateway-recovery-score-v1"
+                gatewayLoss -> "network-gateway-score-v1"
+                syntheticRecovery -> "network-recovery-score-v1"
+                else -> "network-comprehensive-score-v1"
+            }
+            val expectedConclusionPolicy = when {
+                gatewayRecovery -> "network-gateway-recovery-conclusions-v1"
+                gatewayLoss -> "network-gateway-conclusions-v1"
+                syntheticRecovery -> "network-recovery-conclusions-v1"
+                else -> "network-comprehensive-conclusions-v1"
+            }
             if (profile.evaluation.scorePolicyId != expectedScorePolicy) add("网络综合评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("网络综合评分锚点策略未被当前引擎识别")
             if (profile.evaluation.conclusionPolicyId != expectedConclusionPolicy) add("网络综合结论策略未被当前引擎识别")
@@ -236,7 +253,7 @@ object ProfileCapability {
                 .toSet()
             val unknown = requiredFormulaIds - networkRequiredFormulaIds
             if (unknown.isNotEmpty()) add("网络综合必需指标公式未被识别: ${unknown.sorted().joinToString()}")
-            if (profile.evidenceTier !in setOf("quick", "standard", "recovery")) add("网络综合证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "recovery", "gateway_lab")) add("网络综合证据等级无效")
             if (profile.executionPlan != null) add("网络综合测试不得声明行为模型执行计划")
             val phaseTypes = profile.phases.map { it.type }
             val standardPhases = listOf(
@@ -251,7 +268,7 @@ object ProfileCapability {
             profile.syntheticImpairment?.let { impairment ->
                 if (profile.profileId !in setOf("network_comprehensive_weak_capacity_latency", "network_comprehensive_weak_recovery")) add("合成弱网 Profile ID 不受支持")
                 if (impairment.contractVersion != "aneb-synthetic-impairment-v1") add("合成弱网合同版本不受支持")
-                val expectedRoute = if (recoveryProfile) "weak-recovery-v1" else "weak-capacity-latency-v1"
+                val expectedRoute = if (syntheticRecovery) "weak-recovery-v1" else "weak-capacity-latency-v1"
                 if (impairment.routeId != expectedRoute) add("合成弱网路由不受支持")
                 if (impairment.seed == 0L) add("合成弱网缺少 seed")
                 if (impairment.downlinkMbps <= 0.0 || impairment.uplinkMbps <= 0.0) add("合成弱网容量门限无效")
@@ -260,7 +277,7 @@ object ProfileCapability {
                 if (!impairment.appliesTo.containsAll(requiredApplies)) add("合成弱网适用范围不完整")
                 val requiredExclusions = setOf("dns", "tcp", "tls", "udp", "radio_rsrp", "radio_sinr")
                 if (!impairment.excludedFromShaping.containsAll(requiredExclusions)) add("合成弱网排除项不完整")
-                if (recoveryProfile) {
+                if (syntheticRecovery) {
                     if (impairment.outageDurationMs != 2_000) add("恢复测试必须声明 2 秒应用请求不可用窗口")
                     if ("application_request_availability_window" !in impairment.appliesTo) add("恢复测试缺少应用请求不可用范围")
                     if (!impairment.excludedFromShaping.containsAll(setOf("ip_packet_loss", "route_change"))) add("恢复测试排除项不完整")
@@ -273,6 +290,39 @@ object ProfileCapability {
                 }
             }
             if (profile.profileId.contains("_weak_") && profile.syntheticImpairment == null) add("弱网 Profile 缺少合成整形合同")
+            profile.gatewayImpairment?.let { gateway ->
+                if (!gatewayLoss && !gatewayRecovery) add("网关弱网 Profile ID 不受支持")
+                if (gateway.contractVersion != "aneb-gateway-binding-v1") add("网关绑定合同版本不受支持")
+                if (gateway.impairmentLayer != "ip_forwarding") add("网关实验必须声明 IP 转发层")
+                val expectedRef = if (gatewayRecovery) "ip_outage_recovery@1.0.0" else "ip_loss_latency@1.0.0"
+                val expectedFingerprint = if (gatewayRecovery) {
+                    "208f2acdd13e15b799e1f5e27e0cad525c8750f6355f66eb7ea9ad78a87673d8"
+                } else {
+                    "91bd6b105606ea2dd4db7a79486ca20892b2b1770239fbe247dbf51be52d7984"
+                }
+                if (gateway.profileRef != expectedRef) add("网关 Profile 引用不受支持")
+                if (gateway.profileFingerprint != expectedFingerprint) add("网关 Profile 指纹不匹配")
+                if (gateway.activationDelayMs != 500) add("网关激活等待参数不匹配")
+                if (gatewayRecovery) {
+                    if (gateway.kind != "outage" || gateway.durationMs != 2_000) add("网关恢复实验必须绑定 2 秒网络层中断")
+                    if (gateway.uplink.lossPct != 100.0 || gateway.downlink.lossPct != 100.0) add("网关恢复实验必须双向 100% 丢包")
+                    if (
+                        gateway.uplink.rateMbps != 0.0 || gateway.downlink.rateMbps != 0.0 ||
+                        gateway.uplink.delayMs != 0 || gateway.downlink.delayMs != 0 ||
+                        gateway.uplink.jitterMs != 0 || gateway.downlink.jitterMs != 0
+                    ) add("网关恢复实验包含未声明的附加整形")
+                } else {
+                    if (gateway.kind != "continuous" || gateway.durationMs != 60_000) add("网关容量实验持续时间不匹配")
+                    if (gateway.uplink.rateMbps != 2.0 || gateway.downlink.rateMbps != 5.0) add("网关容量实验速率参数不匹配")
+                    if (gateway.uplink.delayMs != 50 || gateway.downlink.delayMs != 50) add("网关容量实验时延参数不匹配")
+                    if (gateway.uplink.jitterMs != 10 || gateway.downlink.jitterMs != 10) add("网关容量实验抖动参数不匹配")
+                    if (gateway.uplink.lossPct != 1.0 || gateway.downlink.lossPct != 1.0) add("网关容量实验丢包参数不匹配")
+                }
+                val exclusions = setOf("radio_rsrp", "radio_rsrq", "radio_sinr", "base_station_scheduler", "actual_route_change")
+                if (gateway.excludedFromImpairment.toSet() != exclusions) add("网关实验排除项与白名单不一致")
+            }
+            if ((gatewayLoss || gatewayRecovery) && profile.gatewayImpairment == null) add("网关 Profile 缺少网络层绑定合同")
+            if (profile.gatewayImpairment != null && profile.syntheticImpairment != null) add("同一 Profile 不得叠加两种弱网机制")
         }
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")
         if (profile.evaluation.missingRequiredMetric != "score_null") add("必需指标缺失策略必须为 score_null")

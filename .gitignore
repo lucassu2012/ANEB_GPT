@@ -12,6 +12,10 @@ app/.idea/
 server/aneb-server
 server/aneb-server.exe
 server/data/
+gateway/aneb-gateway-linux
+gateway/aneb-gateway.exe
+gateway/tls/
+gateway/*.log
 
 # P2-C05 本地联调自签证书私钥不入库（证书公钥部分入库：server/certs/ 的 cert 与
 # app debug res/raw 信任锚需成对；重新生成用 server/tools/gencert 并同步两处）

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 <wan-interface> <ifb-interface>" >&2
+  exit 2
+fi
+
+WAN="$1"
+IFB="$2"
+if [[ ! "$WAN" =~ ^[A-Za-z0-9_.-]{1,15}$ ]] || [[ ! "$IFB" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
+  echo "invalid interface name" >&2
+  exit 2
+fi
+if [ "$WAN" = "lo" ] || [ "$IFB" = "lo" ] || [ "$WAN" = "$IFB" ]; then
+  echo "unsafe interface selection" >&2
+  exit 2
+fi
+
+tc qdisc del dev "$WAN" root 2>/dev/null || true
+tc qdisc del dev "$WAN" ingress 2>/dev/null || true
+if ip link show dev "$IFB" >/dev/null 2>&1; then
+  tc qdisc del dev "$IFB" root 2>/dev/null || true
+  ip link set dev "$IFB" down 2>/dev/null || true
+  ip link del "$IFB" 2>/dev/null || true
+fi
+
+QDISC="$(tc qdisc show dev "$WAN")"
+if printf '%s' "$QDISC" | grep -Eq 'netem| ingress '; then
+  echo "cleanup failed: impairment remains on $WAN: $QDISC" >&2
+  exit 1
+fi
+if ip link show dev "$IFB" >/dev/null 2>&1; then
+  echo "cleanup failed: IFB $IFB still exists" >&2
+  exit 1
+fi
+echo "gateway impairment cleared: wan=$WAN ifb=$IFB"

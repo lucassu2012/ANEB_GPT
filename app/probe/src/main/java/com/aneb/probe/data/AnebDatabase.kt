@@ -44,7 +44,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v15：Profile v2——新增 network_comprehensive_result 独立证据表。
     // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
     // v17：合成恢复——冻结中断时长、恢复用时、失败探针数和恢复后成功率。
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -388,6 +388,27 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_17_18_SQL = listOf(
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayImpairment` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayExperimentId` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayProfileFingerprint` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayManagementBase` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayImpairmentLayer` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayAcknowledged` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayCleanupAcknowledged` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayBypassObserved` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayUplinkDelayMs` INTEGER",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayDownlinkDelayMs` INTEGER",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayUplinkLossPct` REAL",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `gatewayDownlinkLossPct` REAL",
+        )
+
+        internal val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_17_18_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -400,7 +421,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                        MIGRATION_16_17,
+                        MIGRATION_16_17, MIGRATION_17_18,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

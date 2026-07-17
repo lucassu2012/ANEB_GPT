@@ -233,4 +233,29 @@ class ProfileCapabilityTest {
         )
         assertFalse(ProfileCapability.assess(drifted).executable)
     }
+
+    @Test
+    fun `published gateway profiles freeze allowlist fingerprints and radio exclusions`() {
+        fun profile(name: String): ScenarioProfile {
+            val file = sequenceOf(
+                File("../../profiles/published/$name/profile.json"),
+                File("../profiles/published/$name/profile.json"),
+                File("profiles/published/$name/profile.json"),
+            ).first { it.isFile }
+            return ProfileParser.parseSingle(file.readText())
+        }
+
+        val loss = profile("network_comprehensive_gateway_loss")
+        val recovery = profile("network_comprehensive_gateway_recovery")
+        assertTrue(ProfileCapability.assess(loss).contractIssues.joinToString(), ProfileCapability.assess(loss).executable)
+        assertTrue(ProfileCapability.assess(recovery).contractIssues.joinToString(), ProfileCapability.assess(recovery).executable)
+        assertEquals("ip_loss_latency@1.0.0", loss.gatewayImpairment?.profileRef)
+        assertEquals("ip_outage_recovery@1.0.0", recovery.gatewayImpairment?.profileRef)
+        assertTrue(loss.gatewayImpairment?.excludedFromImpairment?.contains("radio_sinr") == true)
+
+        val drifted = loss.copy(
+            gatewayImpairment = loss.gatewayImpairment?.copy(profileFingerprint = "0".repeat(64)),
+        )
+        assertFalse(ProfileCapability.assess(drifted).executable)
+    }
 }

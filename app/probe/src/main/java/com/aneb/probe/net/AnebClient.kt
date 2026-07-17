@@ -105,10 +105,11 @@ class AnebClient(bound: BoundNetwork? = null) {
         val syntheticOutageActive: Boolean = false,
     )
 
-    suspend fun echo(url: String): EchoResult {
+    suspend fun echo(url: String, callTimeoutMs: Long? = null): EchoResult {
         val body = "{\"probe\":\"aneb\"}"
             .toRequestBody("application/json".toMediaType())
         val call = client.newCall(Request.Builder().url(url).post(body).build())
+        callTimeoutMs?.let { call.timeout().timeout(it.coerceAtLeast(100L), TimeUnit.MILLISECONDS) }
         val t0Us = nowUs()
         return try {
             executeCancellable(call) { resp ->
