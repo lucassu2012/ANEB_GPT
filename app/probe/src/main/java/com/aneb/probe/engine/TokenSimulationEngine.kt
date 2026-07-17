@@ -78,6 +78,26 @@ data class TokenSimulationResult(
     val evidence: TokenRunEvidence,
 )
 
+internal data class TokenTtftBasis(
+    val serverProcessingMs: Double?,
+    val ttftMs: Double?,
+)
+
+/** Uses only frozen monotonic timestamps; negative clock-mapped intervals remain unavailable. */
+internal fun deriveTokenTtftBasis(
+    firstArrivalNanos: Long?,
+    mappedUploadReceiveEndNanos: Long?,
+    firstCorrectedServerUs: Long?,
+    serverUploadReceiveEndUs: Long?,
+): TokenTtftBasis = TokenTtftBasis(
+    serverProcessingMs = if (firstCorrectedServerUs == null || serverUploadReceiveEndUs == null) null else {
+        ((firstCorrectedServerUs - serverUploadReceiveEndUs) / 1_000.0).takeIf { it >= 0.0 }
+    },
+    ttftMs = if (firstArrivalNanos == null || mappedUploadReceiveEndNanos == null) null else {
+        ((firstArrivalNanos - mappedUploadReceiveEndNanos) / 1_000_000.0).takeIf { it >= 0.0 }
+    },
+)
+
 private class TokenResultPersistenceException(cause: Throwable) :
     IllegalStateException("token_result_persistence_failed", cause)
 
@@ -453,6 +473,12 @@ class TokenSimulationEngine(private val context: Context) {
         val clickToNode = mappedRecvEndNanos?.let { (it - result.requestStartNanos) / 1_000_000.0 }?.takeIf { it >= 0.0 }
         val first = unique[0]
         val firstCorrectedServerUs = correctedServerUs[0]
+        val ttftBasis = deriveTokenTtftBasis(
+            firstArrivalNanos = first?.arrivalNanos,
+            mappedUploadReceiveEndNanos = mappedRecvEndNanos,
+            firstCorrectedServerUs = firstCorrectedServerUs,
+            serverUploadReceiveEndUs = result.prelude?.uploadRecvEndUs,
+        )
         val ttftExcess = (if (offsetUs == null || first == null || firstCorrectedServerUs == null) null else {
             ((first.arrivalNanos / 1_000.0) - (firstCorrectedServerUs - offsetUs)) / 1_000.0
         })?.takeIf { it >= 0.0 }
@@ -484,6 +510,9 @@ class TokenSimulationEngine(private val context: Context) {
             requestCount = requestCount,
             failedRequestCount = failedCount,
             artifactDownloadDurationMs = downloadDurationMs,
+            taskId = task.taskId,
+            serverProcessingMs = ttftBasis.serverProcessingMs,
+            ttftMs = ttftBasis.ttftMs,
         )
     }
 

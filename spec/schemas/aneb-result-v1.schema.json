@@ -2024,6 +2024,9 @@
         "network_failure",
         "error",
         "click_to_node_receive_ms",
+        "task_id",
+        "server_processing_ms",
+        "ttft_ms",
         "ttft_excess_ms",
         "upload_goodput_mbps",
         "download_goodput_mbps",
@@ -2059,6 +2062,15 @@
           "$ref": "#/$defs/nullable_string"
         },
         "click_to_node_receive_ms": {
+          "$ref": "#/$defs/nullable_non_negative_number"
+        },
+        "task_id": {
+          "$ref": "#/$defs/nullable_string"
+        },
+        "server_processing_ms": {
+          "$ref": "#/$defs/nullable_non_negative_number"
+        },
+        "ttft_ms": {
           "$ref": "#/$defs/nullable_non_negative_number"
         },
         "ttft_excess_ms": {

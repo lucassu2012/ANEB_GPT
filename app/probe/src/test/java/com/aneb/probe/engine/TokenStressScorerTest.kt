@@ -15,6 +15,7 @@ class TokenStressScorerTest {
         assertEquals(TokenConfidence.LOW, result.confidence)
         assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
         assertTrue(result.conclusions.first().contains("单次方向性证据"))
+        assertEquals(380.0, result.metrics.getValue("TOK-B04").value!!, 1e-9)
     }
 
     @Test
@@ -71,6 +72,9 @@ class TokenStressScorerTest {
                 requestCount = 2,
                 failedRequestCount = 0,
                 artifactDownloadDurationMs = 28_000.0,
+                taskId = "video-100mib",
+                serverProcessingMs = 300.0,
+                ttftMs = 380.0,
             ),
         ),
         rttSamplesMs = List(20) { 50.0 },

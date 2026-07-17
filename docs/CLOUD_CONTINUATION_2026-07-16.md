@@ -12,7 +12,7 @@
 - Token、AI 实时交互、网络综合性能三类测试独立评分，禁止混入原有 AQS。
 - 缺失测量值必须为 `null`/“—”，不得填 0；95% 达标结论必须带有效样本数和置信度。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-57；完整指标、目标、评分与结论合同见
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-58；完整指标、目标、评分与结论合同见
 `docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
 
 ## 2. 已完成
@@ -25,8 +25,9 @@
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
 - E-01 已升级到 `aneb-server/0.7.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复路径。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
-- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、行为模型 21 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 522 项 JVM 测试、0 failures/0 skipped、Lint 0 errors（11 warnings）、Go/行为模型测试和 0.5.5 APK 构建通过；最终 Debug APK SHA-256 为 `DDE1489FB219C4B1A5F7440A6E365C57003E09F3F023B38BBC0B16AF3E7CE770`。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、结果 Schema/catalog、TTFT 重复性分析器、行为模型 21 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 525 项 JVM 测试、0 failures/0 skipped、Lint 0 errors（11 warnings）、5 项重复性测试、Go/行为模型测试和 0.5.6 APK 构建通过；最终 Debug APK SHA-256 为 `B2C56295DA3565B06D71C19523C5685DBD1514C2B67E66C88C86D005565F6E57`。
 - App 0.5.5 / Room v19 已使 Token、AI 实时和网络综合新 run 在同一事务冻结类型化行、`aneb-result-v1`、1Hz 无线样本和环境事件；三类结果页可保存或分享经身份/摘要校验的原样 JSONL，Profile 未测指标显式 `missing`，无线时间序列由 R01 证据引用。P40 最终 runs `019f71a6-bbf0-7c71-b8b8-b8338297c6e0` / `019f71a9-191f-7fe3-9995-d4765ed6652f` / `019f71aa-f127-7db3-a4d0-651e57e6a955` 的 Schema 均为零错误、无线样本数一一相符，独立 Python 摘要全部匹配；0.5.4 的 JVM/Python 指数词法缺陷已否决并修复。详见 `docs/P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
+- App 0.5.6 已冻结 Token 原始任务的稳定 ID、节点处理时延和端到端 TTFT，并加入严格同条件、任务对齐的重复性分析器。P40 5-run cohort 的 TTFT CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限；5 条信封均为 completed/valid，Schema、独立摘要、类型化核心字段和 Room/信封无线样本 119/119 一致。Quick 单 run 仍保持 LOW/INCONCLUSIVE。详见 `docs/P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
 - App 0.5.1 已删除正式 API Probe UI/Key 存储，改为 Debug-only、`android.permission.DUMP` 保护且无 intent-filter 的一次性 ADB 诊断 Activity；Release 合并清单自动验收不含该组件。普通 autorun 仅 Debug 首次创建消费并立即清除，避免 Activity 重建重复测试。
 - AI 实时结果采用 `ensureActive → NonCancellable(Room insert + publish)` 最终提交边界；DB 失败不发布，取消与提交碰撞时 durable result 优先。每会话 loaded RTT 监控在 `finally` 中 `cancelAndJoin`；固定 Wi-Fi/蜂窝绑定失效后在下一会话按同承载重获，失败不降级。手动权限流程由 `SavedStateHandle` 恢复，不持有 Activity/Composable/lambda。
 - P40 Pro 0.5.1 真机 run `019f709d-33bf-7dbf-a732-35e28a71b447` 完成 AI 实时 Quick：1/1 会话、3 轮、Room 写入 `ok=true`、98.6/A、`LOW/INCONCLUSIVE`、终态 completed；Debug API 缺参安全拒绝通过且未发出真实 API 请求。测试后已回桌面并强停 Codex，两套 ANEB 均无 PID/服务。首次截图因 ADB 短暂离线为全黑无效帧，不计入 UI 验收；详见 `docs/P40_APP_0.5.1_VALIDATION_2026-07-17.md`。
@@ -45,7 +46,7 @@
 
 1. 继续补 AI 实时真实断网、切后台恢复和打断边缘条件真机回归；取消/落库原子性、异常建链回收和固定承载重获已有自动化回归，真实网络事件不得混用受控服务端恢复分数。
 2. 完成 Token Standard 长时回归，以及 Stress 的取消、断网、切后台恢复和重复测试分布；单次 Stress 继续保持低置信。
-3. `aneb-result-v1`、spec 逻辑目录、三引擎结果信封、JSONL 与正式 RadioCollector 接线已完成；下一步完成 TTFT 同条件重复性复测，并保持 Wi-Fi 活动承载与蜂窝环境协变量分轨解释。
+3. `aneb-result-v1`、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector 和 TTFT 同条件重复性复测已完成；下一步为 P3 建立“授权观测 JSONL → 校准 → 留出验证 → validated 发布”的可执行模板，未获真实数据时继续保持 `hypothesis`。
 4. 为独立 P3 行为模型建立“授权观测 JSONL → 校准 → 留出验证 → validated 发布”流水线模板；在没有真实数据时保持 `hypothesis`。
 5. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
 6. 完成 Token/网络综合 Standard 长时真机稳定性与 Android 16 回归，再进入 release 签名候选。

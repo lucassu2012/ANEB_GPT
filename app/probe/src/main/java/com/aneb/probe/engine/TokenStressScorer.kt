@@ -25,6 +25,13 @@ object TokenStressScorer {
         "TOK-N09" to Spec(20),
     )
 
+    private val optionalSpecs = linkedMapOf(
+        "TOK-B03" to Spec(1, 0.0),
+        "TOK-B04" to Spec(10),
+    )
+
+    private val allSpecs = specs + optionalSpecs
+
     fun score(evidence: TokenRunEvidence): TokenScoreResult {
         if (evidence.invalidReason != null) {
             return TokenScoreResult(
@@ -47,7 +54,7 @@ object TokenStressScorer {
             ?.let { list -> list.count { it }.toDouble() / list.size }
 
         fun metric(id: String, value: Double?, compliance: Double?, count: Int): TokenMetricEvidence {
-            val spec = checkNotNull(specs[id])
+            val spec = checkNotNull(allSpecs[id])
             return TokenMetricEvidence(
                 metricId = id,
                 value = value,
@@ -64,6 +71,11 @@ object TokenStressScorer {
         val uploadDeadline = tasks.mapNotNull { task ->
             task.clickToNodeReceiveMs?.let { it <= TokenSimulationScorer.uploadDeadlineMs("video", task.uploadBytes) }
         }
+        val endToEndTtftPass = tasks.mapNotNull { task ->
+            val ttft = task.ttftMs ?: return@mapNotNull null
+            val processing = task.serverProcessingMs ?: return@mapNotNull null
+            ttft <= processing + 200.0
+        }
         val streamCompleteness = tasks.sumOf { it.expectedTokens }.takeIf { it > 0 }?.let { expected ->
             tasks.sumOf { it.uniqueTokens }.toDouble() / expected
         }
@@ -77,6 +89,8 @@ object TokenStressScorer {
         val metrics = linkedMapOf(
             "TOK-B01" to metric("TOK-B01", taskSuccess, taskSuccess, tasks.size),
             "TOK-B02" to metric("TOK-B02", percentile(tasks.mapNotNull { it.clickToNodeReceiveMs }, 0.95), ratio(uploadDeadline), uploadDeadline.size),
+            "TOK-B03" to metric("TOK-B03", percentile(tasks.mapNotNull { it.serverProcessingMs }, 0.95), null, tasks.count { it.serverProcessingMs != null }),
+            "TOK-B04" to metric("TOK-B04", percentile(tasks.mapNotNull { it.ttftMs }, 0.95), ratio(endToEndTtftPass), endToEndTtftPass.size),
             "TOK-B11" to metric("TOK-B11", streamCompleteness, streamCompleteness, tasks.sumOf { it.expectedTokens }),
             "TOK-N05" to metric("TOK-N05", requestSuccess?.let { 1.0 - it }, requestSuccess, requests),
             "TOK-N06" to metric("TOK-N06", percentile(uploadRates, 0.05), ratio(uploadRates.map { it >= 20.0 }), uploadRates.size),
@@ -93,11 +107,12 @@ object TokenStressScorer {
             val metric = metrics[id]
             metric?.complianceRatio == null || metric.sampleCount < specs.getValue(id).minimum
         }
-        val coverageRatio = metrics.values.minOf { metric ->
+        val requiredMetrics = specs.keys.mapNotNull(metrics::get)
+        val coverageRatio = requiredMetrics.minOf { metric ->
             if (metric.minimumSampleCount <= 0) 1.0
             else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
         }
-        val minimumSampleSatisfied = metrics.values.all { it.sampleCount >= it.minimumSampleCount }
+        val minimumSampleSatisfied = requiredMetrics.all { it.sampleCount >= it.minimumSampleCount }
         if (missing.isNotEmpty()) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,

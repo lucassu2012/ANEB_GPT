@@ -22,6 +22,12 @@ data class TokenTaskEvidence(
     val requestCount: Int,
     val failedRequestCount: Int,
     val artifactDownloadDurationMs: Double? = null,
+    /** Stable runtime-plan identity used to align the same task across repeated runs. */
+    val taskId: String? = null,
+    /** Server-monotonic upload-received -> first scheduled token interval. */
+    val serverProcessingMs: Double? = null,
+    /** Upload received by ANEB node -> first token observed by the App. */
+    val ttftMs: Double? = null,
 )
 
 data class TokenRunEvidence(
@@ -80,6 +86,13 @@ object TokenSimulationScorer {
         "TOK-N06" to MetricSpec(5, 0.95),
     )
 
+    private val optionalSpecs = linkedMapOf(
+        "TOK-B03" to MetricSpec(1, 0.0),
+        "TOK-B04" to MetricSpec(10, 0.95),
+    )
+
+    private val allSpecs = requiredSpecs + optionalSpecs
+
     fun score(evidence: TokenRunEvidence): TokenScoreResult {
         if (evidence.invalidReason != null) {
             return TokenScoreResult(
@@ -102,7 +115,7 @@ object TokenSimulationScorer {
         val failedRequests = evidence.rttSamplesMs.count { it == null } + evidence.loadedRttSamplesMs.count { it == null } + tasks.sumOf { it.failedRequestCount }
 
         fun metric(id: String, value: Double?, compliance: Double?, count: Int): TokenMetricEvidence {
-            val spec = checkNotNull(requiredSpecs[id])
+            val spec = checkNotNull(allSpecs[id])
             return TokenMetricEvidence(
                 id, value, compliance?.coerceIn(0.0, 1.0), count, spec.minimum,
                 spec.targetCompliance, compliance?.let(::complianceScore),
@@ -115,6 +128,11 @@ object TokenSimulationScorer {
             actual <= uploadDeadlineMs(task.workloadKind, task.uploadBytes)
         }
         val ttftPass = tasks.mapNotNull { it.ttftExcessMs?.let { value -> value <= 200.0 } }
+        val endToEndTtftPass = tasks.mapNotNull { task ->
+            val ttft = task.ttftMs ?: return@mapNotNull null
+            val processing = task.serverProcessingMs ?: return@mapNotNull null
+            ttft <= processing + 200.0
+        }
         val onTime = lateness.takeIf { it.isNotEmpty() }?.let { list -> list.count { it <= 200.0 }.toDouble() / list.size }
         val stallRate = residuals.takeIf { it.isNotEmpty() }?.let { list -> list.count { it > 200.0 }.toDouble() / list.size }
         val severeRate = residuals.takeIf { it.isNotEmpty() }?.let { list -> list.count { it > 1_000.0 }.toDouble() / list.size }
@@ -132,6 +150,8 @@ object TokenSimulationScorer {
         val metrics = linkedMapOf(
             "TOK-B01" to metric("TOK-B01", taskSuccess, taskSuccess, tasks.size),
             "TOK-B02" to metric("TOK-B02", percentile(tasks.mapNotNull { it.clickToNodeReceiveMs }, 0.95), ratio(uploadDeadlinePass), uploadDeadlinePass.size),
+            "TOK-B03" to metric("TOK-B03", percentile(tasks.mapNotNull { it.serverProcessingMs }, 0.95), null, tasks.count { it.serverProcessingMs != null }),
+            "TOK-B04" to metric("TOK-B04", percentile(tasks.mapNotNull { it.ttftMs }, 0.95), ratio(endToEndTtftPass), endToEndTtftPass.size),
             "TOK-B05" to metric("TOK-B05", percentile(tasks.mapNotNull { it.ttftExcessMs }, 0.95), ratio(ttftPass), ttftPass.size),
             "TOK-B07" to metric("TOK-B07", onTime, onTime, lateness.size),
             "TOK-B09" to metric("TOK-B09", stallRate, stallRate?.let { 1.0 - it }, residuals.size),
@@ -145,9 +165,10 @@ object TokenSimulationScorer {
         )
 
         val missing = requiredSpecs.keys.filter { metrics[it]?.complianceRatio == null }
-        val confidence = confidence(evidence.variant, metrics.values)
-        val coverageRatio = coverageRatio(metrics.values)
-        val minimumSampleSatisfied = metrics.values.all { it.sampleCount >= it.minimumSampleCount }
+        val requiredMetrics = requiredSpecs.keys.mapNotNull(metrics::get)
+        val confidence = confidence(evidence.variant, requiredMetrics)
+        val coverageRatio = coverageRatio(requiredMetrics)
+        val minimumSampleSatisfied = requiredMetrics.all { it.sampleCount >= it.minimumSampleCount }
         if (missing.isNotEmpty()) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
@@ -179,7 +200,7 @@ object TokenSimulationScorer {
             else -> null
         }
         if (capReason != null) total = minOf(total, 54.0)
-        val allTargetsMet = metrics.values.all { metric ->
+        val allTargetsMet = requiredMetrics.all { metric ->
             val compliance = metric.complianceRatio
             compliance != null && compliance + 1e-12 >= metric.targetComplianceRatio
         }

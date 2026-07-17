@@ -147,6 +147,39 @@ def validate_repository(root: Path) -> list[str]:
 
     token = fixtures.get("token_simulation")
     if token is not None:
+        task_evidence = copy.deepcopy(token)
+        task_evidence["category_payload"]["raw_evidence"]["tasks"] = [
+            {
+                "workload_kind": "text",
+                "upload_bytes": 8192,
+                "response_artifact_bytes": 0,
+                "success": True,
+                "network_failure": False,
+                "error": None,
+                "click_to_node_receive_ms": 12.0,
+                "task_id": "quick-text-0",
+                "server_processing_ms": 300.0,
+                "ttft_ms": 340.0,
+                "ttft_excess_ms": 40.0,
+                "upload_goodput_mbps": 5.4,
+                "download_goodput_mbps": None,
+                "artifact_download_duration_ms": None,
+                "expected_tokens": 10,
+                "unique_tokens": 10,
+                "duplicate_tokens": 0,
+                "token_lateness_ms": [40.0],
+                "itl_residual_ms": [2.0],
+                "request_count": 1,
+                "failed_request_count": 0,
+            }
+        ]
+        if _schema_errors(validator, task_evidence):
+            errors.append("token task invariant: aligned TTFT evidence unexpectedly rejected")
+        missing_ttft = copy.deepcopy(task_evidence)
+        del missing_ttft["category_payload"]["raw_evidence"]["tasks"][0]["ttft_ms"]
+        if not _schema_errors(validator, missing_ttft):
+            errors.append("token task invariant: task without ttft_ms unexpectedly validates")
+
         collected_empty = copy.deepcopy(token)
         collected_empty["context"]["radio"].update(
             collection_status="collected",

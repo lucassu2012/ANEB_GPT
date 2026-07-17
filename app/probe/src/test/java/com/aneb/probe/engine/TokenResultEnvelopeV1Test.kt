@@ -11,6 +11,43 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TokenResultEnvelopeV1Test {
+    @Test fun rawTaskEvidenceCarriesAlignedEndToEndTtftBasis() {
+        val evidence = TokenRunEvidence(
+            variant = "quick",
+            tasks = listOf(
+                TokenTaskEvidence(
+                    workloadKind = "text",
+                    uploadBytes = 8192,
+                    responseArtifactBytes = 0,
+                    success = true,
+                    networkFailure = false,
+                    error = null,
+                    clickToNodeReceiveMs = 10.0,
+                    ttftExcessMs = 40.0,
+                    uploadGoodputMbps = 6.0,
+                    downloadGoodputMbps = null,
+                    expectedTokens = 10,
+                    uniqueTokens = 10,
+                    duplicateTokens = 0,
+                    tokenLatenessMs = listOf(40.0),
+                    itlResidualMs = listOf(2.0),
+                    requestCount = 1,
+                    failedRequestCount = 0,
+                    taskId = "quick-text-0",
+                    serverProcessingMs = 300.0,
+                    ttftMs = 340.0,
+                ),
+            ),
+            rttSamplesMs = listOf(30.0),
+        )
+
+        val task = TokenResultEnvelopeV1.rawEvidenceJson(evidence)
+            .getValue("tasks").jsonArray.single().jsonObject
+        assertEquals("quick-text-0", task.getValue("task_id").jsonPrimitive.content)
+        assertEquals(300.0, task.getValue("server_processing_ms").jsonPrimitive.content.toDouble(), 0.0)
+        assertEquals(340.0, task.getValue("ttft_ms").jsonPrimitive.content.toDouble(), 0.0)
+    }
+
     @Test fun collectedRadioIsEmbeddedReferencedAndNotMarkedMissing() {
         val evidence = TokenRunEvidence("quick", emptyList(), listOf(42.5))
         val result = tokenResult(

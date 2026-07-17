@@ -30,6 +30,9 @@ class TokenSimulationScorerTest {
         assertEquals(100.0, result.totalScore!!, 1e-9)
         assertEquals(TokenConfidence.HIGH, result.confidence)
         assertEquals(TokenVerdict.PASS, result.verdict)
+        assertEquals(350.0, result.metrics.getValue("TOK-B03").value!!, 1e-9)
+        assertEquals(390.0, result.metrics.getValue("TOK-B04").value!!, 1e-9)
+        assertEquals(1.0, result.metrics.getValue("TOK-B04").complianceRatio!!, 1e-9)
     }
 
     @Test
@@ -78,6 +81,9 @@ class TokenSimulationScorerTest {
                 itlResidualMs = List(100) { 5.0 },
                 requestCount = 1,
                 failedRequestCount = 0,
+                taskId = "task-$index",
+                serverProcessingMs = 350.0,
+                ttftMs = 390.0,
             )
         }
         return TokenRunEvidence(

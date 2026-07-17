@@ -75,6 +75,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "Result-schema verification failed with exit code $LASTEXITCODE."
 }
 
+Push-Location $repo
+try {
+    & $pythonCommand.Source -m unittest discover -s scripts/tests
+    if ($LASTEXITCODE -ne 0) {
+        throw "Measurement-analysis tests failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Pop-Location
+}
+
 Push-Location (Join-Path $repo 'tools\aneb-ai-behavior-model')
 try {
     $previousPythonPath = $env:PYTHONPATH
