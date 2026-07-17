@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.7 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；533 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、TTFT 重复性、P3 校准发布流水线和 M4 开测前自救/批量导出切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.7 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；534 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、TTFT 重复性、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -77,6 +77,7 @@
 - ［KNOWN｜HIGH］App 0.5.6 的 P40 Token Quick 5-run 同条件 cohort 已完成：稳定任务 ID 对齐后，TTFT CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限；5 条信封均 Schema/摘要/类型化核心字段匹配，每条 Room/信封无线样本均为 119。该结论只适用于 P40 + Wi-Fi + E-01 + Quick，单 run 继续为 LOW/INCONCLUSIVE。见 `P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.7 已在 P40 验证无效节点启动前拦截、所有正式模式的无线权限用途说明、完整 Network Quick、切后台通知/回到结果和主动取消。正常 runs `019f7209-e89c-7adc-8238-83f9847acdc5` / `019f7211-0c5d-723d-a84f-49115ddd48da` 均完成落库并各采 18 个无线样本；取消 run `019f7212-0268-7280-9fa6-385b32a8fed1` 保留 cancelled/invalid 信封、分数与等级为 null。见 `P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］同一 0.5.7 P40 基线的历史批量导出从 22 条信封中独立验真 18 条，并隔离 4 条 0.5.3/0.5.4 digest mismatch；输出 18 行/18 唯一 run、时间有序、canonical digest 18/18 匹配，拒绝 id 混入 0 次。旧记录没有被重算或改写。
+- ［KNOWN｜HIGH］AI 实时后台正常 Quick run `019f7238-d040-71a0-b874-6c211f051e0d` 完成 3/3 轮；后台真实 Wi-Fi 中断 run `019f7240-bf42-7a48-b23b-3235286da018` 观察到 1/1 会话中断、2/3 轮失败和 51.8% 帧返回率，分数/等级为 null。结果首屏先报告业务任务受损，再给出 ≤1% 会话中断率与 ≥99% 帧返回率目标，同时禁止缺少 PATH_CHANGE 证据时单因归因。两条信封摘要均匹配。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧

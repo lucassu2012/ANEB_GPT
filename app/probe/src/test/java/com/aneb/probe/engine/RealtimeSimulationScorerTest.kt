@@ -77,6 +77,46 @@ class RealtimeSimulationScorerTest {
     }
 
     @Test
+    fun `unexpected disconnect reports user task failure before missing score inputs`() {
+        val base = goodEvidence("quick", 1, 3)
+        val disconnected = base.copy(
+            sessions = base.sessions.map { session ->
+                session.copy(
+                    unexpectedDisconnect = true,
+                    error = "network_lost",
+                    turns = session.turns.map { turn ->
+                        turn.copy(
+                            responseExcessMs = null,
+                            responseMs = null,
+                            uniqueFrames = 0,
+                            onTimeFrames = 0,
+                            stallFrames = turn.expectedFrames,
+                            concealFrames = turn.expectedFrames,
+                            arrivalVariationMs = emptyList(),
+                            bargeResponseMs = null,
+                            success = false,
+                            uplinkGoodputKbps = null,
+                            downlinkGoodputKbps = null,
+                        )
+                    },
+                )
+            },
+        )
+
+        val result = RealtimeSimulationScorer.score(disconnected)
+
+        assertNull(result.totalScore)
+        assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
+        assertTrue(result.conclusions.first().contains("业务任务失败"))
+        assertTrue(result.conclusions.first().contains("1/1 个会话意外中断"))
+        assertTrue(result.conclusions.first().contains("3/3 轮未完成"))
+        assertTrue(result.conclusions.any { it.contains("会话中断率应 ≤1%") })
+        assertTrue(result.conclusions.any { it.contains("本次分别为 100.0% 和 0.0%") })
+        assertTrue(result.conclusions.any { it.contains("不能据此单因归因") })
+        assertTrue(result.conclusions.any { it.contains("必需指标缺失") })
+    }
+
+    @Test
     fun `stall guardrail caps score`() {
         val evidence = goodEvidence("standard", 10, 12)
         val degraded = evidence.copy(
@@ -110,6 +150,8 @@ class RealtimeSimulationScorerTest {
 
         assertEquals(1_500.0, result.metrics.getValue("LIVE-B11").value!!, 1e-9)
         assertEquals(1.0, result.metrics.getValue("LIVE-N08").value!!, 1e-9)
+        assertTrue(result.conclusions.any { it.contains("连接稳定性失败") })
+        assertTrue(result.conclusions.any { it.contains("会话中断率应 ≤1%") })
         assertTrue(result.conclusions.any { it.contains("连接恢复 P95") })
     }
 

@@ -297,7 +297,14 @@ object RealtimeSimulationScorer {
         if (missing.isNotEmpty()) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
-                listOf("必需指标缺失：${missing.joinToString()}；本次总分不可计算。"),
+                buildList {
+                    taskFailureSummary(evidence)?.let(::add)
+                    connectionStabilityRecommendation(evidence, metrics)?.let(::add)
+                    add("必需指标缺失：${missing.joinToString()}；本次总分不可计算。")
+                    if (evidence.variant == "quick") {
+                        add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
+                    }
+                },
                 coverageRatio = coverageRatio,
                 minimumSampleSatisfied = minimumSampleSatisfied,
                 notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
@@ -356,7 +363,7 @@ object RealtimeSimulationScorer {
             groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = conclusions(evidence.variant, metrics, verdict, confidence, capReason),
+            conclusions = conclusions(evidence, metrics, verdict, confidence, capReason),
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -487,13 +494,15 @@ object RealtimeSimulationScorer {
         }
 
     private fun conclusions(
-        variant: String,
+        evidence: RealtimeRunEvidence,
         metrics: Map<String, RealtimeMetricEvidence>,
         verdict: TokenVerdict,
         confidence: TokenConfidence,
         capReason: String?,
     ): List<String> = buildList {
         add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
+        taskFailureSummary(evidence)?.let(::add)
+        connectionStabilityRecommendation(evidence, metrics)?.let(::add)
         fun percent(id: String) = metrics[id]?.complianceRatio
             ?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) }
             ?: "不可用"
@@ -512,7 +521,7 @@ object RealtimeSimulationScorer {
             add("未达质量门限：${failedQualityGates.joinToString("；")}。")
             add("ANEB 采用必需门限优先：任一必需指标未达，即使综合分或等级较高，结论仍为 FAIL。")
         }
-        if (variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
+        if (evidence.variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
         add("相对业务计划的响应超额时延 P95 ${value("LIVE-B04", metrics, "ms")}（建议 ≤200ms，达标 ${percent("LIVE-B04")}）。")
         add("2 秒音频准时帧率 ${percent("LIVE-B05")}（目标 ≥99%，样本 ${metrics["LIVE-B05"]?.sampleCount ?: 0} 帧）。")
         add(
@@ -549,6 +558,44 @@ object RealtimeSimulationScorer {
         add("该业务需要持续双向小包、低尾时延、低到达变化和稳定长连接；带宽不是首要瓶颈。")
         if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
     }
+
+    /** Separates a completed measurement workflow from failure of the simulated user task. */
+    private fun taskFailureSummary(evidence: RealtimeRunEvidence): String? {
+        val sessions = evidence.sessions
+        val turns = sessions.flatMap { it.turns }
+        val disconnects = sessions.count { it.unexpectedDisconnect }
+        val failedTurns = turns.count { !it.success }
+        if (disconnects == 0 && failedTurns == 0) return null
+        val label = when {
+            turns.isNotEmpty() && failedTurns == turns.size -> "业务任务失败"
+            failedTurns > 0 -> "业务任务受损"
+            else -> "连接稳定性失败"
+        }
+        return buildString {
+            append("$label：")
+            if (disconnects > 0) append("$disconnects/${sessions.size} 个会话意外中断")
+            if (disconnects > 0 && failedTurns > 0) append("，")
+            if (failedTurns > 0) append("$failedTurns/${turns.size} 轮未完成")
+            append("。")
+        }
+    }
+
+    private fun connectionStabilityRecommendation(
+        evidence: RealtimeRunEvidence,
+        metrics: Map<String, RealtimeMetricEvidence>,
+    ): String? {
+        if (evidence.sessions.none { it.unexpectedDisconnect }) return null
+        val disconnectRate = metrics["LIVE-B10"]?.value
+        val returnedFrameRate = metrics["LIVE-N04"]?.value?.let { 1.0 - it }
+        return "长连接建议：会话中断率应 ≤1%，应用音频帧返回率应 ≥99%；" +
+            "本次分别为 ${formatPercent(disconnectRate)} 和 ${formatPercent(returnedFrameRate)}。" +
+            "连接异常可能来自活动网络切换、链路中断或节点关闭，需结合环境事件定位，不能据此单因归因。"
+    }
+
+    private fun formatPercent(value: Double?): String = value
+        ?.takeIf { it.isFinite() }
+        ?.let { String.format(Locale.ROOT, "%.1f%%", it.coerceIn(0.0, 1.0) * 100) }
+        ?: "不可用"
 
     private fun value(id: String, metrics: Map<String, RealtimeMetricEvidence>, unit: String): String =
         format(metrics[id]?.value, unit)

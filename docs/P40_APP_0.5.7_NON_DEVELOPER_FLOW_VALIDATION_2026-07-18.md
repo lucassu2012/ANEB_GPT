@@ -3,7 +3,7 @@
 > 日期：2026-07-18（Asia/Shanghai）
 > 设备：Huawei P40 Pro（Android 公开 API，1200×2640）
 > 包：`com.aneb.probe.codex`，`0.5.7-codex`，versionCode 39
-> APK SHA-256：`F4B4C8C6A97A5388DDD0F2CE3A2FB195AA629CCD0FDCCF31DC8E04F97F902A19`
+> APK SHA-256：`2BE93847A7C5074B958C887E3191060BCA70390CBB3806C78B87170258E4F366`
 
 ## 1. 反方观点与本轮边界
 
@@ -21,7 +21,7 @@
 
 ## 3. 自动化验证
 
-- ［COMPUTED｜HIGH］Android JVM：533 tests，0 failures，0 errors，0 skipped。
+- ［COMPUTED｜HIGH］Android JVM：534 tests，0 failures，0 errors，0 skipped。
 - ［COMPUTED｜HIGH］Android Lint：0 errors，11 warnings。
 - ［KNOWN｜HIGH］Debug APK 构建成功；版本、包名与 SHA-256 如本文开头。
 - ［KNOWN｜HIGH］新增反例覆盖：无 scheme、无 host、HTTP 正式包、账号密码、query、fragment、API path、非法端口及离线优先提示。
@@ -81,15 +81,27 @@ Network Quick run `019f7212-0268-7280-9fa6-385b32a8fed1` 在下载阶段点击�
 
 - ［KNOWN｜HIGH］首次全有或全无实现真实暴露了旧历史摘要异常，并安全拒绝生成文件；没有绕过校验或重算历史评分。
 - ［COMPUTED｜HIGH］4 条 0.5.3/0.5.4 旧记录为 `digest_mismatch`：`019f715d-eec5-7e29-92a4-7d78511cb37c`、`019f7192-aa56-7954-a4c7-db6428e5bae7`、`019f7194-46a2-7118-8228-6ccb13c4b052`、`019f7195-b2be-7a9d-af72-230c87a69578`。它们与 D-57 已否决的旧规范化摘要证据处于同一版本区间；本轮只报告事实，不改写旧摘要。
-- ［KNOWN｜HIGH］最终 APK 独立校验每条记录，生成 `aneb_results_18_of_22_20260718_063121.jsonl`；文件 979,886 bytes，SHA-256 `B4F7E00B64B57D3405CB5E6DA5E6CB576AC1F627BB29F0C9D022A8CFBA1618C9`。
+- ［KNOWN｜HIGH］首个修正版独立校验每条记录，生成 `aneb_results_18_of_22_20260718_063121.jsonl`；文件 979,886 bytes，SHA-256 `B4F7E00B64B57D3405CB5E6DA5E6CB576AC1F627BB29F0C9D022A8CFBA1618C9`。
 - ［COMPUTED｜HIGH］文件含 18 行、18 个唯一 run id，按 `started_at_epoch_ms` 非递减排列；覆盖 Token、AI 实时、网络综合，包含 `completed` 与 `cancelled` 状态。
 - ［COMPUTED｜HIGH］18 条 canonical JSON 摘要与 Room `canonicalSha256` 全部一致；4 个拒绝 run id 在文件中出现 0 次。
 - ［KNOWN｜HIGH］真机界面在同一导出卡片内显示“已导出 18/22 条；4 条完整性异常已跳过”，没有被底部导航遮挡，也没有静默丢弃异常记录。
+- ［COMPUTED｜HIGH］最终 APK 加入后续 3 条 AI 实时 run 后再次导出 25 条历史：生成 `aneb_results_21_of_25_20260718_065342.jsonl`，1,081,397 bytes，SHA-256 `25B4BE43C5AABF688C71966E2AD104F2ABEEA9255F87CCFEE24FF51469B8F649`；21 行/21 唯一 run、时间有序、21/21 canonical digest 匹配，4 个旧拒绝 id 混入 0 次，并包含本轮真实断网结果。
+
+### 4.7 AI 实时后台与真实网络中断
+
+先执行一条只切后台、不改变网络的 AI 实时 Quick，再执行一条“进入会话 → Home 后台 → Wi-Fi 关闭 6 秒 → 蜂窝接管 → 恢复 Wi-Fi”的真实中断切片：
+
+- 正常后台 run `019f7238-d040-71a0-b874-6c211f051e0d`：［KNOWN｜HIGH］3/3 轮成功、音频帧未返回率 0%、会话中断率 0%，100/A；Quick 仍为 LOW/INCONCLUSIVE，不因高分外推。统一信封 `completed + valid`、26 个无线样本、独立 canonical digest 匹配。
+- 断网 run `019f7240-bf42-7a48-b23b-3235286da018`：［KNOWN｜HIGH］Service 在后台完成收口并落库，没有卡死；Wi-Fi 最终恢复为已连接，Codex Service 归零。
+- ［COMPUTED｜HIGH］断网 run 观察到 1/1 个会话意外中断、2/3 轮未完成，应用音频帧未返回率 48.2%（返回率 51.8%）、会话中断率 100%；totalScore/grade 均为 null，verdict `INCONCLUSIVE`、confidence `LOW`，canonical digest 匹配，15 个无线样本保留。
+- ［KNOWN｜HIGH］结果页首屏现在先写“业务任务受损”，随后给出长连接目标“会话中断率 ≤1%、应用音频帧返回率 ≥99%”及本次差距；不再只显示“必需指标缺失”。
+- ［KNOWN｜HIGH］run 生命周期仍为 `completed + valid`，表示测量流程已完成且证据可用；业务任务失败、分数不可计算由评估层单独表达。两者不得混为 App 崩溃或伪造 `failed` 生命周期。
+- ［INFERRED｜MED］本次测试夹具明确执行了 Wi-Fi 关闭，但 App 内证据只能证明连接异常与任务失败共现；结论因此列出活动网络切换、链路中断或节点关闭，并明确“不能据此单因归因”。要在产品内直接归因到默认网络切换，仍需冻结系统默认网络 PATH_CHANGE 事件。
 
 ## 5. 资源释放
 
 - ［KNOWN｜HIGH］每段真机操作结束均返回华为桌面并强制停止 Codex 包。
-- ［KNOWN｜HIGH］最终 `com.aneb.probe` 与 `com.aneb.probe.codex` 均无 PID、无 Service；前台为 Huawei Launcher。
+- ［KNOWN｜HIGH］最终 Wi-Fi 已恢复开启且连接；`com.aneb.probe` 与 `com.aneb.probe.codex` 均无 PID、Codex 无 Service；前台为 Huawei Launcher。
 
 ## 6. 剩余 M4 门槛
 
