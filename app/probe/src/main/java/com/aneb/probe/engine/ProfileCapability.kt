@@ -87,7 +87,7 @@ object ProfileCapability {
         "post-recovery-request-success-ratio-v1",
         "post-recovery-echo-rtt-v1",
         "gateway-ip-outage-observed-v1",
-        "gateway-active-to-first-success-v1",
+        "gateway-active-ack-to-first-echo-complete-v1",
         "post-gateway-recovery-request-success-ratio-v1",
         "post-gateway-recovery-echo-rtt-v1",
     )
@@ -233,13 +233,13 @@ object ProfileCapability {
             val gatewayRecovery = profile.profileId == "network_comprehensive_gateway_recovery"
             val recoveryProfile = syntheticRecovery || gatewayRecovery
             val expectedScorePolicy = when {
-                gatewayRecovery -> "network-gateway-recovery-score-v1"
+                gatewayRecovery -> "network-gateway-recovery-score-v2"
                 gatewayLoss -> "network-gateway-score-v1"
                 syntheticRecovery -> "network-recovery-score-v1"
                 else -> "network-comprehensive-score-v1"
             }
             val expectedConclusionPolicy = when {
-                gatewayRecovery -> "network-gateway-recovery-conclusions-v1"
+                gatewayRecovery -> "network-gateway-recovery-conclusions-v2"
                 gatewayLoss -> "network-gateway-conclusions-v1"
                 syntheticRecovery -> "network-recovery-conclusions-v1"
                 else -> "network-comprehensive-conclusions-v1"

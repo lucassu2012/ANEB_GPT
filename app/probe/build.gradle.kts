@@ -30,8 +30,8 @@ android {
         applicationId = "com.aneb.probe"
         minSdk = 29 // CellInfoNr / 5G API 需要（设计文档 §5）
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.4.9"
+        versionCode = 32
+        versionName = "0.5.0"
     }
 
     signingConfigs {

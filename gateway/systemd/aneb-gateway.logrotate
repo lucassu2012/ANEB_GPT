@@ -1,0 +1,11 @@
+/var/lib/aneb-gateway/audit.jsonl {
+    weekly
+    size 8M
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0600 aneb-gateway aneb-gateway
+    su aneb-gateway aneb-gateway
+}

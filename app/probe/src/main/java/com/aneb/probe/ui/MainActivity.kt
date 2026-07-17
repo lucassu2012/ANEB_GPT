@@ -330,6 +330,8 @@ class MainActivity : ComponentActivity() {
                                 AnebTestMode.TOKEN_EXPERIENCE -> Screen.Testing
                             }
                         }
+                        val oneTimeGatewayToken = intentGatewayToken
+                        intentGatewayToken = null
                         ProbeRunService.start(
                             context = applicationContext,
                             config = ProbeRunService.Config(
@@ -340,7 +342,7 @@ class MainActivity : ComponentActivity() {
                                 inject = intentInject,
                                 driveTest = driveTest,
                                 gatewayBase = intentGatewayBase,
-                                gatewayToken = intentGatewayToken,
+                                gatewayToken = oneTimeGatewayToken,
                             ),
                             autorun = fromAutorun,
                         )

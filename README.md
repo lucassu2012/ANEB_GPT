@@ -21,14 +21,14 @@
 
 **命名消歧**：本项目对外称 **ANEB Probe**；并行姊妹项目（Application Echo RTT 垂直切片）称 **ANEB Android Echo 切片**，两者同属 ANEB 研究计划、范围互补。
 
-## 当前状态（2026-07-17，0.4.9）
+## 当前状态（2026-07-17，0.5.0）
 
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
 - E-01 已部署 `aneb-server/0.7.0`：保留 Token/实时交互/H3/UDP 全部能力；容量/时延弱网与 2 秒请求中断恢复均逐 run 隔离，正常路由和其他 run 不受影响。DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 不伪造。权威能力与部署纪律见 `docs/TEST_SERVER_CAPABILITIES.md`。
-- 专用网络层网关软件、白名单 Profile、TLS 管理面、故障清理与 App 0.4.9 Debug 接入已完成；隔离命名空间验证证明双向时延、100% IP 中断、自动恢复与宿主零影响。真实 P40 网络层验收仍等待独占双网口 Linux/AP 硬件，见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
+- `aneb-gateway/0.2.0` 已补齐固定 Debug CA、每次启动证书链核验、严格双网口/全主路由预检、持久 qdisc 所有权、可重试清理锁闩，以及一键安装/失败回滚/安全卸载；App 0.5.0 Debug 以一次性句柄交接 Token，并对启动/清理的回包不确定状态做同 run 对账。早期隔离命名空间已验证双向时延、100% IP 中断、自动恢复和宿主零影响；最终固定 CA 正向生命周期仍需离线 CA 签发的现场叶证书，P40 网络层验收还需独占双网口 Linux/AP，均明确为 `BLOCKED_EXTERNAL`，见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
 - Token、AI 实时和网络综合均已在 P40 Pro 完成端到端验收；Token Stress 完成 100MiB 上下行，AI 实时 Standard/Recovery 已完成长测。网络合成恢复完成 4 次独立 run：恢复 2084.4–2227.3ms、恢复后请求成功率均为 100%，并捕获真实动态恢复计时与中断指针；Room 已到 v17。
-- 最终质量门：442 JVM tests、0 failures；Android Lint 0 errors；行为模型 14 tests PASS；Go 服务端/网关 tests PASS；0.4.9 Debug APK 已生成，SHA-256 为 `B0661B6F7FCC6E5C6F1F631C65D3CF5028EA311CC23661089707E325C94205D2`。因没有独占专用网关，本轮未占用或安装到 P40 Pro。
-- 当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-49。
+- 最终质量门：468 JVM tests、0 failures；Android Lint 0 errors（9 项依赖/SDK 版本提示）；行为模型 14 tests PASS；Go 服务端/网关 tests PASS；0.5.0 Debug APK 已生成，SHA-256 为 `5C9DDD98B46E80AF3BF99F79EBBE4235C730D2D10500F010022BC74C0A7C2B06`。因没有独占专用网关，本轮未占用或安装到 P40 Pro。
+- 当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-52。
 
 后续扩展项包括三类 Standard 长时回归、Stress 的取消/断网/切后台恢复、`agent_control` / `background_continuity` / `realtime_visual` Profile、海外节点和 CAMARA QoD。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。

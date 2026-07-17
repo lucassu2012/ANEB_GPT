@@ -7,21 +7,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
 type API struct {
-	Manager *Manager
-	Token   string
+	Manager             *Manager
+	Token               string
+	AllowedClientSubnet *net.IPNet
+}
+
+var bearerTokenPattern = regexp.MustCompile(`^[A-Fa-f0-9]{64}$`)
+
+func ValidBearerToken(value string) bool {
+	return bearerTokenPattern.MatchString(value)
 }
 
 func (a API) Handler() (http.Handler, error) {
 	if a.Manager == nil {
 		return nil, fmt.Errorf("manager is required")
 	}
-	if len(a.Token) < 32 {
-		return nil, fmt.Errorf("gateway token must contain at least 32 characters")
+	if !ValidBearerToken(a.Token) {
+		return nil, fmt.Errorf("gateway token must be exactly 32 random bytes encoded as 64 hex characters")
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", a.health)
@@ -32,6 +41,10 @@ func (a API) Handler() (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Aneb-Gateway", GatewayVersion)
 		w.Header().Set("Cache-Control", "no-store")
+		if a.AllowedClientSubnet != nil && !remoteAllowed(r.RemoteAddr, a.AllowedClientSubnet) {
+			writeError(w, http.StatusForbidden, "client_outside_exclusive_subnet")
+			return
+		}
 		mux.ServeHTTP(w, r)
 	}), nil
 }
@@ -54,10 +67,25 @@ func (a API) health(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ready", "version": GatewayVersion,
+	status := "ready"
+	statusCode := http.StatusOK
+	if active := a.Manager.Status(); active != nil && active.Phase == "cleanup_failed" {
+		status = "degraded_cleanup_failed"
+		statusCode = http.StatusServiceUnavailable
+	}
+	writeJSON(w, statusCode, map[string]any{
+		"status": status, "version": GatewayVersion,
 		"impairment_layer": "ip_forwarding", "radio_impairment": false,
 	})
+}
+
+func remoteAllowed(remote string, network *net.IPNet) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && network.Contains(ip)
 }
 
 func (a API) profiles(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +132,12 @@ func (a API) experiments(w http.ResponseWriter, r *http.Request) {
 	experiment, err := a.Manager.Start(request.RunID, request.ProfileRef)
 	if err != nil {
 		switch {
+		case errors.Is(err, ErrCleanupLatched):
+			writeError(w, http.StatusLocked, "cleanup_failed_latched")
 		case errors.Is(err, ErrExperimentActive):
 			writeError(w, http.StatusConflict, "experiment_active")
+		case errors.Is(err, ErrRunConflict):
+			writeError(w, http.StatusConflict, "run_id_profile_conflict")
 		case errors.Is(err, ErrNotFound):
 			writeError(w, http.StatusNotFound, "profile_not_found")
 		default:

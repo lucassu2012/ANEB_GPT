@@ -29,6 +29,7 @@ object NetworkRecoveryScorer {
             !evidence.triggerAcknowledged -> "outage_trigger_not_acknowledged"
             evidence.declaredOutageMs <= 0 -> "outage_duration_not_declared"
             evidence.bypassObserved -> "gateway_bypass_observed"
+            evidence.impairmentLayer == "ip_forwarding" && evidence.outageFailureCount <= 0 -> "gateway_outage_not_observed"
             else -> null
         }
         if (invalid != null) {

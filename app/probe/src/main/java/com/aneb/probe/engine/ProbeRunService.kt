@@ -131,6 +131,9 @@ class ProbeRunService : Service() {
     }
 
     private fun startRun(intent: Intent) {
+        val gatewayCredentialHandle = intent.getStringExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
+        val gatewayToken = GatewayCredentialVault.take(gatewayCredentialHandle)
+        intent.removeExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
         if (runJob?.isActive == true) return
         val autorun = intent.getBooleanExtra(EXTRA_AUTORUN, false)
         val testMode = enumValueOrDefault(
@@ -150,7 +153,7 @@ class ProbeRunService : Service() {
             inject = intent.getStringExtra(EXTRA_INJECT).takeIf { BuildConfig.DEBUG },
             driveTest = intent.getBooleanExtra(EXTRA_DRIVE_TEST, false),
             gatewayBase = intent.getStringExtra(EXTRA_GATEWAY_BASE).takeIf { BuildConfig.DEBUG },
-            gatewayToken = takePendingGatewayToken().takeIf { BuildConfig.DEBUG },
+            gatewayToken = gatewayToken.takeIf { BuildConfig.DEBUG },
         )
 
         startForeground(
@@ -366,6 +369,7 @@ class ProbeRunService : Service() {
                 running.testMode,
             )
         }
+        GatewayCredentialVault.clear()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -381,6 +385,7 @@ class ProbeRunService : Service() {
         private const val EXTRA_DRIVE_TEST = "drive_test"
         private const val EXTRA_AUTORUN = "autorun"
         private const val EXTRA_GATEWAY_BASE = "gateway_base"
+        private const val EXTRA_GATEWAY_CREDENTIAL_HANDLE = "gateway_credential_handle"
         private const val CHANNEL_ID = "probe_measurement"
         private const val NOTIFICATION_ID = 4101
 
@@ -402,10 +407,8 @@ class ProbeRunService : Service() {
         internal val realtimeSimulationTelemetry: StateFlow<RealtimeSimulationTelemetry> = _realtimeSimulationTelemetry.asStateFlow()
         private val _realtimeSimulationResult = MutableStateFlow<RealtimeSimulationResult?>(null)
         internal val realtimeSimulationResult: StateFlow<RealtimeSimulationResult?> = _realtimeSimulationResult.asStateFlow()
-        @Volatile private var pendingGatewayToken: String? = null
-
         internal fun start(context: Context, config: Config, autorun: Boolean) {
-            pendingGatewayToken = config.gatewayToken
+            val gatewayCredentialHandle = config.gatewayToken?.let(GatewayCredentialVault::put)
             val intent = Intent(context, ProbeRunService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SERVER, config.serverBase)
@@ -416,11 +419,14 @@ class ProbeRunService : Service() {
                 .putExtra(EXTRA_DRIVE_TEST, config.driveTest)
                 .putExtra(EXTRA_AUTORUN, autorun)
                 .putExtra(EXTRA_GATEWAY_BASE, config.gatewayBase)
-            ContextCompat.startForegroundService(context, intent)
+                .putExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE, gatewayCredentialHandle)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (error: Exception) {
+                GatewayCredentialVault.discard(gatewayCredentialHandle)
+                throw error
+            }
         }
-
-        @Synchronized
-        private fun takePendingGatewayToken(): String? = pendingGatewayToken.also { pendingGatewayToken = null }
 
         internal fun cancel(context: Context) {
             context.startService(Intent(context, ProbeRunService::class.java).setAction(ACTION_CANCEL))

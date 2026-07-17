@@ -26,6 +26,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -39,6 +40,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -218,6 +220,106 @@ private class SyntheticAcknowledgementTracker(private val expected: String?) {
         get() = expected == null || (observations.get() > 0 && mismatches.get() == 0)
 }
 
+internal class GatewayControlException(message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+internal fun gatewayFailureForService(
+    gatewayRequested: Boolean,
+    error: Exception,
+): GatewayControlException? = when {
+    !gatewayRequested -> null
+    error is GatewayControlException -> error
+    else -> GatewayControlException("gateway_control_failed", error)
+}
+
+internal suspend fun <T> withGatewayControlTimeout(
+    timeoutMs: Long,
+    operation: String,
+    block: suspend () -> T,
+): T = try {
+    withTimeout(timeoutMs) { block() }
+} catch (error: TimeoutCancellationException) {
+    throw GatewayControlException("gateway_${operation}_timeout", error)
+}
+
+/** Cancellation is observational only: it may discover an accepted POST, never issue a new POST. */
+internal suspend fun <T> discoverCancelledGatewayStart(
+    status: suspend () -> T?,
+    isOwned: (T) -> Boolean,
+): T? = status()?.takeIf(isOwned)
+
+/** Non-cancel start ambiguity: status, one idempotent POST, then final status discovery. */
+internal suspend fun <T> reconcileFailedGatewayStart(
+    status: suspend () -> T?,
+    retryPost: suspend () -> T?,
+    isOwned: (T) -> Boolean,
+): T? {
+    status()?.takeIf(isOwned)?.let { return it }
+    retryPost()?.takeIf(isOwned)?.let { return it }
+    return status()?.takeIf(isOwned)
+}
+
+/** Explicit HTTP rejection is final; only an unknown POST outcome may be reconciled or retried. */
+internal suspend fun <T> reconcileAmbiguousGatewayStart(
+    startError: Throwable,
+    status: suspend () -> T?,
+    retryPost: suspend () -> T?,
+    isOwned: (T) -> Boolean,
+): T? {
+    if (!AnebGatewayClient.isAmbiguousSubmissionFailure(startError)) throw startError
+    return reconcileFailedGatewayStart(status, retryPost, isOwned)
+}
+
+internal suspend fun <T> pollGatewayStatusUntilFound(
+    status: suspend () -> T?,
+    accept: (T) -> Boolean,
+    pause: suspend () -> Unit,
+): T {
+    while (true) {
+        status()?.takeIf(accept)?.let { return it }
+        pause()
+    }
+}
+
+internal enum class GatewayCleanupNextAction { RETRY_DELETE, POLL_GET }
+
+/** Longer than one 7s control call so an accepted POST can become visible after a lost response. */
+internal const val GATEWAY_DISCOVERY_TIMEOUT_MS = 8_000L
+
+/** Decides when an idempotent DELETE retry is justified without creating an unbounded retry loop. */
+internal class GatewayCleanupReconciliationPolicy(
+    initialDeleteResponseKnown: Boolean,
+    private val maxRetryDeletes: Int = 2,
+) {
+    private var uncertainDeleteNeedsRetry = !initialDeleteResponseKnown
+    private var retryDeletes = 0
+
+    fun onDeleteResult(responseKnown: Boolean) {
+        uncertainDeleteNeedsRetry = !responseKnown
+    }
+
+    fun afterObservation(phase: String?): GatewayCleanupNextAction {
+        val shouldRetry = uncertainDeleteNeedsRetry || phase == "cleanup_failed"
+        if (shouldRetry && retryDeletes < maxRetryDeletes) {
+            uncertainDeleteNeedsRetry = false
+            retryDeletes += 1
+            return GatewayCleanupNextAction.RETRY_DELETE
+        }
+        return GatewayCleanupNextAction.POLL_GET
+    }
+}
+
+internal fun isGatewayControlVariant(variant: String): Boolean =
+    variant == "gateway_loss" || variant == "gateway_recovery"
+
+internal suspend fun prepareGatewayFailureEvidence(
+    cleanup: suspend () -> Unit,
+    freeze: () -> Unit,
+) {
+    cleanup()
+    freeze()
+}
+
 /** 网络综合性能引擎：容量测试期间持续并发 echo，主动态指标始终是 loaded RTT。 */
 class NetworkSpeedEngine(private val context: Context) {
     data class Config(
@@ -254,6 +356,7 @@ class NetworkSpeedEngine(private val context: Context) {
         val runId = TestEngine.newRunId()
         val startedAtEpochMs = System.currentTimeMillis()
         val configuredBase = config.serverBase.trim().trimEnd('/')
+        val gatewayRequested = isGatewayControlVariant(config.variant)
         _result.value = null
         _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.PREPARING)
         log("NET_V1_START run_id=$runId variant=${config.variant} transport=${config.transport.name.lowercase()} server=$configuredBase")
@@ -271,9 +374,45 @@ class NetworkSpeedEngine(private val context: Context) {
         var pathMonitor: PathMonitor? = null
         var gatewayClient: AnebGatewayClient? = null
         var activeGatewayExperimentId: String? = null
+        var gatewayOwnedExperiment: AnebGatewayClient.Experiment? = null
+        var gatewayActivationAcknowledged = false
+        var gatewayEvidence: GatewayRuntimeEvidence? = null
         var gatewayCleanupAcknowledged = false
         var gatewaySpecForCleanup: ProfileGatewayImpairment? = null
+        var cleanupEvidenceFrozen = false
         val invalidReason = AtomicReference<String?>(null)
+
+        suspend fun cleanupOwnedGateway(logLabel: String): Boolean {
+            val cleanupId = activeGatewayExperimentId ?: return gatewayCleanupAcknowledged
+            val cleanupClient = gatewayClient ?: return false
+            val cleanupSpec = gatewaySpecForCleanup ?: return false
+            return runCatching {
+                withContext(NonCancellable) {
+                    stopAndAwaitGatewayCleanup(cleanupClient, cleanupId, cleanupSpec, runId)
+                }
+            }.fold(
+                onSuccess = { terminal ->
+                    gatewayOwnedExperiment = terminal
+                    gatewayCleanupAcknowledged = true
+                    activeGatewayExperimentId = null
+                    gatewayEvidence = (gatewayEvidence ?: GatewayRuntimeEvidence(
+                        experimentId = terminal.experimentId,
+                        profileFingerprint = terminal.profileFingerprint,
+                        acknowledged = gatewayActivationAcknowledged,
+                    )).copy(cleanupAcknowledged = true)
+                    withContext(NonCancellable) {
+                        runCatching { log("NET_V1_GATEWAY_${logLabel}_CLEARED experiment=$cleanupId") }
+                    }
+                    true
+                },
+                onFailure = {
+                    withContext(NonCancellable) {
+                        runCatching { log("NET_V1_GATEWAY_${logLabel}_FAILED experiment=$cleanupId error=${it.message}") }
+                    }
+                    false
+                },
+            )
+        }
         try {
             bound = acquireBoundNetwork(config.transport, guard.metadata["active_transports"])
             if (bound != null) {
@@ -318,10 +457,20 @@ class NetworkSpeedEngine(private val context: Context) {
                 gatewayImpairment = gatewaySpec != null,
             )
             val acknowledgement = SyntheticAcknowledgementTracker(endpoints.expectedAcknowledgement)
-            var gatewayEvidence: GatewayRuntimeEvidence? = null
             if (gatewaySpec != null && config.variant == "gateway_loss") {
-                val started = startGatewayExperiment(checkNotNull(gatewayClient), runId, gatewaySpec)
-                activeGatewayExperimentId = started.experimentId
+                val started = startGatewayExperiment(
+                    gateway = checkNotNull(gatewayClient),
+                    runId = runId,
+                    spec = gatewaySpec,
+                    onOwned = { owned ->
+                        gatewayOwnedExperiment = owned
+                        activeGatewayExperimentId = owned.experimentId
+                    },
+                    onActive = { active ->
+                        gatewayOwnedExperiment = active
+                        gatewayActivationAcknowledged = true
+                    },
+                )
                 gatewayEvidence = GatewayRuntimeEvidence(
                     experimentId = started.experimentId,
                     profileFingerprint = started.profileFingerprint,
@@ -400,7 +549,14 @@ class NetworkSpeedEngine(private val context: Context) {
                         runId = runId,
                         spec = gatewaySpec,
                         phase = phase,
-                        onExperimentStarted = { id -> activeGatewayExperimentId = id },
+                        onExperimentOwned = { owned ->
+                            gatewayOwnedExperiment = owned
+                            activeGatewayExperimentId = owned.experimentId
+                        },
+                        onExperimentActive = { active ->
+                            gatewayOwnedExperiment = active
+                            gatewayActivationAcknowledged = true
+                        },
                     ).also { (runtime, _) ->
                         gatewayEvidence = runtime
                         gatewayCleanupAcknowledged = runtime.cleanupAcknowledged
@@ -445,7 +601,12 @@ class NetworkSpeedEngine(private val context: Context) {
                 )
                 gatewayCleanupAcknowledged = true
                 activeGatewayExperimentId = null
+                gatewayOwnedExperiment = terminal
                 gatewayEvidence = checkNotNull(gatewayEvidence).copy(cleanupAcknowledged = true)
+                GatewayExperimentContract.requireSuccessfulTerminal(
+                    terminal,
+                    gatewayExpected(runId, gatewaySpec),
+                )
                 log("NET_V1_GATEWAY_CLEARED experiment=${terminal.experimentId} reason=${terminal.stopReason}")
             }
 
@@ -596,24 +757,41 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_RESULT run_id=$runId status=$status score=${score.totalScore ?: "null"} grade=${score.grade ?: "null"} verdict=${score.verdict} confidence=${score.confidence}")
             log("NET_V1_END run_id=$runId status=$status")
         } catch (e: CancellationException) {
+            prepareGatewayFailureEvidence(
+                cleanup = { cleanupOwnedGateway("CANCEL") },
+                freeze = { cleanupEvidenceFrozen = true },
+            )
+            val cancelled = gatewayFailureResult(
+                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "cancelled_by_user"),
+                gatewaySpecForCleanup,
+                gatewayOwnedExperiment,
+                gatewayActivationAcknowledged,
+                gatewayCleanupAcknowledged,
+                config.gatewayBase,
+            )
+            withContext(NonCancellable) { runCatching { publishResult(cancelled, log) } }
             throw e
         } catch (e: Exception) {
+            prepareGatewayFailureEvidence(
+                cleanup = { cleanupOwnedGateway("ERROR") },
+                freeze = { cleanupEvidenceFrozen = true },
+            )
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.FAILED, currentMbps = null)
-            publishResult(failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "error:${e.javaClass.simpleName}:${e.message}"), log)
+            val failed = gatewayFailureResult(
+                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "error:${e.javaClass.simpleName}:${e.message}"),
+                gatewaySpecForCleanup,
+                gatewayOwnedExperiment,
+                gatewayActivationAcknowledged,
+                gatewayCleanupAcknowledged,
+                config.gatewayBase,
+            )
+            publishResult(failed, log)
             log("NET_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("NET_V1_END run_id=$runId status=error")
+            gatewayFailureForService(gatewayRequested, e)?.let { throw it }
         } finally {
-            val cleanupId = activeGatewayExperimentId
-            val cleanupClient = gatewayClient
-            val cleanupSpec = gatewaySpecForCleanup
-            if (cleanupId != null && cleanupClient != null && cleanupSpec != null && !gatewayCleanupAcknowledged) {
-                runCatching {
-                    withContext(NonCancellable) {
-                        stopAndAwaitGatewayCleanup(cleanupClient, cleanupId, cleanupSpec, runId)
-                    }
-                }
-                    .onSuccess { log("NET_V1_GATEWAY_FAILSAFE_CLEARED experiment=$cleanupId") }
-                    .onFailure { log("NET_V1_GATEWAY_FAILSAFE_FAILED experiment=$cleanupId error=${it.message}") }
+            if (!cleanupEvidenceFrozen && activeGatewayExperimentId != null && !gatewayCleanupAcknowledged) {
+                cleanupOwnedGateway("FAILSAFE")
             }
             pathMonitor?.stop()
             bound?.release()
@@ -690,19 +868,44 @@ class NetworkSpeedEngine(private val context: Context) {
         gateway: AnebGatewayClient,
         runId: String,
         spec: ProfileGatewayImpairment,
+        onOwned: (AnebGatewayClient.Experiment) -> Unit,
+        onActive: (AnebGatewayClient.Experiment) -> Unit,
     ): AnebGatewayClient.Experiment {
-        val scheduled = gateway.start(runId, spec.profileRef)
-        validateGatewayExperiment(scheduled, runId, spec)
+        val expected = gatewayExpected(runId, spec)
+        val scheduled = try {
+            gateway.start(runId, spec.profileRef)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                discoverOwnedGatewayAfterCancellation(gateway, runId, spec)?.let { owned ->
+                    GatewayExperimentContract.requireOwned(owned, expected)
+                    onOwned(owned)
+                    runCatching { stopAndAwaitGatewayCleanup(gateway, owned.experimentId, spec, runId) }
+                }
+            }
+            throw cancelled
+        } catch (startError: Exception) {
+            val reconciled = withContext(NonCancellable) {
+                reconcileOwnedGatewayAfterStartFailure(gateway, runId, spec, startError)
+            }
+            if (reconciled == null) throw startError
+            reconciled
+        }
+        GatewayExperimentContract.requireOwned(scheduled, expected)
+        onOwned(scheduled)
         return try {
-            withTimeout((spec.activationDelayMs + GATEWAY_TRANSITION_TIMEOUT_MS).toLong()) {
+            validateGatewayExperiment(scheduled, runId, spec)
+            withGatewayControlTimeout(
+                timeoutMs = (spec.activationDelayMs + GATEWAY_TRANSITION_TIMEOUT_MS).toLong(),
+                operation = "activation",
+            ) {
                 var current = scheduled
                 while (current.phase == "scheduled") {
                     delay(GATEWAY_POLL_MS)
                     current = gateway.get(current.experimentId)
                     validateGatewayExperiment(current, runId, spec)
                 }
-                require(current.phase == "active") { "gateway_activation_failed:${current.phase}" }
-                require(current.error.isBlank()) { "gateway_activation_error" }
+                GatewayExperimentContract.requireActive(current, expected)
+                onActive(current)
                 current
             }
         } catch (error: Throwable) {
@@ -715,6 +918,58 @@ class NetworkSpeedEngine(private val context: Context) {
         }
     }
 
+    private suspend fun discoverOwnedGatewayAfterCancellation(
+        gateway: AnebGatewayClient,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+    ): AnebGatewayClient.Experiment? {
+        val expected = gatewayExpected(runId, spec)
+        return discoverCancelledGatewayStart(
+            status = { boundedGatewayStatus(gateway, expected) },
+            isOwned = { GatewayExperimentContract.isOwnedBy(it, expected) },
+        )
+    }
+
+    private suspend fun reconcileOwnedGatewayAfterStartFailure(
+        gateway: AnebGatewayClient,
+        runId: String,
+        spec: ProfileGatewayImpairment,
+        startError: Throwable,
+    ): AnebGatewayClient.Experiment? {
+        val expected = gatewayExpected(runId, spec)
+        return reconcileAmbiguousGatewayStart(
+            startError = startError,
+            status = { boundedGatewayStatus(gateway, expected) },
+            retryPost = {
+                runCatching {
+                    withGatewayControlTimeout(GATEWAY_DISCOVERY_TIMEOUT_MS, "start_retry") {
+                        gateway.start(runId, spec.profileRef)
+                    }
+                }.getOrNull()
+            },
+            isOwned = { GatewayExperimentContract.isOwnedBy(it, expected) },
+        )
+    }
+
+    private suspend fun boundedGatewayStatus(
+        gateway: AnebGatewayClient,
+        expected: GatewayExperimentContract.Expected,
+    ): AnebGatewayClient.Experiment? = withTimeoutOrNull(GATEWAY_DISCOVERY_TIMEOUT_MS) {
+        pollGatewayStatusUntilFound(
+            status = {
+                try {
+                    withTimeoutOrNull(GATEWAY_DISCOVERY_ATTEMPT_TIMEOUT_MS) { gateway.status() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+            },
+            accept = { GatewayExperimentContract.isOwnedBy(it, expected) },
+            pause = { delay(GATEWAY_DISCOVERY_POLL_MS) },
+        )
+    }
+
     private suspend fun ensureGatewayActive(
         gateway: AnebGatewayClient,
         experimentId: String,
@@ -722,8 +977,7 @@ class NetworkSpeedEngine(private val context: Context) {
         spec: ProfileGatewayImpairment,
     ) {
         val current = gateway.get(experimentId)
-        validateGatewayExperiment(current, runId, spec)
-        require(current.phase == "active" && current.error.isBlank()) { "gateway_not_active:${current.phase}" }
+        GatewayExperimentContract.requireActive(current, gatewayExpected(runId, spec))
     }
 
     private suspend fun stopAndAwaitGatewayCleanup(
@@ -731,20 +985,42 @@ class NetworkSpeedEngine(private val context: Context) {
         experimentId: String,
         spec: ProfileGatewayImpairment,
         runId: String,
-    ): AnebGatewayClient.Experiment {
-        val stopping = gateway.stop(experimentId)
-        validateGatewayExperiment(stopping, runId, spec)
-        return withTimeout(GATEWAY_CLEANUP_TIMEOUT_MS) {
-            var current = stopping
-            while (current.phase in setOf("scheduled", "active", "clearing")) {
-                delay(GATEWAY_POLL_MS)
-                current = gateway.get(experimentId)
-                validateGatewayExperiment(current, runId, spec)
+    ): AnebGatewayClient.Experiment = withGatewayControlTimeout(GATEWAY_CLEANUP_TIMEOUT_MS, "cleanup") {
+        val initial = runCatching { gateway.stop(experimentId) }.getOrNull()
+        val policy = GatewayCleanupReconciliationPolicy(initialDeleteResponseKnown = initial != null)
+        val expected = gatewayExpected(runId, spec)
+        var current = initial
+        var fetchBeforeDecision = initial == null
+        var cleaned: AnebGatewayClient.Experiment? = null
+        while (cleaned == null) {
+            if (fetchBeforeDecision) {
+                current = runCatching { gateway.get(experimentId) }.getOrNull()
+                fetchBeforeDecision = false
             }
-            require(current.phase == "completed") { "gateway_cleanup_failed:${current.phase}" }
-            require(current.clearedAt != null && current.error.isBlank()) { "gateway_cleanup_not_confirmed" }
-            current
+            current?.let { observed ->
+                GatewayExperimentContract.validate(observed, expected)
+                if (observed.cleanupVerified) {
+                    GatewayExperimentContract.requireCleanTerminal(observed, expected)
+                    cleaned = observed
+                }
+                if (observed.phase == "completed" || observed.phase == "failed") {
+                    GatewayExperimentContract.requireCleanTerminal(observed, expected)
+                }
+            }
+            if (cleaned != null) break
+            when (policy.afterObservation(current?.phase)) {
+                GatewayCleanupNextAction.RETRY_DELETE -> {
+                    current = runCatching { gateway.stop(experimentId) }.getOrNull()
+                    policy.onDeleteResult(responseKnown = current != null)
+                    fetchBeforeDecision = current == null
+                }
+                GatewayCleanupNextAction.POLL_GET -> {
+                    delay(GATEWAY_POLL_MS)
+                    current = runCatching { gateway.get(experimentId) }.getOrNull()
+                }
+            }
         }
+        requireNotNull(cleaned)
     }
 
     private fun validateGatewayExperiment(
@@ -752,12 +1028,15 @@ class NetworkSpeedEngine(private val context: Context) {
         runId: String,
         spec: ProfileGatewayImpairment,
     ) {
-        require(experiment.runId == runId) { "gateway_run_id_mismatch" }
-        require(experiment.profileRef == spec.profileRef) { "gateway_profile_ref_mismatch" }
-        require(experiment.profileFingerprint == spec.profileFingerprint) { "gateway_profile_fingerprint_mismatch" }
-        require(experiment.impairmentLayer == spec.impairmentLayer) { "gateway_impairment_layer_mismatch" }
-        require(experiment.claimScope == "dedicated_gateway_ip_forwarding") { "gateway_claim_scope_mismatch" }
+        GatewayExperimentContract.validate(experiment, gatewayExpected(runId, spec))
     }
+
+    private fun gatewayExpected(runId: String, spec: ProfileGatewayImpairment) = GatewayExperimentContract.Expected(
+        runId = runId,
+        profileRef = spec.profileRef,
+        profileFingerprint = spec.profileFingerprint,
+        impairmentLayer = spec.impairmentLayer,
+    )
 
     private suspend fun runGatewayRecoveryPhase(
         client: AnebClient,
@@ -766,7 +1045,8 @@ class NetworkSpeedEngine(private val context: Context) {
         runId: String,
         spec: ProfileGatewayImpairment,
         phase: ProfilePhase,
-        onExperimentStarted: (String) -> Unit,
+        onExperimentOwned: (AnebGatewayClient.Experiment) -> Unit,
+        onExperimentActive: (AnebGatewayClient.Experiment) -> Unit,
     ): Pair<GatewayRuntimeEvidence, RecoveryRunObservation> {
         _telemetry.value = _telemetry.value.copy(
             phase = BasicSpeedPhase.RECOVERY,
@@ -778,64 +1058,76 @@ class NetworkSpeedEngine(private val context: Context) {
             networkLayerOutage = false,
             progress = 0.91,
         )
-        val active = startGatewayExperiment(gateway, runId, spec)
-        onExperimentStarted(active.experimentId)
+        val active = startGatewayExperiment(
+            gateway = gateway,
+            runId = runId,
+            spec = spec,
+            onOwned = onExperimentOwned,
+            onActive = onExperimentActive,
+        )
         val startedNanos = SystemClock.elapsedRealtimeNanos()
-        var failures = 0
-        var recoveryTimeMs: Double? = null
-        var bypassObserved = false
+        val tracker = GatewayRecoveryTracker(startedNanos)
+        val expected = gatewayExpected(runId, spec)
         var cleanupAcknowledged = false
+        var cleanTerminal: AnebGatewayClient.Experiment? = null
         try {
             val attempts = phase.samples.coerceAtLeast(1)
             for (index in 0 until attempts) {
                 val before = gateway.get(active.experimentId)
                 validateGatewayExperiment(before, runId, spec)
-                if (before.phase == "failed") error("gateway_experiment_failed")
+                cleanupAcknowledged = before.cleanupVerified && before.clearedAt != null
+                if (cleanupAcknowledged) cleanTerminal = before
+                if (before.phase == "failed" || (cleanupAcknowledged && before.error.isNotBlank())) {
+                    GatewayExperimentContract.requireSuccessfulTerminal(before, expected)
+                }
                 _telemetry.value = _telemetry.value.copy(networkLayerOutage = before.phase == "active")
                 val echo = client.echo(endpoints.url("/api/v1/echo"), GATEWAY_ECHO_TIMEOUT_MS)
+                val echoCompletedNanos = SystemClock.elapsedRealtimeNanos()
                 val after = gateway.get(active.experimentId)
                 validateGatewayExperiment(after, runId, spec)
-                if (after.phase == "failed") error("gateway_experiment_failed")
-                val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1e6
+                cleanupAcknowledged = after.cleanupVerified && after.clearedAt != null
+                if (cleanupAcknowledged) cleanTerminal = after
+                if (after.phase == "failed" || (cleanupAcknowledged && after.error.isNotBlank())) {
+                    GatewayExperimentContract.requireSuccessfulTerminal(after, expected)
+                }
+                val elapsedMs = (echoCompletedNanos - startedNanos) / 1e6
                 val success = echo.error == null
-                if (success && after.phase == "active") {
-                    bypassObserved = true
-                    break
-                }
-                if (!success && before.phase == "active") failures += 1
-                if (after.phase == "completed") {
-                    cleanupAcknowledged = after.clearedAt != null && after.error.isBlank()
-                    if (success) {
-                        recoveryTimeMs = elapsedMs
-                        break
-                    }
-                }
+                tracker.observe(before.phase, after.phase, success, echoCompletedNanos)
                 _telemetry.value = _telemetry.value.copy(
                     recoveryElapsedMs = elapsedMs,
-                    recoveryFailureCount = failures,
+                    recoveryFailureCount = tracker.outageFailureCount,
                     networkLayerOutage = after.phase == "active",
                     loadedRttMs = echo.rttUs?.takeIf { success }?.div(1_000.0),
                     progress = 0.91 + 0.06 * (index + 1) / attempts,
                 )
+                if (tracker.bypassObserved) break
+                if (tracker.hasRecoveryCandidate) {
+                    if (!cleanupAcknowledged) {
+                        cleanTerminal = stopAndAwaitGatewayCleanup(gateway, active.experimentId, spec, runId)
+                        cleanupAcknowledged = true
+                    }
+                    break
+                }
                 if (index + 1 < attempts) delay(phase.echoIntervalMs.coerceAtLeast(50).toLong())
             }
             if (!cleanupAcknowledged) {
-                stopAndAwaitGatewayCleanup(gateway, active.experimentId, spec, runId)
+                cleanTerminal = stopAndAwaitGatewayCleanup(gateway, active.experimentId, spec, runId)
                 cleanupAcknowledged = true
             }
+            GatewayExperimentContract.requireSuccessfulTerminal(checkNotNull(cleanTerminal), expected)
             val runtime = GatewayRuntimeEvidence(
                 experimentId = active.experimentId,
                 profileFingerprint = active.profileFingerprint,
                 acknowledged = true,
                 cleanupAcknowledged = cleanupAcknowledged,
-                bypassObserved = bypassObserved,
+                bypassObserved = tracker.bypassObserved,
             )
             val observation = RecoveryRunObservation(
                 triggerAcknowledged = true,
                 declaredOutageMs = spec.durationMs,
-                outageFailureCount = failures,
-                recoveryTimeMs = recoveryTimeMs,
-                gatewayBypassObserved = bypassObserved,
+                outageFailureCount = tracker.outageFailureCount,
+                recoveryTimeMs = tracker.verifiedRecoveryTimeMs(cleanupAcknowledged),
+                gatewayBypassObserved = tracker.bypassObserved,
             )
             return runtime to observation
         } finally {
@@ -1087,6 +1379,48 @@ class NetworkSpeedEngine(private val context: Context) {
         evidenceJson = buildJsonObject { put("invalid_reason", reason) }.toString(),
     )
 
+    private fun gatewayFailureResult(
+        result: BasicSpeedResult,
+        spec: ProfileGatewayImpairment?,
+        owned: AnebGatewayClient.Experiment?,
+        activationAcknowledged: Boolean,
+        cleanupAcknowledged: Boolean,
+        gatewayBase: String?,
+    ): BasicSpeedResult {
+        if (spec == null) return result
+        val reason = result.transferErrors.firstOrNull().orEmpty()
+        return result.copy(
+            impairmentProfileId = spec.gatewayProfileId,
+            impairmentProfileVersion = spec.gatewayProfileVersion,
+            impairmentDownlinkMbps = spec.downlink.rateMbps,
+            impairmentUplinkMbps = spec.uplink.rateMbps,
+            impairmentAddedRttMs = spec.downlink.delayMs + spec.uplink.delayMs,
+            impairmentJitterMs = maxOf(spec.downlink.jitterMs, spec.uplink.jitterMs),
+            impairmentOutageDurationMs = spec.durationMs.takeIf { spec.kind == "outage" },
+            impairmentExcludedFromShaping = spec.excludedFromImpairment,
+            impairmentAcknowledged = activationAcknowledged,
+            gatewayImpairment = true,
+            gatewayExperimentId = owned?.experimentId,
+            gatewayProfileFingerprint = owned?.profileFingerprint,
+            gatewayManagementBase = gatewayBase?.trim()?.trimEnd('/'),
+            gatewayImpairmentLayer = spec.impairmentLayer,
+            gatewayAcknowledged = activationAcknowledged,
+            gatewayCleanupAcknowledged = cleanupAcknowledged,
+            gatewayUplinkDelayMs = spec.uplink.delayMs,
+            gatewayDownlinkDelayMs = spec.downlink.delayMs,
+            gatewayUplinkLossPct = spec.uplink.lossPct,
+            gatewayDownlinkLossPct = spec.downlink.lossPct,
+            evidenceJson = buildJsonObject {
+                put("invalid_reason", reason)
+                put("gateway_experiment_id", owned?.experimentId?.let(::JsonPrimitive) ?: JsonNull)
+                put("gateway_profile_fingerprint", owned?.profileFingerprint?.let(::JsonPrimitive) ?: JsonNull)
+                put("gateway_ownership_acknowledged", owned != null)
+                put("gateway_activation_acknowledged", activationAcknowledged)
+                put("gateway_cleanup_acknowledged", cleanupAcknowledged)
+            }.toString(),
+        )
+    }
+
     private fun metricsJson(metrics: Map<String, NetworkMetricEvidence>) = JsonObject(metrics.mapValues { (_, m) ->
         buildJsonObject {
             put("value", m.value?.let(::JsonPrimitive) ?: JsonNull)
@@ -1189,7 +1523,9 @@ class NetworkSpeedEngine(private val context: Context) {
         private const val MAX_PARALLEL = 8
         private const val GATEWAY_POLL_MS = 100L
         private const val GATEWAY_TRANSITION_TIMEOUT_MS = 10_000
-        private const val GATEWAY_CLEANUP_TIMEOUT_MS = 12_000L
+        private const val GATEWAY_CLEANUP_TIMEOUT_MS = 30_000L
+        private const val GATEWAY_DISCOVERY_ATTEMPT_TIMEOUT_MS = 500L
+        private const val GATEWAY_DISCOVERY_POLL_MS = 100L
         private const val GATEWAY_ECHO_TIMEOUT_MS = 350L
     }
 }

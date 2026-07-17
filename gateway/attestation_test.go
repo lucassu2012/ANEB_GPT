@@ -19,3 +19,21 @@ func TestDedicatedGatewayAttestationMustMatchWANAndPrivateSubnet(t *testing.T) {
 		t.Fatal("mismatched WAN was accepted")
 	}
 }
+
+func TestDedicatedGatewayAttestationRejectsWideHostBitAndTrailingContracts(t *testing.T) {
+	for name, raw := range map[string]string{
+		"wide":      `{"contract_version":"aneb-dedicated-gateway-v1","dedicated_gateway":true,"wan_interface":"eth0","management_interface":"eth1","exclusive_client_subnet":"192.168.0.0/16"}`,
+		"host bits": `{"contract_version":"aneb-dedicated-gateway-v1","dedicated_gateway":true,"wan_interface":"eth0","management_interface":"eth1","exclusive_client_subnet":"192.168.77.1/24"}`,
+		"trailing":  `{"contract_version":"aneb-dedicated-gateway-v1","dedicated_gateway":true,"wan_interface":"eth0","management_interface":"eth1","exclusive_client_subnet":"192.168.77.0/24"} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "attestation.json")
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadAttestation(path, "eth0"); err == nil {
+				t.Fatal("unsafe attestation was accepted")
+			}
+		})
+	}
+}

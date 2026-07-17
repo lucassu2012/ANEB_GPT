@@ -40,11 +40,11 @@ ANEB 可以稳定、可重复地模拟“低速率、高时延、抖动、短时
 
 2026-07-17 P40 Pro 相邻实测：正常 Standard run `019f6e96-c278-7b68-87f6-7b2c61d58af0` 对比合成弱网 run `019f6e93-6b32-7776-9b3d-a5433814e0dd`，下载 P5 `17.66→2.80Mbps`、上传 P5 `15.91→1.12Mbps`、空闲 RTT P95 `109.80→228.03ms`、综合分 `51.2→32.0`。弱网上传 15 秒获服务端确认 1,835,008B，阶段平均约 0.98Mbps。loaded RTT 没有单调上升（正常 548.74ms、弱网 365.43ms），因此只按实际证据陈述，不把用户态整形等同于真实无线排队。
 
-### B. 可重复网络层实验：独立网关（软件与隔离验证已完成，P40 硬件闭环待执行）
+### B. 可重复网络层实验：独立网关（软件发布候选完成，现场叶证书与 P40 硬件闭环待执行）
 
 让 P40 Pro 接入专用 Wi-Fi 测试网关（Linux 小主机/树莓派/独立 VM 网关），在独立 network namespace 中用 `tc netem + tbf/ifb` 控制双向带宽、时延、抖动和 IP 丢包。它比用户态适配器更接近真实网络层，也不会影响 E-01 其他用户。每次实验保存网关配置、接口计数器和前后基线。
 
-已完成：`gateway/` 服务、TLS+Bearer 管理面、版本化白名单、双向 WAN/IFB 整形、自动清理、JSONL 审计、App Debug 的 `gateway_loss/gateway_recovery`、Room v18 证据冻结与 Linux 命名空间集成验证。2026-07-17 复验为 `0.061ms → 105.260ms → 0.054ms`，100% 双向中断后自动恢复，宿主 qdisc 不变。P40 真机不能在没有独占双网口/AP 的情况下执行；当前明确记为 `BLOCKED_EXTERNAL`，详见 `DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
+已完成：`aneb-gateway/0.2.0`、固定 Debug CA/逐启动证书链核验、版本化白名单、双向 WAN/IFB 整形、全主路由旁路拒绝、严格资源所有权、清理失败锁闩与重试、一键安装/回滚/卸载安全回归，以及 App 0.5.0 的 `gateway_loss/gateway_recovery` 异常清理和 Room v18 证据冻结。加固前数据面复验为 `0.067ms → 97.753ms → 0.051ms`、100% 双向中断后自动恢复、10 条操作事件和宿主 qdisc 不变；它不替代最终固定 CA 正向生命周期。仓库无 CA 私钥和现场叶证书，也没有 P40 独占双网口/AP；两项当前均明确记为 `BLOCKED_EXTERNAL`，详见 `DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
 
 ### C. 真实 RSRP/SINR：射频实验
 

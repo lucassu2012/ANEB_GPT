@@ -40,6 +40,14 @@ class NetworkRecoveryScorerTest {
         assertNull(result.totalScore)
     }
 
+    @Test fun gatewayOutageWithoutFailedProbeIsInvalidRatherThanBadNetworkScore() {
+        val result = NetworkRecoveryScorer.score(
+            healthy().copy(impairmentLayer = "ip_forwarding", outageFailureCount = 0),
+        )
+        assertEquals(TokenVerdict.INVALID, result.verdict)
+        assertNull(result.totalScore)
+    }
+
     private fun healthy() = NetworkRecoveryEvidence(
         serverAcknowledged = true,
         triggerAcknowledged = true,

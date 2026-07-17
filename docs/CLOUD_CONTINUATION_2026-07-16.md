@@ -25,7 +25,7 @@
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
 - E-01 已升级到 `aneb-server/0.7.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复路径。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
-- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 14 项测试和 Go 服务端/网关测试；Room 校验器现使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 442 项 JVM 测试、Lint、Go/行为模型测试和 0.4.9 APK 构建通过；最终 Debug APK SHA-256 为 `B0661B6F7FCC6E5C6F1F631C65D3CF5028EA311CC23661089707E325C94205D2`。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 14 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 468 项 JVM 测试、0 failures、Lint 0 errors、Go/行为模型测试和 0.5.0 APK 构建通过；最终 Debug APK SHA-256 为 `5C9DDD98B46E80AF3BF99F79EBBE4235C730D2D10500F010022BC74C0A7C2B06`。
 - P40 Pro 已完成两次 AI 实时交互 Quick 端到端验收：1/1 会话、3/3 轮次、动态准时帧率/播放余量/RTT/双向速率/首帧响应、结果落库及进程重启后的历史回看均通过；两次均保持 `LOW/INCONCLUSIVE`，测试后已主动退出到华为桌面。
 - 网络综合 Quick/Standard Profile 已发布；Android 已实现 loaded RTT 并发刷新、100ms 吞吐仪表、1s goodput 窗口、握手分解、带序号 UDP 探针、测后恢复 RTT、独立评分、Room v15 结果冻结和历史详情页。
 - P40 Pro 网络综合 Quick 端到端验收通过。最终 0.3.0 手动用户路径 run `019f6b6f-d3d8-7063-b301-90ec8be6fa5e` 在下载/上传阶段正确显示动态 Mbps 指针、loaded RTT、曲线和阶段进度，结果 60.7/C、UDP 50/50 返回并自动跳转结果页；按快测规则保持 `LOW/INCONCLUSIVE`。前序 run 还测得负载 RTT P95 1257.8ms，验证了 loaded RTT 能揭示单看带宽无法发现的排队时延。所有测试后均已退出到华为桌面且无残留前台服务。
@@ -35,7 +35,7 @@
 - AI 实时 Standard 已完成 P40 Pro Wi-Fi 长时闭环。最终 run `019f6e12-b462-7cd9-9ff7-713e8a6c6df7` 完成 10/10 会话、160/160 轮、26518 帧和 4237 次 loaded RTT 尝试，结果 92.1/A、`HIGH/FAIL`：音频准时帧率 99.68%、会话 RTT P95 71.6ms、loaded RTT P95 89.2ms 均达标；`LIVE-B04` 响应超额时延 P95 247.7ms，≤200ms 达标率仅 85.625%（门限 95%），因此硬门限优先判 FAIL。0.4.5 结果结论会逐项点名未达门限及差距，并解释高分/高等级不能覆盖硬门限。承载为 `Huawei-Guest` Wi-Fi，不外推为蜂窝结论；本地证据为 `evidence/device/aneb_realtime_standard_0.4.4.db*`。测试后已强停 Codex 并移除 ADB autorun 最近任务，两套 ANEB 均无进程/服务。
 - E-01 部署权已由 Product Owner 裁定归 Codex。2026-07-17 12:03 CST 已在 `aneb-server/0.5.1` 上将 `s3_multimodal` 从 0.2.1 升至 0.3.0：两段 Token 流后分别增加 12MiB `download_burst`，共 10 阶段；节点本机合同/echo/download/UDP smoke 与公网 Profile/12MiB 精确字节验证均通过。0.4.6 App 能执行该 phase，并只在响应体精确排空时向机器日志输出 D1 原始 goodput；旧版 Room/AQS 不加字段、不变分。共享能力说明固定维护在 `docs/TEST_SERVER_CAPABILITIES.md`。
 - 网络 Recovery 独立 Profile 已完成 E-01 与 P40 闭环。`aneb-server/0.7.0` 只对触发 run 武装一次 2000ms 应用请求中断，其他 run 与正常路由旁路；App 0.4.8 动态显示恢复计时、服务器确认中断、失败探针与恢复后 RTT，并由 Room v17 冻结。4 次 P40 run 恢复 2084.4–2227.3ms、恢复后成功率均 100%，结论仍按单事件证据保持 `LOW/INCONCLUSIVE`。测试后两套 ANEB 均无 PID/服务。
-- 专用 IP 层网关阶段的软件闭环已完成：`gateway/` 提供双向 netem/IFB、TLS+Bearer 控制面、白名单 Profile、自动清理和审计；App 0.4.9 Debug 新增 `gateway_loss/gateway_recovery`，Room v18 保存指纹、激活/清理回执与旁路证据。E01 隔离命名空间复验 `0.061ms → 105.260ms → 0.054ms`，100% 中断/恢复通过且宿主 qdisc 不变。没有独占双网口 Linux/AP，因此 P40 网络层真机项保持 `BLOCKED_EXTERNAL`，不能用软件集成结果替代。
+- 专用 IP 层网关已生产化到 `aneb-gateway/0.2.0`：固定 Debug CA 与逐启动证书链核验、真实转发/回程和全部 main-table 路由预检、严格 IFB/filter/ingress 所有权、可重试失败清理、状态目录防 symlink/mount、严格 Token/TLS key 来源、同步审计，以及带回滚的一键安装/预检/安全卸载均已实现。App 0.5.0 仅对“提交结果未知”执行同 run 对账和一次幂等 POST；明确 409/4xx 拒绝立即失败且绝不重试。一次性 Token 只经随机句柄交接，失败/取消先做有界清理再冻结证据。发布复审关闭 9 项 P1；Go 定向测试重复 20 轮及 E-01 隔离安装安全回归通过。`0.067ms → 97.753ms → 0.051ms` 是固定 CA 加固前的数据面集成证据，不冒充最终发布证据；最终 TLS 正向生命周期缺离线 CA 签发的现场叶证书，P40 网络层真机还缺独占双网口 Linux/AP，二者均为 `BLOCKED_EXTERNAL`。
 
 ## 3. 下一阶段（按顺序）
 
@@ -44,7 +44,7 @@
 3. 正式导航下线真实 API 探针：底部“探针”页改为 Profile/业务测试目录；保留仅限 ADB 的开发诊断路径。
 4. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
 5. 完成 Token/网络综合 Standard 长时真机稳定性与 Android 16 回归，再进入 release 签名候选。
-6. 专用网关软件与 App 接入已完成；下一步是在独占双网口 Linux/AP 到位后执行 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
+6. 专用网关 0.2.0 软件、安装安全与 App 0.5.0 异常闭环已完成；先由离线 CA 为 `192.168.77.1` 签发现场叶证书，再在独占硬件上执行最终 TLS/安装生命周期和 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
 
 ## 4. 关键目录
 

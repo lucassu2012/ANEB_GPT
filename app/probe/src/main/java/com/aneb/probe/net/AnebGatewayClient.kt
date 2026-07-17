@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,16 +28,16 @@ class AnebGatewayClient(
     token: String,
     bound: BoundNetwork? = null,
 ) {
-    private val base = baseUrl.trim().trimEnd('/').also {
-        require(it.startsWith("https://")) { "gateway_control_requires_https" }
-    }
-    private val authorization = "Bearer ${token.also { require(it.length >= 32) { "gateway_token_too_short" } }}"
+    private val base = normalizeBase(baseUrl)
+    private val authorization = "Bearer ${token.also {
+        require(it.matches(Regex("^[A-Fa-f0-9]{64}$"))) { "gateway_token_must_be_64_hex" }
+    }}"
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val client = OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
-        .callTimeout(7, TimeUnit.SECONDS)
+        .callTimeout(CONTROL_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .proxy(Proxy.NO_PROXY)
         .apply {
             if (bound != null) {
@@ -55,12 +56,13 @@ class AnebGatewayClient(
         val phase: String,
         @SerialName("claim_scope") val claimScope: String,
         @SerialName("impairment_layer") val impairmentLayer: String,
-        @SerialName("created_at") val createdAt: String = "",
-        @SerialName("scheduled_at") val scheduledAt: String = "",
-        @SerialName("expected_active_at") val expectedActiveAt: String = "",
+        @SerialName("created_at") val createdAt: String,
+        @SerialName("scheduled_at") val scheduledAt: String,
+        @SerialName("expected_active_at") val expectedActiveAt: String,
         @SerialName("active_at") val activeAt: String? = null,
         @SerialName("expected_clear_at") val expectedClearAt: String? = null,
         @SerialName("cleared_at") val clearedAt: String? = null,
+        @SerialName("cleanup_verified") val cleanupVerified: Boolean,
         @SerialName("stop_reason") val stopReason: String = "",
         val error: String = "",
     )
@@ -69,6 +71,11 @@ class AnebGatewayClient(
     private data class StartRequest(
         @SerialName("run_id") val runId: String,
         @SerialName("profile_ref") val profileRef: String,
+    )
+
+    @Serializable
+    private data class StatusResponse(
+        @SerialName("active_experiment") val activeExperiment: Experiment? = null,
     )
 
     suspend fun start(runId: String, profileRef: String): Experiment {
@@ -101,21 +108,41 @@ class AnebGatewayClient(
         expectedCode = 202,
     )
 
+    suspend fun status(): Experiment? {
+        val body = requestBody(
+            Request.Builder()
+                .url("$base/v1/status")
+                .header("Authorization", authorization)
+                .get()
+                .build(),
+            expectedCode = 200,
+        )
+        return runCatching { json.decodeFromString(StatusResponse.serializer(), body).activeExperiment }
+            .getOrElse { throw GatewayApiException("gateway_response_invalid", submissionMayHaveSucceeded = true) }
+    }
+
     private suspend fun request(request: Request, expectedCode: Int): Experiment {
+        val body = requestBody(request, expectedCode)
+        return runCatching { json.decodeFromString(Experiment.serializer(), body) }
+            .getOrElse { throw GatewayApiException("gateway_response_invalid", submissionMayHaveSucceeded = true) }
+    }
+
+    private suspend fun requestBody(request: Request, expectedCode: Int): String {
         val call = client.newCall(request)
         return try {
             executeCancellable(call) { response ->
                 val body = response.body?.string().orEmpty()
-                if (response.code != expectedCode) throw GatewayApiException("gateway_http_${response.code}")
-                runCatching { json.decodeFromString(Experiment.serializer(), body) }
-                    .getOrElse { throw GatewayApiException("gateway_response_invalid") }
+                if (response.code != expectedCode) {
+                    throw GatewayApiException("gateway_http_${response.code}", submissionMayHaveSucceeded = false)
+                }
+                body
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: GatewayApiException) {
             throw e
         } catch (_: Exception) {
-            throw GatewayApiException("gateway_control_unreachable")
+            throw GatewayApiException("gateway_control_unreachable", submissionMayHaveSucceeded = true)
         }
     }
 
@@ -142,9 +169,27 @@ class AnebGatewayClient(
             })
         }
 
-    class GatewayApiException(message: String) : IOException(message)
+    class GatewayApiException internal constructor(
+        message: String,
+        internal val submissionMayHaveSucceeded: Boolean,
+    ) : IOException(message)
 
     companion object {
+        internal const val CONTROL_CALL_TIMEOUT_MS = 7_000L
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+
+        internal fun normalizeBase(value: String): String {
+            val url = value.trim().toHttpUrl()
+            require(url.scheme == "https") { "gateway_control_requires_https" }
+            require(url.username.isEmpty() && url.password.isEmpty()) { "gateway_base_userinfo_forbidden" }
+            require(url.query == null && url.fragment == null && url.encodedPath == "/") { "gateway_base_must_not_contain_path_or_query" }
+            require(url.host == GATEWAY_MANAGEMENT_IP) { "gateway_base_requires_attested_management_ip" }
+            return url.toString().trimEnd('/')
+        }
+
+        private const val GATEWAY_MANAGEMENT_IP = "192.168.77.1"
+
+        internal fun isAmbiguousSubmissionFailure(error: Throwable): Boolean =
+            error is GatewayApiException && error.submissionMayHaveSucceeded
     }
 }

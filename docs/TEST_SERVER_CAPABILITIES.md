@@ -13,7 +13,7 @@
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-17 16:18 CST；专用网关命名空间复验后 E-01 仍为 0.7.0、默认 qdisc 未变化、无临时命名空间；既有公网 smoke 与 P40 合成恢复结论不变 |
+| 最近验证 | 2026-07-17 21:09 CST；E-01 仍为 0.7.0/`active`，专用网关服务 `inactive`，默认 `fq_codel` 逐字一致、无临时命名空间；隔离安装安全回归只使用 `/tmp`，不安装网关、不改网络；既有公网 smoke 与 P40 合成恢复结论不变 |
 
 所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
@@ -75,7 +75,7 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 - 禁止把故障注入参数开启在生产/取证服务上。
 - 不得只替换 Profile 而跳过合同测试和公网 smoke。
 
-专用网络层弱网能力位于仓库 `gateway/`，不是 E-01 服务端功能，也不得安装到 E-01。其权威边界和验证记录见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`；Claude 可读取该文档了解网关 API/Profile，但 E-01 部署合同与版本不因此改变。
+专用网络层弱网能力位于仓库 `gateway/`，不是 E-01 服务端功能，也不得安装到 E-01。当前仓库基线为 `aneb-gateway/0.2.0`：固定 Debug CA 与逐启动证书链核验、全主路由旁路拒绝、严格 IFB/filter/ingress 所有权、可重试清理、Token/TLS key/状态目录安全，以及带回滚的一键安装和安全卸载。App 对应 0.5.0，网关恢复 Profile 为 `network_comprehensive_gateway_recovery@1.1.0` / `network-gateway-recovery-score-v2`。最终固定 CA 正向生命周期需要离线 CA 签发的现场叶证书，当前为 `BLOCKED_EXTERNAL`；早期命名空间数据面结果不能替代。权威边界和验证记录见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`；部署命令见 `gateway/README.md`。Claude 可读取这两份文档了解网关 API/Profile，但 E-01 部署合同与版本不因此改变。
 
 每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、两个合成弱网合同的目录/回执/精确字节、恢复触发后同 run 503/其他 run 200/正常路由 200/窗口后同 run 200、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
 

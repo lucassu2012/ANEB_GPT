@@ -10,18 +10,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
 )
 
-const GatewayVersion = "aneb-gateway/0.1.0"
+const GatewayVersion = "aneb-gateway/0.2.0"
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 var (
 	ErrExperimentActive = errors.New("an experiment is already active")
 	ErrNotFound         = errors.New("experiment not found")
+	ErrCleanupLatched   = errors.New("gateway cleanup failure is latched")
+	ErrRunConflict      = errors.New("run_id is already bound to another profile")
 )
 
 type ImpairmentController interface {
@@ -41,10 +44,13 @@ type Experiment struct {
 	ActiveAt           *time.Time `json:"active_at,omitempty"`
 	ExpectedClearAt    *time.Time `json:"expected_clear_at,omitempty"`
 	ClearedAt          *time.Time `json:"cleared_at,omitempty"`
+	CleanupVerified    bool       `json:"cleanup_verified"`
 	StopReason         string     `json:"stop_reason,omitempty"`
 	Error              string     `json:"error,omitempty"`
 	ClaimScope         string     `json:"claim_scope"`
 	ImpairmentLayer    string     `json:"impairment_layer"`
+	finalPhase         string
+	finalError         string
 }
 
 type AuditEvent struct {
@@ -63,24 +69,47 @@ type JSONLAuditor struct {
 	mu   sync.Mutex
 }
 
+const maxAuditBytes = 64 << 20
+
 func (a *JSONLAuditor) Record(event AuditEvent) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(a.Path), 0o750); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(a.Path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o640)
+	if info, err := os.Lstat(a.Path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("audit path must be a regular non-symlink file")
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			return fmt.Errorf("audit path must have mode 0600")
+		}
+		if info.Size() >= maxAuditBytes {
+			return fmt.Errorf("audit log reached the %d byte safety limit", maxAuditBytes)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(a.Path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
-	return enc.Encode(event)
+	if err := enc.Encode(event); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 type Manager struct {
 	mu          sync.Mutex
+	cleanupMu   sync.Mutex
 	profiles    map[string]Profile
 	controller  ImpairmentController
 	auditor     Auditor
@@ -88,6 +117,7 @@ type Manager struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	experiments map[string]*Experiment
+	byRunID     map[string]string
 	activeID    string
 	activeStop  context.CancelFunc
 	closed      bool
@@ -123,6 +153,7 @@ func NewManager(ctx context.Context, profiles map[string]Profile, controller Imp
 		ctx:         managerCtx,
 		cancel:      cancel,
 		experiments: make(map[string]*Experiment),
+		byRunID:     make(map[string]string),
 	}, nil
 }
 
@@ -150,11 +181,24 @@ func (m *Manager) Start(runID, profileRef string) (Experiment, error) {
 	if m.closed {
 		return Experiment{}, fmt.Errorf("manager is closed")
 	}
+	if existingID := m.byRunID[runID]; existingID != "" {
+		existing := m.experiments[existingID]
+		if existing == nil {
+			return Experiment{}, fmt.Errorf("run_id index is inconsistent")
+		}
+		if existing.ProfileRef != profileRef {
+			return Experiment{}, ErrRunConflict
+		}
+		return *existing, nil
+	}
 	profile, ok := m.profiles[profileRef]
 	if !ok {
 		return Experiment{}, fmt.Errorf("%w: profile %s", ErrNotFound, profileRef)
 	}
 	if m.activeID != "" {
+		if active := m.experiments[m.activeID]; active != nil && active.Phase == "cleanup_failed" {
+			return Experiment{}, ErrCleanupLatched
+		}
 		return Experiment{}, ErrExperimentActive
 	}
 	id, err := randomID()
@@ -175,11 +219,13 @@ func (m *Manager) Start(runID, profileRef string) (Experiment, error) {
 		ImpairmentLayer:    profile.ImpairmentLayer,
 	}
 	m.experiments[id] = experiment
+	m.byRunID[runID] = id
 	m.activeID = id
 	experimentCtx, stop := context.WithCancel(m.ctx)
 	m.activeStop = stop
 	if err := m.recordLocked("scheduled", experiment); err != nil {
 		delete(m.experiments, id)
+		delete(m.byRunID, runID)
 		m.activeID = ""
 		m.activeStop = nil
 		stop()
@@ -196,17 +242,25 @@ func (m *Manager) run(ctx context.Context, id string, profile Profile) {
 	defer activation.Stop()
 	select {
 	case <-ctx.Done():
-		m.finish(id, "cancelled", "stopped_before_activation", "")
+		m.cleanupAndFinish(id, "completed", "stopped_before_activation", "")
 		return
 	case <-activation.C:
 	}
+	m.mu.Lock()
+	if experiment := m.experiments[id]; experiment != nil {
+		if err := m.recordLocked("applying", experiment); err != nil {
+			m.mu.Unlock()
+			m.cleanupAndFinish(id, "failed", "audit_failed", "write applying audit: "+err.Error())
+			return
+		}
+	}
+	m.mu.Unlock()
 
 	applyCtx, cancelApply := context.WithTimeout(ctx, 15*time.Second)
 	err := m.controller.Apply(applyCtx, profile)
 	cancelApply()
 	if err != nil {
-		_ = m.controller.Clear(context.Background())
-		m.finish(id, "failed", "apply_failed", err.Error())
+		m.cleanupAndFinish(id, "failed", "apply_failed", err.Error())
 		return
 	}
 	now := time.Now().UTC()
@@ -220,8 +274,7 @@ func (m *Manager) run(ctx context.Context, id string, profile Profile) {
 			experiment.Phase = "failed"
 			experiment.Error = "write active audit: " + err.Error()
 			m.mu.Unlock()
-			_ = m.controller.Clear(context.Background())
-			m.finish(id, "failed", "audit_failed", experiment.Error)
+			m.cleanupAndFinish(id, "failed", "audit_failed", experiment.Error)
 			return
 		}
 	}
@@ -244,17 +297,40 @@ func (m *Manager) run(ctx context.Context, id string, profile Profile) {
 		}
 	}
 	m.mu.Unlock()
+	m.cleanupAndFinish(id, "completed", reason, "")
+}
+
+func (m *Manager) cleanupAndFinish(id, finalPhase, reason, errorText string) {
+	m.cleanupMu.Lock()
+	defer m.cleanupMu.Unlock()
+	m.mu.Lock()
+	experiment := m.experiments[id]
+	if experiment == nil || (experiment.CleanupVerified && experiment.Phase != "cleanup_failed") {
+		m.mu.Unlock()
+		return
+	}
+	if experiment.Phase != "cleanup_failed" {
+		if errorText == "" {
+			errorText = experiment.Error
+		}
+		experiment.finalError = errorText
+	}
+	m.mu.Unlock()
 	clearCtx, cancelClear := context.WithTimeout(context.Background(), 10*time.Second)
 	clearErr := m.controller.Clear(clearCtx)
 	cancelClear()
 	if clearErr != nil {
-		m.finish(id, "failed", reason, "cleanup: "+clearErr.Error())
+		if errorText != "" {
+			errorText += "; "
+		}
+		errorText += "cleanup: " + clearErr.Error()
+		m.finish(id, finalPhase, reason, errorText, false)
 		return
 	}
-	m.finish(id, "completed", reason, "")
+	m.finish(id, finalPhase, reason, errorText, true)
 }
 
-func (m *Manager) finish(id, phase, reason, errorText string) {
+func (m *Manager) finish(id, finalPhase, reason, errorText string, cleanupVerified bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	experiment := m.experiments[id]
@@ -262,32 +338,51 @@ func (m *Manager) finish(id, phase, reason, errorText string) {
 		return
 	}
 	now := time.Now().UTC()
-	experiment.Phase = phase
+	experiment.finalPhase = finalPhase
+	experiment.CleanupVerified = cleanupVerified
 	experiment.StopReason = reason
-	if errorText != "" || experiment.Error == "" {
+	if errorText != "" {
 		experiment.Error = errorText
 	}
-	experiment.ClearedAt = &now
-	if m.activeID == id {
-		m.activeID = ""
+	if cleanupVerified {
+		experiment.Phase = finalPhase
+		experiment.ClearedAt = &now
+		experiment.Error = experiment.finalError
+		if m.activeID == id {
+			m.activeID = ""
+			m.activeStop = nil
+		}
+	} else {
+		experiment.Phase = "cleanup_failed"
+		experiment.ClearedAt = nil
+		m.activeID = id
 		m.activeStop = nil
 	}
-	if err := m.recordLocked(phase, experiment); err != nil && experiment.Error == "" {
+	if err := m.recordLocked(experiment.Phase, experiment); err != nil && experiment.Error == "" {
 		experiment.Error = "write terminal audit: " + err.Error()
 	}
 }
 
 func (m *Manager) Stop(id string) (Experiment, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	experiment := m.experiments[id]
 	if experiment == nil {
+		m.mu.Unlock()
 		return Experiment{}, ErrNotFound
+	}
+	if experiment.Phase == "cleanup_failed" {
+		finalPhase := experiment.finalPhase
+		reason := experiment.StopReason
+		m.mu.Unlock()
+		m.cleanupAndFinish(id, finalPhase, reason, "")
+		return m.Get(id)
 	}
 	if m.activeID == id && m.activeStop != nil {
 		m.activeStop()
 	}
-	return *experiment, nil
+	result := *experiment
+	m.mu.Unlock()
+	return result, nil
 }
 
 func (m *Manager) Get(id string) (Experiment, error) {
@@ -323,9 +418,29 @@ func (m *Manager) Close() error {
 	m.cancel()
 	m.mu.Unlock()
 	m.wg.Wait()
+	m.cleanupMu.Lock()
+	defer m.cleanupMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return m.controller.Clear(ctx)
+	if err := m.controller.Clear(ctx); err != nil {
+		m.mu.Lock()
+		id := m.activeID
+		m.mu.Unlock()
+		if id != "" {
+			m.finish(id, "failed", "manager_close", "cleanup: "+err.Error(), false)
+		}
+		return err
+	}
+	m.mu.Lock()
+	id := m.activeID
+	m.mu.Unlock()
+	if id != "" {
+		experiment, getErr := m.Get(id)
+		if getErr == nil && experiment.Phase == "cleanup_failed" {
+			m.finish(id, experiment.finalPhase, experiment.StopReason, "", true)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) recordLocked(event string, experiment *Experiment) error {
