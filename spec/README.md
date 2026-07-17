@@ -11,8 +11,8 @@
 |---|---:|---|
 | P1 / ANEB Probe Android | 0.5.6 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出统一结果信封、1Hz 公开 Android 无线环境证据并支持 JSONL 导出/分享；Token 结果冻结任务对齐的完整 TTFT 证据 |
 | P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
-| P3 / aneb-ai-behavior-model | 0.1.0 | 维护现有 Schema 和 hypothesis 模型；生成带运行计划的 v2 发布包 |
-| Profile 横切机制 | 1.0.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式 |
+| P3 / aneb-ai-behavior-model | 0.2.0 | 维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划的 v2 发布包，并只允许通过绑定留出报告的候选升为 validated |
+| Profile 横切机制 | 1.1.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；新增 P3 授权校准三合同 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 这是一项治理声明，不代表现有 P1/P2 已实现远端版本协商；任何不兼容字段或语义变化都必须
@@ -63,6 +63,9 @@ fail closed。
 - `aneb-behavior-trace-v1.schema.json`：供 P3、Profile 使用。
 - `spec/schemas/aneb-result-v1.schema.json`：P1/P3/Profile 共用的三类正式测试结果合同；
   明确区分 run 状态与评估 verdict，冻结缺失/invalid/无线未采集语义，并禁止导出阶段重算。
+- `aneb-token-observation-v1.schema.json`：只允许 P3 Token 校准所需的派生 session 统计，未知字段拒绝。
+- `aneb-calibration-dataset-v1.schema.json`：冻结授权、观测范围、主体隔离训练/留出分区和规范化摘要。
+- `aneb-model-validation-v1.schema.json`：冻结候选模型、数据集和逐 workload 留出门限结果。
 - `aneb-token-runtime-plan-v1` 与 `aneb-realtime-runtime-plan-v1` 已有合同 ID、Kotlin/Python
   实现和本目录的结构校验，但还没有独立 JSON Schema；catalog 明确将
   `standalone_schema_path` 设为 `null`，不把实现类冒充 Schema。
@@ -105,6 +108,13 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 - ［KNOWN｜HIGH］App 0.5.6 的三个正式新引擎均以每 run 独立 RadioCollector 采集 1Hz Android 公开无线环境证据，并把类型化结果、信封、无线样本和环境事件同事务冻结；R01 使用 `observed + null scalar + sample_count + radio-context evidence ref` 引用时间序列，不虚构单值。
 - ［KNOWN｜HIGH］权限拒绝、设备不可用和未采集分别写 `permission_denied`、`unavailable`、`not_collected`；可分享信封移除经纬度。0.5.5 的规范化数字词法已用 Python 冻结向量锁定，避免 JVM/Python 指数表示差异造成摘要漂移。
 - ［KNOWN｜HIGH］Token 原始任务证据自 0.5.6 起冻结稳定 `task_id`、服务端处理时延和“节点确认上传完成→App 收到首 Token”的端到端 TTFT；B03/B04 由同一冻结证据生成。`scripts/analyze_ttft_repeatability.py` 只接受同 Profile/运行包/App/设备/节点/承载的相邻 cohort，以至少 5 个 run 的任务对齐样本 CV 中位数执行 ≤10% 的 fail-closed 复现性判据。
+
+## P3 校准发布闸门
+
+- ［KNOWN｜HIGH］P3 v0.2.0 只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠。
+- ［KNOWN｜HIGH］calibrated 候选只由 training 拟合，holdout 报告按 `token-holdout-validation-v1` 独立生成；任一 P50/P95、pause 或转移矩阵门限失败即禁止 promote。
+- ［KNOWN｜HIGH］validated 模型 build/runtime 发布必须携带原报告和 dataset manifest，并现场重算报告与 promoted 模型；单独篡改 `status=pass` 无效。
+- ［KNOWN｜HIGH］当前 4 个 catalog 模型仍全部为 hypothesis；Schema 和流水线存在不等于真实业务校准已经完成。
 
 ## 新增或升级资产
 

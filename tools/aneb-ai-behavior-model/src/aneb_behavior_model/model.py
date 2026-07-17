@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ MODEL_CONTRACT = "aneb-behavior-model-v1"
 PROFILE_CONTRACT = "aneb-profile-v2"
 SUPPORTED_BUSINESS_TYPES = {"token_multimodal", "ai_realtime_voice"}
 SUPPORTED_STATUSES = {"hypothesis", "calibrated", "validated", "retired"}
+SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class ModelError(ValueError):
@@ -61,6 +64,9 @@ def validate_model(model: dict[str, Any]) -> None:
         raise ModelError(f"unsupported business_type: {model['business_type']}")
     if model["status"] not in SUPPORTED_STATUSES:
         raise ModelError(f"unsupported model status: {model['status']}")
+    if not isinstance(model["model_version"], str) or not SEMVER_RE.fullmatch(model["model_version"]):
+        raise ModelError("model_version must be strict semantic version")
+    _validate_source(model["source"], model["status"])
     if model["prng"] != "pcg32-v1":
         raise ModelError("published models must use prng=pcg32-v1")
     profile = model["profile_export"]
@@ -106,6 +112,72 @@ def validate_model(model: dict[str, Any]) -> None:
         commit_modes = generation.get("commit_modes", ["vad"])
         if not isinstance(commit_modes, list) or not commit_modes or not set(commit_modes) <= {"vad", "manual"}:
             raise ModelError("commit_modes must contain vad/manual values")
+
+
+def _validate_source(source: Any, status: str) -> None:
+    if not isinstance(source, dict):
+        raise ModelError("source must be an object")
+    if source.get("content_retained") is not False:
+        raise ModelError("model source must not retain raw content")
+    if status not in {"calibrated", "validated"}:
+        return
+    required = {
+        "kind",
+        "dataset_id",
+        "dataset_version",
+        "dataset_manifest_sha256",
+        "authorization_basis",
+        "training_partition",
+        "content_retained",
+    }
+    missing = sorted(required - source.keys())
+    if missing:
+        raise ModelError(f"calibrated source missing fields: {missing}")
+    if source.get("kind") != "authorized_observation_dataset":
+        raise ModelError("calibrated model requires authorized_observation_dataset source")
+    if source.get("authorization_basis") not in {
+        "first_party_measurement",
+        "documented_consent",
+        "licensed_dataset",
+        "public_dataset_permitted_use",
+    }:
+        raise ModelError("calibrated source has unsupported authorization_basis")
+    if not isinstance(source.get("dataset_id"), str) or not source["dataset_id"]:
+        raise ModelError("calibrated source requires dataset_id")
+    if not isinstance(source.get("dataset_version"), str) or not SEMVER_RE.fullmatch(source["dataset_version"]):
+        raise ModelError("calibrated source requires semantic dataset_version")
+    if not isinstance(source.get("dataset_manifest_sha256"), str) or not SHA256_RE.fullmatch(source["dataset_manifest_sha256"]):
+        raise ModelError("calibrated source requires dataset manifest digest")
+    training = source.get("training_partition")
+    if not isinstance(training, dict) or set(training) != {"canonical_sha256", "observation_count"}:
+        raise ModelError("calibrated source requires strict training partition evidence")
+    if not isinstance(training["canonical_sha256"], str) or not SHA256_RE.fullmatch(training["canonical_sha256"]):
+        raise ModelError("training partition digest is invalid")
+    if isinstance(training["observation_count"], bool) or not isinstance(training["observation_count"], int) or training["observation_count"] <= 0:
+        raise ModelError("training partition observation_count is invalid")
+    if status == "validated":
+        validation = source.get("validation")
+        expected = {
+            "validation_contract_version",
+            "policy_id",
+            "report_canonical_sha256",
+            "calibrated_model_sha256",
+            "holdout_partition_sha256",
+            "holdout_observation_count",
+        }
+        if not isinstance(validation, dict) or set(validation) != expected:
+            raise ModelError("validated model requires strict holdout validation evidence")
+        for key in ("report_canonical_sha256", "calibrated_model_sha256", "holdout_partition_sha256"):
+            if not isinstance(validation[key], str) or not SHA256_RE.fullmatch(validation[key]):
+                raise ModelError(f"validated source has invalid {key}")
+        if validation["validation_contract_version"] != "aneb-model-validation-v1":
+            raise ModelError("unsupported validation contract")
+        if validation["policy_id"] != "token-holdout-validation-v1":
+            raise ModelError("unsupported validation policy")
+        if isinstance(validation["holdout_observation_count"], bool) or not isinstance(validation["holdout_observation_count"], int) or validation["holdout_observation_count"] <= 0:
+            raise ModelError("holdout observation_count is invalid")
+    elif "validation" in source:
+        raise ModelError("calibrated model cannot claim validation evidence")
 
 
 def _validate_distribution(distribution: Any, name: str) -> None:

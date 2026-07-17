@@ -269,6 +269,9 @@ def _validate_schemas(root: Path, catalog: dict[str, Any], errors: list[str]) ->
         property_name = {
             "aneb-behavior-trace-v1": "trace_contract_version",
             "aneb-result-v1": "schema_version",
+            "aneb-token-observation-v1": "observation_contract_version",
+            "aneb-calibration-dataset-v1": "dataset_contract_version",
+            "aneb-model-validation-v1": "validation_contract_version",
         }.get(schema_id, "contract_version")
         declared_contract = value.get("properties", {}).get(property_name, {}).get("const")
         if declared_contract != contract:
@@ -801,7 +804,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {error}", file=sys.stderr)
         return 1
     if not args.quiet:
-        print("ANEB spec catalog OK: 3 schemas, 2 families, 16 profiles, 6 runtime bundles, 6 embedded-network profiles")
+        catalog_path = args.catalog or args.root / "spec/catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        families = catalog["profile_families"]
+        profiles = [profile for family in families for profile in family["profiles"]]
+        runtime_bound = [profile for profile in profiles if "runtime_plan_path" in profile]
+        embedded_network = [
+            profile for profile in profiles
+            if profile.get("validation_group_id") == "network_embedded_phases"
+        ]
+        print(
+            "ANEB spec catalog OK: "
+            f"{len(catalog['schemas'])} schemas, {len(families)} families, "
+            f"{len(profiles)} profiles, {len(runtime_bound)} runtime bundles, "
+            f"{len(embedded_network)} embedded-network profiles, "
+            f"{len(catalog['model_assets'])} behavior models"
+        )
     return 0
 
 

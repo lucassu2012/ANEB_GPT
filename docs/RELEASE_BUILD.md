@@ -44,5 +44,5 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 - Room schema: version 19, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
 - Debug APK SHA-256: `B2C56295DA3565B06D71C19523C5685DBD1514C2B67E66C88C86D005565F6E57` (`0.5.6-codex`; debug artifacts are not release evidence).
-- Quality baseline: 525 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); TTFT repeatability analyzer 5 tests, behavior model 21 tests and Go server/gateway tests pass.
+- Quality baseline: 525 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); TTFT repeatability analyzer 5 tests, behavior model 31 tests and Go server/gateway tests pass.
 - Device validation: P40 Pro Token/AI realtime/network Quick envelopes passed Draft 2020-12 validation, independent Python canonical-digest verification and 1Hz radio evidence count reconciliation. A 5-run Token Quick cohort additionally passed task-aligned TTFT repeatability with median CV 1.425% and maximum CV 4.986% against a 10% limit. These are Debug/Quick validation artifacts, not signed release evidence.

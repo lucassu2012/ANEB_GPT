@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aneb.local/schemas/aneb-model-validation-v1.schema.json",
+  "title": "ANEB behavior model holdout validation report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "validation_contract_version",
+    "policy_id",
+    "status",
+    "candidate",
+    "dataset",
+    "criteria",
+    "summary",
+    "workloads",
+    "claim"
+  ],
+  "properties": {
+    "validation_contract_version": {"const": "aneb-model-validation-v1"},
+    "policy_id": {"const": "token-holdout-validation-v1"},
+    "status": {"enum": ["pass", "fail"]},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_id", "model_version", "status", "canonical_sha256"],
+      "properties": {
+        "model_id": {"type": "string", "minLength": 1},
+        "model_version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "status": {"const": "calibrated"},
+        "canonical_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_id", "dataset_version", "manifest_canonical_sha256", "training_partition", "holdout_partition"],
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "dataset_version": {"type": "string", "minLength": 1},
+        "manifest_canonical_sha256": {"$ref": "#/$defs/digest"},
+        "training_partition": {"type": "object"},
+        "holdout_partition": {"type": "object"}
+      }
+    },
+    "criteria": {"type": "object"},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_count", "failed_check_count", "failed_check_ids", "maximum_primary_relative_error"],
+      "properties": {
+        "check_count": {"type": "integer", "minimum": 1},
+        "failed_check_count": {"type": "integer", "minimum": 0},
+        "failed_check_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "maximum_primary_relative_error": {"type": "number", "minimum": 0}
+      }
+    },
+    "workloads": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["holdout_observation_count", "holdout_interval_count", "maximum_transition_row_tvd", "checks"],
+        "properties": {
+          "holdout_observation_count": {"type": "integer", "minimum": 1},
+          "holdout_interval_count": {"type": "integer", "minimum": 1},
+          "maximum_transition_row_tvd": {"type": "number", "minimum": 0, "maximum": 1},
+          "checks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/check"}}
+        }
+      }
+    },
+    "claim": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "candidate_value", "holdout_value", "error", "limit", "pass"],
+      "properties": {
+        "check_id": {"type": "string", "minLength": 1},
+        "candidate_value": {},
+        "holdout_value": {},
+        "error": {"type": "number", "minimum": 0},
+        "limit": {"type": "number", "minimum": 0},
+        "pass": {"type": "boolean"}
+      }
+    }
+  }
+}

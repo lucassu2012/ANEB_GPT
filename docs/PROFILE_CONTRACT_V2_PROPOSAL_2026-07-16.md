@@ -486,6 +486,15 @@ Token 准时到达率当前为 92%，未达 95% 目标。
 
 首版接受线建议为主要 P50/P95 相对误差≤20%，状态转移每行总变差距离≤0.15；这只是建模系统自己的发布门，不进入 App 网络评分。
 
+#### 9.4.1 v0.2.0 as-built（2026-07-18）
+
+- ［KNOWN｜HIGH］已实现 `aneb-token-observation-v1`、`aneb-calibration-dataset-v1` 和 `aneb-model-validation-v1` 三个 Draft 2020-12 合同，并纳入 `spec/catalog.json`。
+- ［KNOWN｜HIGH］观测只允许 payload/处理等待/输出 Token 数/Token 间隔/返回字节等派生统计；未知字段 fail-closed，原始内容、账号和 key 不会被静默忽略后继续拟合。
+- ［KNOWN｜HIGH］训练/留出同时检查 observation ID 与 dataset-specific HMAC subject group 零重叠；普通 SHA256(account) 不被接受。
+- ［KNOWN｜HIGH］每 workload 的训练/留出最小 session 数为 20/10；payload、处理等待、输出 Token 数和 Token 间隔 P50/P95 相对误差门限 20%，pause 占比绝对误差 0.05，转移矩阵逐行 TVD 0.15。
+- ［KNOWN｜HIGH］`promote-token` 与 validated runtime 发布都会从冻结 manifest/holdout 复算报告并核对模型摘要，不能只靠可编辑的 PASS 字段晋级。
+- ［KNOWN｜HIGH］当前没有真实授权数据或 validated 模型，4 个正式模型继续保持 hypothesis。
+
 ## 10. 实施顺序
 
 1. 先实现独立模型工程的 schema、确定性生成器、校验器和三个 hypothesis 原型；

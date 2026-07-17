@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.0.0",
+  "catalog_version": "1.1.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -37,7 +37,7 @@
     },
     "P3": {
       "component": "aneb-ai-behavior-model",
-      "current_version": "0.1.0",
+      "current_version": "0.2.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -51,7 +51,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.0.0",
+      "current_version": "1.1.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -105,6 +105,39 @@
       "contract_version": "aneb-result-v1",
       "consumers": [
         "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-token-observation-v1",
+      "schema_version": "1.0.0",
+      "path": "tools/aneb-ai-behavior-model/schemas/aneb-token-observation-v1.schema.json",
+      "json_schema_id": "https://aneb.local/schemas/aneb-token-observation-v1.schema.json",
+      "contract_version": "aneb-token-observation-v1",
+      "consumers": [
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-calibration-dataset-v1",
+      "schema_version": "1.0.0",
+      "path": "tools/aneb-ai-behavior-model/schemas/aneb-calibration-dataset-v1.schema.json",
+      "json_schema_id": "https://aneb.local/schemas/aneb-calibration-dataset-v1.schema.json",
+      "contract_version": "aneb-calibration-dataset-v1",
+      "consumers": [
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-model-validation-v1",
+      "schema_version": "1.0.0",
+      "path": "tools/aneb-ai-behavior-model/schemas/aneb-model-validation-v1.schema.json",
+      "json_schema_id": "https://aneb.local/schemas/aneb-model-validation-v1.schema.json",
+      "contract_version": "aneb-model-validation-v1",
+      "consumers": [
         "P3",
         "Profile"
       ]

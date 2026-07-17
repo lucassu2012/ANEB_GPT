@@ -1,0 +1,1 @@
+{"observation_contract_version":"aneb-token-observation-v1","observation_id":"obs-synthetic-document-0001","subject_group_id":"hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000","workload_kind":"document","payload_bytes":5242880,"processing_delay_ms":1430,"output_token_count":812,"token_intervals_ms":[31,28,45,310,36],"response_artifact_bytes":0}

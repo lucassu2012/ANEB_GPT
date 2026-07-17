@@ -68,6 +68,9 @@ def fit_token_interval_markov(
 def fit_token_model(
     observations: list[dict[str, Any]],
     template: dict[str, Any],
+    *,
+    calibration_source: dict[str, Any],
+    candidate_version: str,
 ) -> dict[str, Any]:
     """Fit a calibrated token model from session-level JSON observations.
 
@@ -83,12 +86,9 @@ def fit_token_model(
         raise ValueError("no observations")
 
     model = deepcopy(template)
+    model["model_version"] = candidate_version
     model["status"] = "calibrated"
-    model["source"] = {
-        "kind": "authorized_observation_dataset",
-        "observation_count": len(observations),
-        "content_retained": False,
-    }
+    model["source"] = deepcopy(calibration_source)
     workloads_by_kind = {
         workload["kind"]: workload for workload in model["generation"]["workloads"]
     }
@@ -111,4 +111,3 @@ def _empirical(rows: list[dict[str, Any]], field: str) -> dict[str, Any]:
     if not values:
         raise ValueError(f"observation field {field} is empty")
     return {"type": "empirical", "values": values}
-

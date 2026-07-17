@@ -32,7 +32,23 @@ class FittingTest(unittest.TestCase):
             }
             for index in range(6)
         ]
-        fitted = fit_token_model(observations, template)
+        fitted = fit_token_model(
+            observations,
+            template,
+            candidate_version="0.1.1",
+            calibration_source={
+                "kind": "authorized_observation_dataset",
+                "dataset_id": "authorized-token-sessions",
+                "dataset_version": "1.0.0",
+                "dataset_manifest_sha256": "sha256:" + "0" * 64,
+                "authorization_basis": "first_party_measurement",
+                "training_partition": {
+                    "canonical_sha256": "sha256:" + "1" * 64,
+                    "observation_count": len(observations),
+                },
+                "content_retained": False,
+            },
+        )
         validate_model(fitted)
         self.assertEqual(fitted["status"], "calibrated")
         self.assertFalse(fitted["source"]["content_retained"])
@@ -41,4 +57,3 @@ class FittingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

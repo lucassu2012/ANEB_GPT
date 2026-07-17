@@ -1,0 +1,31 @@
+{
+  "metadata_contract_version": "aneb-calibration-metadata-v1",
+  "prepared_at": "2026-07-18T06:00:00Z",
+  "authorization": {
+    "status": "pending",
+    "basis": "documented_consent",
+    "approved_by": "approval-role-id",
+    "approved_at": "2026-07-18T05:00:00Z",
+    "allowed_purposes": [
+      "behavior_model_calibration"
+    ],
+    "content_policy": "derived_statistics_only",
+    "content_retained": false,
+    "reference_id": "replace-with-real-approval-reference"
+  },
+  "scope": {
+    "source_kind": "real_application_observation",
+    "provider_labels": [
+      "replace-with-authorized-cohort-label"
+    ],
+    "geography_labels": [
+      "replace-with-privacy-safe-region-bucket"
+    ],
+    "device_classes": [
+      "replace-with-device-class"
+    ],
+    "observation_window_start": "2026-07-01T00:00:00Z",
+    "observation_window_end": "2026-07-15T00:00:00Z",
+    "collection_method": "derived-session-statistics-v1"
+  }
+}
