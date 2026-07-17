@@ -93,6 +93,49 @@ internal object ProbeRunLogParser {
     }
 }
 
+/** AI 实时测试只以已经持久化并发布的结果作为 Completed 依据。 */
+internal object RealtimeServiceTerminalPolicy {
+    private const val MISSING_RESULT_MESSAGE = "测试未生成结果，请重试。"
+
+    fun afterFlow(autorun: Boolean, committedRunId: String?): ProbeRunSession =
+        committedRunId?.let { completed(autorun, it) }
+            ?: ProbeRunSession.Failed(
+                autorun = autorun,
+                message = MISSING_RESULT_MESSAGE,
+                testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+            )
+
+    fun afterCancellation(
+        autorun: Boolean,
+        committedRunId: String?,
+        cancelRequested: Boolean,
+    ): ProbeRunSession? = when {
+        committedRunId != null -> completed(autorun, committedRunId)
+        cancelRequested -> ProbeRunSession.Cancelled(
+            autorun = autorun,
+            testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+        )
+        else -> null
+    }
+
+    fun afterFailure(
+        autorun: Boolean,
+        committedRunId: String?,
+        message: String,
+    ): ProbeRunSession = committedRunId?.let { completed(autorun, it) }
+        ?: ProbeRunSession.Failed(
+            autorun = autorun,
+            message = message,
+            testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+        )
+
+    private fun completed(autorun: Boolean, runId: String) = ProbeRunSession.Completed(
+        autorun = autorun,
+        runId = runId,
+        testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+    )
+}
+
 /**
  * V1 主测量前台 Service。它拥有 [TestEngine] 与协程作用域；Activity 只订阅 StateFlow，
  * 因此切后台和配置重建不会取消 run。通知提供明确的“取消测试”动作。
@@ -174,6 +217,7 @@ class ProbeRunService : Service() {
 
         runJob = serviceScope.launch {
             var runId: String? = null
+            var realtimeEngine: RealtimeSimulationEngine? = null
             try {
                 val lines: Flow<String> = when (config.testMode) {
                     AnebTestMode.TOKEN_EXPERIENCE -> {
@@ -239,7 +283,9 @@ class ProbeRunService : Service() {
                         )
                     }
                     AnebTestMode.AI_REALTIME_SIMULATION -> {
-                        val engine = RealtimeSimulationEngine(applicationContext)
+                        val engine = RealtimeSimulationEngine(applicationContext).also {
+                            realtimeEngine = it
+                        }
                         telemetryJob = serviceScope.launch {
                             engine.telemetry.collect { _realtimeSimulationTelemetry.value = it }
                         }
@@ -269,20 +315,48 @@ class ProbeRunService : Service() {
                     }
                     ProbeRunLogParser.progressText(line)?.let(::updateNotification)
                 }
-                val completedId = runId
-                _session.value = if (completedId != null) {
-                    ProbeRunSession.Completed(autorun, completedId, config.testMode)
+                if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
+                    val committed = realtimeEngine?.result?.value
+                    if (committed != null) _realtimeSimulationResult.value = committed
+                    _session.value = RealtimeServiceTerminalPolicy.afterFlow(
+                        autorun = autorun,
+                        committedRunId = committed?.runId,
+                    )
                 } else {
-                    ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
+                    val completedId = runId
+                    _session.value = if (completedId != null) {
+                        ProbeRunSession.Completed(autorun, completedId, config.testMode)
+                    } else {
+                        ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
+                    }
                 }
             } catch (e: CancellationException) {
-                if (cancelRequested) {
+                if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
+                    val committed = realtimeEngine?.result?.value
+                    if (committed != null) _realtimeSimulationResult.value = committed
+                    RealtimeServiceTerminalPolicy.afterCancellation(
+                        autorun = autorun,
+                        committedRunId = committed?.runId,
+                        cancelRequested = cancelRequested,
+                    )?.let { _session.value = it }
+                } else if (cancelRequested) {
                     _session.value = ProbeRunSession.Cancelled(autorun, config.testMode)
                 }
                 throw e
             } catch (e: Exception) {
-                addLog("RUN_FAILED error=$e")
-                _session.value = ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e), config.testMode)
+                val committed = realtimeEngine?.result?.value
+                    .takeIf { config.testMode == AnebTestMode.AI_REALTIME_SIMULATION }
+                if (committed != null) _realtimeSimulationResult.value = committed
+                if (committed == null) addLog("RUN_FAILED error=$e")
+                _session.value = if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
+                    RealtimeServiceTerminalPolicy.afterFailure(
+                        autorun = autorun,
+                        committedRunId = committed?.runId,
+                        message = RunFailureMessage.forError(e),
+                    )
+                } else {
+                    ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e), config.testMode)
+                }
             } finally {
                 telemetryJob?.cancel()
                 telemetryJob = null

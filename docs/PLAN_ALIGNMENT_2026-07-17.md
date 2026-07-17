@@ -1,0 +1,165 @@
+# ANEB Codex 进展对齐报告——按《ANEB 系统开发计划 v1.0》映射
+
+> 更新日期：2026-07-17。
+> 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
+> 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
+> 已交付事实基线：Codex `main@aee3760`（App 0.5.0、server 0.7.0、gateway 0.2.0）；本文件把尚未通过全量质量门的工作明确列为“进行中”，不混入已完成。
+
+## 0. 先讲偏差与裁定
+
+- ［KNOWN｜HIGH］当前采用 monorepo，但目录数量不等于计划仓库数量：`app/` 同时承载 P1a/P1b，`server/` + `gateway/` 属于 P2，`profiles/` + `tools/aneb-ai-behavior-model/` 承载 P3 与 Profile 横切资产，Profile 3 独立适配器模块尚未建立。
+- ［INFERRED｜HIGH］现阶段保持逻辑隔离更合适；出现独立发布节奏或独立负责人后再物理拆仓。
+- ［KNOWN｜HIGH］“Profile 即数据”目前只完成了一半：业务参数、质量目标、动态指标和运行计划已数据化；新增一种全新的传输原语、采样语义或评分算法仍然需要代码。可执行的铁律应是：**已有原语内的业务变化只改 Profile；新增原语先升 spec/contract，再改 P1/P2 引擎。**
+- ［KNOWN｜HIGH］JSON 与 YAML 都能承载声明式合同。当前产物已统一为可校验 JSON；为了形式改成 YAML没有业务价值，后续重点是单一 schema、兼容区间和消费者一致性。
+- ［KNOWN｜HIGH］现有 Profile 有两族合同：服务端根 Profile（4 个相位 Profile）和 App 发布 Profile v2（12 个业务/测量 Profile）。两族尚未收敛成 P1/P2 同时解释的一个端到端合同，这是 M0 的真实治理欠账。
+- ［KNOWN｜HIGH］真实第三方 App 适配器尚未进入主 App。依照此前“ANEB App 只做自建节点仿真”的产品边界，未来 Profile 3 应放在独立 `aneb-adapters` 模块，不得把真实 API、账号或脆弱自动化混入 P1b 核心评分链。
+
+## 1. 一页结论
+
+| 计划单元 | Codex 当前状态 | 结论 |
+|---|---|---|
+| **P1a 前台 UI** | **产品化大部完成；发布边界加固中** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、分享、设置、节点与体验地图外壳；视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 正从正式 UI 代码彻底移除，只保留受保护 Debug/ADB 诊断组件。 |
+| **P1b 测量引擎** | **M1 主闭环完成；可靠性收口中** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；无线协变量、Room、导出和评分已接线。当前正修复 AI 实时结果提交/取消原子性、异常建链卡住和固定网络失效后重绑。 |
+| **P2 服务器侧** | **当前 App 所需单节点矩阵完成；原计划 P2 部分完成** | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.7.0`，已覆盖当前 App 使用的 Token、上传、下载、工具循环、WebSocket 实时双工、测速、UDP、结果与逐 run 合成弱网；对照原计划仍缺 RTP/WebRTC 语音回环、通用 100MiB/1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
+| **P3 标准与业务模型** | **可运行纵向切片完成；真实画像未校准** | ［KNOWN｜HIGH］独立行为模型工程可生成 Token/Stress/AI 实时/Recovery 确定性轨迹、运行计划、Profile v2、哈希和验证报告；现有 4 个模型全部明确为 `hypothesis`，没有获准现网观测数据，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
+| **横切 Profile 体系** | **数据化程度高，但合同仍分叉** | ［KNOWN｜HIGH］已有 12 个 App 发布 Profile + 4 个服务端根 Profile；Profile v2 内含业务类型、全量指标/目标、动态主指标、评分/结论策略和哈希绑定运行计划。P1/P2 尚未共同解释同一份 v2 descriptor，统一结果 Schema 也未冻结。 |
+| **里程碑位置** | **M1 单节点功能切片完成、正式验收未通过；M0 治理部分完成；M3 仅 WebSocket 仿真轨完成；M4 UI 超前；M2 未启动** | ［KNOWN｜HIGH］详见 §7；不以 UI 完成度冒充外场与业务画像完成度。 |
+
+## 2. P1a 手机端前台 UI
+
+### 已完成
+
+- ［KNOWN｜HIGH］单 Activity + 原生 Compose 五栏外壳，未用 WebView 承载 `ANEB_UI`。
+- ［KNOWN｜HIGH］Token 多模态测试实时呈现仿真 Token/s、RTT、上行速率和准时到达率；AI 实时测试呈现 2 秒准时音频帧率、播放余量、RTT 与双向速率；网络综合测试呈现负载 RTT、上下行速率和低速窗口。
+- ［KNOWN｜HIGH］测试结果包含独立分数、等级、置信度、业务行为特征、逐项达标情况和网络建议；缺失值显示不可用，不伪装成 0。
+- ［KNOWN｜HIGH］历史记录、结果详情、专业报告、分享卡、Profile 目录、设置、节点页和自适应图标已实现。
+- ［KNOWN｜HIGH］UI 只观察 Service/Engine 状态，不在 Composable 内执行测量与评分主逻辑。
+
+### 进行中
+
+- ［KNOWN｜HIGH］正式 UI 的真实付费 API Probe 死路由、Key 存储页和导出页正在删除；Debug 诊断入口改为受 `android.permission.DUMP` 保护的一次性组件，普通 App 不能触发。
+- ［KNOWN｜HIGH］普通 ADB autorun 正改为首次创建即消费，避免屏幕旋转或系统重建后重复发起测试。
+
+### 缺口
+
+- ［KNOWN｜HIGH］体验地图目前是产品外壳，不是 M2 的 6–8 点位热力聚合与三级归因地图。
+- ［KNOWN｜HIGH］尚未完成“非开发者从安装到测试再到导出报告”的正式可用性验收；Release 签名材料也不在仓库中。
+- ［INFERRED｜MED］视觉已接近目标方向，但“达到 SpeedTest 级”仍需要真机逐屏动效、弱机帧率、无障碍和长文本回归，不能仅由代码完成度判定。
+
+## 3. P1b 手机端测量引擎
+
+### 计划模块映射
+
+| 计划模块 | Codex 状态 | 实现事实 |
+|---|---|---|
+| Profile 解释器 | 🟡 两族合同均可读 | ［KNOWN｜HIGH］旧根 Profile 驱动传统 Token 场景；Profile v2 + runtime plan 驱动 Token/AI 实时/网络综合独立引擎；尚未统一为一个解释器。 |
+| 传输探针 | ✅ | ［KNOWN｜HIGH］OkHttp 事件计时、NO_PROXY、显式 Wi-Fi/蜂窝绑定、Cronet A/B、WebSocket、UDP ANEB1 和专用网关 HTTPS 控制均已实现。 |
+| SSE/Token 解析 | ✅ | ［KNOWN｜HIGH］逐事件 TTFT、TPS、ITL、完整率、卡顿、服务端节奏剥离与批化诊断已实现。 |
+| 上传/下载 | ✅ | ［KNOWN｜HIGH］KB/MB/100MiB 档位、服务端确认字节、并发负载 echo 和精确下载排空均有执行路径。 |
+| Agent 步进 | ✅ | ［KNOWN｜HIGH］`/toolloop` 串行工具调用往返已接入传统场景。 |
+| AI 实时双工 | ✅，可靠性加固中 | ［KNOWN｜HIGH］20ms 双向帧、等待、播放、打断、受控断连与恢复均已实现；本阶段修复取消/持久化/网络重绑 P1。 |
+| 无线上下文 | ✅ | ［KNOWN｜HIGH］RAT、RSRP、RSRQ/SINR（设备公开能力允许时）、小区、位置/路测开关作为协变量采集；App 不声称能人为设置射频指标。 |
+| 会话记录 | ✅，Schema 待统一 | ［KNOWN｜HIGH］Room v18 保存三类结果、网关证据与原始运行上下文；已有 JSON/CSV/报告导出，但不是计划要求的唯一 JSONL Schema。 |
+| Profile 3 真实 App 适配器宿主 | 不适用（独立模块未启动） | ［KNOWN｜HIGH］后续产品裁定已覆盖原计划中的 P1b 适配器宿主设计；真实第三方 App 适配器若重启，应作为独立易耗模块建设，当前未启动，不计为主 App M1 缺口。 |
+
+### 原计划“铁律 3”符合度
+
+- ［KNOWN｜HIGH］客户端计分侧基本符合：评分主指标使用客户端单调时钟可观测时刻，服务端计划/调度时戳只用于剥离服务端节奏和诊断。
+- ［KNOWN｜HIGH］服务端配合侧部分符合：`echo`、`upload`、`toolloop`、`stream`、`realtime` 的诊断信息粒度不一，`download` 没有统一服务端时间序列，UDP 序号由客户端报文携带；因此不能声称“全端点时戳与序号已完成”。
+
+### 已验证能力
+
+- ［KNOWN｜HIGH］0.5.0 基线质量门为 468 个 JVM 测试零失败、Android Lint 零 error、行为模型 14 项测试通过、server/gateway Go 测试通过。
+- ［KNOWN｜HIGH］P40 Pro 已完成 Token 100MiB Stress、网络综合正常/合成弱网相邻对照、逐 run 恢复四轮、无线协变量和 UI 动态证据；这些结论只适用于对应设备、节点和合同，不外推为运营商整体表现。
+- ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
+
+## 4. P2 服务器侧
+
+### 已完成
+
+- ［KNOWN｜HIGH］P2 当前实现与部署技术栈是 Go。
+- ［INFERRED｜HIGH］为了匹配旧计划而改写为 FastAPI不会增加测量能力，当前不应重写。
+- ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.7.0`，端点包括 `/profiles`、`/echo`、`/stream`、`/token-sim`、`/realtime-sim`、`/upload`、`/download`、`/toolloop`、`/results`、`/serverinfo`、`/impairments` 与 UDP/8443。
+- ［KNOWN｜HIGH］`s3_multimodal@0.3.0` 已包含两段 12MiB `download_burst`；端点响应带版本、序号和服务端诊断时间信息。
+- ［KNOWN｜HIGH］E-01 有两个逐 run 隔离的用户态合成弱网合同；共享主机未使用全局 netem。
+- ［KNOWN｜HIGH］独立 `aneb-gateway/0.2.0` 已实现 IP 层双向整形、固定 Debug CA、严格双网口/路由预检、资源所有权和失败清理；它没有部署到 E-01。
+
+### 缺口与阻塞
+
+- ［KNOWN｜HIGH］只有 E-01 单节点，没有同城/区域/中心三级镜像，因此 M2 的地域/层级差分不能开始。
+- ［KNOWN｜HIGH］专用网关最终固定 CA 正向生命周期缺离线 CA 签发的现场叶证书；P40 网络层真机验收缺独占双网口 Linux/AP，均为 `BLOCKED_EXTERNAL`。
+- ［KNOWN｜HIGH］当前 `/upload` 单请求上限为 64MiB，而 Token Stress 通过 `/token-sim` 支持 100MiB 业务负载；如要把通用 `/upload` 扩到 100MiB/1GiB，必须先确定外场流量与服务器资源预算。
+
+## 5. P3 ANEB 标准与业务模型
+
+### 已完成
+
+- ［KNOWN｜HIGH］`tools/aneb-ai-behavior-model/` 是与 App 分离的可运行工程，当前版本 `v0.1.0`。
+- ［KNOWN｜HIGH］已提供 `aneb-profile-v2` 和 `aneb-behavior-trace-v1` JSON Schema、PCG32 确定性生成与规范化语义哈希；工具可重复生成金轨迹和结构验证报告，Git 当前正式发布的是 Token/AI 实时的精简 Profile、运行计划和 manifest。结构验证不等于真实业务校准验证。
+- ［KNOWN｜HIGH］已发布 Token Standard/Quick/Stress 与 AI 实时 Standard/Quick/Recovery 运行计划；网络综合另有 Standard/Quick/合成弱网/恢复/专用网关系列 Profile。
+- ［KNOWN｜HIGH］Profile v2 逐项声明业务类型、行为特征、全量业务/网络/无线指标、质量目标、95% 达标口径、动态主/辅指标、必需指标、权重、门控、结论策略、claim scope 与模型来源。
+- ［KNOWN｜HIGH］评分策略彼此独立：Token、AI 实时和网络综合不混分；缺必需指标时 score 为 null，invalid 保留原始证据但抑制评分。
+
+### 最大缺口
+
+- ［KNOWN｜HIGH］四个行为模型均为 `hypothesis`；没有授权观测数据集、留出集或跨版本校准报告。当前只能称“产品假设驱动的可重复仿真”，不能称“真实 Kimi/DeepSeek/千问模型”。
+- ［KNOWN｜HIGH］尚无统一结果 JSON Schema，也没有把跨 Profile 共用的指标定义/质量目标抽成一个单独版本包；目前它们嵌在各 Profile 中。
+- ［KNOWN｜HIGH］Profile 3 的业务画像采集、包时序拟合、PoP/IP 清单和真实 App 适配器均未开始。
+- ［INFERRED｜HIGH］P3 是下一轮最能提升商业可信度的部分；继续增加假设 Profile 的边际价值低于获得首批合法、可追溯的业务画像数据。
+
+### 原计划目标业务清单 v1 状态
+
+| 目标业务 | 当前状态 |
+|---|---|
+| Kimi / DeepSeek / 千问 Token/API 原型 | ［KNOWN｜HIGH］只有未校准的通用 Token archetype，没有厂商画像校准，不得声称复现任一厂商真实业务。 |
+| Claude Code / Coding Agent | ［KNOWN｜HIGH］只有通用 `s2_coding_agent` 根 Profile 与工具循环测量原语，没有 Claude Code 厂商画像校准。 |
+| 豆包 / 元宝 / 千问 / DeepSeek / Kimi 真实 App 轨 | ［KNOWN｜HIGH］未启动；主 App 当前只做自建节点仿真。 |
+| GPT-Live-like 实时语音 | ［KNOWN｜HIGH］WebSocket 双工仿真、打断与受控恢复已完成。 |
+| 豆包真实语音 / RTP / WebRTC | ［KNOWN｜HIGH］未启动，没有 RTP/WebRTC 回环与逐帧对照验收。 |
+
+## 6. 横切机制：Profile 体系
+
+### 当前资产
+
+- ［KNOWN｜HIGH］服务端根 Profile：`s1_chat`、`s2_coding_agent`、`s3_multimodal`、`basic_network`。
+- ［KNOWN｜HIGH］App 发布 Profile 共 12 个：Token 3 个、AI 实时 3 个、网络综合 6 个。
+- ［KNOWN｜HIGH］Token 与 AI 实时共 6 个发布 Profile 使用 `profile + runtime_plan + manifest`，App 启动前校验合同、模型和规范化哈希；网络综合 6 个 Profile 采用内嵌 phase 合同与客户端 capability 校验，目前没有独立 runtime manifest。两条路径都不接受节点下发任意脚本。
+- ［KNOWN｜HIGH］新增既有模式的 Quick/Standard/Stress/Recovery 变体主要通过数据完成；新增全新 phase 或测量语义仍需引擎适配并升合同版本。
+
+### 下一步收敛顺序
+
+1. ［INFERRED｜HIGH］在现有仓库建立 `spec/` 逻辑根，先以引用/生成方式汇总 schema、profiles、score policies 与 result schema，避免立即移动文件造成 P1/P2 构建断裂。
+2. ［INFERRED｜HIGH］冻结统一 `aneb-result-v1` JSON Schema，提供 Room/报告到该 Schema 的确定性导出；JSONL 只是多条结果的封装，不应另造语义。
+3. ［INFERRED｜HIGH］把两个 Profile 家族的公共头、端点能力和兼容区间统一；P2 不必执行 UI/评分字段，但必须验证自己声明支持的 phase 与 server contract。
+4. ［INFERRED｜HIGH］将重复的指标/目标/评分策略提取为版本化引用，同时保留发布包展开后的自包含快照，保证离线可审计。
+
+## 7. 里程碑映射
+
+| 里程碑 | Codex 现状 | 验收判断 |
+|---|---|---|
+| **M0 契约冻结** | 两套 Schema、16 个 Profile 资产、哈希运行计划均已存在，但 Profile 合同分叉且无统一结果 Schema | ［KNOWN｜HIGH］**部分完成**；运行资产超前，治理验收未闭环。 |
+| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + Profile 1/2/4 仿真轨 + radio_ctx + Room/报告已跑通；无三级部署、统一 JSONL 与 TTFT CV≤10% 复测证据 | ［KNOWN｜HIGH］**部分完成**：单节点实验室纵向切片已跑通，但 M1 正式验收未闭环。 |
+| **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
+| **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
+| **M4 产品化** | Compose UI、动态测试、历史/结果/报告/分享已完成大部；正式发布边界与生命周期加固中 | ［KNOWN｜HIGH］**部分超前**；非开发者验收、签名 Release 与公开发布仍未完成。 |
+
+## 8. 当前自主执行顺序
+
+1. ［FRAME｜LOW］完成 P1 发布边界与 AI 实时生命周期 P1 修复，串行跑全量质量门，生成 App 0.5.1 Debug APK。
+2. ［FRAME｜LOW］进入 M0 治理补账：统一结果 Schema、spec 逻辑目录、Profile 家族兼容声明与生成校验。
+3. ［FRAME｜LOW］为 P3 建立“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”的数据流水线模板；在没有真实数据时不伪造校准完成。
+4. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
+
+## 9. 原计划待拍板项回写
+
+- ［KNOWN｜HIGH］P1 技术栈已由实现事实关闭：Android 原生 Kotlin + Compose。
+- ［KNOWN｜HIGH］P2 技术栈已由实现事实关闭：Go。
+- ［KNOWN｜HIGH］云区域、同城/区域/中心三级部署和首批试点城市尚未落实。
+- ［KNOWN｜HIGH］Profile 3 首批 App 已因后续“主 App 只做自建节点仿真”的裁定延期并转为独立模块议题，不再是 P1b 当前决策。
+
+## 10. 与 Claude 侧对齐原则
+
+- ［KNOWN｜HIGH］E-01 部署仍由 Codex 单点执行，权威合同为 `docs/TEST_SERVER_CAPABILITIES.md`；Claude 提需求/补丁，不直接覆盖共享服务器。
+- ［KNOWN｜HIGH］两侧都按 P1a/P1b/P2/P3/Profile/M0–M4 更新进展，版本、测试数字、真机 run 和部署状态必须能回指仓库或原始证据。
+- ［KNOWN｜HIGH］“已实现”“已部署”“已真机验证”“已达到目标”是四个不同状态，后续报告不得混写。
+- ［INFERRED｜HIGH］两套客户端的价值是互相复核测量语义与结果，而不是靠功能数量竞赛；发现分歧时先对齐 spec，再比较实现。

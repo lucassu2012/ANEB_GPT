@@ -25,8 +25,11 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -81,6 +85,44 @@ data class RealtimeSimulationResult(
     val evidence: RealtimeRunEvidence,
 )
 
+internal fun interface RealtimeResultStore {
+    suspend fun insert(result: RealtimeSimulationResult)
+}
+
+/** Publishes a result only after the durable store has accepted it. */
+internal class RealtimeResultCommitter(
+    private val store: RealtimeResultStore,
+    private val publish: (RealtimeSimulationResult) -> Unit,
+) {
+    suspend fun commit(result: RealtimeSimulationResult) {
+        currentCoroutineContext().ensureActive()
+        withContext(NonCancellable) {
+            try {
+                store.insert(result)
+            } catch (e: CancellationException) {
+                throw e
+            }
+            publish(result)
+        }
+    }
+}
+
+internal suspend fun <T> runRealtimeSessionWithMonitor(
+    monitorJob: Job,
+    disableMonitor: () -> Unit,
+    runSession: suspend () -> T,
+): T = try {
+    runSession()
+} finally {
+    disableMonitor()
+    withContext(NonCancellable) {
+        monitorJob.cancelAndJoin()
+    }
+}
+
+private class RealtimeResultPersistenceException(cause: Throwable) :
+    Exception("realtime_result_persistence_failed", cause)
+
 class RealtimeSimulationEngine(private val context: Context) {
     data class Config(
         val serverBase: String,
@@ -92,6 +134,12 @@ class RealtimeSimulationEngine(private val context: Context) {
     val telemetry: StateFlow<RealtimeSimulationTelemetry> = _telemetry.asStateFlow()
     private val _result = MutableStateFlow<RealtimeSimulationResult?>(null)
     val result: StateFlow<RealtimeSimulationResult?> = _result.asStateFlow()
+    private val resultCommitter = RealtimeResultCommitter(
+        store = RealtimeResultStore { result ->
+            AnebDatabase.get(context).realtimeSimulationResultDao().insert(result.toEntity())
+        },
+        publish = { result -> _result.value = result },
+    )
 
     fun run(config: Config): Flow<String> = channelFlow {
         val log: suspend (String) -> Unit = { send(it) }
@@ -107,26 +155,35 @@ class RealtimeSimulationEngine(private val context: Context) {
             log("REALTIME_V1_END run_id=$runId status=guard_rejected")
             return@channelFlow
         }
-        var bound: BoundNetwork? = null
-        try {
-            bound = when (config.transport) {
-                TestEngine.TransportMode.AUTO -> null
-                TestEngine.TransportMode.WIFI -> NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_WIFI)
-                TestEngine.TransportMode.CELLULAR -> NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_CELLULAR)
-            }
+        val requestedTransport = when (config.transport) {
+            TestEngine.TransportMode.AUTO -> null
+            TestEngine.TransportMode.WIFI -> NetworkCapabilities.TRANSPORT_WIFI
+            TestEngine.TransportMode.CELLULAR -> NetworkCapabilities.TRANSPORT_CELLULAR
+        }
+        val initialBound = try {
+            requestedTransport?.let { NetGuard.acquireNetwork(context, it) }
         } catch (e: GuardException) {
             finishFailed(runId, startedAt, configuredBase, config.variant, "bind_failed:${e.javaClass.simpleName}", log)
             log("REALTIME_V1_END run_id=$runId status=bind_failed")
             return@channelFlow
         }
+        val sessionResources = RefreshingSessionResource<BoundNetwork, AnebClient>(
+            initialLease = initialBound,
+            refreshEnabled = requestedTransport != null,
+            isUsable = { it.isUsable },
+            acquire = {
+                NetGuard.acquireNetwork(context, checkNotNull(requestedTransport))
+            },
+            release = { it.release() },
+            create = { AnebClient(it) },
+        )
         try {
             val loaded = RealtimeRuntimeRepository(context).load(config.variant)
             val profile = loaded.profile
             val plan = loaded.plan
-            val client = AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sni, ip) ->
-                reach = runCatching { ReachabilityProbe(bound).probeDual(sni, ip) }.getOrNull()
+                reach = runCatching { ReachabilityProbe(initialBound).probeDual(sni, ip) }.getOrNull()
             }
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
             val wsUrl = measureBase.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/v1/realtime-sim"
@@ -139,33 +196,19 @@ class RealtimeSimulationEngine(private val context: Context) {
             for ((sessionIndex, session) in plan.sessions.withIndex()) {
                 val isControlledFault = session.controlledDisconnectAfterTurn != null
                 val isRecoveryAttempt = recoveryStartNanos != null && !isControlledFault
+                val sessionResource = sessionResources.forSession()
+                val client = sessionResource.resource
+                if (sessionResource.refreshed) {
+                    log(
+                        "REALTIME_V1_NETWORK_REFRESH run_id=$runId " +
+                            "transport=${config.transport.name.lowercase()} generation=${sessionResource.generation}",
+                    )
+                }
                 val offsetUs = AtomicLong(Long.MIN_VALUE)
                 val onTimeWindow = ConcurrentLinkedQueue<Pair<Long, Boolean>>()
                 val downlinkWindow = ConcurrentLinkedQueue<Pair<Long, Int>>()
                 val loadedRttSamples = Collections.synchronizedList(mutableListOf<Double?>())
                 val loadedMonitorEnabled = AtomicBoolean(false)
-                var loadedMonitorJob: Job? = launch {
-                    while (isActive) {
-                        if (!loadedMonitorEnabled.get()) {
-                            delay(LOADED_ECHO_IDLE_GAP_MS)
-                            continue
-                        }
-                        val echo = try {
-                            client.echo("$measureBase/api/v1/echo")
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            null
-                        }
-                        val sample = echo?.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
-                        loadedRttSamples += sample
-                        _telemetry.value = _telemetry.value.copy(
-                            liveRttMs = sample,
-                            updatedAtNanos = SystemClock.elapsedRealtimeNanos(),
-                        )
-                        delay(LOADED_ECHO_GAP_MS)
-                    }
-                }
                 val sessionStartProgress = completedTurns.toDouble() / totalTurns
                 _telemetry.value = _telemetry.value.copy(
                     phase = if (isRecoveryAttempt) RealtimeSimulationPhase.RECOVERING else RealtimeSimulationPhase.CONNECTING,
@@ -214,11 +257,37 @@ class RealtimeSimulationEngine(private val context: Context) {
                             "after_turn=${session.controlledDisconnectAfterTurn}",
                     )
                 }
-                val wire = RealtimeSimulationWire(client).runSession(
-                    sessionWsUrl,
-                    wirePlan,
-                    session.startAfterPreviousMs,
-                    RealtimeWireCallbacks(
+                val loadedMonitorJob = launch {
+                    while (isActive) {
+                        if (!loadedMonitorEnabled.get()) {
+                            delay(LOADED_ECHO_IDLE_GAP_MS)
+                            continue
+                        }
+                        val echo = try {
+                            client.echo("$measureBase/api/v1/echo")
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val sample = echo?.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
+                        loadedRttSamples += sample
+                        _telemetry.value = _telemetry.value.copy(
+                            liveRttMs = sample,
+                            updatedAtNanos = SystemClock.elapsedRealtimeNanos(),
+                        )
+                        delay(LOADED_ECHO_GAP_MS)
+                    }
+                }
+                val wire = runRealtimeSessionWithMonitor(
+                    monitorJob = loadedMonitorJob,
+                    disableMonitor = { loadedMonitorEnabled.set(false) },
+                ) {
+                    RealtimeSimulationWire(client).runSession(
+                        sessionWsUrl,
+                        wirePlan,
+                        session.startAfterPreviousMs,
+                        RealtimeWireCallbacks(
                         onClockSync = { samples ->
                             offsetUs.set(medianLong(samples.map { it.offsetUs }) ?: Long.MIN_VALUE)
                             _telemetry.value = _telemetry.value.copy(
@@ -259,11 +328,9 @@ class RealtimeSimulationEngine(private val context: Context) {
                                 updatedAtNanos = now,
                             )
                         },
-                    ),
-                )
-                loadedMonitorEnabled.set(false)
-                loadedMonitorJob?.cancelAndJoin()
-                loadedMonitorJob = null
+                        ),
+                    )
+                }
                 val loadedRttSnapshot = synchronized(loadedRttSamples) { loadedRttSamples.toList() }
                 val firstRecoveredAudioNanos = wire.turns
                     .flatMap { it.downlinkFrames }
@@ -325,12 +392,14 @@ class RealtimeSimulationEngine(private val context: Context) {
             log("REALTIME_V1_END run_id=$runId status=completed")
         } catch (e: CancellationException) {
             throw e
+        } catch (e: RealtimeResultPersistenceException) {
+            throw e
         } catch (e: Exception) {
             finishFailed(runId, startedAt, configuredBase, config.variant, e.toString(), log)
             log("REALTIME_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("REALTIME_V1_END run_id=$runId status=error")
         } finally {
-            bound?.release()
+            sessionResources.close()
         }
     }.flowOn(Dispatchers.IO)
 
@@ -498,17 +567,15 @@ class RealtimeSimulationEngine(private val context: Context) {
     }
 
     private suspend fun publishResult(result: RealtimeSimulationResult, log: suspend (String) -> Unit) {
-        _result.value = result
-        val write = runCatching {
-            AnebDatabase.get(context).realtimeSimulationResultDao().insert(result.toEntity())
+        try {
+            resultCommitter.commit(result)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("REALTIME_V1_DB_WRITE run_id=${result.runId} ok=false error=${e.javaClass.simpleName}")
+            throw RealtimeResultPersistenceException(e)
         }
-        log(
-            if (write.isSuccess) {
-                "REALTIME_V1_DB_WRITE run_id=${result.runId} ok=true"
-            } else {
-                "REALTIME_V1_DB_WRITE run_id=${result.runId} ok=false error=${write.exceptionOrNull()?.javaClass?.simpleName}"
-            },
-        )
+        log("REALTIME_V1_DB_WRITE run_id=${result.runId} ok=true")
     }
 
     private fun RealtimeSimulationResult.toEntity(): RealtimeSimulationResultEntity = RealtimeSimulationResultEntity(

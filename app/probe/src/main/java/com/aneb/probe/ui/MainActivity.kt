@@ -13,6 +13,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -27,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -40,12 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.aneb.probe.BuildConfig
 import com.aneb.probe.apiprobe.AiReachabilityProbe
-import com.aneb.probe.apiprobe.ApiKeyStore
-import com.aneb.probe.apiprobe.ApiProbe
-import com.aneb.probe.apiprobe.ApiProbeReport
-import com.aneb.probe.apiprobe.LlmProvider
 import com.aneb.probe.apiprobe.ProviderPresets
-import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.data.RealtimeSimulationResultEntity
@@ -81,7 +76,7 @@ import java.util.Locale
 /**
  * 单 Activity 状态切换导航（UI 重设计）：
  *   Home（GO 大按钮 + 上次结果）/ Testing（脉冲环实时进度）/ Result（双视图）/
- *   History / Settings / ApiProbe。
+ *   History / Settings。
  *
  * 测量语义、adb 自动化、logcat 合同全部不动——主 run 由 [ProbeRunService] 持有，
  * Activity 负责配置、导航与投影；continuity/AB 专项仍保留原自动化入口。
@@ -115,12 +110,18 @@ class MainActivity : ComponentActivity() {
     private var intentAbPairs: Int = AbRunner.DEFAULT_PAIRS
     private var intentAbNetlog: Boolean = false
 
-    private var radioPermissionResultCallback: ((RadioPermissionState) -> Unit)? = null
+    private val manualPermissionViewModel: ManualPermissionViewModel by viewModels()
     private val radioPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            val callback = radioPermissionResultCallback
-            radioPermissionResultCallback = null
-            callback?.invoke(radioPermissionState())
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            when (manualPermissionViewModel.state.value.awaitingSystemPermission) {
+                PendingSystemPermission.RADIO ->
+                    manualPermissionViewModel.onRadioResult(radioPermissionState())
+                PendingSystemPermission.NOTIFICATION ->
+                    manualPermissionViewModel.onNotificationResult(
+                        granted = result[Manifest.permission.POST_NOTIFICATIONS] == true,
+                    )
+                null -> Unit
+            }
         }
 
     private fun radioPermissionState() = RadioPermissionState(
@@ -135,8 +136,8 @@ class MainActivity : ComponentActivity() {
     private fun hasActiveNetwork(): Boolean =
         getSystemService(ConnectivityManager::class.java)?.activeNetwork != null
 
-    private fun requestRadioPermissions(onResult: (RadioPermissionState) -> Unit) {
-        radioPermissionResultCallback = onResult
+    private fun requestRadioPermissions() {
+        if (!manualPermissionViewModel.beginRadioRequest()) return
         radioPermissionLauncher.launch(
             arrayOf(
                 Manifest.permission.READ_PHONE_STATE,
@@ -146,13 +147,14 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun requestRunNotificationPermission(onComplete: () -> Unit) {
+    private fun requestRunNotificationPermission() {
         if (Build.VERSION.SDK_INT < 33 || hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-            onComplete()
+            manualPermissionViewModel.notificationPermissionNotNeeded()
             return
         }
-        radioPermissionResultCallback = { onComplete() }
-        radioPermissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        if (manualPermissionViewModel.beginNotificationRequest()) {
+            radioPermissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        }
     }
 
     private fun openAppPermissionSettings() {
@@ -179,7 +181,6 @@ class MainActivity : ComponentActivity() {
         data class RealtimeSimulationResult(val runId: String) : Screen
         data class BasicResult(val runId: String) : Screen
         data class Result(val runId: String, val fromHistory: Boolean) : Screen
-        data object ApiProbe : Screen
         data object ReachBoard : Screen
         data object Profiles : Screen
         data object Servers : Screen
@@ -198,7 +199,12 @@ class MainActivity : ComponentActivity() {
         db = AnebDatabase.get(applicationContext)
         settingsStore = ProbeSettingsStore(applicationContext)
         intentServer = intent?.getStringExtra("server")
-        intentAutorun = intent?.getBooleanExtra("autorun", false) == true
+        intentAutorun = consumeAutorunOnce(
+            isFirstCreation = savedInstanceState == null,
+            enabled = BuildConfig.DEBUG,
+            readAutorun = { intent?.getBooleanExtra("autorun", false) == true },
+            removeAutorun = { intent?.removeExtra("autorun") },
+        )
         intentModeOverride = when (intent?.getStringExtra("mode")?.lowercase()) {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
@@ -241,8 +247,6 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
-        maybeApiProbeAutorun()
-
         val launchSettings = resolveLaunchSettings(
             saved = settingsStore.load(),
             overrides = ProbeLaunchOverrides(
@@ -305,12 +309,13 @@ class MainActivity : ComponentActivity() {
                     val realtimeSimulationTelemetry by ProbeRunService.realtimeSimulationTelemetry.collectAsStateWithLifecycle()
                     val realtimeSimulationResult by ProbeRunService.realtimeSimulationResult.collectAsStateWithLifecycle()
                     val specialRunSession by ProbeSpecialRunService.session.collectAsStateWithLifecycle()
+                    val manualPermissionState by
+                        manualPermissionViewModel.state.collectAsStateWithLifecycle()
                     val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
                     val running = runSession is ProbeRunSession.Running || auxiliaryRunning
                     var acceptManualSessions by remember { mutableStateOf(!launchRequestedAutorun) }
                     var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
                     var radioEvidenceLimited by remember { mutableStateOf(false) }
-                    var permissionPrompt by remember { mutableStateOf<RadioPermissionPrompt?>(null) }
                     var nodeReach by remember { mutableStateOf<ReachabilityProbe.DualReach?>(null) }
                     var nodeReachRefreshing by remember { mutableStateOf(false) }
                     var nodeReachError by remember { mutableStateOf<String?>(null) }
@@ -355,12 +360,13 @@ class MainActivity : ComponentActivity() {
                         }
                         val state = radioPermissionState()
                         if (testMode != AnebTestMode.TOKEN_EXPERIENCE || state.hasFullRadioEvidence) {
-                            requestRunNotificationPermission { startRun(fromAutorun = false) }
+                            if (manualPermissionViewModel.beginStartTest()) {
+                                requestRunNotificationPermission()
+                            }
                         } else {
-                            permissionPrompt = RadioPermissionPrompt(
+                            manualPermissionViewModel.showRadioRationale(
                                 purpose = RadioPermissionPurpose.START_TEST,
-                                stage = RadioPermissionStage.RATIONALE,
-                                state = state,
+                                radioState = state,
                             )
                         }
                     }
@@ -421,6 +427,24 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    LaunchedEffect(manualPermissionState.event?.id) {
+                        val pendingEvent = manualPermissionState.event ?: return@LaunchedEffect
+                        when (
+                            val event = manualPermissionViewModel.takeEvent(pendingEvent.id)
+                                ?: return@LaunchedEffect
+                        ) {
+                            is ManualPermissionEvent.RequestNotification ->
+                                requestRunNotificationPermission()
+                            is ManualPermissionEvent.StartTest ->
+                                startRun(fromAutorun = false)
+                            is ManualPermissionEvent.EnableDriveTest -> {
+                                driveTest = true
+                                settingsStore.saveDriveTest(true)
+                                android.util.Log.i("AnebProbe", "DRIVE_TEST_TOGGLE enabled=true")
+                            }
+                        }
+                    }
+
                     LaunchedEffect(runSession) {
                         when (val session = runSession) {
                             ProbeRunSession.Idle -> Unit
@@ -473,7 +497,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // ---- ANEB_UI 五栏外壳（测试 / 探针 / 结果 / 地图 / 设置）----
-                    // 底栏仅在各 tab 根（screen==Home）显示；下钻屏（Testing/Result/ApiProbe/
+                    // 底栏仅在各 tab 根（screen==Home）显示；下钻屏（Testing/Result/
                     // ReachBoard/Report）隐底栏、Testing 运行中保持全屏专注。contentWindowInsets 置 0：
                     // Surface 已消费顶部状态栏，Scaffold 不再重复消费系统 Insets。
                     val atRoot = screen is Screen.Home
@@ -581,10 +605,9 @@ class MainActivity : ComponentActivity() {
                                                 } else {
                                                     driveTest = false
                                                     settingsStore.saveDriveTest(false)
-                                                    permissionPrompt = RadioPermissionPrompt(
+                                                    manualPermissionViewModel.showRadioRationale(
                                                         purpose = RadioPermissionPurpose.DRIVE_TEST,
-                                                        stage = RadioPermissionStage.RATIONALE,
-                                                        state = state,
+                                                        radioState = state,
                                                     )
                                                 }
                                             }
@@ -649,12 +672,6 @@ class MainActivity : ComponentActivity() {
                                     onBack = { screen = Screen.Home },
                                     onOpenShare = { model -> screen = Screen.Share(model, s) },
                                 )
-                                is Screen.ApiProbe -> ApiProbeRoute(
-                                    // 从设置根下钻而来：回 Home 哨兵即落回设置 tab 根。
-                                    onBack = { screen = Screen.Home },
-                                    onOpenReachBoard = { screen = Screen.ReachBoard },
-                                    showBack = true,
-                                )
                                 is Screen.ReachBoard -> ReachBoardRoute(onBack = { screen = Screen.Home })
                                 is Screen.Profiles -> ProfileCatalogRoute(
                                     serverUrl = serverUrl,
@@ -709,40 +726,16 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    permissionPrompt?.let { prompt ->
+                    manualPermissionState.prompt?.let { prompt ->
                         RadioPermissionDialog(
                             prompt = prompt,
-                            onRequest = {
-                                requestRadioPermissions { state ->
-                                    if (state.hasFullRadioEvidence) {
-                                        permissionPrompt = null
-                                        when (prompt.purpose) {
-                                            RadioPermissionPurpose.START_TEST ->
-                                                requestRunNotificationPermission { startRun(fromAutorun = false) }
-                                            RadioPermissionPurpose.DRIVE_TEST -> {
-                                                driveTest = true
-                                                settingsStore.saveDriveTest(true)
-                                            }
-                                        }
-                                    } else {
-                                        permissionPrompt = prompt.copy(
-                                            stage = RadioPermissionStage.DENIED,
-                                            state = state,
-                                        )
-                                    }
-                                }
-                            },
-                            onContinueLimited = {
-                                permissionPrompt = null
-                                if (prompt.purpose == RadioPermissionPurpose.START_TEST) {
-                                    requestRunNotificationPermission { startRun(fromAutorun = false) }
-                                }
-                            },
+                            onRequest = ::requestRadioPermissions,
+                            onContinueLimited = { manualPermissionViewModel.continueLimitedStart() },
                             onOpenSettings = {
-                                permissionPrompt = null
+                                manualPermissionViewModel.cancelPending()
                                 openAppPermissionSettings()
                             },
-                            onDismiss = { permissionPrompt = null },
+                            onDismiss = { manualPermissionViewModel.cancelPending() },
                         )
                     }
                 }
@@ -1147,136 +1140,6 @@ class MainActivity : ComponentActivity() {
     }
 
     // ------------------------------------------------------------------
-    // API Probe 路由（阶段 2：真实 API 探针，独立入口）
-    // ------------------------------------------------------------------
-
-    @Composable
-    private fun ApiProbeRoute(
-        onBack: () -> Unit,
-        onOpenReachBoard: () -> Unit,
-        showBack: Boolean = true,
-    ) {
-        val keyStore = remember { ApiKeyStore(applicationContext) }
-        var provider by rememberSaveable { mutableStateOf(keyStore.provider) }
-        var baseUrl by rememberSaveable { mutableStateOf(keyStore.effectiveBaseUrl()) }
-        var model by rememberSaveable { mutableStateOf(keyStore.effectiveModel()) }
-        var selectedPresetId by rememberSaveable { mutableStateOf<String?>(null) }
-        var keyInput by remember { mutableStateOf("") }
-        var hasStoredKey by remember { mutableStateOf(keyStore.hasKey()) }
-        var running by remember { mutableStateOf(false) }
-        var exportStatus by remember { mutableStateOf<String?>(null) }
-        val logs = remember { mutableStateListOf<String>() }
-        var results by remember { mutableStateOf(emptyList<com.aneb.probe.data.ApiProbeResultEntity>()) }
-        var resultsVersion by remember { mutableIntStateOf(0) }
-
-        LaunchedEffect(resultsVersion) {
-            results = withContext(Dispatchers.IO) { db.apiProbeResultDao().recent(20) }
-        }
-
-        fun addLog(line: String) {
-            android.util.Log.i("AnebProbe", line)
-            logs.add(line)
-        }
-
-        ApiProbeScreen(
-            provider = provider,
-            onProviderChange = { p ->
-                provider = p
-                if (baseUrl == LlmProvider.ANTHROPIC.defaultBaseUrl ||
-                    baseUrl == LlmProvider.OPENAI_COMPAT.defaultBaseUrl
-                ) {
-                    baseUrl = p.defaultBaseUrl
-                }
-                if (model == LlmProvider.ANTHROPIC.defaultModel ||
-                    model == LlmProvider.OPENAI_COMPAT.defaultModel
-                ) {
-                    model = p.defaultModel
-                }
-            },
-            baseUrl = baseUrl,
-            onBaseUrlChange = { baseUrl = it },
-            model = model,
-            onModelChange = { model = it },
-            keyInput = keyInput,
-            onKeyInputChange = { keyInput = it },
-            hasStoredKey = hasStoredKey,
-            keyStoreEncrypted = keyStore.encrypted,
-            onSaveConfig = {
-                keyStore.provider = provider
-                keyStore.baseUrlOverride = baseUrl.takeIf { it != provider.defaultBaseUrl }
-                keyStore.modelOverride = model.takeIf { it != provider.defaultModel }
-                if (keyInput.isNotBlank()) {
-                    val keySaved = keyStore.setApiKey(keyInput)
-                    keyInput = ""
-                    if (!keySaved) addLog("APIPROBE_CONFIG key_rejected reason=secure_storage_unavailable")
-                }
-                hasStoredKey = keyStore.hasKey()
-                addLog("APIPROBE_CONFIG saved provider=${provider.id} key_present=$hasStoredKey")
-            },
-            onClearKey = {
-                keyStore.setApiKey(null)
-                hasStoredKey = false
-                addLog("APIPROBE_CONFIG key_cleared")
-            },
-            running = running,
-            onRun = {
-                val key = keyStore.apiKey()
-                if (key == null) {
-                    addLog("APIPROBE_SKIP reason=E-03_no_key")
-                } else if (!running) {
-                    running = true
-                    lifecycleScope.launch {
-                        try {
-                            ApiProbe(applicationContext).run(
-                                ApiProbe.Config(provider, baseUrl, model, key)
-                            ) { line -> withContext(Dispatchers.Main) { addLog(line) } }
-                            resultsVersion++
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            addLog("APIPROBE_FAILED error=${e.javaClass.simpleName}")
-                        } finally {
-                            running = false
-                        }
-                    }
-                }
-            },
-            logs = logs,
-            results = results,
-            exportStatus = exportStatus,
-            onExport = {
-                lifecycleScope.launch(Dispatchers.IO) {
-                    val all = db.apiProbeResultDao().all()
-                    val body = ApiProbeReport.buildJson(all, keyStore.apiKey())
-                    val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    val fileName = "aneb_apiprobe_$ts.json"
-                    val outcome = Exporter.exportToDownloads(
-                        applicationContext, fileName, "application/json", body,
-                    )
-                    val line =
-                        "APIPROBE_EXPORT file=$fileName bytes=${outcome.bytes} " +
-                            "status=${if (outcome.ok) "ok" else "fail"} " +
-                            "claim_scope=${ApiProbeReport.CLAIM_SCOPE}"
-                    android.util.Log.i("AnebProbe", line)
-                    withContext(Dispatchers.Main) { exportStatus = line }
-                }
-            },
-            // 预置接入（mode②）：选中预置自动填 provider/base/model；key 处理逐字不变。
-            presets = ProviderPresets.all,
-            selectedPresetId = selectedPresetId,
-            onSelectPreset = { p ->
-                selectedPresetId = p.id
-                provider = p.toLlmProvider()
-                baseUrl = p.baseUrl
-                model = p.defaultModel
-            },
-            onOpenReachBoard = onOpenReachBoard,
-            onBack = onBack,
-            showBack = showBack,
-        )
-    }
-
-    // ------------------------------------------------------------------
     // 可达性看板路由（mode①：AiReachabilityProbe 无 key 连接层探测，best-effort、不进 AQS）
     // ------------------------------------------------------------------
 
@@ -1337,30 +1200,4 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    /**
-     * API 探针 adb 自动化（模拟器 E2E 验收；仅 debug 构建生效）。结果只看 logcat 的
-     * APIPROBE_RESULT 行（tag=AnebProbe），不落 UI。
-     */
-    private fun maybeApiProbeAutorun() {
-        if (!BuildConfig.DEBUG) return
-        if (intent?.getBooleanExtra("apiprobe_autorun", false) != true) return
-        val server = intent?.getStringExtra("apiprobe_server") ?: return
-        val key = intent?.getStringExtra("apiprobe_key") ?: return
-        val provider = when (intent?.getStringExtra("apiprobe_provider")?.lowercase()) {
-            "anthropic" -> LlmProvider.ANTHROPIC
-            else -> LlmProvider.OPENAI_COMPAT
-        }
-        val model = intent?.getStringExtra("apiprobe_model") ?: provider.defaultModel
-        lifecycleScope.launch {
-            try {
-                ApiProbe(applicationContext).run(
-                    ApiProbe.Config(provider, server, model, key)
-                ) { line -> android.util.Log.i("AnebProbe", line) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.i("AnebProbe", "APIPROBE_FAILED error=${e.javaClass.simpleName}")
-            }
-        }
-    }
 }

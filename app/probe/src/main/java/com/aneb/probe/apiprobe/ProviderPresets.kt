@@ -12,9 +12,9 @@ package com.aneb.probe.apiprobe
  * 核对日期 2026-07-13。base URL 精度是常见坑（GLM 必须 /api/paas/v4、豆包 /api/v3、
  * DashScope compatible-mode/v1），已逐项写死。[verified]=false 者以官方文档为准再用。
  *
- * 与 [ApiKeyStore] 的关系：预置只提供 base/model/protocol 的**默认值**；用户选中某预置后
- * 仍可覆盖 model、并必须自填 key（key 走加密存储、绝不入日志/上报/导出，红线见 ApiKeyStore
- * 与 KeyRedactionTest）。探针的测量口径（claim_scope=application_end_to_end_to_llm_api、
+ * 预置只提供 base/model/protocol 的**默认值**。真实 API 探针只存在于受保护的 Debug/ADB
+ * 诊断组件，调用者每次提供临时 key；App 不再持久化 key。所有文本出口仍经 [ApiKeyRedactor]
+ * 与 KeyRedactionTest 锁定。探针口径（claim_scope=application_end_to_end_to_llm_api、
  * 不进 AQS）不因预置而改变。
  */
 data class ProviderPreset(
@@ -167,7 +167,7 @@ object ProviderPresets {
 
 /**
  * 预置协议族 → 探针 [LlmProvider]（决定适配器与 endpointPath 拼接口径）。
- * 供 UI/MainActivity 选中预置后复用：`preset.toLlmProvider()` 得到 provider，再以
+ * 供 Debug 诊断和合同测试复用：`preset.toLlmProvider()` 得到 provider，再以
  * `ApiProbe.endpointPath(provider)` 拼最终 URL（约定见 ApiProbe.endpointPath KDoc）。
  */
 fun ProviderPreset.toLlmProvider(): LlmProvider = when (protocol) {

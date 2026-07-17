@@ -30,8 +30,8 @@ android {
         applicationId = "com.aneb.probe"
         minSdk = 29 // CellInfoNr / 5G API 需要（设计文档 §5）
         targetSdk = 35
-        versionCode = 32
-        versionName = "0.5.0"
+        versionCode = 33
+        versionName = "0.5.1"
     }
 
     signingConfigs {
@@ -134,10 +134,6 @@ dependencies {
     // 仅 AbRunner/CronetStreamClient 使用——OkHttp 主测量路径不变；两栈计时钩子
     // 粒度不同，数据不可互比（A/B 结论只在 Cronet 栈内得出）。
     implementation(libs.cronet.embedded)
-
-    // 阶段 2 API 探针：key 存 EncryptedSharedPreferences（初始化失败退私有明文 prefs，
-    // 见 ApiKeyStore KDoc 取舍说明）
-    implementation(libs.androidx.security.crypto)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

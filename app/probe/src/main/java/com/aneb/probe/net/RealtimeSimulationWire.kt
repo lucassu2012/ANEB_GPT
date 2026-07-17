@@ -175,7 +175,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
                 events.trySend(WireEvent.Closed(code, reason))
             }
         }
-        val socket = client.openWebSocket(url, listener)
+        var socket: WebSocket? = null
         var openNanos: Long? = null
         var ready: RealtimeReadyWire? = null
         var readyArrival: Long? = null
@@ -183,12 +183,14 @@ class RealtimeSimulationWire(private val client: AnebClient) {
         val turnResults = mutableListOf<RealtimeTurnWireResult>()
         var sessionSummary: RealtimeSessionSummaryWire? = null
         return try {
+            val activeSocket = client.openWebSocket(url, listener)
+            socket = activeSocket
             openNanos = when (val event = receiveEvent(events)) {
                 is WireEvent.Open -> event.atNanos
                 is WireEvent.Failure -> return failed(connectStart, event.error)
                 else -> return failed(connectStart, "websocket_open_protocol_error")
             }
-            check(socket.send(json.encodeToString(RealtimeSessionWirePlan.serializer(), plan))) { "session_plan_send_failed" }
+            check(activeSocket.send(json.encodeToString(RealtimeSessionWirePlan.serializer(), plan))) { "session_plan_send_failed" }
             val readyEvent = awaitTextType(events, "session_ready")
             ready = json.decodeFromString(RealtimeReadyWire.serializer(), readyEvent.text)
             readyArrival = readyEvent.atNanos
@@ -196,7 +198,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
 
             repeat(INITIAL_PINGS) { index ->
                 val t0Us = SystemClock.elapsedRealtimeNanos() / 1_000L
-                check(socket.send(json.encodeToString(RealtimeControlWire.serializer(), RealtimeControlWire("ping", pingId = index.toLong(), clientMonoUs = t0Us)))) { "ping_send_failed" }
+                check(activeSocket.send(json.encodeToString(RealtimeControlWire.serializer(), RealtimeControlWire("ping", pingId = index.toLong(), clientMonoUs = t0Us)))) { "ping_send_failed" }
                 val pongEvent = awaitTextType(events, "pong")
                 val t3Us = pongEvent.atNanos / 1_000L
                 val pong = json.decodeFromString(RealtimePongWire.serializer(), pongEvent.text)
@@ -211,18 +213,18 @@ class RealtimeSimulationWire(private val client: AnebClient) {
 
             plan.turns.forEach { turn ->
                 if (turn.startAfterPreviousMs > 0) delay(turn.startAfterPreviousMs.toLong())
-                check(socket.send(controlJson("turn_start", turn))) { "turn_start_send_failed" }
+                check(activeSocket.send(controlJson("turn_start", turn))) { "turn_start_send_failed" }
                 val uplinkStart = SystemClock.elapsedRealtimeNanos()
                 var acceptedBytes = 0L
                 repeat(turn.uplinkFrames) { seq ->
                     paceFrom(uplinkStart, seq.toLong() * plan.frameMs * 1_000_000L)
                     val frame = encodeUplink(turn.turnIndex, seq, turn.uplinkFrameBytes)
-                    check(socket.send(frame.toByteString())) { "uplink_frame_send_failed" }
+                    check(activeSocket.send(frame.toByteString())) { "uplink_frame_send_failed" }
                     acceptedBytes += turn.uplinkFrameBytes
                     callbacks.onUplink(turn.turnIndex, acceptedBytes, SystemClock.elapsedRealtimeNanos())
                 }
                 val uplinkEnd = SystemClock.elapsedRealtimeNanos()
-                check(socket.send(controlJson("speech_commit", turn))) { "speech_commit_send_failed" }
+                check(activeSocket.send(controlJson("speech_commit", turn))) { "speech_commit_send_failed" }
                 val commitSent = SystemClock.elapsedRealtimeNanos()
                 callbacks.onTurnCommitted(turn.turnIndex, commitSent)
                 val downlink = mutableListOf<RealtimeDownlinkFrame>()
@@ -238,7 +240,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
                             callbacks.onDownlink(frame)
                             val bargeAt = turn.bargeInAfterFrames
                             if (turn.interrupted && bargeSent == null && bargeAt != null && downlink.size >= bargeAt) {
-                                check(socket.send(controlJson("barge_in", turn))) { "barge_in_send_failed" }
+                                check(activeSocket.send(controlJson("barge_in", turn))) { "barge_in_send_failed" }
                                 bargeSent = SystemClock.elapsedRealtimeNanos()
                                 callbacks.onBargeIn(turn.turnIndex, checkNotNull(bargeSent))
                             }
@@ -263,16 +265,16 @@ class RealtimeSimulationWire(private val client: AnebClient) {
             }
             val summaryEvent = awaitTextType(events, "session_summary")
             sessionSummary = json.decodeFromString(RealtimeSessionSummaryWire.serializer(), summaryEvent.text)
-            socket.close(1000, "complete")
+            activeSocket.close(1000, "complete")
             RealtimeSessionWireResult(
                 connectStart, openNanos, ready, readyArrival, rtt, turnResults, sessionSummary, null,
                 SystemClock.elapsedRealtimeNanos(),
             )
         } catch (e: CancellationException) {
-            socket.cancel()
+            socket?.cancel()
             throw e
         } catch (e: Exception) {
-            socket.cancel()
+            socket?.cancel()
             RealtimeSessionWireResult(
                 connectStart, openNanos, ready, readyArrival, rtt, turnResults, sessionSummary, e.toString(),
                 SystemClock.elapsedRealtimeNanos(),

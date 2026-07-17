@@ -148,6 +148,8 @@ object NetGuard {
             .build()
 
         val resumed = AtomicBoolean(false)
+        val selectedNetwork = AtomicReference<Network?>(null)
+        val selectedNetworkUsable = AtomicBoolean(false)
         var callback: ConnectivityManager.NetworkCallback? = null
         var success = false
         try {
@@ -158,11 +160,19 @@ object NetGuard {
                             network: Network,
                             caps: NetworkCapabilities,
                         ) {
+                            val ready = caps.hasTransport(transport) &&
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                            val selected = selectedNetwork.get()
+                            if (selected != null) {
+                                if (network == selected) selectedNetworkUsable.set(ready)
+                                return
+                            }
                             // 三条件同时满足才放行（R-01：VALIDATED 前的样本 TTFT/RTT 系统性偏高）
-                            if (!caps.hasTransport(transport)) return
-                            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
-                            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)) return
+                            if (!ready) return
                             if (!resumed.compareAndSet(false, true)) return
+                            selectedNetwork.set(network)
+                            selectedNetworkUsable.set(true)
                             val lp = try {
                                 cm.getLinkProperties(network)
                             } catch (t: Throwable) {
@@ -184,12 +194,21 @@ object NetGuard {
                                         snapshot = snapshot,
                                         cm = cm,
                                         callback = this,
+                                        usable = selectedNetworkUsable,
                                     ),
                                 )
                             }
                         }
 
+                        override fun onLost(network: Network) {
+                            if (network == selectedNetwork.get()) selectedNetworkUsable.set(false)
+                        }
+
                         override fun onUnavailable() {
+                            if (selectedNetwork.get() != null) {
+                                selectedNetworkUsable.set(false)
+                                return
+                            }
                             if (resumed.compareAndSet(false, true) && cont.isActive) {
                                 cont.resumeWithException(
                                     GuardException("network_unavailable(transport=${transportName(transport)})"),
@@ -297,7 +316,11 @@ class BoundNetwork internal constructor(
     val snapshot: NetworkSnapshot,
     private val cm: ConnectivityManager,
     private val callback: ConnectivityManager.NetworkCallback,
+    private val usable: AtomicBoolean,
 ) {
+    /** False after the selected network is lost, suspended, or no longer validated. */
+    val isUsable: Boolean get() = usable.get()
+
     /** 释放 requestNetwork 请求（此后系统可拆除该网络，绑定即作废） */
     fun release() {
         runCatching { cm.unregisterNetworkCallback(callback) }

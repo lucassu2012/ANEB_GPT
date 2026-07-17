@@ -35,8 +35,8 @@ import com.aneb.probe.ui.theme.AnebType
 
 /**
  * ① AI 全家可达性看板（mode①，iOS 化）。消费 [AiReachabilityProbe] 的每家结果，展示"连接层
- * TLS 握手是否可达"——**免 key**、best-effort。此屏是 API 探针的姊妹入口（从 [ApiProbeScreen]
- * 的"① 全家可达性看板（免 key）"进入），与真实 API 探针（TTFT/ITL）明确分口径。
+ * TLS 握手是否可达"——**免 key**、best-effort。它是独立的连接层诊断，与仅存在于受保护
+ * Debug/ADB 组件中的真实 API 探针（TTFT/ITL）明确分口径。
  *
  * **口径红线（与显示强绑定，勿混）**：claim_scope=`application_reachability_tls_no_key`，只看
  * "能否完成完整 TLS 握手（拿到任意 HTTP 响应即通）"，**不测 TTFT、不进 AQS**，不看 2xx/4xx 语义。

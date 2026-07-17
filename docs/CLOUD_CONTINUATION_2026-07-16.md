@@ -1,18 +1,18 @@
 # ANEB 云端续开发 Checkpoint
 
-> 时间：2026-07-16（Asia/Shanghai）  
-> GitHub：`lucassu2012/ANEB_GPT`  
+> 时间：2026-07-17（Asia/Shanghai）
+> GitHub：`lucassu2012/ANEB_GPT`
 > 发布策略：公开仓只包含源码、设计文档和可复现测试；本机 `evidence/`、设备数据库、日志、密钥、APK、构建缓存不发布。
 
 ## 1. 当前产品边界
 
 - ANEB App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API。
-- 现有真实 API 探针代码保留为开发诊断能力，但必须从正式产品导航隐藏。
+- 真实 API 探针只作为 Debug/ADB 开发诊断能力：正式产品导航、Key 存储和自动入口均已删除；Release 不含可调用组件。
 - AI 真实业务行为模型独立开发，通过冻结的 Profile v2、模型哈希和确定性轨迹与 App 对接。
 - Token、AI 实时交互、网络综合性能三类测试独立评分，禁止混入原有 AQS。
 - 缺失测量值必须为 `null`/“—”，不得填 0；95% 达标结论必须带有效样本数和置信度。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-49；完整指标、目标、评分与结论合同见
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-54；完整指标、目标、评分与结论合同见
 `docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
 
 ## 2. 已完成
@@ -25,7 +25,10 @@
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
 - E-01 已升级到 `aneb-server/0.7.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复路径。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
-- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 14 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 468 项 JVM 测试、0 failures、Lint 0 errors、Go/行为模型测试和 0.5.0 APK 构建通过；最终 Debug APK SHA-256 为 `5C9DDD98B46E80AF3BF99F79EBBE4235C730D2D10500F010022BC74C0A7C2B06`。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、行为模型 14 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 501 项 JVM 测试、0 failures、Lint 0 errors（10 warnings）、Go/行为模型测试和 0.5.1 APK 构建通过；最终 Debug APK SHA-256 为 `099C9180D7EFE5FDEAF1F4A96FA9D74E5ED0B59ABE5141676128CEE6A170426A`。
+- App 0.5.1 已删除正式 API Probe UI/Key 存储，改为 Debug-only、`android.permission.DUMP` 保护且无 intent-filter 的一次性 ADB 诊断 Activity；Release 合并清单自动验收不含该组件。普通 autorun 仅 Debug 首次创建消费并立即清除，避免 Activity 重建重复测试。
+- AI 实时结果采用 `ensureActive → NonCancellable(Room insert + publish)` 最终提交边界；DB 失败不发布，取消与提交碰撞时 durable result 优先。每会话 loaded RTT 监控在 `finally` 中 `cancelAndJoin`；固定 Wi-Fi/蜂窝绑定失效后在下一会话按同承载重获，失败不降级。手动权限流程由 `SavedStateHandle` 恢复，不持有 Activity/Composable/lambda。
+- P40 Pro 0.5.1 真机 run `019f709d-33bf-7dbf-a732-35e28a71b447` 完成 AI 实时 Quick：1/1 会话、3 轮、Room 写入 `ok=true`、98.6/A、`LOW/INCONCLUSIVE`、终态 completed；Debug API 缺参安全拒绝通过且未发出真实 API 请求。测试后已回桌面并强停 Codex，两套 ANEB 均无 PID/服务。首次截图因 ADB 短暂离线为全黑无效帧，不计入 UI 验收；详见 `docs/P40_APP_0.5.1_VALIDATION_2026-07-17.md`。
 - P40 Pro 已完成两次 AI 实时交互 Quick 端到端验收：1/1 会话、3/3 轮次、动态准时帧率/播放余量/RTT/双向速率/首帧响应、结果落库及进程重启后的历史回看均通过；两次均保持 `LOW/INCONCLUSIVE`，测试后已主动退出到华为桌面。
 - 网络综合 Quick/Standard Profile 已发布；Android 已实现 loaded RTT 并发刷新、100ms 吞吐仪表、1s goodput 窗口、握手分解、带序号 UDP 探针、测后恢复 RTT、独立评分、Room v15 结果冻结和历史详情页。
 - P40 Pro 网络综合 Quick 端到端验收通过。最终 0.3.0 手动用户路径 run `019f6b6f-d3d8-7063-b301-90ec8be6fa5e` 在下载/上传阶段正确显示动态 Mbps 指针、loaded RTT、曲线和阶段进度，结果 60.7/C、UDP 50/50 返回并自动跳转结果页；按快测规则保持 `LOW/INCONCLUSIVE`。前序 run 还测得负载 RTT P95 1257.8ms，验证了 loaded RTT 能揭示单看带宽无法发现的排队时延。所有测试后均已退出到华为桌面且无残留前台服务。
@@ -39,12 +42,13 @@
 
 ## 3. 下一阶段（按顺序）
 
-1. 补 AI 实时交互取消/真实断网/切后台恢复和打断边缘条件回归；Standard Wi-Fi 长时与受控服务端恢复已分别闭环，真实网络事件不得混用其分数。
+1. 继续补 AI 实时真实断网、切后台恢复和打断边缘条件真机回归；取消/落库原子性、异常建链回收和固定承载重获已有自动化回归，真实网络事件不得混用受控服务端恢复分数。
 2. 完成 Token Standard 长时回归，以及 Stress 的取消、断网、切后台恢复和重复测试分布；单次 Stress 继续保持低置信。
-3. 正式导航下线真实 API 探针：底部“探针”页改为 Profile/业务测试目录；保留仅限 ADB 的开发诊断路径。
-4. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
-5. 完成 Token/网络综合 Standard 长时真机稳定性与 Android 16 回归，再进入 release 签名候选。
-6. 专用网关 0.2.0 软件、安装安全与 App 0.5.0 异常闭环已完成；先由离线 CA 为 `192.168.77.1` 签发现场叶证书，再在独占硬件上执行最终 TLS/安装生命周期和 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
+3. 按 `docs/PLAN_ALIGNMENT_2026-07-17.md` 进入 M0 治理补账：统一 `aneb-result-v1`、spec 逻辑目录、两族 Profile 兼容声明和生成校验；单节点切片完成不等于 M1 正式验收。
+4. 为独立 P3 行为模型建立“授权观测 JSONL → 校准 → 留出验证 → validated 发布”流水线模板；在没有真实数据时保持 `hypothesis`。
+5. 三类结果统一生成完成性、业务行为特征、瓶颈和逐项 95% 网络建议；因果措辞必须服从证据范围。
+6. 完成 Token/网络综合 Standard 长时真机稳定性与 Android 16 回归，再进入 release 签名候选。
+7. 专用网关 0.2.0 软件、安装安全与 App 0.5.1 异常闭环已完成；先由离线 CA 为 `192.168.77.1` 签发现场叶证书，再在独占硬件上执行最终 TLS/安装生命周期和 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
 
 ## 4. 关键目录
 

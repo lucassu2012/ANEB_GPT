@@ -36,6 +36,7 @@ try {
     & .\gradlew.bat `
         ':probe:testDebugUnitTest' `
         ':probe:lintDebug' `
+        ':probe:processReleaseMainManifest' `
         ':probe:assembleDebug' `
         '--no-daemon' `
         '--no-parallel' `
@@ -52,6 +53,11 @@ finally {
         Remove-Item -LiteralPath $sqliteTmp -Recurse -Force -ErrorAction SilentlyContinue
     }
     Pop-Location
+}
+
+& (Join-Path $PSScriptRoot 'verify_release_boundary.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw "Release-boundary verification failed with exit code $LASTEXITCODE."
 }
 
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue

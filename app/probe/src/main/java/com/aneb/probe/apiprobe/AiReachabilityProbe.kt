@@ -31,7 +31,7 @@ import javax.net.ssl.SSLHandshakeException
  * 明确**不测 TTFT**、**不进 AQS**（[CLAIM_SCOPE] = `application_reachability_tls_no_key`）。
  *
  * 与 [ApiProbe] 的区别：ApiProbe 是带 key 的端到端 TTFT/ITL 对照列（烧钱、需 key）；本探针
- * 是"这些 AI 服务在当前网络下能不能连上"的看板，**无 key（安全，绝不触碰 [ApiKeyStore]）**、
+ * 是"这些 AI 服务在当前网络下能不能连上"的看板，**无 key（从不读取或发送 key）**、
  * 短超时、best-effort。
  *
  * 分类（[Status]，只看 TLS/连接层）：

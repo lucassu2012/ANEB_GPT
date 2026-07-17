@@ -17,9 +17,6 @@ room = "2.6.1"
 kotlinxSerializationJson = "1.7.3"
 kotlinxCoroutines = "1.8.1"
 junit = "4.13.2"
-# 阶段 2 API 探针：key 存储（EncryptedSharedPreferences）。1.1.0-alpha06 为该库最新
-# 发布线（1.0.0 stable 依赖过旧 Tink 且缺 MasterKey API）；精确钉死，禁动态版本。
-securityCrypto = "1.1.0-alpha06"
 # 阶段 2 P2-C05 A/B（D-17/D-19）：Cronet 全量内嵌版（含 QUIC/h3 网络栈）。
 # 143.7445.0 为 Google Maven org.chromium.net 组当前最新发布（2025 恢复发布线，
 # 上一版 141.7340.3）；精确钉死。APK 每 ABI 增大数 MB 属预期（参考项目 ADR-001
@@ -49,8 +46,6 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
-
-androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 
 cronet-embedded = { module = "org.chromium.net:cronet-embedded", version.ref = "cronetEmbedded" }
 

@@ -2,5 +2,13 @@
 <!-- debug 变体专用清单：仅 debug 允许明文 HTTP（对模拟器宿主机 10.0.2.2:8443 联调）。
      release 不含 networkSecurityConfig，targetSdk>=28 默认禁明文（设计文档 §9.1）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:networkSecurityConfig="@xml/network_security_config" />
+    <application android:networkSecurityConfig="@xml/network_security_config">
+        <activity
+            android:name=".debug.ApiProbeDebugActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:permission="android.permission.DUMP"
+            android:taskAffinity="${applicationId}.apiprobe_debug" />
+    </application>
 </manifest>
