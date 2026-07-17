@@ -43,7 +43,7 @@
 ### 缺口
 
 - ［KNOWN｜HIGH］体验地图目前是产品外壳，不是 M2 的 6–8 点位热力聚合与三级归因地图。
-- ［KNOWN｜HIGH］0.5.7 已完成“开测前节点/网络检查 → 权限用途说明 → 正常测试”真机切片；尚未完成不依赖 ADB 的“下载/系统安装 → 首次启动 → 测试 → 导出/分享”整链正式可用性验收，Release 签名材料也不在仓库中。
+- ［KNOWN｜HIGH］0.5.7 已完成“开测前节点/网络检查 → 权限用途说明 → 正常测试 → 切后台/通知/回到结果 → 主动取消”真机切片；取消 run 保留 invalid 审计信封但 score/grade 为 null。尚未完成不依赖 ADB 的“下载/系统安装 → 首次启动 → 测试 → 导出/分享”整链正式可用性验收，Release 签名材料也不在仓库中。
 - ［INFERRED｜MED］视觉已接近目标方向，但“达到 SpeedTest 级”仍需要真机逐屏动效、弱机帧率、无障碍和长文本回归，不能仅由代码完成度判定。
 
 ## 3. P1b 手机端测量引擎
@@ -75,7 +75,7 @@
 - ［KNOWN｜HIGH］App 0.5.3 的 AI 实时 Quick run `019f714a-b54f-787a-a992-2f0254417568` 与网络综合 Quick run `019f714b-ca9d-7aed-a669-533f4ff4a500` 已各自完成 P40 纵向验收：类型化行/信封一一对应、Schema 错误 0、摘要匹配；两类 JSONL 均从系统下载目录读回校验，分享选择器实际拉起。见 `P40_APP_0.5.3_RESULT_V1_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.5 的 Token、AI 实时、网络综合 Quick runs `019f71a6-bbf0-7c71-b8b8-b8338297c6e0` / `019f71a9-191f-7fe3-9995-d4765ed6652f` / `019f71aa-f127-7db3-a4d0-651e57e6a955` 已完成 P40 无线证据和跨语言摘要终验：无线样本分别为 119/26/18，Schema 错误 0，独立 Python 摘要全部匹配。0.5.4 摘要证据因指数词法差异被否决。见 `P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.6 的 P40 Token Quick 5-run 同条件 cohort 已完成：稳定任务 ID 对齐后，TTFT CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限；5 条信封均 Schema/摘要/类型化核心字段匹配，每条 Room/信封无线样本均为 119。该结论只适用于 P40 + Wi-Fi + E-01 + Quick，单 run 继续为 LOW/INCONCLUSIVE。见 `P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
-- ［KNOWN｜HIGH］App 0.5.7 已在 P40 验证无效节点启动前拦截、所有正式模式的无线权限用途说明及完整 Network Quick 回归。run `019f7209-e89c-7adc-8238-83f9847acdc5` 完成落库并采集 18 个无线样本，57.6/C 仍按 Quick 规则保持 LOW/INCONCLUSIVE；见 `P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］App 0.5.7 已在 P40 验证无效节点启动前拦截、所有正式模式的无线权限用途说明、完整 Network Quick、切后台通知/回到结果和主动取消。正常 runs `019f7209-e89c-7adc-8238-83f9847acdc5` / `019f7211-0c5d-723d-a84f-49115ddd48da` 均完成落库并各采 18 个无线样本；取消 run `019f7212-0268-7280-9fa6-385b32a8fed1` 保留 cancelled/invalid 信封、分数与等级为 null。见 `P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧

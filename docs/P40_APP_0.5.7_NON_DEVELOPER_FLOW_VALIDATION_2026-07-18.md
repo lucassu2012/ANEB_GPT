@@ -25,6 +25,7 @@
 - ［KNOWN｜HIGH］Debug APK 构建成功；版本、包名与 SHA-256 如本文开头。
 - ［KNOWN｜HIGH］新增反例覆盖：无 scheme、无 host、HTTP 正式包、账号密码、query、fragment、API path、非法端口及离线优先提示。
 - ［KNOWN｜HIGH］新增穷举测试锁定所有 `AnebTestMode`：无线证据不完整必须先出现用途说明，完整时不得重复打扰。
+- ［KNOWN｜HIGH］全仓质量门 PASS：Release 入口边界、6 Schema/catalog、统一结果 Schema、TTFT 分析器 5 tests、行为模型 31 tests、server/gateway Go tests 全部通过。
 
 ## 4. P40 用户路径实测
 
@@ -54,6 +55,24 @@
 - ［KNOWN｜HIGH］结果先落 Room：`NET_V1_DB_WRITE ok=true`；无线证据 `status=collected samples=18 raw_samples=18 events=0`。
 - ［KNOWN｜HIGH］终态 `completed`，57.6/C，verdict `INCONCLUSIVE`、confidence `LOW`。下载 P5 25.4Mbps、上传 P5 9.7Mbps、空闲 RTT P95 82.2ms、loaded RTT P95 1016.2ms、UDP 未返回 0%。
 - ［KNOWN｜HIGH］Quick 样本不足以证明 95% 长期稳定性，结果页保持低置信，没有把 57.6 分外推为运营商总体质量。
+
+### 4.4 切后台、通知与回到结果
+
+Network Quick run `019f7211-0c5d-723d-a84f-49115ddd48da` 在测量过程中执行 Home → 后台等待 → 通知栏 → 回到 App：
+
+- ［KNOWN｜HIGH］按 Home 前后 `ProbeRunService` 均为 1，前台切到 Huawei Launcher 后测量没有被 Activity 生命周期取消。
+- ［KNOWN｜HIGH］通知显示“ANEB 正在测试网络”、当前阶段“正在测量上传容量与负载 RTT”，并提供“取消测试”动作。
+- ［KNOWN｜HIGH］热启动回到 App 后自动显示完成结果，不要求用户重新选择测试或查找历史。
+- ［KNOWN｜HIGH］Room 中 run 状态为 `completed`，分数 66.3/C，统一信封状态 `completed + valid`；无线样本 18、环境事件 1。该 Quick 结论仍为 LOW/INCONCLUSIVE。
+
+### 4.5 主动取消与审计保留
+
+Network Quick run `019f7212-0268-7280-9fa6-385b32a8fed1` 在下载阶段点击左上角取消：
+
+- ［KNOWN｜HIGH］Service 从 1 降为 0，首页提示“测试已取消，未生成成绩”，没有跳转到正常结果页。
+- ［KNOWN｜HIGH］Room 保留一条 `status=invalid` 的审计记录与 `aneb-result-v1` 信封；信封 run 状态为 `cancelled`、validity 为 `invalid`、reason 为 `cancelled`。
+- ［KNOWN｜HIGH］取消记录的 score 为 `suppressed_invalid`，value/grade 均为 null；不会用未完成的下载片段计算成绩。
+- ［KNOWN｜HIGH］取消前已采到的 5 个无线样本作为原始证据保留，业务指标全部为 missing，结论只写“测试未完成：cancelled”。这是“保留失效证据但抑制评分”，不是删除历史痕迹。
 
 ## 5. 资源释放
 
