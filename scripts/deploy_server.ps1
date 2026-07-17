@@ -138,6 +138,28 @@ echo '--- smoke: /api/v1/download ---'
 bytes=$(curl -sk https://127.0.0.1:8443/api/v1/download?bytes=1024 | wc -c)
 test "$bytes" -eq 1024
 echo "download_bytes=$bytes"
+echo '--- smoke: isolated synthetic impairment contract ---'
+curl -sk https://127.0.0.1:8443/api/v1/impairments | python3 -c '
+import json, sys
+body = json.load(sys.stdin)
+assert len(body["policies"]) == 1, body
+p = body["policies"][0]
+assert p["contract_version"] == "aneb-synthetic-impairment-v1", p
+assert p["profile_id"] == "network_comprehensive_weak_capacity_latency", p
+assert p["version"] == "1.0.0" and p["route_id"] == "weak-capacity-latency-v1", p
+assert (p["downlink_mbps"], p["uplink_mbps"], p["added_rtt_ms"], p["jitter_ms"]) == (3, 1, 120, 30), p
+print("impairment_contract=weak_capacity_latency@1.0.0")
+'
+synthetic='https://127.0.0.1:8443/synthetic/weak-capacity-latency-v1'
+query='impair_run=deploy-smoke&impair_seed=20260717&impair_seq=1'
+curl -sk -D /tmp/aneb_impair_headers -o /tmp/aneb_impair_echo -X POST --data ping "$synthetic/api/v1/echo?$query"
+grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_capacity_latency@1.0.0' /tmp/aneb_impair_headers
+python3 -c 'import json; json.load(open("/tmp/aneb_impair_echo"))'
+rm -f /tmp/aneb_impair_headers /tmp/aneb_impair_echo
+query='impair_run=deploy-smoke-download&impair_seed=20260717&impair_seq=1'
+bytes=$(curl -sk "$synthetic/api/v1/download?bytes=65536&chunk_kb=16&$query" | wc -c)
+test "$bytes" -eq 65536
+echo "synthetic_download_bytes=$bytes"
 echo '--- smoke: shared UDP 8443 sequenced echo ---'
 python3 - <<'PY'
 import socket, struct, time

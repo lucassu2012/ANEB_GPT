@@ -272,7 +272,7 @@ private fun BasicHistoryRecord(result: NetworkComprehensiveResultEntity, onOpen:
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "网络综合 · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
+                "${if (result.syntheticImpairment) "合成弱网" else "网络综合"} · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = colors.ink,

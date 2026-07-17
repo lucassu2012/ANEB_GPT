@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.5.1"
+const serverVersion = "aneb-server/0.6.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -28,22 +28,31 @@ type app struct {
 	// 看 X-Aneb-Proto 头（红队项：QUIC 启用 ≠ 协商 h3）。
 	h3Enabled bool
 	resultsMu sync.Mutex
+	// impairments keeps per-run, aggregate user-space rate limiters. It never
+	// changes host qdisc/firewall/radio state, so normal and concurrent runs
+	// remain isolated from synthetic weak-network traffic.
+	impairments syntheticImpairmentRegistry
 }
 
 // routes 构建完整 handler 树（含 X-Aneb-Server 版本头中间件）。
 func (a *app) routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/echo", a.handleEcho)
-	mux.HandleFunc("/api/v1/profiles", a.handleProfiles)
-	mux.HandleFunc("/api/v1/stream", a.handleStream)
-	mux.HandleFunc("/api/v1/token-sim", a.handleTokenSim)
-	mux.HandleFunc("/api/v1/realtime-sim", a.handleRealtimeSim)
-	mux.HandleFunc("/api/v1/download", a.handleDownload)
-	mux.HandleFunc("/api/v1/upload", a.handleUpload)
-	mux.HandleFunc("/api/v1/toolloop", a.handleToolLoop)
-	mux.HandleFunc("/api/v1/results", a.handleResults)
-	mux.HandleFunc("/api/v1/serverinfo", a.handleServerInfo)
-	return withServerHeader(mux)
+	api := http.NewServeMux()
+	api.HandleFunc("/api/v1/echo", a.handleEcho)
+	api.HandleFunc("/api/v1/profiles", a.handleProfiles)
+	api.HandleFunc("/api/v1/stream", a.handleStream)
+	api.HandleFunc("/api/v1/token-sim", a.handleTokenSim)
+	api.HandleFunc("/api/v1/realtime-sim", a.handleRealtimeSim)
+	api.HandleFunc("/api/v1/download", a.handleDownload)
+	api.HandleFunc("/api/v1/upload", a.handleUpload)
+	api.HandleFunc("/api/v1/toolloop", a.handleToolLoop)
+	api.HandleFunc("/api/v1/results", a.handleResults)
+	api.HandleFunc("/api/v1/serverinfo", a.handleServerInfo)
+	api.HandleFunc("/api/v1/impairments", a.handleSyntheticImpairments)
+
+	root := http.NewServeMux()
+	root.Handle("/synthetic/", a.syntheticImpairmentHandler(api))
+	root.Handle("/", api)
+	return withServerHeader(root)
 }
 
 // withServerHeader 为所有响应附加 X-Aneb-Server 版本头——服务端指纹，

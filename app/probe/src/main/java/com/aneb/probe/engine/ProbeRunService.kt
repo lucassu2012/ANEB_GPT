@@ -195,7 +195,11 @@ class ProbeRunService : Service() {
                         engine.run(
                             NetworkSpeedEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = if (config.mode == TestEngine.Mode.FORENSIC) "standard" else "quick",
+                                variant = when (config.mode) {
+                                    TestEngine.Mode.QUICK -> "quick"
+                                    TestEngine.Mode.FORENSIC -> "standard"
+                                    TestEngine.Mode.STRESS -> "weak_capacity_latency"
+                                },
                                 transport = config.transport,
                             ),
                         )

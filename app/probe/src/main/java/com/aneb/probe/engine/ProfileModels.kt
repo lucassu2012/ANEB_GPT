@@ -175,6 +175,23 @@ data class ProfilePhase(
     }
 }
 
+/**
+ * Per-run user-space impairment contract. These values shape only HTTP request
+ * delay/body and response body; they never represent real radio or IP loss.
+ */
+@Serializable
+data class ProfileSyntheticImpairment(
+    @SerialName("contract_version") val contractVersion: String,
+    @SerialName("route_id") val routeId: String,
+    val seed: Long,
+    @SerialName("downlink_mbps") val downlinkMbps: Double,
+    @SerialName("uplink_mbps") val uplinkMbps: Double,
+    @SerialName("added_rtt_ms") val addedRttMs: Int,
+    @SerialName("jitter_ms") val jitterMs: Int,
+    @SerialName("applies_to") val appliesTo: List<String>,
+    @SerialName("excluded_from_shaping") val excludedFromShaping: List<String>,
+)
+
 @Serializable
 data class ScenarioProfile(
     @SerialName("profile_id") val profileId: String,
@@ -194,6 +211,7 @@ data class ScenarioProfile(
     val trace: ProfileTrace? = null,
     @SerialName("evidence_tier") val evidenceTier: String = "",
     @SerialName("execution_plan") val executionPlan: ProfileExecutionPlan? = null,
+    @SerialName("synthetic_impairment") val syntheticImpairment: ProfileSyntheticImpairment? = null,
     /** v1 兼容字段；v2 只能用于显示旧 Profile，不能替代 live_presentation/evaluation。 */
     val presentation: ProfilePresentation = ProfilePresentation(),
     val phases: List<ProfilePhase> = emptyList(),
@@ -232,6 +250,7 @@ object ProfileParser {
         "published/ai_realtime_voice_recovery/profile.json",
         "published/network_comprehensive_quick/profile.json",
         "published/network_comprehensive_standard/profile.json",
+        "published/network_comprehensive_weak_capacity_latency/profile.json",
     )
 
     private val json = Json { ignoreUnknownKeys = true }

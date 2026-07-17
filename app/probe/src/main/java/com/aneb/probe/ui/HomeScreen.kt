@@ -90,6 +90,7 @@ fun HomeScreen(
     var isDragging by remember { mutableStateOf(false) }
     var confirmStress by remember { mutableStateOf(false) }
     var confirmRecovery by remember { mutableStateOf(false) }
+    var confirmWeakNetwork by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val collapsedHeight = 150.dp
     val halfHeight = 250.dp
@@ -135,7 +136,9 @@ fun HomeScreen(
             IdleStartRing(
                 running = running,
                 onStart = {
-                    if (testMode == AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
+                    if (testMode == AnebTestMode.NETWORK_BASIC && mode == TestEngine.Mode.STRESS) {
+                        confirmWeakNetwork = true
+                    } else if (testMode == AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
                         confirmStress = true
                     } else if (testMode == AnebTestMode.AI_REALTIME_SIMULATION && mode == TestEngine.Mode.STRESS) {
                         confirmRecovery = true
@@ -146,7 +149,11 @@ fun HomeScreen(
             )
             Text(
                 when (testMode) {
-                    AnebTestMode.NETWORK_BASIC -> "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
+                    AnebTestMode.NETWORK_BASIC -> if (mode == TestEngine.Mode.STRESS) {
+                        "隔离模拟 ↓3 / ↑1 Mbps 与 +120±30ms 应用时延，真实无线信号保持不变"
+                    } else {
+                        "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
+                    }
                     AnebTestMode.TOKEN_SIMULATION -> if (mode == TestEngine.Mode.STRESS) {
                         "100MiB 视频上传 + 100MiB 大对象返回，动态测量容量与负载 RTT"
                     } else {
@@ -292,7 +299,11 @@ fun HomeScreen(
                         symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
                         label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "测试档位",
                         value = when (testMode) {
-                            AnebTestMode.NETWORK_BASIC -> modeSummary(mode, "约 20 秒", "约 42 秒")
+                            AnebTestMode.NETWORK_BASIC -> if (mode == TestEngine.Mode.STRESS) {
+                                "当前：合成弱网 · 约 42 秒 · ↓3 ↑1 Mbps · +120±30ms"
+                            } else {
+                                modeSummary(mode, "约 20 秒", "约 42 秒")
+                            }
                             AnebTestMode.TOKEN_SIMULATION -> when (mode) {
                                 TestEngine.Mode.QUICK -> "当前：快测 · 约 2 分钟"
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 23 分钟"
@@ -327,6 +338,25 @@ fun HomeScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { confirmStress = false }) { Text("取消") }
+                },
+            )
+        }
+
+        if (confirmWeakNetwork) {
+            AlertDialog(
+                onDismissRequest = { confirmWeakNetwork = false },
+                title = { Text("开始合成弱网测试？") },
+                text = {
+                    Text(
+                        "本次只对 ANEB 当前测试流量模拟下行 3Mbps、上行 1Mbps、应用请求附加 RTT 120±30ms。" +
+                            "不会修改手机的 RSRP/SINR，也不模拟 DNS、TCP、TLS 或 UDP 丢包；结果会永久标记为“合成弱网”。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { confirmWeakNetwork = false; onStart() }) { Text("开始弱网测试") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmWeakNetwork = false }) { Text("取消") }
                 },
             )
         }

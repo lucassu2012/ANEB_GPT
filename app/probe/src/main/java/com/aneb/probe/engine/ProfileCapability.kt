@@ -232,6 +232,23 @@ object ProfileCapability {
             if (profile.executionPlan != null) add("网络综合测试不得声明行为模型执行计划")
             val phaseTypes = profile.phases.map { it.type }
             if (phaseTypes != networkComprehensivePhases.toList()) add("网络综合阶段顺序或集合不受支持")
+            profile.syntheticImpairment?.let { impairment ->
+                if (profile.profileId != "network_comprehensive_weak_capacity_latency") add("合成弱网 Profile ID 不受支持")
+                if (impairment.contractVersion != "aneb-synthetic-impairment-v1") add("合成弱网合同版本不受支持")
+                if (impairment.routeId != "weak-capacity-latency-v1") add("合成弱网路由不受支持")
+                if (impairment.seed == 0L) add("合成弱网缺少 seed")
+                if (impairment.downlinkMbps <= 0.0 || impairment.uplinkMbps <= 0.0) add("合成弱网容量门限无效")
+                if (impairment.addedRttMs < 0 || impairment.jitterMs < 0) add("合成弱网时延参数无效")
+                val requiredApplies = setOf("http_request_delay", "http_request_body", "http_response_body")
+                if (!impairment.appliesTo.containsAll(requiredApplies)) add("合成弱网适用范围不完整")
+                val requiredExclusions = setOf("dns", "tcp", "tls", "udp", "radio_rsrp", "radio_sinr")
+                if (!impairment.excludedFromShaping.containsAll(requiredExclusions)) add("合成弱网排除项不完整")
+                val upload = profile.phases.firstOrNull { it.type == ProfilePhase.TYPE_UPLOAD_LOADED }
+                if (upload?.bytes != 131_072L || upload.chunkKb != 64 || upload.parallel != 2) {
+                    add("合成弱网上传必须使用服务器确认的 128KiB 双连接分块")
+                }
+            }
+            if (profile.profileId.contains("_weak_") && profile.syntheticImpairment == null) add("弱网 Profile 缺少合成整形合同")
         }
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")
         if (profile.evaluation.missingRequiredMetric != "score_null") add("必需指标缺失策略必须为 score_null")

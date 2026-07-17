@@ -1,5 +1,6 @@
 package com.aneb.probe.engine
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
@@ -211,5 +212,25 @@ class ProfileCapabilityTest {
         assertTrue(result.contractIssues.isNotEmpty())
         assertFalse(result.executable)
         assertFalse("path_setup" in result.unsupportedPhaseTypes)
+    }
+
+    @Test
+    fun `published weak network profile freezes supported shaping and exclusions`() {
+        val file = sequenceOf(
+            File("../../profiles/published/network_comprehensive_weak_capacity_latency/profile.json"),
+            File("../profiles/published/network_comprehensive_weak_capacity_latency/profile.json"),
+            File("profiles/published/network_comprehensive_weak_capacity_latency/profile.json"),
+        ).first { it.isFile }
+        val profile = ProfileParser.parseSingle(file.readText())
+
+        val result = ProfileCapability.assess(profile)
+        assertTrue(result.contractIssues.joinToString(), result.executable)
+        assertEquals("aneb-synthetic-impairment-v1", profile.syntheticImpairment?.contractVersion)
+        assertTrue(profile.syntheticImpairment?.excludedFromShaping?.contains("radio_rsrp") == true)
+
+        val drifted = profile.copy(
+            syntheticImpairment = profile.syntheticImpairment?.copy(excludedFromShaping = listOf("dns")),
+        )
+        assertFalse(ProfileCapability.assess(drifted).executable)
     }
 }

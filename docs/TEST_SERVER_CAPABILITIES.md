@@ -7,15 +7,15 @@
 | 项目 | 当前合同 |
 |---|---|
 | 节点 | E-01，深圳，公网 `120.79.148.0:8443` |
-| 服务端 | `aneb-server/0.5.1`，Linux/amd64 |
+| 服务端 | `aneb-server/0.6.0`，Linux/amd64 |
 | 主通道 | `https://120.79.148.0:8443`；项目 App 使用自有 IP-SAN 信任锚 |
 | SNI 通道 | `https://120-79-148-0.sslip.io:8443`；部分蜂窝网络已观察到 SNI-keyed RST，只用于 REACH 对照，不作为强制主通道 |
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-17 12:03 CST；节点本机与公网 smoke 均通过 |
+| 最近验证 | 2026-07-17 13:40 CST；节点本机、公网 smoke 与 P40 Pro 正常/弱网相邻对照均通过 |
 
-所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.5.1`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
+所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.6.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
 ## 2. 已部署端点
 
@@ -31,6 +31,8 @@
 | `POST /api/v1/toolloop` | 工具调用往返 | 上行 ≤64MiB；处理等待 0–60000ms；下行 0–16MiB |
 | `POST /api/v1/results` | 旧版结果合同落盘 | JSON ≤1MiB；`claim_scope` 固定为 `application_end_to_end_to_probe_node`；schema `1.0` |
 | `GET /api/v1/serverinfo` | 节点版本和运行时快照 | 版本、uptime、H3 开关、TCP slow-start-after-idle、拥塞控制 |
+| `GET /api/v1/impairments` | 已部署合成弱网合同目录 | 当前仅返回 `network_comprehensive_weak_capacity_latency@1.0.0` |
+| `/synthetic/weak-capacity-latency-v1/api/v1/{echo,download,upload}` | 逐 run 隔离的用户态弱网路径 | 必须携带 `impair_run/impair_seed/impair_seq`；只支持这 3 个端点；正常 `/api/v1/*` 路径不整形 |
 | UDP `:8443` | 网络综合带序号应用探针 | `ANEB1 + seq + monotonic timestamp` 魔数分流；与 H3 共端口 |
 
 ## 3. 根 Profile 清单
@@ -71,7 +73,7 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 - 禁止把故障注入参数开启在生产/取证服务上。
 - 不得只替换 Profile 而跳过合同测试和公网 smoke。
 
-每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
+每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、合成弱网目录/回执/精确字节、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
 
 ## 5. 弱网测试边界
 
@@ -79,10 +81,30 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 
 软件可控的是**合成网络损伤**：带宽上限、附加时延、抖动、应用层未返回和短时中断。它只能用于验证 ANEB 对弱网的灵敏度和结论逻辑，结果必须标记 `synthetic_impairment=true`，并把手机实际采集的 RSRP/SINR 当作协变量，不得伪装成无线指标被改变。
 
-E-01 当前未启用弱网整机整端口整形。推荐实现为“单 run、单连接、固定版本 Profile”的隔离损伤合同；在该能力上线并完成并发隔离测试前，不得在共享节点运行全局 `netem`。
+E-01 已启用首个**用户态、逐 run 隔离**弱网合同；仍未、也不得启用整机/整端口全局 `netem`：
+
+- Profile：`network_comprehensive_weak_capacity_latency@1.0.0`；路由 `weak-capacity-latency-v1`。
+- 合成条件：聚合下行 3Mbps、聚合上行 1Mbps、每个 HTTP 请求附加 RTT `120±30ms`；抖动由 `run+seed+seq` 确定性生成。
+- 作用范围：HTTP 请求等待、请求体、响应体。并发连接共享同一 run 的上/下行限速器，不能靠增加并发绕过容量上限；run 状态 15 分钟无活动后回收，最多 4096 个活跃 run。
+- 明确排除：DNS、TCP、TLS、UDP、RSRP、SINR；初版不注入 IP 丢包或断线。UDP 结果仍是未整形现场协变量。
+- 防伪：成功响应带 `X-Aneb-Synthetic-Impairment: network_comprehensive_weak_capacity_latency@1.0.0` 与参数头；App 0.4.7 必须核对回执，否则结果 `INVALID`、分数抑制。
+- 上行计量：弱网 Profile 使用双连接 128KiB 分块；客户端只累计服务端 `/upload` 回执确认的字节，不把本机 socket 写入量当成线上 goodput。
+
+P40 Pro 0.4.7 相邻对照（同设备、同节点、同一 `AUTO` 承载，弱网后紧接正常 Standard）：
+
+| 指标 | 正常 Standard `019f6e96…` | 合成弱网 `019f6e93…` | 方向 |
+|---|---:|---:|---|
+| 下载 P5 | 17.66Mbps | 2.80Mbps | 降低 84.2% |
+| 上传 P5 | 15.91Mbps | 1.12Mbps | 降低 92.9% |
+| 空闲 RTT P95 | 109.80ms | 228.03ms | 增加 118.24ms，接近声明的 +120ms |
+| 网络综合分 | 51.2/D/FAIL | 32.0/D/FAIL | 弱网进一步下降 19.2 分 |
+| UDP 未返回率 | 0% | 0% | 未整形，不据此声称模拟丢包 |
+
+正常 run 的 loaded RTT P95 为 548.74ms，反而高于弱网 run 的 365.43ms；这是实际路径满载排队与用户态整形位置不同造成的观测，证明“合成时延更高”不能被外推为所有 loaded RTT 都必然单调上升。首个 Profile 的结论只适用于容量/应用时延敏感性验证。
 
 ## 6. 变更记录
 
 | 日期 | 变更 |
 |---|---|
+| 2026-07-17 | 部署 `aneb-server/0.6.0`：新增逐 run 聚合限速的 `weak-capacity-latency-v1` 用户态适配器、目录与回执头；正常路由不整形。App 0.4.7/Room v16 完成 P40 正常/弱网相邻对照，上行改为服务器确认字节口径。 |
 | 2026-07-17 | 建立权威能力文档；Codex 接管唯一部署权；在 0.2.1 基础上合并 `s3_multimodal@0.3.0` 的两段 `download_burst`，并补客户端兼容执行与 fail-closed 字节校验。 |

@@ -3,6 +3,7 @@ package com.aneb.probe.engine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NetworkComprehensiveScorerTest {
@@ -36,6 +37,26 @@ class NetworkComprehensiveScorerTest {
         )
         assertEquals(TokenVerdict.FAIL, result.verdict)
         assertNotNull(result.totalScore)
+    }
+
+    @Test fun syntheticWeakNetworkConclusionDisclosesTargetsAndExclusions() {
+        val result = NetworkComprehensiveScorer.score(
+            healthy("weak_capacity_latency").copy(
+                syntheticImpairment = SyntheticNetworkEvidence(
+                    profileId = "network_comprehensive_weak_capacity_latency",
+                    profileVersion = "1.0.0",
+                    downlinkMbps = 3.0,
+                    uplinkMbps = 1.0,
+                    addedRttMs = 120,
+                    jitterMs = 30,
+                    appliesTo = listOf("http_request_delay", "http_request_body", "http_response_body"),
+                    excludedFromShaping = listOf("dns", "tcp", "tls", "udp", "radio_rsrp", "radio_sinr"),
+                    serverAcknowledged = true,
+                ),
+            ),
+        )
+        assertTrue(result.conclusions.any { it.contains("合成弱网") && it.contains("120±30") })
+        assertTrue(result.conclusions.any { it.contains("RSRP/SINR") })
     }
 
     private fun healthy(variant: String) = NetworkComprehensiveEvidence(

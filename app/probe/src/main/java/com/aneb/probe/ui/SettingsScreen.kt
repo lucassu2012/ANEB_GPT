@@ -690,7 +690,9 @@ internal fun BackButton(onBack: () -> Unit) {
 }
 
 private fun modeOptions(testMode: AnebTestMode): List<TestEngine.Mode> = if (
-    testMode == AnebTestMode.TOKEN_SIMULATION || testMode == AnebTestMode.AI_REALTIME_SIMULATION
+    testMode == AnebTestMode.NETWORK_BASIC ||
+    testMode == AnebTestMode.TOKEN_SIMULATION ||
+    testMode == AnebTestMode.AI_REALTIME_SIMULATION
 ) {
     listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC, TestEngine.Mode.STRESS)
 } else {
@@ -700,5 +702,9 @@ private fun modeOptions(testMode: AnebTestMode): List<TestEngine.Mode> = if (
 private fun modeLabel(mode: TestEngine.Mode, testMode: AnebTestMode): String = when (mode) {
     TestEngine.Mode.QUICK -> "快测"
     TestEngine.Mode.FORENSIC -> if (testMode == AnebTestMode.TOKEN_EXPERIENCE) "取证" else "标准"
-    TestEngine.Mode.STRESS -> if (testMode == AnebTestMode.AI_REALTIME_SIMULATION) "恢复" else "压力"
+    TestEngine.Mode.STRESS -> when (testMode) {
+        AnebTestMode.NETWORK_BASIC -> "弱网"
+        AnebTestMode.AI_REALTIME_SIMULATION -> "恢复"
+        else -> "压力"
+    }
 }

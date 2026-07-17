@@ -94,6 +94,16 @@ fun BasicSpeedTestingScreen(
             AnebWordmark(Modifier.align(Alignment.Center))
         }
 
+        telemetry.syntheticImpairmentLabel?.let { label ->
+            AnebGradientCard(Modifier.fillMaxWidth().padding(bottom = 10.dp), radius = 14.dp) {
+                Column(Modifier.padding(horizontal = 13.dp, vertical = 10.dp)) {
+                    Text("合成弱网正在生效", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.fair)
+                    Text(label, fontSize = 10.sp, color = colors.ink, modifier = Modifier.padding(top = 3.dp))
+                    Text("服务器回执校验中 · 真实 RSRP/SINR 不变", fontSize = 9.sp, color = colors.muted, modifier = Modifier.padding(top = 3.dp))
+                }
+            }
+        }
+
         AnebMetricTrio(
             listOf(
                 AnebMetric("负载 RTT", telemetry.loadedRttMs.oneOrDash(), "ms", colors.brand),
@@ -195,7 +205,38 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
         }
         Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("AI 业务路径综合能力", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
-            Text("${result.variant.uppercase()} · ${confidenceLabel(result.confidence)}", fontSize = 10.sp, color = colors.muted, modifier = Modifier.align(Alignment.Start).padding(top = 4.dp))
+            Text(
+                "${if (result.syntheticImpairment) "合成弱网" else result.variant.uppercase()} · ${confidenceLabel(result.confidence)}",
+                fontSize = 10.sp,
+                color = if (result.syntheticImpairment) colors.fair else colors.muted,
+                modifier = Modifier.align(Alignment.Start).padding(top = 4.dp),
+            )
+            if (result.syntheticImpairment) {
+                AnebGradientCard(Modifier.fillMaxWidth().padding(top = 10.dp), radius = 14.dp) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            if (result.impairmentAcknowledged) "服务器已确认合成弱网" else "服务器未确认，评分应被抑制",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (result.impairmentAcknowledged) colors.fair else colors.poor,
+                        )
+                        Text(
+                            "↓${result.impairmentDownlinkMbps.oneOrDash()} Mbps · ↑${result.impairmentUplinkMbps.oneOrDash()} Mbps · " +
+                                "+${result.impairmentAddedRttMs ?: "—"}±${result.impairmentJitterMs ?: "—"} ms",
+                            fontSize = 10.sp,
+                            color = colors.ink,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        Text(
+                            "不含 DNS/TCP/TLS/UDP/RSRP/SINR 整形；无线样本仅作现场协变量。",
+                            fontSize = 9.sp,
+                            lineHeight = 14.sp,
+                            color = colors.muted,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
             AnebScoreRing(
                 score = result.totalScore?.toInt(),
                 valueText = result.totalScore?.let(::oneDecimal) ?: "—",
@@ -335,6 +376,15 @@ internal fun NetworkComprehensiveResultEntity.toDomain(): BasicSpeedResult = Bas
     groupScores = parseDoubleMap(groupScoresJson),
     conclusions = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(conclusionsJson).jsonArray.map { it.jsonPrimitive.content } }.getOrDefault(emptyList()),
     evidenceJson = evidenceJson,
+    syntheticImpairment = syntheticImpairment,
+    impairmentProfileId = impairmentProfileId,
+    impairmentProfileVersion = impairmentProfileVersion,
+    impairmentDownlinkMbps = impairmentDownlinkMbps,
+    impairmentUplinkMbps = impairmentUplinkMbps,
+    impairmentAddedRttMs = impairmentAddedRttMs,
+    impairmentJitterMs = impairmentJitterMs,
+    impairmentExcludedFromShaping = impairmentExcludedCsv.split(',').filter { it.isNotBlank() },
+    impairmentAcknowledged = impairmentAcknowledged,
 )
 
 private fun parseNetworkMetrics(raw: String): Map<String, NetworkMetricEvidence> = runCatching {

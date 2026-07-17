@@ -269,6 +269,7 @@ class MainActivity : ComponentActivity() {
                             if (
                                 launchSettings.mode == TestEngine.Mode.STRESS &&
                                 launchSettings.testMode !in setOf(
+                                    AnebTestMode.NETWORK_BASIC,
                                     AnebTestMode.TOKEN_SIMULATION,
                                     AnebTestMode.AI_REALTIME_SIMULATION,
                                 )
@@ -484,6 +485,7 @@ class MainActivity : ComponentActivity() {
                                             settingsStore.saveTestMode(it)
                                             if (
                                                 it !in setOf(
+                                                    AnebTestMode.NETWORK_BASIC,
                                                     AnebTestMode.TOKEN_SIMULATION,
                                                     AnebTestMode.AI_REALTIME_SIMULATION,
                                                 ) && mode == TestEngine.Mode.STRESS

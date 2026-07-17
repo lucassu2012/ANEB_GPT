@@ -23,9 +23,9 @@
 - Android 已实现 Profile v2 fail-closed 校验、计划哈希验证、真实上传/SSE Token 流、250ms 动态仪表、Token Simulation Score v1、Room v13 独立结果表及历史详情页。
 - E-01 已部署 `POST /api/v1/token-sim`，严格执行上传接收、处理基线和逐 Token 绝对时序；服务端不合成网络损伤。
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
-- E-01 已升级到 `aneb-server/0.5.1`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3 和与 HTTP/3 共用 UDP/8443 的带序号 `ANEB1` 应用探针。
+- E-01 已升级到 `aneb-server/0.6.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延合成弱网路径。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
-- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 14 项测试和 Go 服务端测试，并隔离并行开发时的 KSP 缓存竞争。本轮 Android 64 个 suite、431 项 JVM 测试（按 XML suite header 复算）、Lint 和 0.4.6 APK 构建通过。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、行为模型 14 项测试和 Go 服务端测试，并隔离并行开发时的 KSP 缓存竞争。本轮 434 项 JVM 测试、Lint、Go/行为模型测试和 0.4.7 APK 构建通过；最终 Debug APK SHA-256 为 `B86C1254900DADEB0251137E9F251DD7D34241FC561169A0D3FF0C59227A6A9D`。
 - P40 Pro 已完成两次 AI 实时交互 Quick 端到端验收：1/1 会话、3/3 轮次、动态准时帧率/播放余量/RTT/双向速率/首帧响应、结果落库及进程重启后的历史回看均通过；两次均保持 `LOW/INCONCLUSIVE`，测试后已主动退出到华为桌面。
 - 网络综合 Quick/Standard Profile 已发布；Android 已实现 loaded RTT 并发刷新、100ms 吞吐仪表、1s goodput 窗口、握手分解、带序号 UDP 探针、测后恢复 RTT、独立评分、Room v15 结果冻结和历史详情页。
 - P40 Pro 网络综合 Quick 端到端验收通过。最终 0.3.0 手动用户路径 run `019f6b6f-d3d8-7063-b301-90ec8be6fa5e` 在下载/上传阶段正确显示动态 Mbps 指针、loaded RTT、曲线和阶段进度，结果 60.7/C、UDP 50/50 返回并自动跳转结果页；按快测规则保持 `LOW/INCONCLUSIVE`。前序 run 还测得负载 RTT P95 1257.8ms，验证了 loaded RTT 能揭示单看带宽无法发现的排队时延。所有测试后均已退出到华为桌面且无残留前台服务。

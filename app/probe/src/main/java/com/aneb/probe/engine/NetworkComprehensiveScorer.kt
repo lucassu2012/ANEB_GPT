@@ -9,6 +9,19 @@ data class NetworkHandshakeEvidence(
     val tcpMs: Double?,
     val tlsMs: Double?,
     val success: Boolean,
+    val syntheticImpairment: String? = null,
+)
+
+data class SyntheticNetworkEvidence(
+    val profileId: String,
+    val profileVersion: String,
+    val downlinkMbps: Double,
+    val uplinkMbps: Double,
+    val addedRttMs: Int,
+    val jitterMs: Int,
+    val appliesTo: List<String>,
+    val excludedFromShaping: List<String>,
+    val serverAcknowledged: Boolean,
 )
 
 data class NetworkComprehensiveEvidence(
@@ -23,6 +36,7 @@ data class NetworkComprehensiveEvidence(
     val udpReceivedSeqs: List<Int>,
     val udpUnavailableReason: String?,
     val handshakes: List<NetworkHandshakeEvidence>,
+    val syntheticImpairment: SyntheticNetworkEvidence? = null,
     val invalidReason: String? = null,
 )
 
@@ -175,6 +189,17 @@ object NetworkComprehensiveScorer {
         missing: List<String>,
     ) = buildList {
         add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
+        evidence.syntheticImpairment?.let { synthetic ->
+            add(
+                "本次为服务器确认的合成弱网：下行 ${synthetic.downlinkMbps.toDisplay()}Mbps、" +
+                    "上行 ${synthetic.uplinkMbps.toDisplay()}Mbps、应用请求附加 RTT " +
+                    "${synthetic.addedRttMs}±${synthetic.jitterMs}ms。",
+            )
+            add(
+                "未模拟 ${synthetic.excludedFromShaping.joinToString("、")}；" +
+                    "真实 RSRP/SINR 与 UDP 指标仅作现场协变量，不代表受控无线弱网。",
+            )
+        }
         if (evidence.variant == "quick") add("快测样本不足以证明 95% 长期稳定性，只允许方向性判断。")
         if (missing.isNotEmpty()) add("必需指标缺失：${missing.joinToString()}；本次总分不可计算。")
         if (evidence.udpUnavailableReason != null) {
@@ -226,6 +251,7 @@ object NetworkComprehensiveScorer {
     }
 
     private fun weighted(vararg terms: Pair<Double, Double>) = terms.sumOf { it.first * it.second }
+    private fun Double.toDisplay() = if (this % 1.0 == 0.0) toInt().toString() else toString()
     private fun round1(value: Double) = (value * 10.0).roundToInt() / 10.0
     private fun grade(score: Double) = when { score >= 85 -> "A"; score >= 70 -> "B"; score >= 55 -> "C"; else -> "D" }
 }

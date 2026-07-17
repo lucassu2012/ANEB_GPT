@@ -99,6 +99,8 @@ class AnebClient(bound: BoundNetwork? = null) {
         val timing: TimingRecord?,
         /** 服务端观察到的客户端源 IP:port（每场景网络快照的路径对账字段，R-01/R-31） */
         val observed: String? = null,
+        /** Server-confirmed synthetic profile; absent means no synthetic claim. */
+        val syntheticImpairment: String? = null,
     )
 
     suspend fun echo(url: String): EchoResult {
@@ -112,7 +114,10 @@ class AnebClient(bound: BoundNetwork? = null) {
                 val t3Us = nowUs()
                 val timing = timingFactory.recordFor(call)
                 if (!resp.isSuccessful) {
-                    EchoResult(t0Us, null, null, t3Us, null, null, resp.code, "http ${resp.code}", timing)
+                    EchoResult(
+                        t0Us, null, null, t3Us, null, null, resp.code, "http ${resp.code}", timing,
+                        syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
+                    )
                 } else {
                     val wire = json.decodeFromString(
                         EchoWire.serializer(),
@@ -123,6 +128,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                     EchoResult(
                         t0Us, wire.t1Us, wire.t2Us, t3Us, offsetUs, rttUs,
                         resp.code, null, timing, observed = wire.observed,
+                        syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
                     )
                 }
             }
@@ -238,6 +244,8 @@ class AnebClient(bound: BoundNetwork? = null) {
         val httpCode: Int?,
         val error: String?,
         val timing: TimingRecord?,
+        /** Server-confirmed synthetic profile; absent means no synthetic claim. */
+        val syntheticImpairment: String? = null,
     )
 
     /**
@@ -262,7 +270,10 @@ class AnebClient(bound: BoundNetwork? = null) {
                 val timing = timingFactory.recordFor(call)
                 if (!resp.isSuccessful) {
                     resp.body?.string()
-                    TransferResult(startNanos, null, 0L, resp.code, "http ${resp.code}", timing)
+                    TransferResult(
+                        startNanos, null, 0L, resp.code, "http ${resp.code}", timing,
+                        syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
+                    )
                 } else {
                     val source = checkNotNull(resp.body) { "empty body for 2xx" }.source()
                     val sink = Buffer()
@@ -281,6 +292,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                         httpCode = resp.code,
                         error = null,
                         timing = timing,
+                        syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
                     )
                 }
             }
@@ -462,14 +474,28 @@ class AnebClient(bound: BoundNetwork? = null) {
         return try {
             executeCancellable(call) { resp ->
                 val timing = timingFactory.recordFor(call)
-                resp.body?.string()
+                val bodyText = resp.body?.string()
+                val confirmedBytes = if (resp.isSuccessful && bodyText != null) {
+                    runCatching {
+                        json.decodeFromString(UploadServerView.serializer(), bodyText).bytes
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                val error = when {
+                    !resp.isSuccessful -> "http ${resp.code}"
+                    confirmedBytes == null || confirmedBytes < 0L -> "invalid_upload_ack"
+                    confirmedBytes != totalBytes -> "upload_ack_mismatch:$confirmedBytes/$totalBytes"
+                    else -> null
+                }
                 TransferResult(
                     startNanos = startNanos,
                     endNanos = SystemClock.elapsedRealtimeNanos(),
-                    totalBytes = if (resp.isSuccessful) totalBytes else 0L,
+                    totalBytes = if (error == null) confirmedBytes ?: 0L else 0L,
                     httpCode = resp.code,
-                    error = if (resp.isSuccessful) null else "http ${resp.code}",
+                    error = error,
                     timing = timing,
+                    syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
                 )
             }
         } catch (e: CancellationException) {

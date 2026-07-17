@@ -42,7 +42,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v13：Profile v2——新增 token_simulation_result 独立表；不并入 TestRun/AQS。
     // v14：Profile v2——新增 realtime_simulation_result 独立表；不并入 TestRun/AQS。
     // v15：Profile v2——新增 network_comprehensive_result 独立证据表。
-    version = 15,
+    // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
+    version = 16,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -355,6 +356,24 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_15_16_SQL = listOf(
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `syntheticImpairment` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentProfileId` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentProfileVersion` TEXT",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentDownlinkMbps` REAL",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentUplinkMbps` REAL",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentAddedRttMs` INTEGER",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentJitterMs` INTEGER",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentExcludedCsv` TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentAcknowledged` INTEGER NOT NULL DEFAULT 0",
+        )
+
+        internal val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_15_16_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -366,7 +385,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     // 不可静默丢弃）——v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11 见上方（均 additive）。
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
+                        MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

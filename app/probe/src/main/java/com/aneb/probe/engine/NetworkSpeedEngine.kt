@@ -13,6 +13,7 @@ import com.aneb.probe.net.NetworkUdpProbe
 import com.aneb.probe.net.PathMonitor
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.net.TimingRecord
+import java.net.URLEncoder
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
@@ -70,6 +71,8 @@ data class BasicSpeedTelemetry(
     val progress: Double = 0.0,
     val historyMbps: List<Double> = emptyList(),
     val historyLoadedRttMs: List<Double> = emptyList(),
+    /** Non-null only for an explicitly declared synthetic run. */
+    val syntheticImpairmentLabel: String? = null,
 )
 
 data class BasicSpeedResult(
@@ -105,11 +108,20 @@ data class BasicSpeedResult(
     val groupScores: Map<String, Double> = emptyMap(),
     val conclusions: List<String> = emptyList(),
     val evidenceJson: String = "{}",
+    val syntheticImpairment: Boolean = false,
+    val impairmentProfileId: String? = null,
+    val impairmentProfileVersion: String? = null,
+    val impairmentDownlinkMbps: Double? = null,
+    val impairmentUplinkMbps: Double? = null,
+    val impairmentAddedRttMs: Int? = null,
+    val impairmentJitterMs: Int? = null,
+    val impairmentExcludedFromShaping: List<String> = emptyList(),
+    val impairmentAcknowledged: Boolean = false,
 )
 
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
     suspend fun load(variant: String): ScenarioProfile = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard")) { "unsupported_network_variant:$variant" }
+        require(variant in setOf("quick", "standard", "weak_capacity_latency")) { "unsupported_network_variant:$variant" }
         val path = "published/network_comprehensive_$variant/profile.json"
         val text = context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
         val profile = ProfileParser.parseSingle(text)
@@ -117,9 +129,56 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         require(assessment.executable) {
             "network_profile_not_executable:${(assessment.contractIssues + assessment.unsupportedPhaseTypes).joinToString("|")}"
         }
-        require(profile.evidenceTier == variant) { "network_profile_variant_mismatch" }
+        val expectedTier = if (variant == "weak_capacity_latency") "standard" else variant
+        require(profile.evidenceTier == expectedTier) { "network_profile_variant_mismatch" }
+        require((profile.syntheticImpairment != null) == (variant == "weak_capacity_latency")) {
+            "network_profile_impairment_mismatch"
+        }
         profile
     }
+}
+
+private class NetworkEndpointContext(
+    private val base: String,
+    private val runId: String,
+    profileId: String,
+    profileVersion: String,
+    val impairment: ProfileSyntheticImpairment?,
+    private val sequence: AtomicInteger = AtomicInteger(0),
+) {
+    val expectedAcknowledgement: String? = impairment?.let { "$profileId@$profileVersion" }
+
+    fun url(pathAndQuery: String): String {
+        val spec = impairment ?: return base + pathAndQuery
+        val separator = if ('?' in pathAndQuery) '&' else '?'
+        return buildString {
+            append(base)
+            append("/synthetic/")
+            append(spec.routeId)
+            append(pathAndQuery)
+            append(separator)
+            append("impair_run=")
+            append(URLEncoder.encode(runId, Charsets.UTF_8.name()))
+            append("&impair_seed=")
+            append(spec.seed)
+            append("&impair_seq=")
+            append(sequence.getAndIncrement())
+        }
+    }
+}
+
+private class SyntheticAcknowledgementTracker(private val expected: String?) {
+    private val observations = AtomicInteger(0)
+    private val mismatches = AtomicInteger(0)
+
+    fun observe(actual: String?) {
+        if (expected == null) return
+        observations.incrementAndGet()
+        if (actual != expected) mismatches.incrementAndGet()
+    }
+
+    val acknowledged: Boolean
+        get() = expected == null || (observations.get() > 0 && mismatches.get() == 0)
 }
 
 /** 网络综合性能引擎：容量测试期间持续并发 echo，主动态指标始终是 loaded RTT。 */
@@ -178,6 +237,25 @@ class NetworkSpeedEngine(private val context: Context) {
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
             if (measureBase != configuredBase) log("NET_V1_REACH_SWITCH from=sni_host to=bare_ip base=$measureBase")
             log("NET_V1_PROFILE id=${profile.profileId} version=${profile.version} source=bundled score=${profile.evaluation.scorePolicyId}")
+            val endpoints = NetworkEndpointContext(
+                base = measureBase,
+                runId = runId,
+                profileId = profile.profileId,
+                profileVersion = profile.version,
+                impairment = profile.syntheticImpairment,
+            )
+            val acknowledgement = SyntheticAcknowledgementTracker(endpoints.expectedAcknowledgement)
+            profile.syntheticImpairment?.let { impairment ->
+                _telemetry.value = _telemetry.value.copy(
+                    syntheticImpairmentLabel = "合成弱网 · ↓${impairment.downlinkMbps.toInt()} ↑${impairment.uplinkMbps.toInt()} Mbps · +${impairment.addedRttMs}±${impairment.jitterMs} ms",
+                )
+                log(
+                    "NET_V1_IMPAIRMENT requested=${endpoints.expectedAcknowledgement} " +
+                        "dl_mbps=${impairment.downlinkMbps} ul_mbps=${impairment.uplinkMbps} " +
+                        "added_rtt_ms=${impairment.addedRttMs} jitter_ms=${impairment.jitterMs} " +
+                        "excluded=${impairment.excludedFromShaping.joinToString(",")}",
+                )
+            }
 
             fun phase(type: String) = profile.phases.first { it.type == type }
             val handshakePhase = phase(ProfilePhase.TYPE_PATH_SETUP)
@@ -188,13 +266,13 @@ class NetworkSpeedEngine(private val context: Context) {
             val postPhase = phase(ProfilePhase.TYPE_POST_LOAD_LATENCY)
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.HANDSHAKE, progress = 0.02)
-            val handshakes = measureHandshakes(client, measureBase, handshakePhase.attempts) { index ->
+            val handshakes = measureHandshakes(client, endpoints, acknowledgement, handshakePhase.attempts) { index ->
                 _telemetry.value = _telemetry.value.copy(progress = 0.02 + 0.06 * index / handshakePhase.attempts.coerceAtLeast(1))
             }
             log("NET_V1_PHASE run_id=$runId phase=handshake attempts=${handshakes.size}")
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.LATENCY, progress = 0.09)
-            val idle = measureEcho(client, measureBase, idlePhase.samples) { index, samples ->
+            val idle = measureEcho(client, endpoints, acknowledgement, idlePhase.samples) { index, samples ->
                 val summary = BasicSpeedMath.summarizeEcho(samples)
                 _telemetry.value = _telemetry.value.copy(
                     pingMs = summary.rttP50Ms,
@@ -207,10 +285,10 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_PHASE run_id=$runId phase=idle_latency samples=${idle.size}")
 
             log("NET_V1_PHASE run_id=$runId phase=download_loaded duration_ms=${downloadPhase.durationMs}")
-            val download = runTransferPhase(client, measureBase, runId, downloadPhase, TransferDirection.DOWNLOAD, idleP50, 0.21, 0.48)
+            val download = runTransferPhase(client, endpoints, acknowledgement, runId, downloadPhase, TransferDirection.DOWNLOAD, idleP50, 0.21, 0.48)
             _telemetry.value = _telemetry.value.copy(downloadMbps = download.averageMbps)
             log("NET_V1_PHASE run_id=$runId phase=upload_loaded duration_ms=${uploadPhase.durationMs}")
-            val upload = runTransferPhase(client, measureBase, runId, uploadPhase, TransferDirection.UPLOAD, idleP50, 0.49, 0.76)
+            val upload = runTransferPhase(client, endpoints, acknowledgement, runId, uploadPhase, TransferDirection.UPLOAD, idleP50, 0.49, 0.76)
             _telemetry.value = _telemetry.value.copy(uploadMbps = upload.averageMbps)
 
             _telemetry.value = _telemetry.value.copy(
@@ -224,8 +302,18 @@ class NetworkSpeedEngine(private val context: Context) {
             log("NET_V1_PHASE run_id=$runId phase=udp sent=${udp.packetsSent} received=${udp.receivedSeqs.distinct().size} error=${udp.error ?: "none"}")
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.FINALIZING, progress = 0.92)
-            val post = measureEcho(client, measureBase, postPhase.samples) { index, _ ->
+            val post = measureEcho(client, endpoints, acknowledgement, postPhase.samples) { index, _ ->
                 _telemetry.value = _telemetry.value.copy(progress = 0.92 + 0.07 * index / postPhase.samples.coerceAtLeast(1))
+            }
+
+            if (profile.syntheticImpairment != null && !acknowledgement.acknowledged) {
+                invalidReason.compareAndSet(null, "synthetic_impairment_not_acknowledged")
+            }
+            if (profile.syntheticImpairment != null) {
+                log(
+                    "NET_V1_IMPAIRMENT acknowledged=${acknowledgement.acknowledged} " +
+                        "server_profile=${endpoints.expectedAcknowledgement}",
+                )
             }
 
             val loaded = download.loadedRttMs + upload.loadedRttMs
@@ -243,6 +331,19 @@ class NetworkSpeedEngine(private val context: Context) {
                 udpReceivedSeqs = udp.receivedSeqs,
                 udpUnavailableReason = udp.error,
                 handshakes = handshakes,
+                syntheticImpairment = profile.syntheticImpairment?.let { impairment ->
+                    SyntheticNetworkEvidence(
+                        profileId = profile.profileId,
+                        profileVersion = profile.version,
+                        downlinkMbps = impairment.downlinkMbps,
+                        uplinkMbps = impairment.uplinkMbps,
+                        addedRttMs = impairment.addedRttMs,
+                        jitterMs = impairment.jitterMs,
+                        appliesTo = impairment.appliesTo,
+                        excludedFromShaping = impairment.excludedFromShaping,
+                        serverAcknowledged = acknowledgement.acknowledged,
+                    )
+                },
                 invalidReason = invalidReason.get(),
             )
             val score = NetworkComprehensiveScorer.score(evidence)
@@ -263,6 +364,15 @@ class NetworkSpeedEngine(private val context: Context) {
                 metrics["NET-B09"]?.value, metrics["NET-B07"]?.value, metrics["NET-B10"]?.value,
                 BasicSpeedMath.percentile(post.filterNotNull(), 0.50), download.totalBytes, upload.totalBytes, errors,
                 metrics, score.groupScores, score.conclusions, evidenceJson(evidence),
+                syntheticImpairment = profile.syntheticImpairment != null,
+                impairmentProfileId = profile.syntheticImpairment?.let { profile.profileId },
+                impairmentProfileVersion = profile.syntheticImpairment?.let { profile.version },
+                impairmentDownlinkMbps = profile.syntheticImpairment?.downlinkMbps,
+                impairmentUplinkMbps = profile.syntheticImpairment?.uplinkMbps,
+                impairmentAddedRttMs = profile.syntheticImpairment?.addedRttMs,
+                impairmentJitterMs = profile.syntheticImpairment?.jitterMs,
+                impairmentExcludedFromShaping = profile.syntheticImpairment?.excludedFromShaping.orEmpty(),
+                impairmentAcknowledged = profile.syntheticImpairment != null && acknowledgement.acknowledged,
             )
             publishResult(result, log)
             _telemetry.value = _telemetry.value.copy(
@@ -299,22 +409,28 @@ class NetworkSpeedEngine(private val context: Context) {
 
     private suspend fun measureHandshakes(
         client: AnebClient,
-        base: String,
+        endpoints: NetworkEndpointContext,
+        acknowledgement: SyntheticAcknowledgementTracker,
         attempts: Int,
         onProgress: (Int) -> Unit,
     ): List<NetworkHandshakeEvidence> {
         val values = ArrayList<NetworkHandshakeEvidence>()
         repeat(attempts.coerceAtLeast(1)) { index ->
             client.evictConnections()
-            val echo = client.echo("$base/api/v1/echo")
-            values += handshakeEvidence(echo.timing, echo.error == null)
+            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            acknowledgement.observe(echo.syntheticImpairment)
+            values += handshakeEvidence(echo.timing, echo.error == null, echo.syntheticImpairment)
             onProgress(index + 1)
             if (index + 1 < attempts) delay(ECHO_GAP_MS)
         }
         return values
     }
 
-    private fun handshakeEvidence(timing: TimingRecord?, success: Boolean): NetworkHandshakeEvidence {
+    private fun handshakeEvidence(
+        timing: TimingRecord?,
+        success: Boolean,
+        syntheticImpairment: String?,
+    ): NetworkHandshakeEvidence {
         fun delta(end: Long?, start: Long?) = if (end != null && start != null && end >= start) (end - start) / 1e6 else null
         val tcpEnd = timing?.secureConnectStartNs ?: timing?.connectEndNs
         return NetworkHandshakeEvidence(
@@ -322,18 +438,21 @@ class NetworkSpeedEngine(private val context: Context) {
             tcpMs = delta(tcpEnd, timing?.connectStartNs),
             tlsMs = delta(timing?.secureConnectEndNs, timing?.secureConnectStartNs),
             success = success,
+            syntheticImpairment = syntheticImpairment,
         )
     }
 
     private suspend fun measureEcho(
         client: AnebClient,
-        base: String,
+        endpoints: NetworkEndpointContext,
+        acknowledgement: SyntheticAcknowledgementTracker,
         samples: Int,
         onProgress: (Int, List<Double?>) -> Unit,
     ): List<Double?> {
         val values = ArrayList<Double?>(samples)
         repeat(samples.coerceAtLeast(1)) { index ->
-            val echo = client.echo("$base/api/v1/echo")
+            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            acknowledgement.observe(echo.syntheticImpairment)
             values += echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
             onProgress(index + 1, values)
             if (index + 1 < samples) delay(ECHO_GAP_MS)
@@ -352,7 +471,8 @@ class NetworkSpeedEngine(private val context: Context) {
 
     private suspend fun runTransferPhase(
         client: AnebClient,
-        base: String,
+        endpoints: NetworkEndpointContext,
+        acknowledgement: SyntheticAcknowledgementTracker,
         runId: String,
         phase: ProfilePhase,
         direction: TransferDirection,
@@ -403,7 +523,8 @@ class NetworkSpeedEngine(private val context: Context) {
         }
         val echoJob = launch(Dispatchers.IO) {
             while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
-                val echo = client.echo("$base/api/v1/echo")
+                val echo = client.echo(endpoints.url("/api/v1/echo"))
+                acknowledgement.observe(echo.syntheticImpairment)
                 val rtt = echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
                 loadedRtt.add(rtt)
                 if (rtt != null) {
@@ -425,11 +546,23 @@ class NetworkSpeedEngine(private val context: Context) {
                 while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
                     val transfer = when (direction) {
                         TransferDirection.DOWNLOAD -> client.downloadThroughput(
-                            "$base/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}",
+                            endpoints.url("/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}"),
                         ) { count, _ -> totalBytes.add(count.toLong()) }
                         TransferDirection.UPLOAD -> client.uploadThroughput(
-                            "$base/api/v1/upload?run=$runId-net-$workerIndex", transferBytes, chunkBytes,
-                        ) { count, _ -> totalBytes.add(count.toLong()) }
+                            endpoints.url("/api/v1/upload?run=$runId-net-$workerIndex"), transferBytes, chunkBytes,
+                        ) { count, _ ->
+                            // Synthetic runs count only bytes acknowledged by the server. Local socket writes
+                            // can run ahead of a constrained uplink and would otherwise overstate goodput.
+                            if (endpoints.impairment == null) totalBytes.add(count.toLong())
+                        }
+                    }
+                    acknowledgement.observe(transfer.syntheticImpairment)
+                    if (
+                        direction == TransferDirection.UPLOAD &&
+                        endpoints.impairment != null &&
+                        transfer.error == null
+                    ) {
+                        totalBytes.add(transfer.totalBytes)
                     }
                     if (transfer.error != null) { errors.add(transfer.error); break }
                 }
@@ -460,6 +593,10 @@ class NetworkSpeedEngine(private val context: Context) {
                     result.transferErrors.joinToString("\n") { it.replace("\u0000", "") }, metricsJson(result.metrics),
                     JsonObject(result.groupScores.mapValues { JsonPrimitive(it.value) }).toString(),
                     JsonArray(result.conclusions.map(::JsonPrimitive)).toString(), result.evidenceJson,
+                    result.syntheticImpairment, result.impairmentProfileId, result.impairmentProfileVersion,
+                    result.impairmentDownlinkMbps, result.impairmentUplinkMbps, result.impairmentAddedRttMs,
+                    result.impairmentJitterMs, result.impairmentExcludedFromShaping.joinToString(","),
+                    result.impairmentAcknowledged,
                 ),
             )
         }
@@ -529,8 +666,23 @@ class NetworkSpeedEngine(private val context: Context) {
                 put("tcp_ms", h.tcpMs?.let(::JsonPrimitive) ?: JsonNull)
                 put("tls_ms", h.tlsMs?.let(::JsonPrimitive) ?: JsonNull)
                 put("success", h.success)
+                put("synthetic_impairment", h.syntheticImpairment?.let(::JsonPrimitive) ?: JsonNull)
             }) }
         })
+        put("synthetic_impairment", e.syntheticImpairment?.let { synthetic ->
+            buildJsonObject {
+                put("contract_version", "aneb-synthetic-evidence-v1")
+                put("profile_id", synthetic.profileId)
+                put("profile_version", synthetic.profileVersion)
+                put("downlink_mbps", synthetic.downlinkMbps)
+                put("uplink_mbps", synthetic.uplinkMbps)
+                put("added_rtt_ms", synthetic.addedRttMs)
+                put("jitter_ms", synthetic.jitterMs)
+                put("applies_to", buildJsonArray { synthetic.appliesTo.forEach { add(JsonPrimitive(it)) } })
+                put("excluded_from_shaping", buildJsonArray { synthetic.excludedFromShaping.forEach { add(JsonPrimitive(it)) } })
+                put("server_acknowledged", synthetic.serverAcknowledged)
+            }
+        } ?: JsonNull)
         put("invalid_reason", e.invalidReason?.let(::JsonPrimitive) ?: JsonNull)
     }.toString()
 

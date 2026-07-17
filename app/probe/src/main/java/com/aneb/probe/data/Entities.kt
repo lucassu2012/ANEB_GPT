@@ -139,6 +139,15 @@ data class NetworkComprehensiveResultEntity(
     val groupScoresJson: String,
     val conclusionsJson: String,
     val evidenceJson: String,
+    val syntheticImpairment: Boolean = false,
+    val impairmentProfileId: String? = null,
+    val impairmentProfileVersion: String? = null,
+    val impairmentDownlinkMbps: Double? = null,
+    val impairmentUplinkMbps: Double? = null,
+    val impairmentAddedRttMs: Int? = null,
+    val impairmentJitterMs: Int? = null,
+    val impairmentExcludedCsv: String = "",
+    val impairmentAcknowledged: Boolean = false,
 )
 
 /** Profile v2 Token 仿真独立结果；不进入 TestRun/AQS，完整证据以版本化 JSON 保留。 */
