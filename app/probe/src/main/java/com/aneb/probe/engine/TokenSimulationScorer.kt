@@ -54,6 +54,11 @@ data class TokenScoreResult(
     val metrics: Map<String, TokenMetricEvidence>,
     val capReason: String?,
     val conclusions: List<String>,
+    /** Frozen audit basis emitted by the scorer; exporters must not derive it again. */
+    val confidenceMethodId: String = "token-sample-coverage-v1",
+    val coverageRatio: Double? = null,
+    val minimumSampleSatisfied: Boolean? = null,
+    val notComputableReason: String? = null,
 )
 
 /** Token Simulation Score v1 + compliance-anchors-v1 (D-37/D-39). */
@@ -81,6 +86,9 @@ object TokenSimulationScorer {
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
                 listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                coverageRatio = null,
+                minimumSampleSatisfied = false,
+                notComputableReason = "invalid_run:${evidence.invalidReason}",
             )
         }
         val tasks = evidence.tasks
@@ -138,10 +146,15 @@ object TokenSimulationScorer {
 
         val missing = requiredSpecs.keys.filter { metrics[it]?.complianceRatio == null }
         val confidence = confidence(evidence.variant, metrics.values)
+        val coverageRatio = coverageRatio(metrics.values)
+        val minimumSampleSatisfied = metrics.values.all { it.sampleCount >= it.minimumSampleCount }
         if (missing.isNotEmpty()) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
                 listOf("必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。"),
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
             )
         }
 
@@ -184,6 +197,8 @@ object TokenSimulationScorer {
             metrics = metrics,
             capReason = capReason,
             conclusions = buildConclusions(evidence, metrics, verdict, confidence, capReason),
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 
@@ -230,6 +245,13 @@ object TokenSimulationScorer {
         if (coverage.all { it >= 0.50 }) return TokenConfidence.MEDIUM
         return TokenConfidence.LOW
     }
+
+    private fun coverageRatio(metrics: Collection<TokenMetricEvidence>): Double? = metrics
+        .takeIf { it.isNotEmpty() }
+        ?.minOf { metric ->
+            if (metric.minimumSampleCount <= 0) 1.0
+            else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
+        }
 
     private fun buildConclusions(
         evidence: TokenRunEvidence,

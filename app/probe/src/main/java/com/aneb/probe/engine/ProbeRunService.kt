@@ -93,47 +93,72 @@ internal object ProbeRunLogParser {
     }
 }
 
-/** AI 实时测试只以已经持久化并发布的结果作为 Completed 依据。 */
-internal object RealtimeServiceTerminalPolicy {
+/** 正式 Profile 测试只以已经持久化并发布的结果作为 Completed 依据。 */
+internal object FormalResultServiceTerminalPolicy {
     private const val MISSING_RESULT_MESSAGE = "测试未生成结果，请重试。"
 
-    fun afterFlow(autorun: Boolean, committedRunId: String?): ProbeRunSession =
-        committedRunId?.let { completed(autorun, it) }
+    fun afterFlow(
+        autorun: Boolean,
+        testMode: AnebTestMode,
+        committedRunId: String?,
+    ): ProbeRunSession =
+        committedRunId?.let { completed(autorun, testMode, it) }
             ?: ProbeRunSession.Failed(
                 autorun = autorun,
                 message = MISSING_RESULT_MESSAGE,
-                testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+                testMode = testMode,
             )
 
     fun afterCancellation(
         autorun: Boolean,
+        testMode: AnebTestMode,
         committedRunId: String?,
+        committedResultWasCancelled: Boolean = false,
         cancelRequested: Boolean,
     ): ProbeRunSession? = when {
-        committedRunId != null -> completed(autorun, committedRunId)
+        committedResultWasCancelled && cancelRequested -> ProbeRunSession.Cancelled(
+            autorun = autorun,
+            testMode = testMode,
+        )
+        committedResultWasCancelled -> null
+        committedRunId != null -> completed(autorun, testMode, committedRunId)
         cancelRequested -> ProbeRunSession.Cancelled(
             autorun = autorun,
-            testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+            testMode = testMode,
         )
         else -> null
     }
 
     fun afterFailure(
         autorun: Boolean,
+        testMode: AnebTestMode,
         committedRunId: String?,
         message: String,
-    ): ProbeRunSession = committedRunId?.let { completed(autorun, it) }
+    ): ProbeRunSession = committedRunId?.let { completed(autorun, testMode, it) }
         ?: ProbeRunSession.Failed(
             autorun = autorun,
             message = message,
-            testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+            testMode = testMode,
         )
 
-    private fun completed(autorun: Boolean, runId: String) = ProbeRunSession.Completed(
+    private fun completed(autorun: Boolean, testMode: AnebTestMode, runId: String) = ProbeRunSession.Completed(
         autorun = autorun,
         runId = runId,
-        testMode = AnebTestMode.AI_REALTIME_SIMULATION,
+        testMode = testMode,
     )
+}
+
+private data class FormalCommittedResult(
+    val runId: String,
+    val wasCancelled: Boolean = false,
+)
+
+private fun AnebTestMode.hasFormalDurableResult(): Boolean = when (this) {
+    AnebTestMode.NETWORK_BASIC,
+    AnebTestMode.TOKEN_SIMULATION,
+    AnebTestMode.AI_REALTIME_SIMULATION
+    -> true
+    AnebTestMode.TOKEN_EXPERIENCE -> false
 }
 
 /**
@@ -217,7 +242,26 @@ class ProbeRunService : Service() {
 
         runJob = serviceScope.launch {
             var runId: String? = null
+            var networkEngine: NetworkSpeedEngine? = null
+            var tokenEngine: TokenSimulationEngine? = null
             var realtimeEngine: RealtimeSimulationEngine? = null
+            fun syncFormalResult(): FormalCommittedResult? = when (config.testMode) {
+                AnebTestMode.NETWORK_BASIC -> networkEngine?.result?.value?.also {
+                    _basicResult.value = it
+                }?.let { result ->
+                    FormalCommittedResult(
+                        runId = result.runId,
+                        wasCancelled = result.transferErrors.any { it == "cancelled" },
+                    )
+                }
+                AnebTestMode.TOKEN_SIMULATION -> tokenEngine?.result?.value?.also {
+                    _tokenSimulationResult.value = it
+                }?.let { FormalCommittedResult(it.runId) }
+                AnebTestMode.AI_REALTIME_SIMULATION -> realtimeEngine?.result?.value?.also {
+                    _realtimeSimulationResult.value = it
+                }?.let { FormalCommittedResult(it.runId) }
+                AnebTestMode.TOKEN_EXPERIENCE -> null
+            }
             try {
                 val lines: Flow<String> = when (config.testMode) {
                     AnebTestMode.TOKEN_EXPERIENCE -> {
@@ -236,7 +280,9 @@ class ProbeRunService : Service() {
                         )
                     }
                     AnebTestMode.NETWORK_BASIC -> {
-                        val engine = NetworkSpeedEngine(applicationContext)
+                        val engine = NetworkSpeedEngine(applicationContext).also {
+                            networkEngine = it
+                        }
                         telemetryJob = serviceScope.launch {
                             engine.telemetry.collect { _basicTelemetry.value = it }
                         }
@@ -261,7 +307,9 @@ class ProbeRunService : Service() {
                         )
                     }
                     AnebTestMode.TOKEN_SIMULATION -> {
-                        val engine = TokenSimulationEngine(applicationContext)
+                        val engine = TokenSimulationEngine(applicationContext).also {
+                            tokenEngine = it
+                        }
                         telemetryJob = serviceScope.launch {
                             engine.telemetry.collect { _tokenSimulationTelemetry.value = it }
                         }
@@ -315,12 +363,11 @@ class ProbeRunService : Service() {
                     }
                     ProbeRunLogParser.progressText(line)?.let(::updateNotification)
                 }
-                if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
-                    val committed = realtimeEngine?.result?.value
-                    if (committed != null) _realtimeSimulationResult.value = committed
-                    _session.value = RealtimeServiceTerminalPolicy.afterFlow(
+                if (config.testMode.hasFormalDurableResult()) {
+                    _session.value = FormalResultServiceTerminalPolicy.afterFlow(
                         autorun = autorun,
-                        committedRunId = committed?.runId,
+                        testMode = config.testMode,
+                        committedRunId = syncFormalResult()?.runId,
                     )
                 } else {
                     val completedId = runId
@@ -331,12 +378,13 @@ class ProbeRunService : Service() {
                     }
                 }
             } catch (e: CancellationException) {
-                if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
-                    val committed = realtimeEngine?.result?.value
-                    if (committed != null) _realtimeSimulationResult.value = committed
-                    RealtimeServiceTerminalPolicy.afterCancellation(
+                if (config.testMode.hasFormalDurableResult()) {
+                    val committed = syncFormalResult()
+                    FormalResultServiceTerminalPolicy.afterCancellation(
                         autorun = autorun,
+                        testMode = config.testMode,
                         committedRunId = committed?.runId,
+                        committedResultWasCancelled = committed?.wasCancelled == true,
                         cancelRequested = cancelRequested,
                     )?.let { _session.value = it }
                 } else if (cancelRequested) {
@@ -344,13 +392,12 @@ class ProbeRunService : Service() {
                 }
                 throw e
             } catch (e: Exception) {
-                val committed = realtimeEngine?.result?.value
-                    .takeIf { config.testMode == AnebTestMode.AI_REALTIME_SIMULATION }
-                if (committed != null) _realtimeSimulationResult.value = committed
+                val committed = syncFormalResult()
                 if (committed == null) addLog("RUN_FAILED error=$e")
-                _session.value = if (config.testMode == AnebTestMode.AI_REALTIME_SIMULATION) {
-                    RealtimeServiceTerminalPolicy.afterFailure(
+                _session.value = if (config.testMode.hasFormalDurableResult()) {
+                    FormalResultServiceTerminalPolicy.afterFailure(
                         autorun = autorun,
+                        testMode = config.testMode,
                         committedRunId = committed?.runId,
                         message = RunFailureMessage.forError(e),
                     )

@@ -27,9 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -85,28 +83,6 @@ data class RealtimeSimulationResult(
     val evidence: RealtimeRunEvidence,
 )
 
-internal fun interface RealtimeResultStore {
-    suspend fun insert(result: RealtimeSimulationResult)
-}
-
-/** Publishes a result only after the durable store has accepted it. */
-internal class RealtimeResultCommitter(
-    private val store: RealtimeResultStore,
-    private val publish: (RealtimeSimulationResult) -> Unit,
-) {
-    suspend fun commit(result: RealtimeSimulationResult) {
-        currentCoroutineContext().ensureActive()
-        withContext(NonCancellable) {
-            try {
-                store.insert(result)
-            } catch (e: CancellationException) {
-                throw e
-            }
-            publish(result)
-        }
-    }
-}
-
 internal suspend fun <T> runRealtimeSessionWithMonitor(
     monitorJob: Job,
     disableMonitor: () -> Unit,
@@ -134,8 +110,8 @@ class RealtimeSimulationEngine(private val context: Context) {
     val telemetry: StateFlow<RealtimeSimulationTelemetry> = _telemetry.asStateFlow()
     private val _result = MutableStateFlow<RealtimeSimulationResult?>(null)
     val result: StateFlow<RealtimeSimulationResult?> = _result.asStateFlow()
-    private val resultCommitter = RealtimeResultCommitter(
-        store = RealtimeResultStore { result ->
+    private val resultCommitter = DurableResultCommitter(
+        store = DurableResultStore { result: RealtimeSimulationResult ->
             AnebDatabase.get(context).realtimeSimulationResultDao().insert(result.toEntity())
         },
         publish = { result -> _result.value = result },

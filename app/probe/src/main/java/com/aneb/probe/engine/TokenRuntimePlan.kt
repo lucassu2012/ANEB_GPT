@@ -55,6 +55,12 @@ data class TokenRuntimePlan(
 data class LoadedTokenRuntime(
     val profile: ScenarioProfile,
     val plan: TokenRuntimePlan,
+    /** Exact canonical digest of the Profile bytes parsed for this run. */
+    val profileHash: String,
+    /** Exact canonical digest already matched against profile.execution_plan.artifact_hash. */
+    val runtimeArtifactHash: String,
+    val profileAssetUri: String,
+    val runtimeAssetUri: String,
 )
 
 /** Loads the generated App artifact and fails closed on any profile/model/hash drift. */
@@ -72,11 +78,19 @@ class TokenRuntimeRepository(private val context: Context) {
             "token_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}"
         }
         val execution = requireNotNull(profile.executionPlan) { "token_execution_plan_missing" }
+        val profileHash = TokenRuntimeIntegrity.canonicalSha256(profileText)
         val actualHash = TokenRuntimeIntegrity.canonicalSha256(planText)
         require(actualHash == execution.artifactHash) { "token_runtime_hash_mismatch" }
         val plan = json.decodeFromString(TokenRuntimePlan.serializer(), planText)
         validateBinding(profile, plan)
-        LoadedTokenRuntime(profile, plan)
+        LoadedTokenRuntime(
+            profile = profile,
+            plan = plan,
+            profileHash = profileHash,
+            runtimeArtifactHash = actualHash,
+            profileAssetUri = "asset:///$base/profile.json",
+            runtimeAssetUri = "asset:///$base/runtime_plan.json",
+        )
     }
 
     private fun validateBinding(profile: ScenarioProfile, plan: TokenRuntimePlan) {

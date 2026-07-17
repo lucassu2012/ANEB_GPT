@@ -9,6 +9,9 @@ description = "Deterministic AI workload behavior modeling and ANEB Profile gene
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+test = ["jsonschema>=4.22,<5"]
+
 [project.scripts]
 aneb-behavior = "aneb_behavior_model.cli:main"
 
@@ -17,4 +20,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

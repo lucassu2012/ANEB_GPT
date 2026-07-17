@@ -17,8 +17,8 @@ class RealtimeResultCommitterTest {
     @Test
     fun `failed durable commit never publishes a realtime result`() = runBlocking {
         var published: RealtimeSimulationResult? = null
-        val committer = RealtimeResultCommitter(
-            store = RealtimeResultStore { throw IOException("disk_full") },
+        val committer = DurableResultCommitter(
+            store = DurableResultStore<RealtimeSimulationResult> { throw IOException("disk_full") },
             publish = { published = it },
         )
 
@@ -36,8 +36,8 @@ class RealtimeResultCommitterTest {
     fun `cancellation observed before final commit stores and publishes nothing`() = runBlocking {
         var stored = false
         var published: RealtimeSimulationResult? = null
-        val committer = RealtimeResultCommitter(
-            store = RealtimeResultStore { stored = true },
+        val committer = DurableResultCommitter(
+            store = DurableResultStore<RealtimeSimulationResult> { stored = true },
             publish = { published = it },
         )
 
@@ -58,8 +58,8 @@ class RealtimeResultCommitterTest {
         val allowStoreToFinish = CompletableDeferred<Unit>()
         var stored = false
         var published: RealtimeSimulationResult? = null
-        val committer = RealtimeResultCommitter(
-            store = RealtimeResultStore {
+        val committer = DurableResultCommitter(
+            store = DurableResultStore<RealtimeSimulationResult> {
                 storeEntered.complete(Unit)
                 allowStoreToFinish.await()
                 stored = true
@@ -80,8 +80,8 @@ class RealtimeResultCommitterTest {
     @Test
     fun `store cancellation remains cancellation and never publishes`() = runBlocking {
         var published: RealtimeSimulationResult? = null
-        val committer = RealtimeResultCommitter(
-            store = RealtimeResultStore { throw CancellationException("store_cancelled") },
+        val committer = DurableResultCommitter(
+            store = DurableResultStore<RealtimeSimulationResult> { throw CancellationException("store_cancelled") },
             publish = { published = it },
         )
 

@@ -2,7 +2,10 @@ package com.aneb.probe.engine
 
 import android.content.Context
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.SystemClock
+import androidx.room.withTransaction
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.TokenSimulationResultEntity
@@ -73,6 +76,14 @@ data class TokenSimulationResult(
     val evidence: TokenRunEvidence,
 )
 
+private class TokenResultPersistenceException(cause: Throwable) :
+    IllegalStateException("token_result_persistence_failed", cause)
+
+private data class TokenDurableResult(
+    val result: TokenSimulationResult,
+    val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+)
+
 /** Executes the hash-bound Profile v2 Token plan and produces an independent score. */
 class TokenSimulationEngine(private val context: Context) {
     data class Config(
@@ -86,6 +97,16 @@ class TokenSimulationEngine(private val context: Context) {
 
     private val _result = MutableStateFlow<TokenSimulationResult?>(null)
     val result: StateFlow<TokenSimulationResult?> = _result.asStateFlow()
+    private val resultCommitter = DurableResultCommitter(
+        store = DurableResultStore { durable: TokenDurableResult ->
+            val db = AnebDatabase.get(context)
+            db.withTransaction {
+                db.tokenSimulationResultDao().insert(durable.result.toEntity())
+                db.resultEnvelopeDao().insert(durable.envelope)
+            }
+        },
+        publish = { durable -> _result.value = durable.result },
+    )
 
     fun run(config: Config): Flow<String> = channelFlow {
         val log: suspend (String) -> Unit = { send(it) }
@@ -98,12 +119,17 @@ class TokenSimulationEngine(private val context: Context) {
 
         val guard = NetGuard.guardCheck(context)
         if (!guard.ok) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, "guard_rejected:${guard.reasons.joinToString(",")}", log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant,
+                "guard_rejected:${guard.reasons.joinToString(",")}",
+                TokenResultEnvelopeSource(profile = null), config.transport, guard, null, log,
+            )
             log("TOKEN_V2_END run_id=$runId status=guard_rejected")
             return@channelFlow
         }
 
         var bound: BoundNetwork? = null
+        var envelopeSource = TokenResultEnvelopeSource(profile = null)
         try {
             bound = when (config.transport) {
                 TestEngine.TransportMode.AUTO -> null
@@ -111,7 +137,10 @@ class TokenSimulationEngine(private val context: Context) {
                 TestEngine.TransportMode.CELLULAR -> NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_CELLULAR)
             }
         } catch (e: GuardException) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, "bind_failed:${e.javaClass.simpleName}", log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant,
+                "bind_failed:${e.javaClass.simpleName}", envelopeSource, config.transport, guard, null, log,
+            )
             log("TOKEN_V2_END run_id=$runId status=bind_failed")
             return@channelFlow
         }
@@ -123,6 +152,13 @@ class TokenSimulationEngine(private val context: Context) {
             val loaded = TokenRuntimeRepository(context).load(config.variant)
             val profile = loaded.profile
             val plan = loaded.plan
+            envelopeSource = TokenResultEnvelopeSource(
+                profile = profile,
+                profileHash = loaded.profileHash,
+                runtimeArtifactHash = loaded.runtimeArtifactHash,
+                profileUri = loaded.profileAssetUri,
+                runtimeArtifactUri = loaded.runtimeAssetUri,
+            )
             val client = AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
@@ -329,13 +365,23 @@ class TokenSimulationEngine(private val context: Context) {
                 loadedRttSamplesMs = loadedRttSnapshot,
             )
             val score = score(evidence)
+            val endedAt = System.currentTimeMillis()
             val result = TokenSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
                 plan.modelId, plan.modelVersion, plan.modelHash, plan.calibrationStatus,
                 plan.variant, profile.evaluation.scorePolicyId, profile.evaluation.scoreAnchorPolicyId,
                 profile.evaluation.conclusionPolicyId, score, evidence,
             )
-            publishResult(result, log)
+            publishResult(
+                result = result,
+                source = envelopeSource,
+                transport = config.transport,
+                guard = guard,
+                bound = bound,
+                endedAtEpochMs = endedAt,
+                status = if (score.verdict == TokenVerdict.INVALID) "failed" else "completed",
+                log = log,
+            )
             _telemetry.value = _telemetry.value.copy(
                 phase = if (score.verdict == TokenVerdict.INVALID) TokenSimulationPhase.FAILED else TokenSimulationPhase.COMPLETE,
                 progress = 1.0,
@@ -347,8 +393,13 @@ class TokenSimulationEngine(private val context: Context) {
             log("TOKEN_V2_END run_id=$runId status=completed")
         } catch (e: CancellationException) {
             throw e
+        } catch (e: TokenResultPersistenceException) {
+            throw e
         } catch (e: Exception) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, e.toString(), log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant, e.toString(),
+                envelopeSource, config.transport, guard, bound, log,
+            )
             log("TOKEN_V2_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("TOKEN_V2_END run_id=$runId status=error")
         } finally {
@@ -430,31 +481,82 @@ class TokenSimulationEngine(private val context: Context) {
         server: String,
         variant: String,
         reason: String,
+        source: TokenResultEnvelopeSource,
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
         log: suspend (String) -> Unit,
     ) {
         val evidence = TokenRunEvidence(variant, emptyList(), emptyList(), reason)
         val policies = policies(variant)
+        val profile = source.profile
         val result = TokenSimulationResult(
-            runId, startedAt, server, "token_multimodal_$variant", "unknown",
-            "unknown", "unknown", "unknown", "unknown", variant,
-            policies.first, policies.second, policies.third, score(evidence), evidence,
+            runId, startedAt, server, profile?.profileId ?: "token_multimodal_$variant", profile?.version ?: "unknown",
+            profile?.business?.behaviorModelId ?: "unknown",
+            profile?.business?.behaviorModelVersion ?: "unknown",
+            profile?.business?.behaviorModelHash ?: "unknown",
+            profile?.business?.calibrationStatus ?: "unknown",
+            variant,
+            profile?.evaluation?.scorePolicyId?.takeIf { it.isNotBlank() } ?: policies.first,
+            profile?.evaluation?.scoreAnchorPolicyId?.takeIf { it.isNotBlank() } ?: policies.second,
+            profile?.evaluation?.conclusionPolicyId?.takeIf { it.isNotBlank() } ?: policies.third,
+            score(evidence), evidence,
         )
-        publishResult(result, log)
+        publishResult(
+            result = result,
+            source = source,
+            transport = transport,
+            guard = guard,
+            bound = bound,
+            endedAtEpochMs = System.currentTimeMillis(),
+            status = "failed",
+            log = log,
+        )
         _telemetry.value = TokenSimulationTelemetry(phase = TokenSimulationPhase.FAILED)
     }
 
-    private suspend fun publishResult(result: TokenSimulationResult, log: suspend (String) -> Unit) {
-        _result.value = result
-        val write = runCatching {
-            AnebDatabase.get(context).tokenSimulationResultDao().insert(result.toEntity())
-        }
-        log(
-            if (write.isSuccess) {
-                "TOKEN_V2_DB_WRITE run_id=${result.runId} ok=true"
-            } else {
-                "TOKEN_V2_DB_WRITE run_id=${result.runId} ok=false error=${write.exceptionOrNull()?.javaClass?.simpleName}"
-            },
+    private suspend fun publishResult(
+        result: TokenSimulationResult,
+        source: TokenResultEnvelopeSource,
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+        endedAtEpochMs: Long,
+        status: String,
+        log: suspend (String) -> Unit,
+    ) {
+        val envelope = TokenResultEnvelopeV1.build(
+            TokenResultEnvelopeInput(
+                result = result,
+                source = source,
+                producer = AnebResultProducerContext(
+                    component = "aneb-probe-android",
+                    componentVersion = BuildConfig.VERSION_NAME,
+                    buildType = BuildConfig.BUILD_TYPE,
+                ),
+                device = AnebResultDeviceContext(
+                    manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
+                    osRelease = Build.VERSION.RELEASE,
+                    apiLevel = Build.VERSION.SDK_INT,
+                    appPackage = BuildConfig.APPLICATION_ID,
+                    appVersionName = BuildConfig.VERSION_NAME,
+                    appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                ),
+                network = networkContext(transport, guard, bound),
+                endedAtEpochMs = endedAtEpochMs,
+                status = status,
+            ),
         )
+        try {
+            resultCommitter.commit(TokenDurableResult(result, envelope))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("TOKEN_V2_DB_WRITE run_id=${result.runId} ok=false error=${e.javaClass.simpleName}")
+            throw TokenResultPersistenceException(e)
+        }
+        log("TOKEN_V2_DB_WRITE run_id=${result.runId} ok=true")
     }
 
     private fun TokenSimulationResult.toEntity(): TokenSimulationResultEntity = TokenSimulationResultEntity(
@@ -493,39 +595,49 @@ class TokenSimulationEngine(private val context: Context) {
             JsonArray.serializer(),
             JsonArray(score.conclusions.map(::JsonPrimitive)),
         ),
-        evidenceJson = Json.encodeToString(JsonObject.serializer(), evidence.toJson()),
+        evidenceJson = Json.encodeToString(
+            JsonObject.serializer(),
+            TokenResultEnvelopeV1.rawEvidenceJson(evidence).withContractVersion(variant),
+        ),
     )
 
-    private fun TokenRunEvidence.toJson(): JsonObject = buildJsonObject {
+    private fun JsonObject.withContractVersion(variant: String): JsonObject = buildJsonObject {
         put("contract_version", "aneb-token-run-evidence-v1")
         put("variant", variant)
-        put("invalid_reason", invalidReason?.let(::JsonPrimitive) ?: JsonNull)
-        put("rtt_samples_ms", JsonArray(rttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
-        put("loaded_rtt_samples_ms", JsonArray(loadedRttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
-        put("tasks", buildJsonArray {
-            tasks.forEach { task ->
-                add(buildJsonObject {
-                    put("workload_kind", task.workloadKind)
-                    put("upload_bytes", task.uploadBytes)
-                    put("response_artifact_bytes", task.responseArtifactBytes)
-                    put("success", task.success)
-                    put("network_failure", task.networkFailure)
-                    put("error", task.error?.let(::JsonPrimitive) ?: JsonNull)
-                    putNullableDouble("click_to_node_receive_ms", task.clickToNodeReceiveMs)
-                    putNullableDouble("ttft_excess_ms", task.ttftExcessMs)
-                    putNullableDouble("upload_goodput_mbps", task.uploadGoodputMbps)
-                    putNullableDouble("download_goodput_mbps", task.downloadGoodputMbps)
-                    putNullableDouble("artifact_download_duration_ms", task.artifactDownloadDurationMs)
-                    put("expected_tokens", task.expectedTokens)
-                    put("unique_tokens", task.uniqueTokens)
-                    put("duplicate_tokens", task.duplicateTokens)
-                    put("token_lateness_ms", JsonArray(task.tokenLatenessMs.map(::JsonPrimitive)))
-                    put("itl_residual_ms", JsonArray(task.itlResidualMs.map(::JsonPrimitive)))
-                    put("request_count", task.requestCount)
-                    put("failed_request_count", task.failedRequestCount)
-                })
-            }
-        })
+        this@withContractVersion.forEach { (key, value) -> put(key, value) }
+    }
+
+    private fun networkContext(
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+    ): AnebResultNetworkContext {
+        val caps = bound?.snapshot?.capabilities
+        val activeTransport = bound?.snapshot?.transport
+            ?: guard.metadata["active_transports"]?.takeUnless { it == "none" }
+        val validated = bound?.let { true }
+            ?: guard.metadata["active_validated"]?.toBooleanStrictOrNull()
+        val notSuspended = caps?.substringAfter("not_suspended=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val notMetered = caps?.substringAfter("not_metered=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val privateDnsActive = guard.metadata["private_dns_active"]
+        val privateDnsMode = when (privateDnsActive) {
+            "true" -> guard.metadata["private_dns_server"]?.let { "active:$it" } ?: "active"
+            "false" -> "off"
+            else -> privateDnsActive
+        }
+        return AnebResultNetworkContext(
+            requestedTransport = transport.name.lowercase(),
+            activeTransport = activeTransport,
+            capabilities = caps?.split(' ')?.filter { it.isNotBlank() }.orEmpty(),
+            interfaceName = bound?.snapshot?.interfaceName,
+            validated = validated,
+            notSuspended = notSuspended,
+            metered = notMetered?.not(),
+            vpnActive = guard.reasons.any { it.startsWith("vpn_active") },
+            privateDnsMode = privateDnsMode,
+        )
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.putNullableDouble(key: String, value: Double?) {

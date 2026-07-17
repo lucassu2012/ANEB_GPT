@@ -1,0 +1,369 @@
+{
+  "catalog_id": "aneb-spec-catalog",
+  "catalog_version": "1.0.0",
+  "compatibility": {
+    "policy": "semver-half-open-v1",
+    "catalog_range": {
+      "min_inclusive": "1.0.0",
+      "max_exclusive": "2.0.0"
+    }
+  },
+  "consumers": {
+    "P1": {
+      "component": "ANEB Probe Android",
+      "current_version": "0.5.2",
+      "catalog_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "2.0.0"
+      },
+      "roles": [
+        "consume_server_root_profiles",
+        "consume_published_profile_v2",
+        "verify_runtime_bound_bundles",
+        "emit_aneb_result_v1"
+      ]
+    },
+    "P2": {
+      "component": "aneb-server",
+      "current_version": "0.7.0",
+      "catalog_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "2.0.0"
+      },
+      "roles": [
+        "serve_server_root_profiles",
+        "provide_allowlisted_profile_primitives"
+      ]
+    },
+    "P3": {
+      "component": "aneb-ai-behavior-model",
+      "current_version": "0.1.0",
+      "catalog_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "2.0.0"
+      },
+      "roles": [
+        "own_profile_and_trace_schemas",
+        "own_result_schema",
+        "publish_behavior_models",
+        "publish_runtime_bound_bundles"
+      ]
+    },
+    "Profile": {
+      "component": "ANEB Profile governance",
+      "current_version": "1.0.0",
+      "catalog_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "2.0.0"
+      },
+      "roles": [
+        "index_all_profile_assets",
+        "enforce_compatibility_and_integrity",
+        "govern_result_contract"
+      ]
+    }
+  },
+  "hash_strategies": [
+    {
+      "strategy_id": "canonical-json-sha256-v1",
+      "algorithm": "sha256",
+      "serialization": "utf8-json-sort-keys-compact-ensure-ascii-false",
+      "digest_encoding": "lowercase-hex",
+      "manifest_line_format": "<digest><two-spaces><basename>",
+      "profile_reference_format": "sha256:<digest>"
+    }
+  ],
+  "schemas": [
+    {
+      "schema_id": "aneb-profile-v2",
+      "schema_version": "2.0.0",
+      "path": "tools/aneb-ai-behavior-model/schemas/aneb-profile-v2.schema.json",
+      "json_schema_id": "https://aneb.local/schemas/aneb-profile-v2.schema.json",
+      "contract_version": "aneb-profile-v2",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-behavior-trace-v1",
+      "schema_version": "1.0.0",
+      "path": "tools/aneb-ai-behavior-model/schemas/aneb-behavior-trace-v1.schema.json",
+      "json_schema_id": "https://aneb.local/schemas/aneb-behavior-trace-v1.schema.json",
+      "contract_version": "aneb-behavior-trace-v1",
+      "consumers": [
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-result-v1",
+      "schema_version": "1.0.0",
+      "path": "spec/schemas/aneb-result-v1.schema.json",
+      "json_schema_id": "urn:aneb:schema:result:v1",
+      "contract_version": "aneb-result-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    }
+  ],
+  "runtime_contracts": [
+    {
+      "contract_version": "aneb-token-runtime-plan-v1",
+      "version": "1.0.0",
+      "standalone_schema_path": null,
+      "compatible_profile_modes": [
+        "token_simulation"
+      ],
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "contract_version": "aneb-realtime-runtime-plan-v1",
+      "version": "1.0.0",
+      "standalone_schema_path": null,
+      "compatible_profile_modes": [
+        "ai_realtime_simulation"
+      ],
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    }
+  ],
+  "model_assets": [
+    {
+      "model_id": "ai-realtime-voice-behavior-v0.1",
+      "version": "0.1.0",
+      "status": "hypothesis",
+      "path": "tools/aneb-ai-behavior-model/models/ai_realtime_voice_hypothesis_v0.1.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "model_id": "ai-realtime-voice-behavior-v0.2",
+      "version": "0.2.0",
+      "status": "hypothesis",
+      "path": "tools/aneb-ai-behavior-model/models/ai_realtime_voice_hypothesis_v0.2.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "model_id": "token-multimodal-behavior-v0.1",
+      "version": "0.1.0",
+      "status": "hypothesis",
+      "path": "tools/aneb-ai-behavior-model/models/token_multimodal_hypothesis_v0.1.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "model_id": "token-multimodal-stress-behavior-v0.1",
+      "version": "0.1.0",
+      "status": "hypothesis",
+      "path": "tools/aneb-ai-behavior-model/models/token_multimodal_stress_hypothesis_v0.1.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    }
+  ],
+  "profile_families": [
+    {
+      "family_id": "server-root-inline-profile-v1",
+      "family_version": "1.0.0",
+      "contract_version": null,
+      "profile_version_range": {
+        "min_inclusive": "0.1.0",
+        "max_exclusive": "1.0.0"
+      },
+      "schema_ref": null,
+      "consumers": [
+        "P1",
+        "P2",
+        "Profile"
+      ],
+      "validation_groups": [
+        {
+          "group_id": "server_root_inline_phases",
+          "validation_strategy": "legacy-required-fields-and-inline-phases-v1",
+          "runtime_manifest_policy": "forbidden",
+          "hash_strategy_id": null,
+          "compatible_modes": [
+            "token_experience",
+            "network_basic"
+          ]
+        }
+      ],
+      "profiles": [
+        {
+          "profile_id": "basic_network",
+          "version": "0.1.0",
+          "path": "profiles/basic_network.json",
+          "validation_group_id": "server_root_inline_phases"
+        },
+        {
+          "profile_id": "s1_chat",
+          "version": "0.2.1",
+          "path": "profiles/s1_chat.json",
+          "validation_group_id": "server_root_inline_phases"
+        },
+        {
+          "profile_id": "s2_coding_agent",
+          "version": "0.2.1",
+          "path": "profiles/s2_coding_agent.json",
+          "validation_group_id": "server_root_inline_phases"
+        },
+        {
+          "profile_id": "s3_multimodal",
+          "version": "0.3.0",
+          "path": "profiles/s3_multimodal.json",
+          "validation_group_id": "server_root_inline_phases"
+        }
+      ]
+    },
+    {
+      "family_id": "published-profile-v2",
+      "family_version": "2.0.0",
+      "contract_version": "aneb-profile-v2",
+      "profile_version_range": {
+        "min_inclusive": "1.0.0",
+        "max_exclusive": "2.0.0"
+      },
+      "schema_ref": "aneb-profile-v2",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ],
+      "validation_groups": [
+        {
+          "group_id": "behavior_runtime_bound",
+          "validation_strategy": "profile-runtime-manifest-canonical-hash-v1",
+          "runtime_manifest_policy": "required",
+          "hash_strategy_id": "canonical-json-sha256-v1",
+          "compatible_modes": [
+            "token_simulation",
+            "ai_realtime_simulation"
+          ]
+        },
+        {
+          "group_id": "network_embedded_phases",
+          "validation_strategy": "profile-v2-embedded-phases-v1",
+          "runtime_manifest_policy": "forbidden",
+          "hash_strategy_id": null,
+          "compatible_modes": [
+            "network_comprehensive"
+          ]
+        }
+      ],
+      "profiles": [
+        {
+          "profile_id": "ai_realtime_voice_quick",
+          "version": "1.0.0",
+          "path": "profiles/published/ai_realtime_voice_quick/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
+          "manifest_path": "profiles/published/ai_realtime_voice_quick/manifest.sha256"
+        },
+        {
+          "profile_id": "ai_realtime_voice_recovery",
+          "version": "1.2.0",
+          "path": "profiles/published/ai_realtime_voice_recovery/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/ai_realtime_voice_recovery/runtime_plan.json",
+          "manifest_path": "profiles/published/ai_realtime_voice_recovery/manifest.sha256"
+        },
+        {
+          "profile_id": "ai_realtime_voice_standard",
+          "version": "1.0.0",
+          "path": "profiles/published/ai_realtime_voice_standard/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/ai_realtime_voice_standard/runtime_plan.json",
+          "manifest_path": "profiles/published/ai_realtime_voice_standard/manifest.sha256"
+        },
+        {
+          "profile_id": "network_comprehensive_gateway_loss",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_gateway_loss/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "network_comprehensive_gateway_recovery",
+          "version": "1.1.0",
+          "path": "profiles/published/network_comprehensive_gateway_recovery/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "network_comprehensive_quick",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_quick/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "network_comprehensive_standard",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_standard/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "network_comprehensive_weak_capacity_latency",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_weak_capacity_latency/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "network_comprehensive_weak_recovery",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_weak_recovery/profile.json",
+          "validation_group_id": "network_embedded_phases"
+        },
+        {
+          "profile_id": "token_multimodal_quick",
+          "version": "1.0.0",
+          "path": "profiles/published/token_multimodal_quick/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
+          "manifest_path": "profiles/published/token_multimodal_quick/manifest.sha256"
+        },
+        {
+          "profile_id": "token_multimodal_standard",
+          "version": "1.0.0",
+          "path": "profiles/published/token_multimodal_standard/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/token_multimodal_standard/runtime_plan.json",
+          "manifest_path": "profiles/published/token_multimodal_standard/manifest.sha256"
+        },
+        {
+          "profile_id": "token_multimodal_stress",
+          "version": "1.0.0",
+          "path": "profiles/published/token_multimodal_stress/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/token_multimodal_stress/runtime_plan.json",
+          "manifest_path": "profiles/published/token_multimodal_stress/manifest.sha256"
+        }
+      ]
+    }
+  ]
+}

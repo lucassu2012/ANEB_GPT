@@ -320,6 +320,9 @@ internal suspend fun prepareGatewayFailureEvidence(
     freeze()
 }
 
+private class NetworkResultPersistenceException(cause: Throwable) :
+    IllegalStateException("network_result_persistence_failed", cause)
+
 /** 网络综合性能引擎：容量测试期间持续并发 echo，主动态指标始终是 loaded RTT。 */
 class NetworkSpeedEngine(private val context: Context) {
     data class Config(
@@ -350,6 +353,12 @@ class NetworkSpeedEngine(private val context: Context) {
     val telemetry: StateFlow<BasicSpeedTelemetry> = _telemetry.asStateFlow()
     private val _result = MutableStateFlow<BasicSpeedResult?>(null)
     val result: StateFlow<BasicSpeedResult?> = _result.asStateFlow()
+    private val resultCommitter = DurableResultCommitter(
+        store = DurableResultStore { result: BasicSpeedResult ->
+            AnebDatabase.get(context).networkComprehensiveResultDao().insert(result.toEntity())
+        },
+        publish = { result -> _result.value = result },
+    )
 
     fun run(config: Config): Flow<String> = channelFlow {
         val log: suspend (String) -> Unit = { send(it) }
@@ -762,7 +771,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 freeze = { cleanupEvidenceFrozen = true },
             )
             val cancelled = gatewayFailureResult(
-                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "cancelled_by_user"),
+                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "cancelled"),
                 gatewaySpecForCleanup,
                 gatewayOwnedExperiment,
                 gatewayActivationAcknowledged,
@@ -770,6 +779,8 @@ class NetworkSpeedEngine(private val context: Context) {
                 config.gatewayBase,
             )
             withContext(NonCancellable) { runCatching { publishResult(cancelled, log) } }
+            throw e
+        } catch (e: NetworkResultPersistenceException) {
             throw e
         } catch (e: Exception) {
             prepareGatewayFailureEvidence(
@@ -1316,33 +1327,37 @@ class NetworkSpeedEngine(private val context: Context) {
     }
 
     private suspend fun publishResult(result: BasicSpeedResult, log: suspend (String) -> Unit) {
-        _result.value = result
-        val write = runCatching {
-            AnebDatabase.get(context).networkComprehensiveResultDao().insert(
-                NetworkComprehensiveResultEntity(
-                    result.runId, result.startedAtEpochMs, result.serverBase, result.claimScope, result.profileId,
-                    result.profileVersion, result.variant, result.scorePolicyId, result.scoreAnchorPolicyId,
-                    result.conclusionPolicyId, result.status, result.totalScore, result.grade, result.verdict.name,
-                    result.confidence.name, result.downloadMbps, result.uploadMbps, result.pingMs, result.loadedRttMs,
-                    result.latencyDeltaMs, result.jitterMs, result.requestLossRate, result.throughputRobustCv,
-                    result.udpNonReturnRate, result.postLoadPingMs, result.downloadBytes, result.uploadBytes,
-                    result.transferErrors.joinToString("\n") { it.replace("\u0000", "") }, metricsJson(result.metrics),
-                    JsonObject(result.groupScores.mapValues { JsonPrimitive(it.value) }).toString(),
-                    JsonArray(result.conclusions.map(::JsonPrimitive)).toString(), result.evidenceJson,
-                    result.syntheticImpairment, result.impairmentProfileId, result.impairmentProfileVersion,
-                    result.impairmentDownlinkMbps, result.impairmentUplinkMbps, result.impairmentAddedRttMs,
-                    result.impairmentJitterMs, result.impairmentOutageDurationMs,
-                    result.impairmentExcludedFromShaping.joinToString(","), result.impairmentAcknowledged,
-                    result.recoveryTimeMs, result.recoveryFailureCount, result.postRecoverySuccessRatio,
-                    result.gatewayImpairment, result.gatewayExperimentId, result.gatewayProfileFingerprint,
-                    result.gatewayManagementBase, result.gatewayImpairmentLayer, result.gatewayAcknowledged,
-                    result.gatewayCleanupAcknowledged, result.gatewayBypassObserved, result.gatewayUplinkDelayMs,
-                    result.gatewayDownlinkDelayMs, result.gatewayUplinkLossPct, result.gatewayDownlinkLossPct,
-                ),
-            )
+        try {
+            resultCommitter.commit(result)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("NET_V1_DB_WRITE run_id=${result.runId} ok=false error=${e.javaClass.simpleName}")
+            throw NetworkResultPersistenceException(e)
         }
-        log(if (write.isSuccess) "NET_V1_DB_WRITE run_id=${result.runId} ok=true" else "NET_V1_DB_WRITE run_id=${result.runId} ok=false error=${write.exceptionOrNull()?.javaClass?.simpleName}")
+        log("NET_V1_DB_WRITE run_id=${result.runId} ok=true")
     }
+
+    private fun BasicSpeedResult.toEntity() = NetworkComprehensiveResultEntity(
+        runId, startedAtEpochMs, serverBase, claimScope, profileId,
+        profileVersion, variant, scorePolicyId, scoreAnchorPolicyId,
+        conclusionPolicyId, status, totalScore, grade, verdict.name,
+        confidence.name, downloadMbps, uploadMbps, pingMs, loadedRttMs,
+        latencyDeltaMs, jitterMs, requestLossRate, throughputRobustCv,
+        udpNonReturnRate, postLoadPingMs, downloadBytes, uploadBytes,
+        transferErrors.joinToString("\n") { it.replace("\u0000", "") }, metricsJson(metrics),
+        JsonObject(groupScores.mapValues { JsonPrimitive(it.value) }).toString(),
+        JsonArray(conclusions.map(::JsonPrimitive)).toString(), evidenceJson,
+        syntheticImpairment, impairmentProfileId, impairmentProfileVersion,
+        impairmentDownlinkMbps, impairmentUplinkMbps, impairmentAddedRttMs,
+        impairmentJitterMs, impairmentOutageDurationMs,
+        impairmentExcludedFromShaping.joinToString(","), impairmentAcknowledged,
+        recoveryTimeMs, recoveryFailureCount, postRecoverySuccessRatio,
+        gatewayImpairment, gatewayExperimentId, gatewayProfileFingerprint,
+        gatewayManagementBase, gatewayImpairmentLayer, gatewayAcknowledged,
+        gatewayCleanupAcknowledged, gatewayBypassObserved, gatewayUplinkDelayMs,
+        gatewayDownlinkDelayMs, gatewayUplinkLossPct, gatewayDownlinkLossPct,
+    )
 
     private fun failureResult(runId: String, started: Long, base: String, variant: String, reason: String) = BasicSpeedResult(
         runId = runId,

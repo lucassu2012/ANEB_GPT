@@ -65,6 +65,16 @@ if (-not $pythonCommand) {
     throw 'Python 3.11+ is required for the behavior-model quality gate.'
 }
 
+& $pythonCommand.Source (Join-Path $PSScriptRoot 'verify_spec_catalog.py')
+if ($LASTEXITCODE -ne 0) {
+    throw "Spec-catalog verification failed with exit code $LASTEXITCODE."
+}
+
+& $pythonCommand.Source (Join-Path $PSScriptRoot 'verify_result_schema.py')
+if ($LASTEXITCODE -ne 0) {
+    throw "Result-schema verification failed with exit code $LASTEXITCODE."
+}
+
 Push-Location (Join-Path $repo 'tools\aneb-ai-behavior-model')
 try {
     $previousPythonPath = $env:PYTHONPATH

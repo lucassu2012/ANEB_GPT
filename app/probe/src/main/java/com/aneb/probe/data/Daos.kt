@@ -65,6 +65,18 @@ interface RealtimeSimulationResultDao {
 }
 
 @Dao
+interface ResultEnvelopeDao {
+    @Insert
+    suspend fun insert(result: ResultEnvelopeEntity)
+
+    @Query("SELECT * FROM result_envelope ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<ResultEnvelopeEntity>
+
+    @Query("SELECT * FROM result_envelope WHERE runId = :runId")
+    suspend fun byId(runId: String): ResultEnvelopeEntity?
+}
+
+@Dao
 interface ReportBodyDao {
     @Insert
     suspend fun insert(body: ReportBodyEntity)

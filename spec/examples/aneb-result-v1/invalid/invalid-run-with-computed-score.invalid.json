@@ -1,0 +1,180 @@
+{
+  "schema_version": "aneb-result-v1",
+  "test_type": "token_simulation",
+  "producer": {
+    "resolution_status": "resolved",
+    "component": "aneb-result-schema-fixture",
+    "component_version": "1.0.0",
+    "exporter_version": "aneb-result-exporter-v1",
+    "build_type": "test",
+    "serialized_at_epoch_ms": 1784246400000
+  },
+  "completeness": {
+    "status": "partial",
+    "missing_fields": [
+      "/context/device",
+      "/context/network",
+      "/context/radio",
+      "/profile",
+      "/profile/runtime_artifact_hash"
+    ],
+    "notes": ["Deliberately invalid fixture; source Profile identity was unavailable."]
+  },
+  "result_semantics": {
+    "metrics_recomputed_on_export": false,
+    "score_recomputed_on_export": false,
+    "confidence_recomputed_on_export": false,
+    "conclusions_recomputed_on_export": false,
+    "missing_value_encoding": "null_with_explicit_state",
+    "invalid_run_policy": "retain_raw_evidence_and_suppress_score"
+  },
+  "run": {
+    "run_id": "00000000-0000-7000-8000-000000000004",
+    "started_at_epoch_ms": 1784246400000,
+    "ended_at_epoch_ms": 1784246400100,
+    "duration_ms": 100,
+    "status": "failed",
+    "validity": "invalid",
+    "invalid_reason_codes": ["guard_rejected"],
+    "source_record_version": "schema-fixture-v1"
+  },
+  "profile": {
+    "resolution_status": "unavailable",
+    "contract_version": null,
+    "profile_id": "token_multimodal_quick",
+    "profile_version": null,
+    "variant": "quick",
+    "profile_fingerprint": null,
+    "profile_evidence_ref_id": null,
+    "runtime_artifact_status": "unavailable",
+    "runtime_artifact_hash": null,
+    "runtime_artifact_evidence_ref_id": null,
+    "source_uri": null
+  },
+  "claim": {
+    "scope": "application_end_to_end_to_probe_node",
+    "measurement_subject": "Attempted ANEB controlled token simulation path",
+    "limitations": [
+      "Deliberately invalid schema fixture: an invalid run must never carry a computed score."
+    ]
+  },
+  "context": {
+    "endpoint": {
+      "server_base": "https://example.invalid",
+      "node_id": null,
+      "server_version": null
+    },
+    "device": {
+      "availability": "not_collected",
+      "manufacturer": null,
+      "model": null,
+      "os_name": null,
+      "os_release": null,
+      "api_level": null,
+      "app_package": null,
+      "app_version_name": null,
+      "app_version_code": null
+    },
+    "network": {
+      "availability": "not_collected",
+      "requested_transport": null,
+      "active_transport": null,
+      "capabilities": [],
+      "interface_name": null,
+      "validated": null,
+      "not_suspended": null,
+      "metered": null,
+      "vpn_active": null,
+      "private_dns_mode": null,
+      "bound_network_generation": null,
+      "evidence_ref_ids": []
+    },
+    "radio": {
+      "collection_status": "not_collected",
+      "unavailable_reason": "guard_rejected_before_collection",
+      "operator_name": null,
+      "network_type": null,
+      "override_type": null,
+      "nr_state": null,
+      "rat": null,
+      "rsrp_dbm": null,
+      "rsrq_db": null,
+      "sinr_db": null,
+      "sample_count": 0,
+      "samples": [],
+      "evidence_ref_ids": []
+    }
+  },
+  "evaluation": {
+    "algorithm_versions": {
+      "measurement_engine_version": "schema-fixture-v1",
+      "metric_catalog_id": null,
+      "target_set_id": null,
+      "score_policy_id": null,
+      "score_anchor_policy_id": null,
+      "conclusion_policy_id": null,
+      "calculation_origin": "measurement_engine",
+      "finalized_at_epoch_ms": 1784246400100
+    },
+    "score": {
+      "state": "computed",
+      "value": 88,
+      "grade": "A",
+      "verdict": "pass",
+      "confidence": "high",
+      "confidence_basis": {
+        "method_id": "deliberately-wrong-fixture-v1",
+        "coverage_ratio": 1,
+        "minimum_sample_satisfied": true
+      },
+      "cap_reason": null,
+      "not_computable_reason": null
+    },
+    "group_scores": {},
+    "metrics": {},
+    "conclusions": [
+      {
+        "conclusion_id": "deliberately-invalid-score",
+        "severity": "failure",
+        "policy_id": "invalid-fixture-v1",
+        "text": "This value must be rejected because the run is invalid but the score is marked computed.",
+        "basis": ["evidence:token-raw"]
+      }
+    ]
+  },
+  "evidence": {
+    "raw_evidence_retained": true,
+    "invalid_evidence_retained": true,
+    "refs": [
+      {
+        "ref_id": "token-raw",
+        "kind": "inline_json_pointer",
+        "uri": "#/category_payload/raw_evidence",
+        "media_type": "application/json",
+        "digest": null,
+        "record_count": 0,
+        "redaction": "none",
+        "description": "Inline invalid-run evidence."
+      }
+    ],
+    "environment_events": []
+  },
+  "category_payload": {
+    "evidence_contract_version": "aneb-token-run-evidence-v1",
+    "variant": "quick",
+    "behavior_model": {
+      "resolution_status": "unavailable",
+      "model_id": null,
+      "model_version": null,
+      "model_hash": null,
+      "calibration_status": "unknown",
+      "source_kind": null
+    },
+    "raw_evidence": {
+      "invalid_reason": "guard_rejected",
+      "rtt_samples_ms": [],
+      "loaded_rtt_samples_ms": [],
+      "tasks": []
+    }
+  }
+}

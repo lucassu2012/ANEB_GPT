@@ -31,6 +31,10 @@ object TokenStressScorer {
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
                 listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                confidenceMethodId = "token-stress-sample-coverage-v1",
+                coverageRatio = null,
+                minimumSampleSatisfied = false,
+                notComputableReason = "invalid_run:${evidence.invalidReason}",
             )
         }
         val tasks = evidence.tasks.filter { it.workloadKind == "video" }
@@ -89,11 +93,20 @@ object TokenStressScorer {
             val metric = metrics[id]
             metric?.complianceRatio == null || metric.sampleCount < specs.getValue(id).minimum
         }
+        val coverageRatio = metrics.values.minOf { metric ->
+            if (metric.minimumSampleCount <= 0) 1.0
+            else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
+        }
+        val minimumSampleSatisfied = metrics.values.all { it.sampleCount >= it.minimumSampleCount }
         if (missing.isNotEmpty()) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
                 emptyMap(), metrics, null,
                 listOf("必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。"),
+                confidenceMethodId = "token-stress-sample-coverage-v1",
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
             )
         }
 
@@ -127,6 +140,9 @@ object TokenStressScorer {
             metrics = metrics,
             capReason = capReason,
             conclusions = conclusions(metrics, verdict, capReason),
+            confidenceMethodId = "token-stress-sample-coverage-v1",
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 

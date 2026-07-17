@@ -1,0 +1,248 @@
+{
+  "schema_version": "aneb-result-v1",
+  "test_type": "ai_realtime_simulation",
+  "producer": {
+    "resolution_status": "resolved",
+    "component": "aneb-result-schema-fixture",
+    "component_version": "1.0.0",
+    "exporter_version": "aneb-result-exporter-v1",
+    "build_type": "test",
+    "serialized_at_epoch_ms": 1784246400000
+  },
+  "completeness": {
+    "status": "partial",
+    "missing_fields": [
+      "/context/device",
+      "/context/network",
+      "/context/radio",
+      "/run/duration_ms",
+      "/run/ended_at_epoch_ms"
+    ],
+    "notes": ["Schema fixture: measurement and device context were deliberately not collected."]
+  },
+  "result_semantics": {
+    "metrics_recomputed_on_export": false,
+    "score_recomputed_on_export": false,
+    "confidence_recomputed_on_export": false,
+    "conclusions_recomputed_on_export": false,
+    "missing_value_encoding": "null_with_explicit_state",
+    "invalid_run_policy": "retain_raw_evidence_and_suppress_score"
+  },
+  "run": {
+    "run_id": "00000000-0000-7000-8000-000000000002",
+    "started_at_epoch_ms": 1784246400000,
+    "ended_at_epoch_ms": null,
+    "duration_ms": null,
+    "status": "completed",
+    "validity": "valid",
+    "invalid_reason_codes": [],
+    "source_record_version": "schema-fixture-v1"
+  },
+  "profile": {
+    "resolution_status": "resolved",
+    "contract_version": "aneb-profile-v2",
+    "profile_id": "ai_realtime_voice_standard",
+    "profile_version": "1.0.0",
+    "variant": "standard",
+    "profile_fingerprint": {
+      "algorithm": "sha256",
+      "canonicalization": "raw-utf8-bytes-v1",
+      "value": "sha256:f76eab54997947ded04efb34f43c3d496938a6df92df723ed9008aff056916c3"
+    },
+    "profile_evidence_ref_id": "profile-artifact",
+    "runtime_artifact_status": "resolved",
+    "runtime_artifact_hash": {
+      "algorithm": "sha256",
+      "canonicalization": "canonical-json-v1",
+      "value": "sha256:3aa12a9cc5e5f6a978da72f222a9b5f3e4127f3103fa868a7e3770d483ce7616"
+    },
+    "runtime_artifact_evidence_ref_id": "runtime-artifact",
+    "source_uri": "profiles/published/ai_realtime_voice_standard/profile.json"
+  },
+  "claim": {
+    "scope": "application_end_to_end_to_probe_node",
+    "measurement_subject": "ANEB controlled full-duplex realtime simulation path to the selected probe node",
+    "limitations": [
+      "Schema fixture only; it contains no measured frames and makes no network-quality claim.",
+      "It does not represent a third-party AI service, carrier-wide result, MOS, or SLA."
+    ]
+  },
+  "context": {
+    "endpoint": {
+      "server_base": "https://example.invalid",
+      "node_id": null,
+      "server_version": null
+    },
+    "device": {
+      "availability": "not_collected",
+      "manufacturer": null,
+      "model": null,
+      "os_name": null,
+      "os_release": null,
+      "api_level": null,
+      "app_package": null,
+      "app_version_name": null,
+      "app_version_code": null
+    },
+    "network": {
+      "availability": "not_collected",
+      "requested_transport": null,
+      "active_transport": null,
+      "capabilities": [],
+      "interface_name": null,
+      "validated": null,
+      "not_suspended": null,
+      "metered": null,
+      "vpn_active": null,
+      "private_dns_mode": null,
+      "bound_network_generation": null,
+      "evidence_ref_ids": []
+    },
+    "radio": {
+      "collection_status": "not_collected",
+      "unavailable_reason": "schema_fixture_no_collection",
+      "operator_name": null,
+      "network_type": null,
+      "override_type": null,
+      "nr_state": null,
+      "rat": null,
+      "rsrp_dbm": null,
+      "rsrq_db": null,
+      "sinr_db": null,
+      "sample_count": 0,
+      "samples": [],
+      "evidence_ref_ids": []
+    }
+  },
+  "evaluation": {
+    "algorithm_versions": {
+      "measurement_engine_version": "schema-fixture-v1",
+      "metric_catalog_id": "realtime-sim-measurements-v1",
+      "target_set_id": "realtime-interaction-targets-v1",
+      "score_policy_id": "realtime-interaction-score-v1",
+      "score_anchor_policy_id": "compliance-anchors-v1",
+      "conclusion_policy_id": "realtime-interaction-conclusions-v1",
+      "calculation_origin": "measurement_engine",
+      "finalized_at_epoch_ms": null
+    },
+    "score": {
+      "state": "not_computable",
+      "value": null,
+      "grade": null,
+      "verdict": "inconclusive",
+      "confidence": "low",
+      "confidence_basis": {
+        "method_id": "schema-fixture-no-coverage-v1",
+        "coverage_ratio": null,
+        "minimum_sample_satisfied": false
+      },
+      "cap_reason": null,
+      "not_computable_reason": "schema_fixture_has_no_measurement_samples"
+    },
+    "group_scores": {},
+    "metrics": {
+      "LIVE-N02": {
+        "label": "会话内 RTT",
+        "domain": "network",
+        "unit": "ms",
+        "measurement_level": "exact",
+        "state": "missing",
+        "value": null,
+        "compliance_ratio": null,
+        "sample_count": 0,
+        "minimum_sample_count": 20,
+        "source_event_ids": [],
+        "direction": "lower_is_better",
+        "required_for_score": true,
+        "quality_target": {
+          "operator": "lte",
+          "value": 100,
+          "values": {},
+          "policy_id": null,
+          "required_compliance_ratio": 0.95,
+          "provenance": "aneb_product_provisional_v1"
+        },
+        "score": null,
+        "formula_id": "live_n02-v1",
+        "aggregation": "p95",
+        "components": {},
+        "source_evidence_ref_ids": ["realtime-raw"],
+        "invalid_reason": "not_measured_in_schema_fixture"
+      }
+    },
+    "conclusions": [
+      {
+        "conclusion_id": "fixture-no-claim",
+        "severity": "info",
+        "policy_id": "realtime-interaction-conclusions-v1",
+        "text": "This schema fixture has no realtime samples; score and quality conclusions are unavailable.",
+        "basis": ["metric:LIVE-N02", "evidence:realtime-raw"]
+      }
+    ]
+  },
+  "evidence": {
+    "raw_evidence_retained": true,
+    "invalid_evidence_retained": true,
+    "refs": [
+      {
+        "ref_id": "profile-artifact",
+        "kind": "local_file",
+        "uri": "profiles/published/ai_realtime_voice_standard/profile.json",
+        "media_type": "application/json",
+        "digest": {
+          "algorithm": "sha256",
+          "canonicalization": "raw-utf8-bytes-v1",
+          "value": "sha256:f76eab54997947ded04efb34f43c3d496938a6df92df723ed9008aff056916c3"
+        },
+        "record_count": 1,
+        "redaction": "none",
+        "description": "Exact Profile artifact used by this schema fixture."
+      },
+      {
+        "ref_id": "runtime-artifact",
+        "kind": "local_file",
+        "uri": "profiles/published/ai_realtime_voice_standard/runtime_plan.json",
+        "media_type": "application/json",
+        "digest": {
+          "algorithm": "sha256",
+          "canonicalization": "canonical-json-v1",
+          "value": "sha256:3aa12a9cc5e5f6a978da72f222a9b5f3e4127f3103fa868a7e3770d483ce7616"
+        },
+        "record_count": 1,
+        "redaction": "none",
+        "description": "Hash-bound realtime runtime plan referenced by the Profile."
+      },
+      {
+        "ref_id": "realtime-raw",
+        "kind": "inline_json_pointer",
+        "uri": "#/category_payload/raw_evidence",
+        "media_type": "application/json",
+        "digest": null,
+        "record_count": 0,
+        "redaction": "none",
+        "description": "Inline realtime evidence fixture; empty by design."
+      }
+    ],
+    "environment_events": []
+  },
+  "category_payload": {
+    "evidence_contract_version": "aneb-realtime-run-evidence-v1",
+    "variant": "standard",
+    "behavior_model": {
+      "resolution_status": "resolved",
+      "model_id": "ai-realtime-voice-behavior-v0.2",
+      "model_version": "0.2.0",
+      "model_hash": {
+        "algorithm": "sha256",
+        "canonicalization": "canonical-json-v1",
+        "value": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6"
+      },
+      "calibration_status": "hypothesis",
+      "source_kind": "product_requirement_hypothesis"
+    },
+    "raw_evidence": {
+      "invalid_reason": null,
+      "sessions": []
+    }
+  }
+}

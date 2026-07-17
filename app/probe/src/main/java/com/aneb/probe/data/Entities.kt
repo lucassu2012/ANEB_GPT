@@ -226,6 +226,27 @@ data class RealtimeSimulationResultEntity(
     val evidenceJson: String,
 )
 
+/**
+ * Versioned, self-contained result envelope. The JSON body is produced by the measurement
+ * engine before publication and is committed in the same Room transaction as its typed row.
+ * [canonicalSha256] uses canonical-json-sha256-v1 and protects semantic JSON content (format-only
+ * whitespace is intentionally ignored). Later export reads the stored body without a second
+ * scoring or reconstruction pass.
+ */
+@Entity(
+    tableName = "result_envelope",
+    indices = [Index("startedAtEpochMs"), Index("testType")],
+)
+data class ResultEnvelopeEntity(
+    @PrimaryKey val runId: String,
+    val schemaVersion: String,
+    val testType: String,
+    val startedAtEpochMs: Long,
+    val serializedAtEpochMs: Long,
+    val canonicalSha256: String,
+    val bodyJson: String,
+)
+
 @Entity(
     tableName = "token_event",
     indices = [Index("runId"), Index(value = ["runId", "scenarioKey", "streamIndex", "seq"])],

@@ -23,6 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TokenSimulationResultEntity::class,
         RealtimeSimulationResultEntity::class,
         NetworkComprehensiveResultEntity::class,
+        ResultEnvelopeEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -44,7 +45,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v15：Profile v2——新增 network_comprehensive_result 独立证据表。
     // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
     // v17：合成恢复——冻结中断时长、恢复用时、失败探针数和恢复后成功率。
-    version = 18,
+    // v19：新增统一 aneb-result-v1 结果信封；先由 Token 正式引擎写入纵向样板。
+    version = 19,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -62,6 +64,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun tokenSimulationResultDao(): TokenSimulationResultDao
     abstract fun realtimeSimulationResultDao(): RealtimeSimulationResultDao
     abstract fun networkComprehensiveResultDao(): NetworkComprehensiveResultDao
+    abstract fun resultEnvelopeDao(): ResultEnvelopeDao
 
     companion object {
         @Volatile
@@ -409,6 +412,28 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_18_19_SQL = listOf(
+            "CREATE TABLE IF NOT EXISTS `result_envelope` (" +
+                "`runId` TEXT NOT NULL, " +
+                "`schemaVersion` TEXT NOT NULL, " +
+                "`testType` TEXT NOT NULL, " +
+                "`startedAtEpochMs` INTEGER NOT NULL, " +
+                "`serializedAtEpochMs` INTEGER NOT NULL, " +
+                "`canonicalSha256` TEXT NOT NULL, " +
+                "`bodyJson` TEXT NOT NULL, " +
+                "PRIMARY KEY(`runId`))",
+            "CREATE INDEX IF NOT EXISTS `index_result_envelope_startedAtEpochMs` " +
+                "ON `result_envelope` (`startedAtEpochMs`)",
+            "CREATE INDEX IF NOT EXISTS `index_result_envelope_testType` " +
+                "ON `result_envelope` (`testType`)",
+        )
+
+        internal val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_18_19_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -421,7 +446,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                        MIGRATION_16_17, MIGRATION_17_18,
+                        MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()
