@@ -65,6 +65,10 @@ data class RealtimeScoreResult(
     val metrics: Map<String, RealtimeMetricEvidence>,
     val capReason: String?,
     val conclusions: List<String>,
+    val confidenceMethodId: String = "realtime-sample-coverage-v1",
+    val coverageRatio: Double? = null,
+    val minimumSampleSatisfied: Boolean? = null,
+    val notComputableReason: String? = null,
 )
 
 object RealtimeSimulationScorer {
@@ -130,6 +134,9 @@ object RealtimeSimulationScorer {
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
                 listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                coverageRatio = null,
+                minimumSampleSatisfied = false,
+                notComputableReason = "invalid_run:${evidence.invalidReason}",
             )
         }
         val sessions = evidence.sessions
@@ -283,11 +290,17 @@ object RealtimeSimulationScorer {
         val requiredIds = specs.filterValues { it.required }.keys
         val requiredMetrics = requiredIds.mapNotNull(metrics::get)
         val confidence = confidence(evidence.variant, requiredMetrics)
+        val coverageRatio = coverageRatio(requiredMetrics)
+        val minimumSampleSatisfied = requiredMetrics.isNotEmpty() &&
+            requiredMetrics.all { it.sampleCount >= it.minimumSampleCount }
         val missing = requiredIds.filter { metrics[it]?.complianceRatio == null }
         if (missing.isNotEmpty()) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
                 listOf("必需指标缺失：${missing.joinToString()}；本次总分不可计算。"),
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
             )
         }
 
@@ -344,6 +357,8 @@ object RealtimeSimulationScorer {
             metrics = metrics,
             capReason = capReason,
             conclusions = conclusions(evidence.variant, metrics, verdict, confidence, capReason),
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 
@@ -357,6 +372,9 @@ object RealtimeSimulationScorer {
         val successful = sessions.count { it.recoveryMs != null }
         val requiredMetrics = recoveryMinimums.keys.mapNotNull(metrics::get)
         val coverage = requiredMetrics.map { it.sampleCount.toDouble() / it.minimumSampleCount }
+        val coverageRatio = coverageRatio(requiredMetrics)
+        val minimumSampleSatisfied = expected >= 2 && requiredMetrics.isNotEmpty() &&
+            requiredMetrics.all { it.sampleCount >= it.minimumSampleCount }
         val confidence = when {
             expected >= 2 && coverage.all { it >= 1.0 } -> TokenConfidence.HIGH
             expected > 0 && coverage.all { it >= 0.5 } -> TokenConfidence.MEDIUM
@@ -367,6 +385,10 @@ object RealtimeSimulationScorer {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
                 listOf("受控恢复必需证据缺失：${(missing + if (expected == 0) listOf("controlled_disconnect") else emptyList()).joinToString()}。"),
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_recovery_evidence:" +
+                    (missing + if (expected == 0) listOf("controlled_disconnect") else emptyList()).joinToString(","),
             )
         }
 
@@ -445,6 +467,8 @@ object RealtimeSimulationScorer {
             metrics = metrics,
             capReason = capReason,
             conclusions = conclusions,
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 
@@ -454,6 +478,13 @@ object RealtimeSimulationScorer {
         if (coverage.all { it >= 0.50 }) return TokenConfidence.MEDIUM
         return TokenConfidence.LOW
     }
+
+    private fun coverageRatio(metrics: Collection<RealtimeMetricEvidence>): Double? = metrics
+        .takeIf { it.isNotEmpty() }
+        ?.minOf { metric ->
+            if (metric.minimumSampleCount <= 0) 1.0
+            else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
+        }
 
     private fun conclusions(
         variant: String,

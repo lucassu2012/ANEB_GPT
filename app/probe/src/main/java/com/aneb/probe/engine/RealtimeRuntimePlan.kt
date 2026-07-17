@@ -56,6 +56,12 @@ data class RealtimeRuntimePlan(
 data class LoadedRealtimeRuntime(
     val profile: ScenarioProfile,
     val plan: RealtimeRuntimePlan,
+    /** Canonical digest of the exact Profile parsed for this run. */
+    val profileHash: String,
+    /** Canonical digest already matched against profile.execution_plan.artifact_hash. */
+    val runtimeArtifactHash: String,
+    val profileAssetUri: String,
+    val runtimeAssetUri: String,
 )
 
 class RealtimeRuntimeRepository(private val context: Context) {
@@ -72,10 +78,19 @@ class RealtimeRuntimeRepository(private val context: Context) {
             "realtime_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}"
         }
         val execution = requireNotNull(profile.executionPlan) { "realtime_execution_plan_missing" }
-        require(TokenRuntimeIntegrity.canonicalSha256(planText) == execution.artifactHash) { "realtime_runtime_hash_mismatch" }
+        val profileHash = TokenRuntimeIntegrity.canonicalSha256(profileText)
+        val runtimeArtifactHash = TokenRuntimeIntegrity.canonicalSha256(planText)
+        require(runtimeArtifactHash == execution.artifactHash) { "realtime_runtime_hash_mismatch" }
         val plan = json.decodeFromString(RealtimeRuntimePlan.serializer(), planText)
         validateBinding(profile, plan)
-        LoadedRealtimeRuntime(profile, plan)
+        LoadedRealtimeRuntime(
+            profile = profile,
+            plan = plan,
+            profileHash = profileHash,
+            runtimeArtifactHash = runtimeArtifactHash,
+            profileAssetUri = "asset:///$base/profile.json",
+            runtimeAssetUri = "asset:///$base/runtime_plan.json",
+        )
     }
 
     private fun validateBinding(profile: ScenarioProfile, plan: RealtimeRuntimePlan) {

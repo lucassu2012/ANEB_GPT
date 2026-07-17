@@ -9,7 +9,7 @@
 
 | 单元 | 当前版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.2 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与哈希校验；Token 新 run 发出统一结果信封 |
+| P1 / ANEB Probe Android | 0.5.3 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与哈希校验；三类新 run 同事务发出统一结果信封并支持 JSONL 导出/分享 |
 | P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
 | P3 / aneb-ai-behavior-model | 0.1.0 | 维护现有 Schema 和 hypothesis 模型；生成带运行计划的 v2 发布包 |
 | Profile 横切机制 | 1.0.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式 |
@@ -97,12 +97,12 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 
 ## `aneb-result-v1` 当前接线状态
 
-- ［KNOWN｜HIGH］Token 新 run 已在 Room v19 中把类型化结果与统一结果信封同事务落库；
-  Profile/运行计划指纹、评分审计字段与原始证据在引擎最终化时冻结。
+- ［KNOWN｜HIGH］Token、AI 实时和网络综合的新 run 均在 Room v19 中把类型化结果与统一结果信封同事务落库；
+  Profile/运行计划指纹（网络综合为不适用）、评分审计字段与原始证据在引擎最终化时冻结。
 - ［KNOWN｜HIGH］JSONL 核心按开始时间/run id 确定排序，核验 run/test/schema 身份和规范化
   SHA-256 后原样输出 `bodyJson`，不解析重算。
-- ［KNOWN｜HIGH］AI 实时与网络综合尚未写统一信封；用户界面的文件导出/分享尚未接线。
-- ［KNOWN｜HIGH］三个正式新引擎尚未接 RadioCollector；当前 Token 信封明确写
+- ［KNOWN｜HIGH］三类结果页均可将单条冻结信封保存为 JSONL 或以文件分享；旧记录没有信封时明确禁用，不做历史补算。
+- ［KNOWN｜HIGH］三个正式新引擎尚未接 RadioCollector；当前统一信封明确写
   `collection_status=not_collected`，并把 `/context/radio` 列入 completeness，绝不补 0。
 
 ## 新增或升级资产

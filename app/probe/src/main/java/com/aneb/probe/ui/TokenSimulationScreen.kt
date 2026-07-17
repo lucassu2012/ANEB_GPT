@@ -166,7 +166,14 @@ fun TokenSimulationTestingScreen(
 }
 
 @Composable
-fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Unit) {
+fun TokenSimulationResultScreen(
+    result: TokenSimulationResult,
+    onBack: () -> Unit,
+    exportAvailable: Boolean = false,
+    exportStatus: String? = null,
+    onExportJsonl: () -> Unit = {},
+    onShareJsonl: () -> Unit = {},
+) {
     val colors = AnebTheme.colors
     val score = result.score
     val accent = when (score.verdict) {
@@ -239,6 +246,7 @@ fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Uni
                     Text("${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}", fontSize = 9.sp, color = colors.faint, modifier = Modifier.padding(top = 6.dp))
                 }
             }
+            UnifiedResultExportActions(exportAvailable, exportStatus, onExportJsonl, onShareJsonl)
             Text(
                 "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
                 fontSize = 9.sp,
@@ -253,7 +261,14 @@ fun TokenSimulationResultScreen(result: TokenSimulationResult, onBack: () -> Uni
 
 /** Process-death-safe history projection; values are loaded from the frozen Room result, never rescored. */
 @Composable
-fun TokenSimulationStoredResultScreen(result: TokenSimulationResultEntity, onBack: () -> Unit) {
+fun TokenSimulationStoredResultScreen(
+    result: TokenSimulationResultEntity,
+    onBack: () -> Unit,
+    exportAvailable: Boolean = false,
+    exportStatus: String? = null,
+    onExportJsonl: () -> Unit = {},
+    onShareJsonl: () -> Unit = {},
+) {
     val colors = AnebTheme.colors
     val verdict = runCatching { TokenVerdict.valueOf(result.verdict) }.getOrDefault(TokenVerdict.INVALID)
     val confidence = runCatching { TokenConfidence.valueOf(result.confidence) }.getOrDefault(TokenConfidence.INVALID)
@@ -316,6 +331,7 @@ fun TokenSimulationStoredResultScreen(result: TokenSimulationResultEntity, onBac
                     }
                 }
             }
+            UnifiedResultExportActions(exportAvailable, exportStatus, onExportJsonl, onShareJsonl)
             Text(
                 "${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}\n${result.scorePolicyId} · ${result.scoreAnchorPolicyId}",
                 fontSize = 9.sp,

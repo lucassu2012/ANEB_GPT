@@ -155,7 +155,14 @@ fun RealtimeSimulationTestingScreen(
 }
 
 @Composable
-fun RealtimeSimulationResultScreen(result: RealtimeSimulationResult, onBack: () -> Unit) {
+fun RealtimeSimulationResultScreen(
+    result: RealtimeSimulationResult,
+    onBack: () -> Unit,
+    exportAvailable: Boolean = false,
+    exportStatus: String? = null,
+    onExportJsonl: () -> Unit = {},
+    onShareJsonl: () -> Unit = {},
+) {
     RealtimeResultContent(
         titleSuffix = "AI 实时交互",
         variant = result.variant,
@@ -168,12 +175,23 @@ fun RealtimeSimulationResultScreen(result: RealtimeSimulationResult, onBack: () 
         modelLine = "${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}",
         policyLine = "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}",
         onBack = onBack,
+        exportAvailable = exportAvailable,
+        exportStatus = exportStatus,
+        onExportJsonl = onExportJsonl,
+        onShareJsonl = onShareJsonl,
     )
 }
 
 /** 历史页只读取冻结结果，不以当前版本算法重算。 */
 @Composable
-fun RealtimeSimulationStoredResultScreen(result: RealtimeSimulationResultEntity, onBack: () -> Unit) {
+fun RealtimeSimulationStoredResultScreen(
+    result: RealtimeSimulationResultEntity,
+    onBack: () -> Unit,
+    exportAvailable: Boolean = false,
+    exportStatus: String? = null,
+    onExportJsonl: () -> Unit = {},
+    onShareJsonl: () -> Unit = {},
+) {
     val verdict = runCatching { TokenVerdict.valueOf(result.verdict) }.getOrDefault(TokenVerdict.INVALID)
     val confidence = runCatching { TokenConfidence.valueOf(result.confidence) }.getOrDefault(TokenConfidence.INVALID)
     val metricsJson = remember(result.metricsJson) {
@@ -208,6 +226,10 @@ fun RealtimeSimulationStoredResultScreen(result: RealtimeSimulationResultEntity,
         modelLine = "${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}",
         policyLine = "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}",
         onBack = onBack,
+        exportAvailable = exportAvailable,
+        exportStatus = exportStatus,
+        onExportJsonl = onExportJsonl,
+        onShareJsonl = onShareJsonl,
     )
 }
 
@@ -224,6 +246,10 @@ private fun RealtimeResultContent(
     modelLine: String,
     policyLine: String,
     onBack: () -> Unit,
+    exportAvailable: Boolean,
+    exportStatus: String?,
+    onExportJsonl: () -> Unit,
+    onShareJsonl: () -> Unit,
 ) {
     val colors = AnebTheme.colors
     val accent = when (verdict) {
@@ -273,6 +299,7 @@ private fun RealtimeResultContent(
                     Text(modelLine, fontSize = 9.sp, color = colors.faint, modifier = Modifier.padding(top = 6.dp))
                 }
             }
+            UnifiedResultExportActions(exportAvailable, exportStatus, onExportJsonl, onShareJsonl)
             Text(
                 "$policyLine\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
                 fontSize = 9.sp,

@@ -2432,6 +2432,10 @@
               "type": "null"
             }
           ]
+        },
+        "engine_failure_context": {
+          "description": "Original engine failure object retained when the run ended before the full network evidence contract could be populated.",
+          "type": ["object", "null"]
         }
       },
       "additionalProperties": false

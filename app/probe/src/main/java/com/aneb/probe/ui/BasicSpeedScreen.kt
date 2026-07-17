@@ -226,7 +226,14 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 
 /** 网络综合结果页：冻结独立分数、证据置信度与版本化结论。 */
 @Composable
-fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
+fun BasicSpeedResultScreen(
+    result: BasicSpeedResult,
+    onBack: () -> Unit,
+    exportAvailable: Boolean = false,
+    exportStatus: String? = null,
+    onExportJsonl: () -> Unit = {},
+    onShareJsonl: () -> Unit = {},
+) {
     val colors = AnebTheme.colors
     val recoveryResult = result.variant in setOf("weak_recovery", "gateway_recovery")
     val accent = when (result.verdict) {
@@ -376,6 +383,7 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                     )
                 }
             }
+            UnifiedResultExportActions(exportAvailable, exportStatus, onExportJsonl, onShareJsonl)
             Text(
                 "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}\n范围仅限本机到当前 ANEB 节点，不代表运营商全网评级",
                 fontSize = 9.sp,

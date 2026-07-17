@@ -72,6 +72,10 @@ data class NetworkComprehensiveScoreResult(
     val groupScores: Map<String, Double>,
     val metrics: Map<String, NetworkMetricEvidence>,
     val conclusions: List<String>,
+    val confidenceMethodId: String = "network-sample-coverage-v1",
+    val coverageRatio: Double? = null,
+    val minimumSampleSatisfied: Boolean? = null,
+    val notComputableReason: String? = null,
 )
 
 /** D-37 冻结的网络综合独立评分；不与 Token、实时交互或旧 AQS 混分。 */
@@ -87,6 +91,9 @@ object NetworkComprehensiveScorer {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID, emptyMap(), emptyMap(),
                 listOf("测试证据无效：${evidence.invalidReason}；原始证据保留，评分被抑制。"),
+                coverageRatio = null,
+                minimumSampleSatisfied = false,
+                notComputableReason = "invalid_run:${evidence.invalidReason}",
             )
         }
         val idle = evidence.idleRttMs.filterNotNull()
@@ -154,11 +161,17 @@ object NetworkComprehensiveScorer {
             "NET-B12" to metric("NET-B12", handshakeCompliance, handshakeCompliance, evidence.handshakes.size),
         )
         val confidence = confidence(evidence.variant, metrics.values)
+        val coverageRatio = coverageRatio(metrics.values)
+        val minimumSampleSatisfied = metrics.values.isNotEmpty() &&
+            metrics.values.all { it.sampleCount >= it.minimumSampleCount }
         val missing = metrics.values.filter { it.value == null || it.complianceRatio == null }.map { it.metricId }
         if (missing.isNotEmpty()) {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics,
                 conclusions(evidence, metrics, TokenVerdict.INCONCLUSIVE, confidence, missing),
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
             )
         }
 
@@ -193,6 +206,8 @@ object NetworkComprehensiveScorer {
             groupScores = groups.mapValues { round1(it.value) },
             metrics = metrics,
             conclusions = conclusions(evidence, metrics, verdict, confidence, emptyList()),
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 
@@ -255,6 +270,13 @@ object NetworkComprehensiveScorer {
         if (coverage.all { it >= 0.50 }) return TokenConfidence.MEDIUM
         return TokenConfidence.LOW
     }
+
+    private fun coverageRatio(metrics: Collection<NetworkMetricEvidence>): Double? = metrics
+        .takeIf { it.isNotEmpty() }
+        ?.minOf { metric ->
+            if (metric.minimumSampleCount <= 0) 1.0
+            else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
+        }
 
     private fun ratio(values: List<Boolean>): Double? =
         values.takeIf { it.isNotEmpty() }?.let { list -> list.count { it }.toDouble() / list.size }

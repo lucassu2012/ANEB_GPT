@@ -36,6 +36,10 @@ object NetworkRecoveryScorer {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID, emptyMap(), emptyMap(),
                 listOf("恢复测试证据无效：$invalid；原始证据保留，评分被抑制。"),
+                confidenceMethodId = "network-recovery-sample-coverage-v1",
+                coverageRatio = null,
+                minimumSampleSatisfied = false,
+                notComputableReason = "invalid_run:$invalid",
             )
         }
 
@@ -66,11 +70,17 @@ object NetworkRecoveryScorer {
                 postRttCompliance?.let(TokenSimulationScorer::complianceScore),
             ),
         )
+        val coverageRatio = coverageRatio(metrics.values)
+        val minimumSampleSatisfied = metrics.values.all { it.sampleCount >= it.minimumSampleCount }
         val missing = metrics.values.filter { it.value == null || it.complianceRatio == null || it.score == null }
         if (missing.isNotEmpty()) {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.FAIL, TokenConfidence.LOW, emptyMap(), metrics,
                 conclusions(evidence, metrics, TokenVerdict.FAIL, missing.map { it.metricId }),
+                confidenceMethodId = "network-recovery-sample-coverage-v1",
+                coverageRatio = coverageRatio,
+                minimumSampleSatisfied = minimumSampleSatisfied,
+                notComputableReason = "missing_required_metrics:${missing.joinToString(",") { it.metricId }}",
             )
         }
 
@@ -97,6 +107,9 @@ object NetworkRecoveryScorer {
             groupScores = groups.mapValues { round1(it.value) },
             metrics = metrics,
             conclusions = conclusions(evidence, metrics, verdict, emptyList()),
+            confidenceMethodId = "network-recovery-sample-coverage-v1",
+            coverageRatio = coverageRatio,
+            minimumSampleSatisfied = minimumSampleSatisfied,
         )
     }
 
@@ -135,6 +148,13 @@ object NetworkRecoveryScorer {
 
     private fun ratio(values: List<Boolean>): Double? =
         values.takeIf { it.isNotEmpty() }?.let { list -> list.count { it }.toDouble() / list.size }
+
+    private fun coverageRatio(metrics: Collection<NetworkMetricEvidence>): Double? = metrics
+        .takeIf { it.isNotEmpty() }
+        ?.minOf { metric ->
+            if (metric.minimumSampleCount <= 0) 1.0
+            else (metric.sampleCount.toDouble() / metric.minimumSampleCount).coerceIn(0.0, 1.0)
+        }
 
     private fun percentile(values: List<Double>, q: Double): Double? {
         if (values.isEmpty()) return null

@@ -2,7 +2,10 @@ package com.aneb.probe.engine
 
 import android.content.Context
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.SystemClock
+import androidx.room.withTransaction
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.NetworkComprehensiveResultEntity
 import com.aneb.probe.net.AnebClient
@@ -119,6 +122,10 @@ data class BasicSpeedResult(
     val groupScores: Map<String, Double> = emptyMap(),
     val conclusions: List<String> = emptyList(),
     val evidenceJson: String = "{}",
+    val confidenceMethodId: String = "network-sample-coverage-v1",
+    val coverageRatio: Double? = null,
+    val minimumSampleSatisfied: Boolean? = null,
+    val notComputableReason: String? = null,
     val syntheticImpairment: Boolean = false,
     val impairmentProfileId: String? = null,
     val impairmentProfileVersion: String? = null,
@@ -146,8 +153,14 @@ data class BasicSpeedResult(
     val gatewayDownlinkLossPct: Double? = null,
 )
 
+private data class LoadedNetworkProfile(
+    val profile: ScenarioProfile,
+    val profileHash: String,
+    val profileAssetUri: String,
+)
+
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
-    suspend fun load(variant: String): ScenarioProfile = withContext(Dispatchers.IO) {
+    suspend fun load(variant: String): LoadedNetworkProfile = withContext(Dispatchers.IO) {
         require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery", "gateway_loss", "gateway_recovery")) {
             "unsupported_network_variant:$variant"
         }
@@ -171,7 +184,11 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         require((profile.gatewayImpairment != null) == (variant in setOf("gateway_loss", "gateway_recovery"))) {
             "network_profile_gateway_mismatch"
         }
-        profile
+        LoadedNetworkProfile(
+            profile = profile,
+            profileHash = TokenRuntimeIntegrity.canonicalSha256(text),
+            profileAssetUri = "asset:///$path",
+        )
     }
 }
 
@@ -323,6 +340,11 @@ internal suspend fun prepareGatewayFailureEvidence(
 private class NetworkResultPersistenceException(cause: Throwable) :
     IllegalStateException("network_result_persistence_failed", cause)
 
+private data class NetworkDurableResult(
+    val result: BasicSpeedResult,
+    val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+)
+
 /** 网络综合性能引擎：容量测试期间持续并发 echo，主动态指标始终是 loaded RTT。 */
 class NetworkSpeedEngine(private val context: Context) {
     data class Config(
@@ -354,10 +376,14 @@ class NetworkSpeedEngine(private val context: Context) {
     private val _result = MutableStateFlow<BasicSpeedResult?>(null)
     val result: StateFlow<BasicSpeedResult?> = _result.asStateFlow()
     private val resultCommitter = DurableResultCommitter(
-        store = DurableResultStore { result: BasicSpeedResult ->
-            AnebDatabase.get(context).networkComprehensiveResultDao().insert(result.toEntity())
+        store = DurableResultStore { durable: NetworkDurableResult ->
+            val db = AnebDatabase.get(context)
+            db.withTransaction {
+                db.networkComprehensiveResultDao().insert(durable.result.toEntity())
+                db.resultEnvelopeDao().insert(durable.envelope)
+            }
         },
-        publish = { result -> _result.value = result },
+        publish = { durable -> _result.value = durable.result },
     )
 
     fun run(config: Config): Flow<String> = channelFlow {
@@ -371,10 +397,14 @@ class NetworkSpeedEngine(private val context: Context) {
         log("NET_V1_START run_id=$runId variant=${config.variant} transport=${config.transport.name.lowercase()} server=$configuredBase")
 
         val guard = NetGuard.guardCheck(context)
+        var envelopeSource = NetworkResultEnvelopeSource(profile = null)
         if (!guard.ok) {
             val reason = guard.reasons.joinToString(",")
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
-            publishResult(failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "guard_rejected:$reason"), log)
+            publishResult(
+                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "guard_rejected:$reason"),
+                envelopeSource, config.transport, guard, null, System.currentTimeMillis(), "failed", log,
+            )
             log("NET_V1_END run_id=$runId status=guard_rejected reasons=$reason")
             return@channelFlow
         }
@@ -429,13 +459,22 @@ class NetworkSpeedEngine(private val context: Context) {
             }
         } catch (e: GuardException) {
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
-            publishResult(failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "bind_failed:${e.message}"), log)
+            publishResult(
+                failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "bind_failed:${e.message}"),
+                envelopeSource, config.transport, guard, null, System.currentTimeMillis(), "failed", log,
+            )
             log("NET_V1_END run_id=$runId status=bind_failed")
             return@channelFlow
         }
 
         try {
-            val profile = NetworkComprehensiveProfileRepository(context).load(config.variant)
+            val loadedProfile = NetworkComprehensiveProfileRepository(context).load(config.variant)
+            val profile = loadedProfile.profile
+            envelopeSource = NetworkResultEnvelopeSource(
+                profile = profile,
+                profileHash = loadedProfile.profileHash,
+                profileUri = loadedProfile.profileAssetUri,
+            )
             val client = AnebClient(bound)
             val gatewaySpec = profile.gatewayImpairment
             gatewaySpecForCleanup = gatewaySpec
@@ -719,6 +758,10 @@ class NetworkSpeedEngine(private val context: Context) {
                 capacityMetrics["NET-B09"]?.value, capacityMetrics["NET-B07"]?.value, capacityMetrics["NET-B10"]?.value,
                 BasicSpeedMath.percentile(post.filterNotNull(), 0.50), download.totalBytes, upload.totalBytes, errors,
                 metrics, score.groupScores, score.conclusions, evidenceJson(evidence, recoveryEvidence),
+                confidenceMethodId = score.confidenceMethodId,
+                coverageRatio = score.coverageRatio,
+                minimumSampleSatisfied = score.minimumSampleSatisfied,
+                notComputableReason = score.notComputableReason,
                 syntheticImpairment = profile.syntheticImpairment != null,
                 impairmentProfileId = when {
                     profile.syntheticImpairment != null -> profile.profileId
@@ -758,7 +801,10 @@ class NetworkSpeedEngine(private val context: Context) {
                 gatewayUplinkLossPct = gatewaySpec?.uplink?.lossPct,
                 gatewayDownlinkLossPct = gatewaySpec?.downlink?.lossPct,
             )
-            publishResult(result, log)
+            publishResult(
+                result, envelopeSource, config.transport, guard, bound, System.currentTimeMillis(),
+                if (status == "completed") "completed" else "failed", log,
+            )
             _telemetry.value = _telemetry.value.copy(
                 phase = if (status == "failed" || status == "invalid") BasicSpeedPhase.FAILED else BasicSpeedPhase.COMPLETE,
                 currentMbps = null, phaseAverageMbps = null, progress = 1.0,
@@ -778,7 +824,14 @@ class NetworkSpeedEngine(private val context: Context) {
                 gatewayCleanupAcknowledged,
                 config.gatewayBase,
             )
-            withContext(NonCancellable) { runCatching { publishResult(cancelled, log) } }
+            withContext(NonCancellable) {
+                runCatching {
+                    publishResult(
+                        cancelled, envelopeSource, config.transport, guard, bound,
+                        System.currentTimeMillis(), "cancelled", log,
+                    )
+                }
+            }
             throw e
         } catch (e: NetworkResultPersistenceException) {
             throw e
@@ -796,7 +849,10 @@ class NetworkSpeedEngine(private val context: Context) {
                 gatewayCleanupAcknowledged,
                 config.gatewayBase,
             )
-            publishResult(failed, log)
+            publishResult(
+                failed, envelopeSource, config.transport, guard, bound,
+                System.currentTimeMillis(), "failed", log,
+            )
             log("NET_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("NET_V1_END run_id=$runId status=error")
             gatewayFailureForService(gatewayRequested, e)?.let { throw it }
@@ -1326,9 +1382,41 @@ class NetworkSpeedEngine(private val context: Context) {
         TransferSummary(BasicSpeedMath.mbps(bytes, endNanos - startNanos), bytes, windows.toList(), loadedSnapshot, errors.toList())
     }
 
-    private suspend fun publishResult(result: BasicSpeedResult, log: suspend (String) -> Unit) {
+    private suspend fun publishResult(
+        result: BasicSpeedResult,
+        source: NetworkResultEnvelopeSource,
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+        endedAtEpochMs: Long,
+        status: String,
+        log: suspend (String) -> Unit,
+    ) {
+        val envelope = NetworkResultEnvelopeV1.build(
+            NetworkResultEnvelopeInput(
+                result = result,
+                source = source,
+                producer = AnebResultProducerContext(
+                    component = "aneb-probe-android",
+                    componentVersion = BuildConfig.VERSION_NAME,
+                    buildType = BuildConfig.BUILD_TYPE,
+                ),
+                device = AnebResultDeviceContext(
+                    manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
+                    osRelease = Build.VERSION.RELEASE,
+                    apiLevel = Build.VERSION.SDK_INT,
+                    appPackage = BuildConfig.APPLICATION_ID,
+                    appVersionName = BuildConfig.VERSION_NAME,
+                    appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                ),
+                network = networkContext(transport, guard, bound),
+                endedAtEpochMs = endedAtEpochMs,
+                status = status,
+            ),
+        )
         try {
-            resultCommitter.commit(result)
+            resultCommitter.commit(NetworkDurableResult(result, envelope))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1336,6 +1424,39 @@ class NetworkSpeedEngine(private val context: Context) {
             throw NetworkResultPersistenceException(e)
         }
         log("NET_V1_DB_WRITE run_id=${result.runId} ok=true")
+    }
+
+    private fun networkContext(
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+    ): AnebResultNetworkContext {
+        val caps = bound?.snapshot?.capabilities
+        val activeTransport = bound?.snapshot?.transport
+            ?: guard.metadata["active_transports"]?.takeUnless { it == "none" }
+        val validated = bound?.let { true }
+            ?: guard.metadata["active_validated"]?.toBooleanStrictOrNull()
+        val notSuspended = caps?.substringAfter("not_suspended=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val notMetered = caps?.substringAfter("not_metered=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val privateDnsActive = guard.metadata["private_dns_active"]
+        val privateDnsMode = when (privateDnsActive) {
+            "true" -> guard.metadata["private_dns_server"]?.let { "active:$it" } ?: "active"
+            "false" -> "off"
+            else -> privateDnsActive
+        }
+        return AnebResultNetworkContext(
+            requestedTransport = transport.name.lowercase(),
+            activeTransport = activeTransport,
+            capabilities = caps?.split(' ')?.filter { it.isNotBlank() }.orEmpty(),
+            interfaceName = bound?.snapshot?.interfaceName,
+            validated = validated,
+            notSuspended = notSuspended,
+            metered = notMetered?.not(),
+            vpnActive = guard.reasons.any { it.startsWith("vpn_active") },
+            privateDnsMode = privateDnsMode,
+        )
     }
 
     private fun BasicSpeedResult.toEntity() = NetworkComprehensiveResultEntity(

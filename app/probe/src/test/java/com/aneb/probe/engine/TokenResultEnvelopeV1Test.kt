@@ -66,6 +66,24 @@ class TokenResultEnvelopeV1Test {
                         provenance = "aneb_product_provisional_v1",
                     ),
                 ),
+                ProfileMeasurement(
+                    metricId = "TOK-B03",
+                    label = "Document upload latency",
+                    domain = "business",
+                    unit = "ms",
+                    measurementLevel = "exact",
+                    formulaId = "tok_b03-v1",
+                    aggregation = "p95",
+                    direction = "lower_is_better",
+                    requiredForScore = false,
+                    minimumSampleCount = 3,
+                    qualityTarget = ProfileQualityTarget(
+                        operator = "lte",
+                        value = 5_000.0,
+                        requiredComplianceRatio = 0.95,
+                        provenance = "aneb_product_provisional_v1",
+                    ),
+                ),
             ),
             evaluation = ProfileEvaluation(
                 targetSetId = "token-sim-targets-v1",
@@ -98,6 +116,11 @@ class TokenResultEnvelopeV1Test {
             .getValue("score").jsonObject.getValue("value").jsonPrimitive.content.toDouble(), 0.0)
         assertEquals(DIGEST_A, root.getValue("profile").jsonObject
             .getValue("profile_fingerprint").jsonObject.getValue("value").jsonPrimitive.content)
+        val frozenMetrics = root.getValue("evaluation").jsonObject.getValue("metrics").jsonObject
+        assertEquals("missing", frozenMetrics.getValue("TOK-B03").jsonObject
+            .getValue("state").jsonPrimitive.content)
+        assertEquals("measurement_not_emitted_by_current_engine", frozenMetrics.getValue("TOK-B03").jsonObject
+            .getValue("invalid_reason").jsonPrimitive.content)
         val radio = root.getValue("context").jsonObject.getValue("radio").jsonObject
         assertEquals("not_collected", radio.getValue("collection_status").jsonPrimitive.content)
         assertEquals(JsonNull, radio.getValue("rsrp_dbm"))

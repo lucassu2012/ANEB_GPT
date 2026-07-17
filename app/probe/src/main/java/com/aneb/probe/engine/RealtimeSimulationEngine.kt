@@ -2,7 +2,10 @@ package com.aneb.probe.engine
 
 import android.content.Context
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.SystemClock
+import androidx.room.withTransaction
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.RealtimeSimulationResultEntity
 import com.aneb.probe.net.AnebClient
@@ -99,6 +102,11 @@ internal suspend fun <T> runRealtimeSessionWithMonitor(
 private class RealtimeResultPersistenceException(cause: Throwable) :
     Exception("realtime_result_persistence_failed", cause)
 
+private data class RealtimeDurableResult(
+    val result: RealtimeSimulationResult,
+    val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+)
+
 class RealtimeSimulationEngine(private val context: Context) {
     data class Config(
         val serverBase: String,
@@ -111,10 +119,14 @@ class RealtimeSimulationEngine(private val context: Context) {
     private val _result = MutableStateFlow<RealtimeSimulationResult?>(null)
     val result: StateFlow<RealtimeSimulationResult?> = _result.asStateFlow()
     private val resultCommitter = DurableResultCommitter(
-        store = DurableResultStore { result: RealtimeSimulationResult ->
-            AnebDatabase.get(context).realtimeSimulationResultDao().insert(result.toEntity())
+        store = DurableResultStore { durable: RealtimeDurableResult ->
+            val db = AnebDatabase.get(context)
+            db.withTransaction {
+                db.realtimeSimulationResultDao().insert(durable.result.toEntity())
+                db.resultEnvelopeDao().insert(durable.envelope)
+            }
         },
-        publish = { result -> _result.value = result },
+        publish = { durable -> _result.value = durable.result },
     )
 
     fun run(config: Config): Flow<String> = channelFlow {
@@ -126,8 +138,13 @@ class RealtimeSimulationEngine(private val context: Context) {
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.PREPARING)
         log("REALTIME_V1_START run_id=$runId variant=${config.variant} server=$configuredBase")
         val guard = NetGuard.guardCheck(context)
+        var envelopeSource = RealtimeResultEnvelopeSource(profile = null)
         if (!guard.ok) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, "guard_rejected:${guard.reasons.joinToString()}", log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant,
+                "guard_rejected:${guard.reasons.joinToString()}", envelopeSource,
+                config.transport, guard, null, log,
+            )
             log("REALTIME_V1_END run_id=$runId status=guard_rejected")
             return@channelFlow
         }
@@ -139,7 +156,11 @@ class RealtimeSimulationEngine(private val context: Context) {
         val initialBound = try {
             requestedTransport?.let { NetGuard.acquireNetwork(context, it) }
         } catch (e: GuardException) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, "bind_failed:${e.javaClass.simpleName}", log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant,
+                "bind_failed:${e.javaClass.simpleName}", envelopeSource,
+                config.transport, guard, null, log,
+            )
             log("REALTIME_V1_END run_id=$runId status=bind_failed")
             return@channelFlow
         }
@@ -157,6 +178,13 @@ class RealtimeSimulationEngine(private val context: Context) {
             val loaded = RealtimeRuntimeRepository(context).load(config.variant)
             val profile = loaded.profile
             val plan = loaded.plan
+            envelopeSource = RealtimeResultEnvelopeSource(
+                profile = profile,
+                profileHash = loaded.profileHash,
+                runtimeArtifactHash = loaded.runtimeArtifactHash,
+                profileUri = loaded.profileAssetUri,
+                runtimeArtifactUri = loaded.runtimeAssetUri,
+            )
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sni, ip) ->
                 reach = runCatching { ReachabilityProbe(initialBound).probeDual(sni, ip) }.getOrNull()
@@ -359,7 +387,16 @@ class RealtimeSimulationEngine(private val context: Context) {
                 plan.variant, profile.evaluation.scorePolicyId, profile.evaluation.scoreAnchorPolicyId,
                 profile.evaluation.conclusionPolicyId, score, runEvidence,
             )
-            publishResult(result, log)
+            publishResult(
+                result = result,
+                source = envelopeSource,
+                transport = config.transport,
+                guard = guard,
+                bound = initialBound,
+                endedAtEpochMs = System.currentTimeMillis(),
+                status = if (score.verdict == TokenVerdict.INVALID) "failed" else "completed",
+                log = log,
+            )
             _telemetry.value = _telemetry.value.copy(
                 phase = if (score.verdict == TokenVerdict.INVALID) RealtimeSimulationPhase.FAILED else RealtimeSimulationPhase.COMPLETE,
                 progress = 1.0,
@@ -371,7 +408,10 @@ class RealtimeSimulationEngine(private val context: Context) {
         } catch (e: RealtimeResultPersistenceException) {
             throw e
         } catch (e: Exception) {
-            finishFailed(runId, startedAt, configuredBase, config.variant, e.toString(), log)
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant, e.toString(), envelopeSource,
+                config.transport, guard, initialBound, log,
+            )
             log("REALTIME_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("REALTIME_V1_END run_id=$runId status=error")
         } finally {
@@ -530,21 +570,78 @@ class RealtimeSimulationEngine(private val context: Context) {
         server: String,
         variant: String,
         reason: String,
+        source: RealtimeResultEnvelopeSource,
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
         log: suspend (String) -> Unit,
     ) {
         val evidence = RealtimeRunEvidence(variant, emptyList(), reason)
-        publishResult(RealtimeSimulationResult(
-            runId, startedAt, server, "ai_realtime_voice_$variant", "unknown",
-            "unknown", "unknown", "unknown", "unknown", variant,
-            "realtime-interaction-score-v1", "compliance-anchors-v1",
-            "realtime-interaction-conclusions-v1", RealtimeSimulationScorer.score(evidence), evidence,
-        ), log)
+        val profile = source.profile
+        val scorePolicy = profile?.evaluation?.scorePolicyId?.takeIf(String::isNotBlank)
+            ?: if (variant == "recovery") "realtime-recovery-score-v2" else "realtime-interaction-score-v1"
+        val result = RealtimeSimulationResult(
+            runId, startedAt, server, profile?.profileId ?: "ai_realtime_voice_$variant", profile?.version ?: "unknown",
+            profile?.business?.behaviorModelId ?: "unknown",
+            profile?.business?.behaviorModelVersion ?: "unknown",
+            profile?.business?.behaviorModelHash ?: "unknown",
+            profile?.business?.calibrationStatus ?: "unknown",
+            variant,
+            scorePolicy,
+            profile?.evaluation?.scoreAnchorPolicyId?.takeIf(String::isNotBlank) ?: "compliance-anchors-v1",
+            profile?.evaluation?.conclusionPolicyId?.takeIf(String::isNotBlank)
+                ?: if (variant == "recovery") "realtime-recovery-conclusions-v2" else "realtime-interaction-conclusions-v1",
+            RealtimeSimulationScorer.score(evidence, scorePolicy),
+            evidence,
+        )
+        publishResult(
+            result = result,
+            source = source,
+            transport = transport,
+            guard = guard,
+            bound = bound,
+            endedAtEpochMs = System.currentTimeMillis(),
+            status = "failed",
+            log = log,
+        )
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.FAILED)
     }
 
-    private suspend fun publishResult(result: RealtimeSimulationResult, log: suspend (String) -> Unit) {
+    private suspend fun publishResult(
+        result: RealtimeSimulationResult,
+        source: RealtimeResultEnvelopeSource,
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+        endedAtEpochMs: Long,
+        status: String,
+        log: suspend (String) -> Unit,
+    ) {
+        val envelope = RealtimeResultEnvelopeV1.build(
+            RealtimeResultEnvelopeInput(
+                result = result,
+                source = source,
+                producer = AnebResultProducerContext(
+                    component = "aneb-probe-android",
+                    componentVersion = BuildConfig.VERSION_NAME,
+                    buildType = BuildConfig.BUILD_TYPE,
+                ),
+                device = AnebResultDeviceContext(
+                    manufacturer = Build.MANUFACTURER,
+                    model = Build.MODEL,
+                    osRelease = Build.VERSION.RELEASE,
+                    apiLevel = Build.VERSION.SDK_INT,
+                    appPackage = BuildConfig.APPLICATION_ID,
+                    appVersionName = BuildConfig.VERSION_NAME,
+                    appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                ),
+                network = networkContext(transport, guard, bound),
+                endedAtEpochMs = endedAtEpochMs,
+                status = status,
+            ),
+        )
         try {
-            resultCommitter.commit(result)
+            resultCommitter.commit(RealtimeDurableResult(result, envelope))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -558,7 +655,11 @@ class RealtimeSimulationEngine(private val context: Context) {
         runId = runId,
         startedAtEpochMs = startedAtEpochMs,
         serverBase = serverBase,
-        claimScope = "application_end_to_end_to_probe_node",
+        claimScope = if (variant == "recovery") {
+            "controlled_server_disconnect_recovery_to_probe_node"
+        } else {
+            "application_end_to_end_to_probe_node"
+        },
         profileId = profileId,
         profileVersion = profileVersion,
         behaviorModelId = behaviorModelId,
@@ -639,6 +740,39 @@ class RealtimeSimulationEngine(private val context: Context) {
                 })
             }
         })
+    }
+
+    private fun networkContext(
+        transport: TestEngine.TransportMode,
+        guard: com.aneb.probe.net.GuardResult,
+        bound: BoundNetwork?,
+    ): AnebResultNetworkContext {
+        val caps = bound?.snapshot?.capabilities
+        val activeTransport = bound?.snapshot?.transport
+            ?: guard.metadata["active_transports"]?.takeUnless { it == "none" }
+        val validated = bound?.let { true }
+            ?: guard.metadata["active_validated"]?.toBooleanStrictOrNull()
+        val notSuspended = caps?.substringAfter("not_suspended=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val notMetered = caps?.substringAfter("not_metered=", "")
+            ?.substringBefore(' ')?.toBooleanStrictOrNull()
+        val privateDnsActive = guard.metadata["private_dns_active"]
+        val privateDnsMode = when (privateDnsActive) {
+            "true" -> guard.metadata["private_dns_server"]?.let { "active:$it" } ?: "active"
+            "false" -> "off"
+            else -> privateDnsActive
+        }
+        return AnebResultNetworkContext(
+            requestedTransport = transport.name.lowercase(),
+            activeTransport = activeTransport,
+            capabilities = caps?.split(' ')?.filter { it.isNotBlank() }.orEmpty(),
+            interfaceName = bound?.snapshot?.interfaceName,
+            validated = validated,
+            notSuspended = notSuspended,
+            metered = notMetered?.not(),
+            vpnActive = guard.reasons.any { it.startsWith("vpn_active") },
+            privateDnsMode = privateDnsMode,
+        )
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.putNullableDouble(key: String, value: Double?) {

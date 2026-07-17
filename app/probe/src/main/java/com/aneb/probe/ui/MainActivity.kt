@@ -49,6 +49,7 @@ import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.AbRunner
+import com.aneb.probe.engine.AnebResultJsonlExporter
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.ContinuityRunner
 import com.aneb.probe.engine.ProbeRunService
@@ -794,9 +795,20 @@ class MainActivity : ComponentActivity() {
         val result by produceState<com.aneb.probe.engine.BasicSpeedResult?>(initialValue = null, runId) {
             value = withContext(Dispatchers.IO) { db.networkComprehensiveResultDao().byId(runId)?.toDomain() }
         }
+        val exportAvailable by produceState(initialValue = false, runId) {
+            value = withContext(Dispatchers.IO) { db.resultEnvelopeDao().byId(runId) != null }
+        }
+        var exportStatus by remember(runId) { mutableStateOf<String?>(null) }
         val loaded = result
         if (loaded != null) {
-            BasicSpeedResultScreen(result = loaded, onBack = onBack)
+            BasicSpeedResultScreen(
+                result = loaded,
+                onBack = onBack,
+                exportAvailable = exportAvailable,
+                exportStatus = exportStatus,
+                onExportJsonl = { doExportUnifiedResult(runId, share = false) { exportStatus = it } },
+                onShareJsonl = { doExportUnifiedResult(runId, share = true) { exportStatus = it } },
+            )
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 Text("未找到网络综合记录", color = AnebTheme.colors.muted)
@@ -813,9 +825,29 @@ class MainActivity : ComponentActivity() {
         val stored by produceState<TokenSimulationResultEntity?>(initialValue = null, runId) {
             value = withContext(Dispatchers.IO) { db.tokenSimulationResultDao().byId(runId) }
         }
+        val exportAvailable by produceState(initialValue = false, runId) {
+            value = withContext(Dispatchers.IO) { db.resultEnvelopeDao().byId(runId) != null }
+        }
+        var exportStatus by remember(runId) { mutableStateOf<String?>(null) }
+        val export = { doExportUnifiedResult(runId, share = false) { exportStatus = it } }
+        val share = { doExportUnifiedResult(runId, share = true) { exportStatus = it } }
         when {
-            liveResult?.runId == runId -> TokenSimulationResultScreen(result = liveResult, onBack = onBack)
-            stored != null -> TokenSimulationStoredResultScreen(result = checkNotNull(stored), onBack = onBack)
+            liveResult?.runId == runId -> TokenSimulationResultScreen(
+                result = liveResult,
+                onBack = onBack,
+                exportAvailable = exportAvailable,
+                exportStatus = exportStatus,
+                onExportJsonl = export,
+                onShareJsonl = share,
+            )
+            stored != null -> TokenSimulationStoredResultScreen(
+                result = checkNotNull(stored),
+                onBack = onBack,
+                exportAvailable = exportAvailable,
+                exportStatus = exportStatus,
+                onExportJsonl = export,
+                onShareJsonl = share,
+            )
             else -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 Text("未找到 Token 仿真记录", color = AnebTheme.colors.muted)
             }
@@ -831,9 +863,29 @@ class MainActivity : ComponentActivity() {
         val stored by produceState<RealtimeSimulationResultEntity?>(initialValue = null, runId) {
             value = withContext(Dispatchers.IO) { db.realtimeSimulationResultDao().byId(runId) }
         }
+        val exportAvailable by produceState(initialValue = false, runId) {
+            value = withContext(Dispatchers.IO) { db.resultEnvelopeDao().byId(runId) != null }
+        }
+        var exportStatus by remember(runId) { mutableStateOf<String?>(null) }
+        val export = { doExportUnifiedResult(runId, share = false) { exportStatus = it } }
+        val share = { doExportUnifiedResult(runId, share = true) { exportStatus = it } }
         when {
-            liveResult?.runId == runId -> RealtimeSimulationResultScreen(result = liveResult, onBack = onBack)
-            stored != null -> RealtimeSimulationStoredResultScreen(result = checkNotNull(stored), onBack = onBack)
+            liveResult?.runId == runId -> RealtimeSimulationResultScreen(
+                result = liveResult,
+                onBack = onBack,
+                exportAvailable = exportAvailable,
+                exportStatus = exportStatus,
+                onExportJsonl = export,
+                onShareJsonl = share,
+            )
+            stored != null -> RealtimeSimulationStoredResultScreen(
+                result = checkNotNull(stored),
+                onBack = onBack,
+                exportAvailable = exportAvailable,
+                exportStatus = exportStatus,
+                onExportJsonl = export,
+                onShareJsonl = share,
+            )
             else -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 Text("未找到 AI 实时交互记录", color = AnebTheme.colors.muted)
             }
@@ -1136,6 +1188,60 @@ class MainActivity : ComponentActivity() {
                     "uri=${outcome.uri ?: "null"} error=${outcome.error?.replace(' ', '_') ?: "none"}"
             android.util.Log.i("AnebProbe", line)
             withContext(Dispatchers.Main) { onStatus(line) }
+        }
+    }
+
+    /** Exports one immutable aneb-result-v1 envelope; sharing never rebuilds or rescales it. */
+    private fun doExportUnifiedResult(
+        runId: String,
+        share: Boolean,
+        onStatus: (String) -> Unit,
+    ) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val record = db.resultEnvelopeDao().byId(runId)
+            if (record == null) {
+                android.util.Log.w("AnebProbe", "RESULT_V1_EXPORT run_id=$runId status=missing")
+                withContext(Dispatchers.Main) { onStatus("无法导出：这条记录没有统一结果信封。") }
+                return@launch
+            }
+            val content = runCatching { AnebResultJsonlExporter.export(listOf(record)) }
+                .getOrElse { error ->
+                    android.util.Log.e("AnebProbe", "RESULT_V1_EXPORT run_id=$runId status=integrity_fail", error)
+                    withContext(Dispatchers.Main) { onStatus("失败：结果完整性校验未通过。") }
+                    return@launch
+                }
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val safeType = record.testType.replace(Regex("[^a-z0-9_-]"), "_")
+            val fileName = "aneb_result_${safeType}_${runId.take(8)}_$ts.jsonl"
+            val outcome = Exporter.exportToDownloads(
+                applicationContext,
+                fileName,
+                "application/x-ndjson",
+                content,
+            )
+            val line =
+                "RESULT_V1_EXPORT run_id=$runId type=${record.testType} share=$share file=$fileName " +
+                    "bytes=${outcome.bytes} status=${if (outcome.ok) "ok" else "fail"} " +
+                    "uri=${outcome.uri ?: "null"} error=${outcome.error?.replace(' ', '_') ?: "none"}"
+            android.util.Log.i("AnebProbe", line)
+            withContext(Dispatchers.Main) {
+                if (!outcome.ok || outcome.uri == null) {
+                    onStatus("失败：无法写入系统下载目录。")
+                    return@withContext
+                }
+                onStatus(if (share) "证据文件已生成，请选择分享目标。" else "已保存到系统下载目录：$fileName")
+                if (share) {
+                    val uri = Uri.parse(outcome.uri)
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/x-ndjson"
+                        putExtra(Intent.EXTRA_SUBJECT, "ANEB 可审计测试结果")
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        clipData = android.content.ClipData.newRawUri("ANEB JSONL", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(send, "分享 ANEB 测试证据"))
+                }
+            }
         }
     }
 
