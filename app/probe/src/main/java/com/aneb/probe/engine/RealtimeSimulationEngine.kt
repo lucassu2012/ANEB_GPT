@@ -105,6 +105,7 @@ private class RealtimeResultPersistenceException(cause: Throwable) :
 private data class RealtimeDurableResult(
     val result: RealtimeSimulationResult,
     val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+    val radio: FormalRadioEvidence,
 )
 
 class RealtimeSimulationEngine(private val context: Context) {
@@ -124,6 +125,10 @@ class RealtimeSimulationEngine(private val context: Context) {
             db.withTransaction {
                 db.realtimeSimulationResultDao().insert(durable.result.toEntity())
                 db.resultEnvelopeDao().insert(durable.envelope)
+                durable.radio.radioEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.radioSampleDao().insertAll(it) }
+                durable.radio.eventEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.envEventDao().insertAll(it) }
             }
         },
         publish = { durable -> _result.value = durable.result },
@@ -134,6 +139,7 @@ class RealtimeSimulationEngine(private val context: Context) {
         val runId = TestEngine.newRunId()
         val startedAt = System.currentTimeMillis()
         val configuredBase = config.serverBase.trim().trimEnd('/')
+        val radioCollector = FormalRadioEvidenceCollector(context).also { it.start(this) }
         _result.value = null
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.PREPARING)
         log("REALTIME_V1_START run_id=$runId variant=${config.variant} server=$configuredBase")
@@ -143,7 +149,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant,
                 "guard_rejected:${guard.reasons.joinToString()}", envelopeSource,
-                config.transport, guard, null, log,
+                config.transport, guard, null, radioCollector, log,
             )
             log("REALTIME_V1_END run_id=$runId status=guard_rejected")
             return@channelFlow
@@ -159,7 +165,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant,
                 "bind_failed:${e.javaClass.simpleName}", envelopeSource,
-                config.transport, guard, null, log,
+                config.transport, guard, null, radioCollector, log,
             )
             log("REALTIME_V1_END run_id=$runId status=bind_failed")
             return@channelFlow
@@ -395,6 +401,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                 bound = initialBound,
                 endedAtEpochMs = System.currentTimeMillis(),
                 status = if (score.verdict == TokenVerdict.INVALID) "failed" else "completed",
+                radioCollector = radioCollector,
                 log = log,
             )
             _telemetry.value = _telemetry.value.copy(
@@ -410,11 +417,12 @@ class RealtimeSimulationEngine(private val context: Context) {
         } catch (e: Exception) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant, e.toString(), envelopeSource,
-                config.transport, guard, initialBound, log,
+                config.transport, guard, initialBound, radioCollector, log,
             )
             log("REALTIME_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("REALTIME_V1_END run_id=$runId status=error")
         } finally {
+            radioCollector.close()
             sessionResources.close()
         }
     }.flowOn(Dispatchers.IO)
@@ -574,6 +582,7 @@ class RealtimeSimulationEngine(private val context: Context) {
         transport: TestEngine.TransportMode,
         guard: com.aneb.probe.net.GuardResult,
         bound: BoundNetwork?,
+        radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
         val evidence = RealtimeRunEvidence(variant, emptyList(), reason)
@@ -602,6 +611,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             bound = bound,
             endedAtEpochMs = System.currentTimeMillis(),
             status = "failed",
+            radioCollector = radioCollector,
             log = log,
         )
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.FAILED)
@@ -615,8 +625,10 @@ class RealtimeSimulationEngine(private val context: Context) {
         bound: BoundNetwork?,
         endedAtEpochMs: Long,
         status: String,
+        radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
+        val radio = radioCollector.freeze()
         val envelope = RealtimeResultEnvelopeV1.build(
             RealtimeResultEnvelopeInput(
                 result = result,
@@ -638,16 +650,18 @@ class RealtimeSimulationEngine(private val context: Context) {
                 network = networkContext(transport, guard, bound),
                 endedAtEpochMs = endedAtEpochMs,
                 status = status,
+                radio = radio,
             ),
         )
         try {
-            resultCommitter.commit(RealtimeDurableResult(result, envelope))
+            resultCommitter.commit(RealtimeDurableResult(result, envelope, radio))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log("REALTIME_V1_DB_WRITE run_id=${result.runId} ok=false error=${e.javaClass.simpleName}")
             throw RealtimeResultPersistenceException(e)
         }
+        log("REALTIME_V1_RADIO run_id=${result.runId} status=${radio.collectionStatus} samples=${radio.samples.size}")
         log("REALTIME_V1_DB_WRITE run_id=${result.runId} ok=true")
     }
 

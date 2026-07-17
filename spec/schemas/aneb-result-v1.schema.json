@@ -1611,16 +1611,29 @@
           },
           "then": {
             "properties": {
-              "value": {
-                "type": "number"
-              },
               "source_evidence_ref_ids": {
                 "minItems": 1
               },
               "invalid_reason": {
                 "type": "null"
               }
-            }
+            },
+            "anyOf": [
+              {
+                "properties": {
+                  "value": { "type": "number" }
+                }
+              },
+              {
+                "description": "A mixed time series is observed through its evidence reference; no scalar is fabricated.",
+                "properties": {
+                  "unit": { "const": "mixed" },
+                  "aggregation": { "const": "time_series" },
+                  "value": { "type": "null" },
+                  "sample_count": { "type": "integer", "minimum": 1 }
+                }
+              }
+            ]
           }
         },
         {

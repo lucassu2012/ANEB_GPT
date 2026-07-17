@@ -2,6 +2,8 @@ package com.aneb.probe.engine
 
 import android.content.Context
 import java.security.MessageDigest
+import java.math.BigDecimal
+import java.math.BigInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -129,6 +131,42 @@ internal object TokenRuntimeIntegrity {
             Json.encodeToString(JsonPrimitive.serializer(), JsonPrimitive(key)) + ":" + canonicalJson(value)
         }
         is JsonArray -> element.joinToString(prefix = "[", postfix = "]", separator = ",") { canonicalJson(it) }
-        is JsonPrimitive -> element.toString()
+        is JsonPrimitive -> canonicalPrimitive(element)
+    }
+
+    /** Matches Python json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False). */
+    private fun canonicalPrimitive(value: JsonPrimitive): String {
+        if (value.isString) {
+            return Json.encodeToString(JsonPrimitive.serializer(), value)
+        }
+        val content = value.content
+        if (content == "true" || content == "false" || content == "null") return content
+        return if (content.contains('.') || content.contains('e', ignoreCase = true)) {
+            canonicalPythonFloat(content)
+        } else {
+            BigInteger(content).toString()
+        }
+    }
+
+    private fun canonicalPythonFloat(content: String): String {
+        val number = content.toDouble()
+        require(number.isFinite()) { "canonical_json_non_finite_number" }
+        if (number == 0.0) {
+            return if (java.lang.Double.doubleToRawLongBits(number) < 0) "-0.0" else "0.0"
+        }
+
+        // BigDecimal.valueOf starts from Java's shortest round-tripping decimal. Python and
+        // Java agree on the digits; their exponent thresholds and spelling differ.
+        val decimal = BigDecimal.valueOf(number).stripTrailingZeros()
+        val exponent = decimal.precision() - decimal.scale() - 1
+        if (exponent < -4 || exponent >= 16) {
+            val digits = decimal.unscaledValue().abs().toString()
+            val mantissa = if (digits.length == 1) digits else digits.first() + "." + digits.drop(1)
+            val exponentText = kotlin.math.abs(exponent).toString().padStart(2, '0')
+            val sign = if (exponent < 0) "-" else "+"
+            return (if (decimal.signum() < 0) "-" else "") + mantissa + "e" + sign + exponentText
+        }
+        val plain = decimal.toPlainString()
+        return if (plain.contains('.')) plain else "$plain.0"
     }
 }

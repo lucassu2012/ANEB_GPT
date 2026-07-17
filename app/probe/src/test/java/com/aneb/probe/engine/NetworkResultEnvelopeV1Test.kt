@@ -10,6 +10,36 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NetworkResultEnvelopeV1Test {
+    @Test fun collectedRadioIsEmbeddedAndNotMarkedMissing() {
+        val result = result(metrics = emptyMap(), evidenceJson = completeEvidenceJson())
+        val root = Json.parseToJsonElement(
+            NetworkResultEnvelopeV1.build(
+                input(
+                    result,
+                    NetworkResultEnvelopeSource(
+                        profile = radioOnlyProfileFixture(
+                            "network_comprehensive_quick",
+                            ScenarioProfile.MODE_NETWORK_COMPREHENSIVE,
+                            "NET-R01",
+                        ),
+                    ),
+                    radio = collectedRadioEvidenceFixture(),
+                ),
+            ).bodyJson,
+        ).jsonObject
+        val radio = root.getValue("context").jsonObject.getValue("radio").jsonObject
+
+        assertEquals("collected", radio.getValue("collection_status").jsonPrimitive.content)
+        assertEquals(1, radio.getValue("sample_count").jsonPrimitive.content.toInt())
+        assertTrue(root.getValue("completeness").jsonObject.getValue("missing_fields").jsonArray
+            .none { it.jsonPrimitive.content == "/context/radio" })
+        val metric = root.getValue("evaluation").jsonObject.getValue("metrics").jsonObject
+            .getValue("NET-R01").jsonObject
+        assertEquals("observed", metric.getValue("state").jsonPrimitive.content)
+        assertEquals(JsonNull, metric.getValue("value"))
+        assertEquals("radio-context", metric.getValue("source_evidence_ref_ids").jsonArray.single().jsonPrimitive.content)
+    }
+
     @Test fun resolvedResultFreezesAllProfileMetricsAndExplicitMissingState() {
         val observed = NetworkMetricEvidence("NET-B01", 42.0, 1.0, 10, 10, 100.0)
         val profile = profile(listOf("NET-B01", "NET-B08"))
@@ -159,6 +189,7 @@ class NetworkResultEnvelopeV1Test {
         result: BasicSpeedResult,
         source: NetworkResultEnvelopeSource,
         status: String = "completed",
+        radio: FormalRadioEvidence = FormalRadioEvidence.notCollected("test_fixture_no_radio"),
     ) = NetworkResultEnvelopeInput(
         result = result,
         source = source,
@@ -167,6 +198,7 @@ class NetworkResultEnvelopeV1Test {
         network = AnebResultNetworkContext("auto", "wifi", listOf("validated=true"), null, true, null, false, false, "active"),
         endedAtEpochMs = 2_000L,
         status = status,
+        radio = radio,
     )
 
     private fun completeEvidenceJson() = """

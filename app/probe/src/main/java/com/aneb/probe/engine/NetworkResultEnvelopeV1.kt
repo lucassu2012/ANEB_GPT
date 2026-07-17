@@ -27,6 +27,7 @@ internal data class NetworkResultEnvelopeInput(
     val network: AnebResultNetworkContext,
     val endedAtEpochMs: Long,
     val status: String,
+    val radio: FormalRadioEvidence = FormalRadioEvidence.notCollected("radio_evidence_not_provided"),
 )
 
 /** Freezes network-comprehensive results without re-running measurement or scoring logic. */
@@ -45,7 +46,7 @@ internal object NetworkResultEnvelopeV1 {
         val missingFields = buildList {
             add("/context/endpoint/node_id")
             add("/context/endpoint/server_version")
-            add("/context/radio")
+            if (input.radio.collectionStatus != "collected") add("/context/radio")
             if (input.network.activeTransport == null) add("/context/network/active_transport")
             if (input.network.interfaceName == null) add("/context/network/interface_name")
             if (input.network.validated == null) add("/context/network/validated")
@@ -77,6 +78,7 @@ internal object NetworkResultEnvelopeV1 {
                 put("redaction", "none")
                 put("description", "Inline latency, transfer, UDP, impairment and recovery evidence frozen by the network engine.")
             })
+            if (input.radio.collectionStatus == "collected") add(input.radio.evidenceRefJson())
         }
         val serializedAt = input.endedAtEpochMs
         val body = buildJsonObject {
@@ -96,7 +98,11 @@ internal object NetworkResultEnvelopeV1 {
                 put("notes", buildJsonArray {
                     add(JsonPrimitive("Only context observed by the formal network-comprehensive engine is included; absent fields were not reconstructed."))
                     add(JsonPrimitive("Network Profiles contain executable phases directly, so a separate runtime artifact is not applicable."))
-                    add(JsonPrimitive("Radio sampling is not yet wired to the formal network-comprehensive engine."))
+                    add(JsonPrimitive(
+                        if (input.radio.collectionStatus == "collected")
+                            "Public Android radio observations were sampled at 1Hz; coordinates are excluded from this shareable result."
+                        else "Radio context unavailable: ${input.radio.unavailableReason}.",
+                    ))
                 })
             })
             put("result_semantics", buildJsonObject {
@@ -135,7 +141,7 @@ internal object NetworkResultEnvelopeV1 {
                 })
                 put("device", deviceContext(input.device))
                 put("network", networkContext(input.network))
-                put("radio", unavailableRadioContext())
+                put("radio", input.radio.contextJson())
             })
             put("evaluation", buildJsonObject {
                 put("algorithm_versions", buildJsonObject {
@@ -154,7 +160,7 @@ internal object NetworkResultEnvelopeV1 {
                 })
                 put("metrics", buildJsonObject {
                     (definitions.keys + result.metrics.keys).toSortedSet().forEach { id ->
-                        put(id, metricJson(result.metrics[id], definitions[id]))
+                        put(id, metricJson(result.metrics[id], definitions[id], input.radio))
                     }
                 })
                 put("conclusions", buildJsonArray {
@@ -173,7 +179,7 @@ internal object NetworkResultEnvelopeV1 {
                 put("raw_evidence_retained", true)
                 put("invalid_evidence_retained", true)
                 put("refs", evidenceRefs)
-                put("environment_events", buildJsonArray { })
+                put("environment_events", input.radio.environmentEventsJson())
             })
             put("category_payload", buildJsonObject {
                 put("evidence_contract_version", "aneb-network-evidence-v1")
@@ -273,9 +279,15 @@ internal object NetworkResultEnvelopeV1 {
         }
     }
 
-    private fun metricJson(metric: NetworkMetricEvidence?, definition: ProfileMeasurement?): JsonObject {
+    private fun metricJson(
+        metric: NetworkMetricEvidence?,
+        definition: ProfileMeasurement?,
+        radio: FormalRadioEvidence,
+    ): JsonObject {
         checkNotNull(definition) { "network_result_metric_definition_missing:${metric?.metricId ?: "unknown"}" }
-        val observed = metric?.value?.isFinite() == true
+        val radioSeriesObserved = definition.domain == "radio_covariate" &&
+            definition.aggregation == "time_series" && radio.collectionStatus == "collected"
+        val observed = metric?.value?.isFinite() == true || radioSeriesObserved
         return buildJsonObject {
             put("label", definition.label)
             put("domain", normalizeDomain(definition.domain))
@@ -284,7 +296,7 @@ internal object NetworkResultEnvelopeV1 {
             put("state", if (observed) "observed" else "missing")
             put("value", metric?.value.finiteOrNull())
             put("compliance_ratio", metric?.complianceRatio.finiteOrNull())
-            put("sample_count", metric?.sampleCount ?: 0)
+            put("sample_count", if (radioSeriesObserved) radio.samples.size else metric?.sampleCount ?: 0)
             put("minimum_sample_count", metric?.minimumSampleCount ?: definition.minimumSampleCount)
             put("source_event_ids", JsonArray(definition.sourceEventIds.map(::JsonPrimitive)))
             put("direction", definition.direction)
@@ -294,7 +306,9 @@ internal object NetworkResultEnvelopeV1 {
             put("formula_id", definition.formulaId)
             put("aggregation", definition.aggregation)
             put("components", buildJsonObject { })
-            put("source_evidence_ref_ids", buildJsonArray { add(JsonPrimitive("network-raw")) })
+            put("source_evidence_ref_ids", buildJsonArray {
+                add(JsonPrimitive(if (radioSeriesObserved) "radio-context" else "network-raw"))
+            })
             put("invalid_reason", if (observed) null else if (metric == null) "measurement_not_emitted_by_current_engine" else "measurement_unavailable")
         }
     }
@@ -352,22 +366,6 @@ internal object NetworkResultEnvelopeV1 {
         put("vpn_active", network.vpnActive)
         put("private_dns_mode", network.privateDnsMode)
         put("bound_network_generation", JsonNull)
-        put("evidence_ref_ids", buildJsonArray { })
-    }
-
-    private fun unavailableRadioContext(): JsonObject = buildJsonObject {
-        put("collection_status", "not_collected")
-        put("unavailable_reason", "formal_network_engine_radio_collector_not_wired")
-        put("operator_name", JsonNull)
-        put("network_type", JsonNull)
-        put("override_type", JsonNull)
-        put("nr_state", JsonNull)
-        put("rat", JsonNull)
-        put("rsrp_dbm", JsonNull)
-        put("rsrq_db", JsonNull)
-        put("sinr_db", JsonNull)
-        put("sample_count", 0)
-        put("samples", buildJsonArray { })
         put("evidence_ref_ids", buildJsonArray { })
     }
 

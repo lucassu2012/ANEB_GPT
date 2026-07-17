@@ -10,6 +10,45 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RealtimeResultEnvelopeV1Test {
+    @Test fun collectedRadioIsEmbeddedAndNotMarkedMissing() {
+        val evidence = RealtimeRunEvidence("quick", emptyList())
+        val result = result(
+            RealtimeScoreResult(
+                null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
+                emptyMap(), emptyMap(), null, listOf("Insufficient evidence."),
+                coverageRatio = 0.0, minimumSampleSatisfied = false,
+                notComputableReason = "test_fixture",
+            ),
+            evidence,
+        )
+        val root = Json.parseToJsonElement(
+            RealtimeResultEnvelopeV1.build(
+                input(
+                    result,
+                    RealtimeResultEnvelopeSource(
+                        profile = radioOnlyProfileFixture(
+                            "ai_realtime_voice_quick",
+                            ScenarioProfile.MODE_AI_REALTIME_SIMULATION,
+                            "LIVE-R01",
+                        ),
+                    ),
+                    radio = collectedRadioEvidenceFixture(),
+                ),
+            ).bodyJson,
+        ).jsonObject
+        val radio = root.getValue("context").jsonObject.getValue("radio").jsonObject
+
+        assertEquals("collected", radio.getValue("collection_status").jsonPrimitive.content)
+        assertEquals(1, radio.getValue("sample_count").jsonPrimitive.content.toInt())
+        assertTrue(root.getValue("completeness").jsonObject.getValue("missing_fields").jsonArray
+            .none { it.jsonPrimitive.content == "/context/radio" })
+        val metric = root.getValue("evaluation").jsonObject.getValue("metrics").jsonObject
+            .getValue("LIVE-R01").jsonObject
+        assertEquals("observed", metric.getValue("state").jsonPrimitive.content)
+        assertEquals(JsonNull, metric.getValue("value"))
+        assertEquals("radio-context", metric.getValue("source_evidence_ref_ids").jsonArray.single().jsonPrimitive.content)
+    }
+
     @Test fun resolvedResultFreezesProfileScoreEvidenceAndMissingRadio() {
         val metric = RealtimeMetricEvidence(
             metricId = "LIVE-N02",
@@ -170,6 +209,7 @@ class RealtimeResultEnvelopeV1Test {
         result: RealtimeSimulationResult,
         source: RealtimeResultEnvelopeSource,
         status: String = "completed",
+        radio: FormalRadioEvidence = FormalRadioEvidence.notCollected("test_fixture_no_radio"),
     ) = RealtimeResultEnvelopeInput(
         result = result,
         source = source,
@@ -178,6 +218,7 @@ class RealtimeResultEnvelopeV1Test {
         network = AnebResultNetworkContext("auto", "wifi", listOf("validated=true"), null, true, null, false, false, "active"),
         endedAtEpochMs = 2_000L,
         status = status,
+        radio = radio,
     )
 
     private companion object {

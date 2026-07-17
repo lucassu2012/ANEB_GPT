@@ -1,4 +1,4 @@
-# ANEB Probe 0.5.3 release build
+# ANEB Probe 0.5.5 release build
 
 ## Ownership boundary
 
@@ -40,7 +40,9 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.5.3` (`versionCode=35`; Debug reports `0.5.3-codex`)
+- Version: `0.5.5` (`versionCode=37`; Debug reports `0.5.5-codex`)
 - Room schema: version 19, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
-- Debug APK SHA-256: `5174D6F263D33F1241E388CB1B1F8C05CF030B69AFCFA81A3ECD4E260B10540C` (`0.5.3-codex`; debug artifacts are not release evidence).
+- Debug APK SHA-256: `DDE1489FB219C4B1A5F7440A6E365C57003E09F3F023B38BBC0B16AF3E7CE770` (`0.5.5-codex`; debug artifacts are not release evidence).
+- Quality baseline: 522 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); behavior model 21 tests and Go server/gateway tests pass.
+- Device validation: P40 Pro Token/AI realtime/network Quick envelopes passed Draft 2020-12 validation, independent Python canonical-digest verification and 1Hz radio evidence count reconciliation. These are Debug/Quick validation artifacts, not signed release evidence.

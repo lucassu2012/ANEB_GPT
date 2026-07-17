@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -82,6 +84,7 @@ private class TokenResultPersistenceException(cause: Throwable) :
 private data class TokenDurableResult(
     val result: TokenSimulationResult,
     val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+    val radio: FormalRadioEvidence,
 )
 
 /** Executes the hash-bound Profile v2 Token plan and produces an independent score. */
@@ -103,6 +106,10 @@ class TokenSimulationEngine(private val context: Context) {
             db.withTransaction {
                 db.tokenSimulationResultDao().insert(durable.result.toEntity())
                 db.resultEnvelopeDao().insert(durable.envelope)
+                durable.radio.radioEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.radioSampleDao().insertAll(it) }
+                durable.radio.eventEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.envEventDao().insertAll(it) }
             }
         },
         publish = { durable -> _result.value = durable.result },
@@ -113,6 +120,7 @@ class TokenSimulationEngine(private val context: Context) {
         val runId = TestEngine.newRunId()
         val startedAt = System.currentTimeMillis()
         val configuredBase = config.serverBase.trim().trimEnd('/')
+        val radioCollector = FormalRadioEvidenceCollector(context).also { it.start(this) }
         _result.value = null
         _telemetry.value = TokenSimulationTelemetry(phase = TokenSimulationPhase.PREPARING)
         log("TOKEN_V2_START run_id=$runId variant=${config.variant} server=$configuredBase")
@@ -122,7 +130,7 @@ class TokenSimulationEngine(private val context: Context) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant,
                 "guard_rejected:${guard.reasons.joinToString(",")}",
-                TokenResultEnvelopeSource(profile = null), config.transport, guard, null, log,
+                TokenResultEnvelopeSource(profile = null), config.transport, guard, null, radioCollector, log,
             )
             log("TOKEN_V2_END run_id=$runId status=guard_rejected")
             return@channelFlow
@@ -139,7 +147,7 @@ class TokenSimulationEngine(private val context: Context) {
         } catch (e: GuardException) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant,
-                "bind_failed:${e.javaClass.simpleName}", envelopeSource, config.transport, guard, null, log,
+                "bind_failed:${e.javaClass.simpleName}", envelopeSource, config.transport, guard, null, radioCollector, log,
             )
             log("TOKEN_V2_END run_id=$runId status=bind_failed")
             return@channelFlow
@@ -380,6 +388,7 @@ class TokenSimulationEngine(private val context: Context) {
                 bound = bound,
                 endedAtEpochMs = endedAt,
                 status = if (score.verdict == TokenVerdict.INVALID) "failed" else "completed",
+                radioCollector = radioCollector,
                 log = log,
             )
             _telemetry.value = _telemetry.value.copy(
@@ -398,14 +407,17 @@ class TokenSimulationEngine(private val context: Context) {
         } catch (e: Exception) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant, e.toString(),
-                envelopeSource, config.transport, guard, bound, log,
+                envelopeSource, config.transport, guard, bound, radioCollector, log,
             )
             log("TOKEN_V2_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("TOKEN_V2_END run_id=$runId status=error")
         } finally {
-            loadedMonitorEnabled.set(false)
-            loadedMonitorJob?.cancelAndJoin()
-            bound?.release()
+            withContext(NonCancellable) {
+                loadedMonitorEnabled.set(false)
+                loadedMonitorJob?.cancelAndJoin()
+                radioCollector.close()
+                bound?.release()
+            }
         }
     }.flowOn(Dispatchers.IO)
 
@@ -485,6 +497,7 @@ class TokenSimulationEngine(private val context: Context) {
         transport: TestEngine.TransportMode,
         guard: com.aneb.probe.net.GuardResult,
         bound: BoundNetwork?,
+        radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
         val evidence = TokenRunEvidence(variant, emptyList(), emptyList(), reason)
@@ -510,6 +523,7 @@ class TokenSimulationEngine(private val context: Context) {
             bound = bound,
             endedAtEpochMs = System.currentTimeMillis(),
             status = "failed",
+            radioCollector = radioCollector,
             log = log,
         )
         _telemetry.value = TokenSimulationTelemetry(phase = TokenSimulationPhase.FAILED)
@@ -523,8 +537,10 @@ class TokenSimulationEngine(private val context: Context) {
         bound: BoundNetwork?,
         endedAtEpochMs: Long,
         status: String,
+        radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
+        val radio = radioCollector.freeze()
         val envelope = TokenResultEnvelopeV1.build(
             TokenResultEnvelopeInput(
                 result = result,
@@ -546,16 +562,18 @@ class TokenSimulationEngine(private val context: Context) {
                 network = networkContext(transport, guard, bound),
                 endedAtEpochMs = endedAtEpochMs,
                 status = status,
+                radio = radio,
             ),
         )
         try {
-            resultCommitter.commit(TokenDurableResult(result, envelope))
+            resultCommitter.commit(TokenDurableResult(result, envelope, radio))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log("TOKEN_V2_DB_WRITE run_id=${result.runId} ok=false error=${e.javaClass.simpleName}")
             throw TokenResultPersistenceException(e)
         }
+        log("TOKEN_V2_RADIO run_id=${result.runId} status=${radio.collectionStatus} samples=${radio.samples.size}")
         log("TOKEN_V2_DB_WRITE run_id=${result.runId} ok=true")
     }
 

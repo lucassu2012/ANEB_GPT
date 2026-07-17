@@ -343,6 +343,7 @@ private class NetworkResultPersistenceException(cause: Throwable) :
 private data class NetworkDurableResult(
     val result: BasicSpeedResult,
     val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
+    val radio: FormalRadioEvidence,
 )
 
 /** 网络综合性能引擎：容量测试期间持续并发 echo，主动态指标始终是 loaded RTT。 */
@@ -381,6 +382,10 @@ class NetworkSpeedEngine(private val context: Context) {
             db.withTransaction {
                 db.networkComprehensiveResultDao().insert(durable.result.toEntity())
                 db.resultEnvelopeDao().insert(durable.envelope)
+                durable.radio.radioEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.radioSampleDao().insertAll(it) }
+                durable.radio.eventEntities(durable.result.runId).takeIf { it.isNotEmpty() }
+                    ?.let { db.envEventDao().insertAll(it) }
             }
         },
         publish = { durable -> _result.value = durable.result },
@@ -395,6 +400,7 @@ class NetworkSpeedEngine(private val context: Context) {
         _result.value = null
         _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.PREPARING)
         log("NET_V1_START run_id=$runId variant=${config.variant} transport=${config.transport.name.lowercase()} server=$configuredBase")
+        val radioCollector = FormalRadioEvidenceCollector(context).also { it.start(this) }
 
         val guard = NetGuard.guardCheck(context)
         var envelopeSource = NetworkResultEnvelopeSource(profile = null)
@@ -403,7 +409,8 @@ class NetworkSpeedEngine(private val context: Context) {
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
             publishResult(
                 failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "guard_rejected:$reason"),
-                envelopeSource, config.transport, guard, null, System.currentTimeMillis(), "failed", log,
+                envelopeSource, config.transport, guard, null, radioCollector,
+                System.currentTimeMillis(), "failed", log,
             )
             log("NET_V1_END run_id=$runId status=guard_rejected reasons=$reason")
             return@channelFlow
@@ -461,7 +468,8 @@ class NetworkSpeedEngine(private val context: Context) {
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
             publishResult(
                 failureResult(runId, startedAtEpochMs, configuredBase, config.variant, "bind_failed:${e.message}"),
-                envelopeSource, config.transport, guard, null, System.currentTimeMillis(), "failed", log,
+                envelopeSource, config.transport, guard, null, radioCollector,
+                System.currentTimeMillis(), "failed", log,
             )
             log("NET_V1_END run_id=$runId status=bind_failed")
             return@channelFlow
@@ -802,7 +810,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 gatewayDownlinkLossPct = gatewaySpec?.downlink?.lossPct,
             )
             publishResult(
-                result, envelopeSource, config.transport, guard, bound, System.currentTimeMillis(),
+                result, envelopeSource, config.transport, guard, bound, radioCollector, System.currentTimeMillis(),
                 if (status == "completed") "completed" else "failed", log,
             )
             _telemetry.value = _telemetry.value.copy(
@@ -827,7 +835,7 @@ class NetworkSpeedEngine(private val context: Context) {
             withContext(NonCancellable) {
                 runCatching {
                     publishResult(
-                        cancelled, envelopeSource, config.transport, guard, bound,
+                        cancelled, envelopeSource, config.transport, guard, bound, radioCollector,
                         System.currentTimeMillis(), "cancelled", log,
                     )
                 }
@@ -850,7 +858,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 config.gatewayBase,
             )
             publishResult(
-                failed, envelopeSource, config.transport, guard, bound,
+                failed, envelopeSource, config.transport, guard, bound, radioCollector,
                 System.currentTimeMillis(), "failed", log,
             )
             log("NET_V1_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
@@ -862,6 +870,7 @@ class NetworkSpeedEngine(private val context: Context) {
             }
             pathMonitor?.stop()
             bound?.release()
+            radioCollector.close()
         }
     }.flowOn(Dispatchers.IO)
 
@@ -1388,10 +1397,12 @@ class NetworkSpeedEngine(private val context: Context) {
         transport: TestEngine.TransportMode,
         guard: com.aneb.probe.net.GuardResult,
         bound: BoundNetwork?,
+        radioCollector: FormalRadioEvidenceCollector,
         endedAtEpochMs: Long,
         status: String,
         log: suspend (String) -> Unit,
     ) {
+        val radio = radioCollector.freeze()
         val envelope = NetworkResultEnvelopeV1.build(
             NetworkResultEnvelopeInput(
                 result = result,
@@ -1413,10 +1424,11 @@ class NetworkSpeedEngine(private val context: Context) {
                 network = networkContext(transport, guard, bound),
                 endedAtEpochMs = endedAtEpochMs,
                 status = status,
+                radio = radio,
             ),
         )
         try {
-            resultCommitter.commit(NetworkDurableResult(result, envelope))
+            resultCommitter.commit(NetworkDurableResult(result, envelope, radio))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1424,6 +1436,10 @@ class NetworkSpeedEngine(private val context: Context) {
             throw NetworkResultPersistenceException(e)
         }
         log("NET_V1_DB_WRITE run_id=${result.runId} ok=true")
+        log(
+            "NET_V1_RADIO run_id=${result.runId} status=${radio.collectionStatus} " +
+                "samples=${radio.samples.size} raw_samples=${radio.rawSamples.size} events=${radio.events.size}",
+        )
     }
 
     private fun networkContext(

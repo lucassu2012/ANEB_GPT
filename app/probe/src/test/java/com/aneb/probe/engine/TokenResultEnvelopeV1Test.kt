@@ -11,6 +11,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TokenResultEnvelopeV1Test {
+    @Test fun collectedRadioIsEmbeddedReferencedAndNotMarkedMissing() {
+        val evidence = TokenRunEvidence("quick", emptyList(), listOf(42.5))
+        val result = tokenResult(
+            TokenScoreResult(
+                null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
+                emptyMap(), emptyMap(), null, listOf("Insufficient evidence."),
+                coverageRatio = 0.0, minimumSampleSatisfied = false,
+                notComputableReason = "test_fixture",
+            ),
+            evidence,
+        )
+        val body = TokenResultEnvelopeV1.build(
+            input(
+                result,
+                TokenResultEnvelopeSource(
+                    profile = radioOnlyProfileFixture(
+                        "token_multimodal_quick",
+                        ScenarioProfile.MODE_TOKEN_SIMULATION,
+                        "TOK-R01",
+                    ),
+                ),
+                radio = collectedRadioEvidenceFixture(),
+            ),
+        ).bodyJson
+        val root = Json.parseToJsonElement(body).jsonObject
+        val radio = root.getValue("context").jsonObject.getValue("radio").jsonObject
+
+        assertEquals("collected", radio.getValue("collection_status").jsonPrimitive.content)
+        assertEquals(1, radio.getValue("sample_count").jsonPrimitive.content.toInt())
+        assertFalse(root.getValue("completeness").jsonObject.getValue("missing_fields").jsonArray
+            .any { it.jsonPrimitive.content == "/context/radio" })
+        assertTrue(root.getValue("evidence").jsonObject.getValue("refs").jsonArray
+            .any { it.jsonObject.getValue("ref_id").jsonPrimitive.content == "radio-context" })
+        assertEquals(1, root.getValue("evidence").jsonObject.getValue("environment_events").jsonArray.size)
+        val metric = root.getValue("evaluation").jsonObject.getValue("metrics").jsonObject
+            .getValue("TOK-R01").jsonObject
+        assertEquals("observed", metric.getValue("state").jsonPrimitive.content)
+        assertEquals(JsonNull, metric.getValue("value"))
+        assertEquals(1, metric.getValue("sample_count").jsonPrimitive.content.toInt())
+        assertEquals("radio-context", metric.getValue("source_evidence_ref_ids").jsonArray.single().jsonPrimitive.content)
+        assertFalse(body.contains("22.5"))
+        assertFalse(body.contains("114.0"))
+    }
+
     @Test fun resolvedResultFreezesIdentityScoreAndExplicitMissingRadio() {
         val metric = TokenMetricEvidence(
             metricId = "TOK-N03",
@@ -179,6 +223,7 @@ class TokenResultEnvelopeV1Test {
         result: TokenSimulationResult,
         source: TokenResultEnvelopeSource,
         status: String = "completed",
+        radio: FormalRadioEvidence = FormalRadioEvidence.notCollected("test_fixture_no_radio"),
     ) = TokenResultEnvelopeInput(
         result = result,
         source = source,
@@ -187,6 +232,7 @@ class TokenResultEnvelopeV1Test {
         network = AnebResultNetworkContext("auto", "cellular", listOf("validated=true"), null, true, null, null, false, "active"),
         endedAtEpochMs = 2_000L,
         status = status,
+        radio = radio,
     )
 
     private companion object {

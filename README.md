@@ -21,19 +21,20 @@
 
 **命名消歧**：本项目对外称 **ANEB Probe**；并行姊妹项目（Application Echo RTT 垂直切片）称 **ANEB Android Echo 切片**，两者同属 ANEB 研究计划、范围互补。
 
-## 当前状态（2026-07-18，0.5.3）
+## 当前状态（2026-07-18，0.5.5）
 
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
 - 正式 App 已删除真实付费 API 探针导航、Key 存储和自动化入口；仅 Debug 变体保留受 `android.permission.DUMP` 保护、无 intent-filter、一次一任务的 ADB 诊断组件，Release 合并清单由质量门自动验证不含该组件。
 - AI 实时测试已收口取消/落库一致性：结果先持久化再发布，取消与最终提交碰撞时以持久结果为准；每会话 loaded RTT 监控必定回收，固定 Wi-Fi/蜂窝失效后只重获同一承载、不静默降级。权限弹窗与待执行动作可跨 Activity/进程重建恢复，ADB autorun 仅 Debug 首次创建消费一次。
-- M0 已建立 `spec/` 逻辑根和机器目录：索引 3 个 Schema、2 个 Profile 家族、16 个 Profile 与 6 个哈希绑定运行包。统一 `aneb-result-v1` 已冻结并通过 Draft 2020-12 正反例校验；Room v19 为 Token、AI 实时和网络综合新 run 同事务保存类型化行与统一结果信封，三类结果页均可保存/分享原样 JSONL。正式三引擎 RadioCollector 仍待接线，未采集无线指标明确写 `not_collected`。
+- M0 已建立 `spec/` 逻辑根和机器目录：索引 3 个 Schema、2 个 Profile 家族、16 个 Profile 与 6 个哈希绑定运行包。统一 `aneb-result-v1` 已冻结并通过 Draft 2020-12 正反例校验；Room v19 为 Token、AI 实时和网络综合新 run 同事务保存类型化行、统一结果信封、1Hz 无线样本与环境事件，三类结果页均可保存/分享原样 JSONL。R01 通过证据引用表达时间序列，权限拒绝/不可用/未采集保持显式状态，共享信封不含位置。
 - E-01 已部署 `aneb-server/0.7.0`：保留 Token/实时交互/H3/UDP 全部能力；容量/时延弱网与 2 秒请求中断恢复均逐 run 隔离，正常路由和其他 run 不受影响。DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 不伪造。权威能力与部署纪律见 `docs/TEST_SERVER_CAPABILITIES.md`。
 - `aneb-gateway/0.2.0` 已补齐固定 Debug CA、每次启动证书链核验、严格双网口/全主路由预检、持久 qdisc 所有权、可重试清理锁闩，以及一键安装/失败回滚/安全卸载；App 0.5.1 Debug 以一次性句柄交接 Token，并对启动/清理的回包不确定状态做同 run 对账。早期隔离命名空间已验证双向时延、100% IP 中断、自动恢复和宿主零影响；最终固定 CA 正向生命周期仍需离线 CA 签发的现场叶证书，P40 网络层验收还需独占双网口 Linux/AP，均明确为 `BLOCKED_EXTERNAL`，见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
 - Token、AI 实时和网络综合均已在 P40 Pro 完成端到端验收；Token Stress 完成 100MiB 上下行，AI 实时 Standard/Recovery 已完成长测。网络合成恢复完成 4 次独立 run：恢复 2084.4–2227.3ms、恢复后请求成功率均为 100%，并捕获真实动态恢复计时与中断指针；Room 已到 v17。
-- 0.5.3 最终质量门：514 JVM tests、0 failures/0 skipped；Android Lint 0 errors（11 项依赖/SDK/API 版本提示）；行为模型 21 tests PASS；Go 服务端/网关 tests PASS；Debug/Release API 入口边界 PASS。Debug APK 包名 `com.aneb.probe.codex`、versionCode 35，SHA-256 为 `5174d6f263d33f1241e388cb1b1f8c05cf030b69afcfa81a3ecd4e260b10540c`。
+- 0.5.5 最终质量门：522 JVM tests、0 failures/0 skipped；Android Lint 0 errors（11 项依赖/SDK/API 版本提示）；行为模型 21 tests PASS；Go 服务端/网关 tests PASS；Debug/Release API 入口边界 PASS。Debug APK 包名 `com.aneb.probe.codex`、versionCode 37，SHA-256 为 `dde1489fb219c4b1a5f7440a6e365c57003e09f3f023b38bbc0b16af3e7ce770`。
 - App 0.5.2 已在 P40 Pro 完成独立 Token Quick 验收，run `019f70ed-ed0a-7897-b019-eff5a9a26dda`：Room v19 同 run 各有 1 条类型化结果与统一信封，Draft 2020-12 校验错误 0、规范化摘要匹配，98.4/A 但按覆盖率 0.15 保持 `LOW/INCONCLUSIVE`；无线字段诚实记录 `not_collected/null`。验证结束后已返回桌面并确认 Codex/Claude 两包均无 PID 或服务，详见 `docs/P40_APP_0.5.2_RESULT_V1_VALIDATION_2026-07-18.md`。
 - App 0.5.3 已在 P40 Pro 完成 AI 实时与网络综合 Quick 统一信封、JSONL 保存及系统分享验收：两个 run 的类型化行/信封一一对应，Schema 错误 0、规范化摘要匹配；AI 实时 21 项、网络综合 13 项 Profile 指标均完整出现，未测项显式 `missing`。详见 `docs/P40_APP_0.5.3_RESULT_V1_VALIDATION_2026-07-18.md`。
-- “3 个子项目 + 1 个横切机制”的事实进度与 M0～M4 验收差距见 `docs/PLAN_ALIGNMENT_2026-07-17.md`；当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-56。
+- App 0.5.5 已在 P40 Pro 完成 Token、AI 实时和网络综合三类无线证据与跨语言摘要终验：三条 run 分别冻结 119/26/18 个无线样本，Schema 错误 0，独立 Python 摘要全部匹配；0.5.4 的指数词法缺陷已被识别、否决并以冻结向量修复。活动承载均为 Wi-Fi，无线信号只作环境协变量，Quick 结论保持 LOW/INCONCLUSIVE。详见 `docs/P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
+- “3 个子项目 + 1 个横切机制”的事实进度与 M0～M4 验收差距见 `docs/PLAN_ALIGNMENT_2026-07-17.md`；当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-57。
 
 后续扩展项包括三类 Standard 长时回归、Stress 的取消/断网/切后台恢复、`agent_control` / `background_continuity` / `realtime_visual` Profile、海外节点和 CAMARA QoD。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。

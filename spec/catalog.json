@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.3",
+      "current_version": "0.5.5",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"

@@ -54,6 +54,7 @@ internal data class TokenResultEnvelopeInput(
     val network: AnebResultNetworkContext,
     val endedAtEpochMs: Long,
     val status: String,
+    val radio: FormalRadioEvidence = FormalRadioEvidence.notCollected("radio_evidence_not_provided"),
 )
 
 /**
@@ -84,7 +85,7 @@ internal object TokenResultEnvelopeV1 {
         val missingFields = buildList {
             add("/context/endpoint/node_id")
             add("/context/endpoint/server_version")
-            add("/context/radio")
+            if (input.radio.collectionStatus != "collected") add("/context/radio")
             if (input.network.activeTransport == null) add("/context/network/active_transport")
             if (input.network.interfaceName == null) add("/context/network/interface_name")
             if (input.network.validated == null) add("/context/network/validated")
@@ -124,6 +125,7 @@ internal object TokenResultEnvelopeV1 {
                 put("redaction", "none")
                 put("description", "Inline Token task, RTT and stream evidence frozen by the measurement engine.")
             })
+            if (input.radio.collectionStatus == "collected") add(input.radio.evidenceRefJson())
         }
         val body = buildJsonObject {
             put("schema_version", SCHEMA_VERSION)
@@ -141,7 +143,11 @@ internal object TokenResultEnvelopeV1 {
                 put("missing_fields", JsonArray(missingFields.map(::JsonPrimitive)))
                 put("notes", buildJsonArray {
                     add(JsonPrimitive("Only context observed by this formal Token engine is included; absent fields were not reconstructed."))
-                    add(JsonPrimitive("Radio sampling is not yet wired to the formal Token engine."))
+                    add(JsonPrimitive(
+                        if (input.radio.collectionStatus == "collected")
+                            "Public Android radio observations were sampled at 1Hz; coordinates are excluded from this shareable result."
+                        else "Radio context unavailable: ${input.radio.unavailableReason}.",
+                    ))
                 })
             })
             put("result_semantics", buildJsonObject {
@@ -182,7 +188,7 @@ internal object TokenResultEnvelopeV1 {
                 })
                 put("device", deviceContext(input.device))
                 put("network", networkContext(input.network))
-                put("radio", unavailableRadioContext())
+                put("radio", input.radio.contextJson())
             })
             put("evaluation", buildJsonObject {
                 put("algorithm_versions", buildJsonObject {
@@ -201,7 +207,7 @@ internal object TokenResultEnvelopeV1 {
                 })
                 put("metrics", buildJsonObject {
                     (profileMeasurements.keys + score.metrics.keys).toSortedSet().forEach { id ->
-                        put(id, metricJson(score.metrics[id], profileMeasurements[id]))
+                        put(id, metricJson(score.metrics[id], profileMeasurements[id], input.radio))
                     }
                 })
                 put("conclusions", buildJsonArray {
@@ -220,7 +226,7 @@ internal object TokenResultEnvelopeV1 {
                 put("raw_evidence_retained", true)
                 put("invalid_evidence_retained", true)
                 put("refs", evidenceRefs)
-                put("environment_events", buildJsonArray { })
+                put("environment_events", input.radio.environmentEventsJson())
             })
             put("category_payload", buildJsonObject {
                 put("evidence_contract_version", "aneb-token-run-evidence-v1")
@@ -316,22 +322,6 @@ internal object TokenResultEnvelopeV1 {
         put("evidence_ref_ids", buildJsonArray { })
     }
 
-    private fun unavailableRadioContext(): JsonObject = buildJsonObject {
-        put("collection_status", "not_collected")
-        put("unavailable_reason", "formal_token_engine_radio_collector_not_wired")
-        put("operator_name", JsonNull)
-        put("network_type", JsonNull)
-        put("override_type", JsonNull)
-        put("nr_state", JsonNull)
-        put("rat", JsonNull)
-        put("rsrp_dbm", JsonNull)
-        put("rsrq_db", JsonNull)
-        put("sinr_db", JsonNull)
-        put("sample_count", 0)
-        put("samples", buildJsonArray { })
-        put("evidence_ref_ids", buildJsonArray { })
-    }
-
     private fun scoreJson(score: TokenScoreResult, valid: Boolean): JsonObject {
         val state = when {
             !valid -> "suppressed_invalid"
@@ -358,9 +348,15 @@ internal object TokenResultEnvelopeV1 {
         }
     }
 
-    private fun metricJson(metric: TokenMetricEvidence?, definition: ProfileMeasurement?): JsonObject {
+    private fun metricJson(
+        metric: TokenMetricEvidence?,
+        definition: ProfileMeasurement?,
+        radio: FormalRadioEvidence,
+    ): JsonObject {
         checkNotNull(definition) { "token_result_metric_definition_missing:${metric?.metricId ?: "unknown"}" }
-        val observed = metric?.value?.isFinite() == true
+        val radioSeriesObserved = definition.domain == "radio_covariate" &&
+            definition.aggregation == "time_series" && radio.collectionStatus == "collected"
+        val observed = metric?.value?.isFinite() == true || radioSeriesObserved
         return buildJsonObject {
             put("label", definition.label)
             put("domain", normalizeDomain(definition.domain))
@@ -369,7 +365,7 @@ internal object TokenResultEnvelopeV1 {
             put("state", if (observed) "observed" else "missing")
             put("value", metric?.value)
             put("compliance_ratio", metric?.complianceRatio)
-            put("sample_count", metric?.sampleCount ?: 0)
+            put("sample_count", if (radioSeriesObserved) radio.samples.size else metric?.sampleCount ?: 0)
             put("minimum_sample_count", metric?.minimumSampleCount ?: definition.minimumSampleCount)
             put("source_event_ids", JsonArray(definition.sourceEventIds.map(::JsonPrimitive)))
             put("direction", definition.direction)
@@ -379,7 +375,9 @@ internal object TokenResultEnvelopeV1 {
             put("formula_id", definition.formulaId)
             put("aggregation", definition.aggregation)
             put("components", buildJsonObject { })
-            put("source_evidence_ref_ids", buildJsonArray { add(JsonPrimitive("token-raw")) })
+            put("source_evidence_ref_ids", buildJsonArray {
+                add(JsonPrimitive(if (radioSeriesObserved) "radio-context" else "token-raw"))
+            })
             put(
                 "invalid_reason",
                 if (observed) null

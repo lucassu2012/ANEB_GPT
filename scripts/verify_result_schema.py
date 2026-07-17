@@ -168,6 +168,32 @@ def validate_repository(root: Path) -> list[str]:
         if not _schema_errors(validator, fabricated_metric):
             errors.append("null invariant: missing metric encoded as zero unexpectedly validates")
 
+        scalar_with_null = copy.deepcopy(token)
+        scalar_metric = scalar_with_null["evaluation"]["metrics"]["TOK-N03"]
+        scalar_metric.update(
+            state="observed",
+            value=None,
+            sample_count=1,
+            source_evidence_ref_ids=["token-raw"],
+            invalid_reason=None,
+        )
+        if not _schema_errors(validator, scalar_with_null):
+            errors.append("metric invariant: observed scalar with null value unexpectedly validates")
+
+        referenced_series = copy.deepcopy(token)
+        series_metric = referenced_series["evaluation"]["metrics"]["TOK-N03"]
+        series_metric.update(
+            unit="mixed",
+            aggregation="time_series",
+            state="observed",
+            value=None,
+            sample_count=1,
+            source_evidence_ref_ids=["radio-context"],
+            invalid_reason=None,
+        )
+        if _schema_errors(validator, referenced_series):
+            errors.append("metric invariant: referenced mixed time series unexpectedly rejected")
+
     return errors
 
 
