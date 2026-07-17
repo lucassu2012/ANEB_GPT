@@ -316,6 +316,8 @@ class MainActivity : ComponentActivity() {
                     val running = runSession is ProbeRunSession.Running || auxiliaryRunning
                     var acceptManualSessions by remember { mutableStateOf(!launchRequestedAutorun) }
                     var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
+                    var bulkExportRunning by remember { mutableStateOf(false) }
+                    var bulkExportStatus by remember { mutableStateOf<String?>(null) }
                     var radioEvidenceLimited by remember { mutableStateOf(false) }
                     var nodeReach by remember { mutableStateOf<ReachabilityProbe.DualReach?>(null) }
                     var nodeReachRefreshing by remember { mutableStateOf(false) }
@@ -617,6 +619,18 @@ class MainActivity : ComponentActivity() {
                                             android.util.Log.i("AnebProbe", "DRIVE_TEST_TOGGLE enabled=$driveTest")
                                         },
                                         injectActive = intentInject,
+                                        exportRunning = bulkExportRunning,
+                                        exportStatus = bulkExportStatus,
+                                        onExportAllResults = {
+                                            if (!bulkExportRunning) {
+                                                bulkExportRunning = true
+                                                bulkExportStatus = "正在校验并导出…"
+                                                doExportAllUnifiedResults { status ->
+                                                    bulkExportStatus = status
+                                                    bulkExportRunning = false
+                                                }
+                                            }
+                                        },
                                         onOpenServer = ::openServerScreen,
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
@@ -1243,6 +1257,69 @@ class MainActivity : ComponentActivity() {
                     }
                     startActivity(Intent.createChooser(send, "分享 ANEB 测试证据"))
                 }
+            }
+        }
+    }
+
+    /** Exports every independently verified immutable result envelope in chronological JSONL order. */
+    private fun doExportAllUnifiedResults(onStatus: (String) -> Unit) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val records = db.resultEnvelopeDao().all()
+            if (records.isEmpty()) {
+                android.util.Log.i("AnebProbe", "RESULT_V1_BULK_EXPORT status=empty")
+                withContext(Dispatchers.Main) { onStatus("暂无可导出的正式测试结果。") }
+                return@launch
+            }
+            val selection = runCatching { AnebResultJsonlExporter.selectVerifiable(records) }
+                .getOrElse { error ->
+                    android.util.Log.e(
+                        "AnebProbe",
+                        "RESULT_V1_BULK_EXPORT status=selection_fail records=${records.size}",
+                        error,
+                    )
+                    withContext(Dispatchers.Main) { onStatus("失败：结果记录存在重复标识，未生成文件。") }
+                    return@launch
+                }
+            if (selection.accepted.isEmpty()) {
+                android.util.Log.e(
+                    "AnebProbe",
+                    "RESULT_V1_BULK_EXPORT status=no_verifiable_record records=${records.size} " +
+                        "rejected_ids=${selection.rejected.joinToString(",") { it.runId }}",
+                )
+                withContext(Dispatchers.Main) { onStatus("失败：没有通过完整性校验的结果，未生成文件。") }
+                return@launch
+            }
+            val content = AnebResultJsonlExporter.export(selection.accepted)
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val fileName = "aneb_results_${selection.accepted.size}_of_${records.size}_$ts.jsonl"
+            val outcome = Exporter.exportToDownloads(
+                applicationContext,
+                fileName,
+                "application/x-ndjson",
+                content,
+            )
+            android.util.Log.i(
+                "AnebProbe",
+                "RESULT_V1_BULK_EXPORT records=${records.size} accepted=${selection.accepted.size} " +
+                    "rejected=${selection.rejected.size} " +
+                    "rejected_ids=${selection.rejected.joinToString(",") { it.runId }} " +
+                    "file=$fileName bytes=${outcome.bytes} " +
+                    "status=${if (outcome.ok) "ok" else "fail"} " +
+                    "uri=${outcome.uri ?: "null"} error=${outcome.error?.replace(' ', '_') ?: "none"}",
+            )
+            withContext(Dispatchers.Main) {
+                onStatus(
+                    if (outcome.ok) {
+                        if (selection.rejected.isEmpty()) {
+                            "已导出 ${selection.accepted.size} 条可验证结果。文件已保存到系统下载目录。"
+                        } else {
+                            "已导出 ${selection.accepted.size}/${records.size} 条；" +
+                                "${selection.rejected.size} 条完整性异常已跳过。"
+                        }
+                    } else {
+                        "失败：无法写入系统下载目录。"
+                    },
+                )
             }
         }
     }

@@ -3,13 +3,13 @@
 > 日期：2026-07-18（Asia/Shanghai）
 > 设备：Huawei P40 Pro（Android 公开 API，1200×2640）
 > 包：`com.aneb.probe.codex`，`0.5.7-codex`，versionCode 39
-> APK SHA-256：`D276D7C52F3549E52194B9E90C5C45EBB8969FD441FB09DA9154B7302A6BFF33`
+> APK SHA-256：`F4B4C8C6A97A5388DDD0F2CE3A2FB195AA629CCD0FDCCF31DC8E04F97F902A19`
 
 ## 1. 反方观点与本轮边界
 
 - ［KNOWN｜HIGH］这不是正式发布验收：安装的是 Debug 包，且使用 `adb install -r`，没有仓库外正式签名密钥，也没有验证应用商店分发。
 - ［KNOWN｜HIGH］这不是全新设备清数据首装：为保留既有测量证据，使用系统权限撤销来进入与首装相同的“无线权限未授予”分支。
-- ［KNOWN｜HIGH］本轮只证明 M4 的“开测前自救 + 正常测量不回归”切片；历史导出、分享与统一信封已有 0.5.3–0.5.6 独立证据，本轮不重复冒充新证据。
+- ［KNOWN｜HIGH］本轮证明 M4 的“开测前自救 + 正常测量不回归 + 历史批量导出”切片；安装仍通过 ADB，不能冒充公开分发整链证据。
 
 ## 2. 变更
 
@@ -17,10 +17,11 @@
 2. 权限只用于读取当前数据卡、小区与信号；对话明确说明不读取通话、联系人或 IMSI。拒绝无线权限不阻断业务测量，只把无线归因标为证据不足。
 3. 开测前统一校验活动网络和节点根地址。节点只接受 HTTP(S) 根地址；正式包禁止 HTTP，并拒绝账号密码、查询参数、片段、API 子路径和非法端口。
 4. 设置页沿用 `ANEB_UI` 的“高级/自定义服务器地址”位置，在原输入框内显示可操作错误，不增加新的视觉体系。
+5. 设置页“数据与隐私”新增“导出可验证结果”：逐条校验冻结信封，按时间顺序输出原始 JSONL；单条异常严格拒绝，但不会永久锁死其余合法历史，跳过数量必须对用户可见。
 
 ## 3. 自动化验证
 
-- ［COMPUTED｜HIGH］Android JVM：531 tests，0 failures，0 errors，0 skipped。
+- ［COMPUTED｜HIGH］Android JVM：533 tests，0 failures，0 errors，0 skipped。
 - ［COMPUTED｜HIGH］Android Lint：0 errors，11 warnings。
 - ［KNOWN｜HIGH］Debug APK 构建成功；版本、包名与 SHA-256 如本文开头。
 - ［KNOWN｜HIGH］新增反例覆盖：无 scheme、无 host、HTTP 正式包、账号密码、query、fragment、API path、非法端口及离线优先提示。
@@ -73,6 +74,17 @@ Network Quick run `019f7212-0268-7280-9fa6-385b32a8fed1` 在下载阶段点击�
 - ［KNOWN｜HIGH］Room 保留一条 `status=invalid` 的审计记录与 `aneb-result-v1` 信封；信封 run 状态为 `cancelled`、validity 为 `invalid`、reason 为 `cancelled`。
 - ［KNOWN｜HIGH］取消记录的 score 为 `suppressed_invalid`，value/grade 均为 null；不会用未完成的下载片段计算成绩。
 - ［KNOWN｜HIGH］取消前已采到的 5 个无线样本作为原始证据保留，业务指标全部为 missing，结论只写“测试未完成：cancelled”。这是“保留失效证据但抑制评分”，不是删除历史痕迹。
+
+### 4.6 历史批量导出与旧摘要异常隔离
+
+在设置页点击“导出可验证结果”，对本机 22 条 `result_envelope` 历史逐条校验：
+
+- ［KNOWN｜HIGH］首次全有或全无实现真实暴露了旧历史摘要异常，并安全拒绝生成文件；没有绕过校验或重算历史评分。
+- ［COMPUTED｜HIGH］4 条 0.5.3/0.5.4 旧记录为 `digest_mismatch`：`019f715d-eec5-7e29-92a4-7d78511cb37c`、`019f7192-aa56-7954-a4c7-db6428e5bae7`、`019f7194-46a2-7118-8228-6ccb13c4b052`、`019f7195-b2be-7a9d-af72-230c87a69578`。它们与 D-57 已否决的旧规范化摘要证据处于同一版本区间；本轮只报告事实，不改写旧摘要。
+- ［KNOWN｜HIGH］最终 APK 独立校验每条记录，生成 `aneb_results_18_of_22_20260718_063121.jsonl`；文件 979,886 bytes，SHA-256 `B4F7E00B64B57D3405CB5E6DA5E6CB576AC1F627BB29F0C9D022A8CFBA1618C9`。
+- ［COMPUTED｜HIGH］文件含 18 行、18 个唯一 run id，按 `started_at_epoch_ms` 非递减排列；覆盖 Token、AI 实时、网络综合，包含 `completed` 与 `cancelled` 状态。
+- ［COMPUTED｜HIGH］18 条 canonical JSON 摘要与 Room `canonicalSha256` 全部一致；4 个拒绝 run id 在文件中出现 0 次。
+- ［KNOWN｜HIGH］真机界面在同一导出卡片内显示“已导出 18/22 条；4 条完整性异常已跳过”，没有被底部导航遮挡，也没有静默丢弃异常记录。
 
 ## 5. 资源释放
 

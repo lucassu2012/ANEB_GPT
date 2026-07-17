@@ -13,6 +13,13 @@ import kotlinx.serialization.json.jsonPrimitive
  * emitted. UI/file sharing can call this core later without gaining authority to change results.
  */
 internal object AnebResultJsonlExporter {
+    data class RejectedRecord(val runId: String, val reason: String)
+
+    data class VerifiableSelection(
+        val accepted: List<ResultEnvelopeEntity>,
+        val rejected: List<RejectedRecord>,
+    )
+
     fun export(records: List<ResultEnvelopeEntity>): String {
         require(records.map { it.runId }.distinct().size == records.size) {
             "aneb_result_export_duplicate_run_id"
@@ -20,6 +27,32 @@ internal object AnebResultJsonlExporter {
         val ordered = records.sortedWith(compareBy<ResultEnvelopeEntity> { it.startedAtEpochMs }.thenBy { it.runId })
         ordered.forEach(::verify)
         return ordered.joinToString(separator = "\n", postfix = if (ordered.isEmpty()) "" else "\n") { it.bodyJson }
+    }
+
+    /**
+     * A legacy/corrupt record must not permanently block the user's whole archive. Each envelope
+     * remains fail-closed: only independently verified records are accepted, and every rejection
+     * is returned so the UI can report a transparent partial export rather than omit it silently.
+     */
+    fun selectVerifiable(records: List<ResultEnvelopeEntity>): VerifiableSelection {
+        require(records.map { it.runId }.distinct().size == records.size) {
+            "aneb_result_export_duplicate_run_id"
+        }
+        val accepted = mutableListOf<ResultEnvelopeEntity>()
+        val rejected = mutableListOf<RejectedRecord>()
+        records.sortedWith(compareBy<ResultEnvelopeEntity> { it.startedAtEpochMs }.thenBy { it.runId })
+            .forEach { record ->
+                try {
+                    verify(record)
+                    accepted += record
+                } catch (error: Exception) {
+                    rejected += RejectedRecord(
+                        runId = record.runId,
+                        reason = error.message ?: "aneb_result_export_unknown_integrity_failure",
+                    )
+                }
+            }
+        return VerifiableSelection(accepted = accepted, rejected = rejected)
     }
 
     private fun verify(record: ResultEnvelopeEntity) {

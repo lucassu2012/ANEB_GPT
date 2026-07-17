@@ -73,6 +73,9 @@ fun SettingsScreen(
     driveTest: Boolean,
     onDriveTestChange: (Boolean) -> Unit,
     injectActive: String?,
+    exportRunning: Boolean,
+    exportStatus: String?,
+    onExportAllResults: () -> Unit,
     onOpenServer: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -94,6 +97,9 @@ fun SettingsScreen(
             driveTest = driveTest,
             onDriveRequest = { on -> if (on) confirmDrive = true else onDriveTestChange(false) },
             injectActive = injectActive,
+            exportRunning = exportRunning,
+            exportStatus = exportStatus,
+            onExportAllResults = onExportAllResults,
             onOpenServer = onOpenServer,
             onOpenReachBoard = onOpenReachBoard,
             onOpenProfiles = onOpenProfiles,
@@ -265,6 +271,26 @@ fun SettingsScreen(
             }
         }
 
+        SectionLabel("数据与隐私")
+        GroupedCard {
+            OptionRow(
+                title = "导出可验证结果",
+                subtitle = "原始 JSONL · 不重算评分 · 异常记录明确跳过",
+                selected = false,
+                showChevron = true,
+                onClick = onExportAllResults,
+            )
+        }
+        exportStatus?.let {
+            Text(
+                it,
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
+                color = if (it.startsWith("失败") || it.startsWith("暂无")) colors.fair else colors.brand2,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+
         Spacer(Modifier.height(24.dp))
         Text(ResultFormat.CLAIM_SCOPE_TEXT, fontSize = 11.sp, color = colors.faint)
         Spacer(Modifier.height(24.dp))
@@ -312,6 +338,9 @@ private fun SettingsRootScreen(
     driveTest: Boolean,
     onDriveRequest: (Boolean) -> Unit,
     injectActive: String?,
+    exportRunning: Boolean,
+    exportStatus: String?,
+    onExportAllResults: () -> Unit,
     onOpenServer: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -425,6 +454,29 @@ private fun SettingsRootScreen(
             }
         }
 
+        com.aneb.probe.ui.components.AnebSectionTitle(
+            "数据与隐私",
+            Modifier.padding(top = 17.dp, start = 4.dp, bottom = 7.dp),
+        )
+        SettingsDesignGroup {
+            SettingsDesignRow(
+                icon = "⇩",
+                tint = colors.brand2,
+                title = "导出可验证结果",
+                subtitle = when {
+                    exportRunning -> "正在逐条校验摘要并准备 JSONL"
+                    exportStatus != null -> exportStatus
+                    else -> "JSONL · 包含完成与失效证据 · 异常记录明确跳过"
+                },
+                onClick = if (exportRunning) null else onExportAllResults,
+            ) {
+                Text(
+                    if (exportRunning) "导出中…" else "导出  ›",
+                    fontSize = 10.sp,
+                    color = if (exportRunning) colors.faint else colors.brand2,
+                )
+            }
+        }
         com.aneb.probe.ui.components.AnebSectionTitle(
             "高级",
             Modifier.padding(top = 17.dp, start = 4.dp, bottom = 7.dp),
