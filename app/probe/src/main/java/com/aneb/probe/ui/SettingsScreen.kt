@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.ui.components.GlassChrome
@@ -316,6 +317,10 @@ private fun SettingsRootScreen(
     onOpenProfiles: () -> Unit,
 ) {
     val colors = AnebTheme.colors
+    val serverValidation = ServerAddressPolicy.validate(
+        value = serverUrl,
+        allowCleartext = BuildConfig.DEBUG,
+    )
     Column(
         Modifier
             .fillMaxSize()
@@ -428,6 +433,10 @@ private fun SettingsRootScreen(
             value = serverUrl,
             onValueChange = onServerUrlChange,
             label = { Text("自定义服务器地址") },
+            isError = !serverValidation.isValid,
+            supportingText = serverValidation.message?.let { message ->
+                { Text(message) }
+            },
             singleLine = true,
             shape = AnebShapes.button,
             colors = iosTextFieldColors(),

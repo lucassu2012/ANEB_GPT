@@ -1,5 +1,6 @@
 package com.aneb.probe.ui
 
+import com.aneb.probe.engine.AnebTestMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,5 +28,16 @@ class RadioPermissionStateTest {
     fun `电话和精确位置都缺失时不隐藏任一缺口`() {
         val state = RadioPermissionState(false, false, false)
         assertEquals("电话与精确位置权限均未完整授予", state.deniedSummary)
+    }
+
+    @Test
+    fun `所有测试类型在无线证据不完整时都先展示用途说明`() {
+        val incomplete = RadioPermissionState(false, false, false)
+        val complete = RadioPermissionState(true, true, true)
+
+        AnebTestMode.entries.forEach { mode ->
+            assertTrue(requiresRadioEvidenceRationale(mode, incomplete))
+            assertFalse(requiresRadioEvidenceRationale(mode, complete))
+        }
     }
 }

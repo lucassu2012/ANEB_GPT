@@ -9,7 +9,7 @@
 
 | 单元 | 当前版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.6 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出统一结果信封、1Hz 公开 Android 无线环境证据并支持 JSONL 导出/分享；Token 结果冻结任务对齐的完整 TTFT 证据 |
+| P1 / ANEB Probe Android | 0.5.7 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出统一结果信封、1Hz 公开 Android 无线环境证据并支持 JSONL 导出/分享；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
 | P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
 | P3 / aneb-ai-behavior-model | 0.2.0 | 维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划的 v2 发布包，并只允许通过绑定留出报告的候选升为 validated |
 | Profile 横切机制 | 1.1.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；新增 P3 授权校准三合同 |

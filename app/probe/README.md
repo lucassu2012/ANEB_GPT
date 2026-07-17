@@ -1,7 +1,7 @@
 # ANEB Probe Android 模块
 
 发布包名为 `com.aneb.probe`，Codex 调试包名为 `com.aneb.probe.codex`。当前版本
-`0.3.0`（versionCode 21），minSdk 29、targetSdk 35。
+`0.5.7`（versionCode 39），minSdk 29、targetSdk 35，Room schema v19。
 
 ## 正式产品能力
 
@@ -31,7 +31,7 @@
 |---|---|
 | `engine/` | 三类执行引擎、Profile fail-closed 校验、评分和结论 |
 | `net/` | HTTPS/WebSocket/HTTP3 客户端、路径绑定、UDP 探针 |
-| `data/` | Room 实体、DAO 与版本迁移；当前 schema v15 |
+| `data/` | Room 实体、DAO 与版本迁移；当前 schema v19 |
 | `ui/` | ANEB_UI 风格首页、动态仪表、历史和结果页 |
 | `radio/` | 公开 Android API 可得的无线与小区协变量 |
 

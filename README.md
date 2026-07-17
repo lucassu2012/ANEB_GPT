@@ -21,7 +21,7 @@
 
 **命名消歧**：本项目对外称 **ANEB Probe**；并行姊妹项目（Application Echo RTT 垂直切片）称 **ANEB Android Echo 切片**，两者同属 ANEB 研究计划、范围互补。
 
-## 当前状态（2026-07-18，0.5.6）
+## 当前状态（2026-07-18，0.5.7）
 
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
@@ -32,11 +32,12 @@
 - E-01 已部署 `aneb-server/0.7.0`：保留 Token/实时交互/H3/UDP 全部能力；容量/时延弱网与 2 秒请求中断恢复均逐 run 隔离，正常路由和其他 run 不受影响。DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 不伪造。权威能力与部署纪律见 `docs/TEST_SERVER_CAPABILITIES.md`。
 - `aneb-gateway/0.2.0` 已补齐固定 Debug CA、每次启动证书链核验、严格双网口/全主路由预检、持久 qdisc 所有权、可重试清理锁闩，以及一键安装/失败回滚/安全卸载；App 0.5.1 Debug 以一次性句柄交接 Token，并对启动/清理的回包不确定状态做同 run 对账。早期隔离命名空间已验证双向时延、100% IP 中断、自动恢复和宿主零影响；最终固定 CA 正向生命周期仍需离线 CA 签发的现场叶证书，P40 网络层验收还需独占双网口 Linux/AP，均明确为 `BLOCKED_EXTERNAL`，见 `docs/DEDICATED_GATEWAY_PLAN_AND_VALIDATION_2026-07-17.md`。
 - Token、AI 实时和网络综合均已在 P40 Pro 完成端到端验收；Token Stress 完成 100MiB 上下行，AI 实时 Standard/Recovery 已完成长测。网络合成恢复完成 4 次独立 run：恢复 2084.4–2227.3ms、恢复后请求成功率均为 100%，并捕获真实动态恢复计时与中断指针；Room 已到 v17。
-- 0.5.6 最终质量门：525 JVM tests、0 failures/0 skipped；Android Lint 0 errors（11 项依赖/SDK/API 版本提示）；TTFT 重复性分析器 5 tests、P3 行为模型 31 tests、Go 服务端/网关 tests PASS；Debug/Release API 入口边界 PASS。Debug APK 包名 `com.aneb.probe.codex`、versionCode 38，SHA-256 为 `b2c56295da3565b06d71c19523c5685dbd1514c2b67e66c88c86d005565f6e57`。
+- 0.5.7 Android 验证：531 JVM tests、0 failures/0 skipped；Android Lint 0 errors（11 项依赖/SDK/API 版本提示）；Debug APK 包名 `com.aneb.probe.codex`、versionCode 39，SHA-256 为 `d276d7c52f3549e52194b9e90c5c45ebb8969fd441fb09da9154b7302a6bff33`。全仓质量门还覆盖 TTFT 重复性分析器 5 tests、P3 行为模型 31 tests、Go 服务端/网关 tests 与 Debug/Release API 入口边界。
 - App 0.5.2 已在 P40 Pro 完成独立 Token Quick 验收，run `019f70ed-ed0a-7897-b019-eff5a9a26dda`：Room v19 同 run 各有 1 条类型化结果与统一信封，Draft 2020-12 校验错误 0、规范化摘要匹配，98.4/A 但按覆盖率 0.15 保持 `LOW/INCONCLUSIVE`；无线字段诚实记录 `not_collected/null`。验证结束后已返回桌面并确认 Codex/Claude 两包均无 PID 或服务，详见 `docs/P40_APP_0.5.2_RESULT_V1_VALIDATION_2026-07-18.md`。
 - App 0.5.3 已在 P40 Pro 完成 AI 实时与网络综合 Quick 统一信封、JSONL 保存及系统分享验收：两个 run 的类型化行/信封一一对应，Schema 错误 0、规范化摘要匹配；AI 实时 21 项、网络综合 13 项 Profile 指标均完整出现，未测项显式 `missing`。详见 `docs/P40_APP_0.5.3_RESULT_V1_VALIDATION_2026-07-18.md`。
 - App 0.5.5 已在 P40 Pro 完成 Token、AI 实时和网络综合三类无线证据与跨语言摘要终验：三条 run 分别冻结 119/26/18 个无线样本，Schema 错误 0，独立 Python 摘要全部匹配；0.5.4 的指数词法缺陷已被识别、否决并以冻结向量修复。活动承载均为 Wi-Fi，无线信号只作环境协变量，Quick 结论保持 LOW/INCONCLUSIVE。详见 `docs/P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
 - App 0.5.6 为每个 Token 任务冻结稳定 `task_id`、节点处理时延 B03 和端到端 TTFT B04，并提供任务对齐的 fail-closed 重复性审计。P40 Pro 同设备/同 Wi-Fi/同节点连续 5 次 Quick 的 3 个任务 TTFT CV 中位数为 1.425%、最大值 4.986%，达到 ≤10% 的原计划 M1 复测门限；5 条 Schema、摘要、类型化结果与 119×5 无线样本证据链均通过。单 run 仍因 Quick 样本量保持 LOW/INCONCLUSIVE，详见 `docs/P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
+- App 0.5.7 开始 M4 非开发者路径收口：所有正式测试首次开测先解释无线证据权限并允许低置信继续；无网络或非法节点地址在启动 Service 前给出自救提示。P40 已验证非法地址零服务启动、无线用途说明和完整 Network Quick 正常落库/18 个无线样本，详见 `docs/P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - “3 个子项目 + 1 个横切机制”的事实进度与 M0～M4 验收差距见 `docs/PLAN_ALIGNMENT_2026-07-17.md`；当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-59。
 
 后续扩展项包括三类 Standard 长时回归、Stress 的取消/断网/切后台恢复、`agent_control` / `background_continuity` / `realtime_visual` Profile、海外节点和 CAMARA QoD。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。

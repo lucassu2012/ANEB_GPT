@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.6 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；525 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、TTFT 重复性和 P3 校准发布流水线已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.7 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；531 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、TTFT 重复性、P3 校准发布流水线和 M4 开测前自救切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -18,12 +18,12 @@
 
 | 计划单元 | Codex 当前状态 | 结论 |
 |---|---|---|
-| **P1a 前台 UI** | **0.5.6 产品化大部完成；统一导出已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
+| **P1a 前台 UI** | **0.5.7 产品化大部完成；开测自救与统一导出已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。0.5.7 在不改变主视觉结构的前提下补齐所有测试类型的无线权限用途说明、低置信继续和节点地址开测前校验。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
 | **P1b 测量引擎** | **M1 单节点验收切片闭环** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果均先落 Room 再发布，并在同一事务冻结 `aneb-result-v1`、1Hz 无线样本与环境事件。0.5.6 的 5-run TTFT 任务对齐 CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限。 |
 | **P2 服务器侧** | **当前 App 所需单节点矩阵完成；原计划 P2 部分完成** | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.7.0`，已覆盖当前 App 使用的 Token、上传、下载、工具循环、WebSocket 实时双工、测速、UDP、结果与逐 run 合成弱网；对照原计划仍缺 RTP/WebRTC 语音回环、通用 100MiB/1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
 | **P3 标准与业务模型** | **0.2.0 校准流水线闭环；真实画像未校准** | ［KNOWN｜HIGH］除确定性 Token/Stress/AI 实时/Recovery 生成外，现已实现授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算；现有 4 个模型仍明确为 `hypothesis`，没有获准观测数据，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
 | **横切 Profile 体系** | **目录与结果/校准合同已冻结，执行合同仍分叉** | ［KNOWN｜HIGH］`spec/catalog.json` 已机器索引 6 个 Schema、2 个 Profile 家族、16 个 Profile、6 个运行包及消费者边界；新增 Token 观测、校准数据集和留出验证合同。P1/P2 尚未共同解释同一份 v2 descriptor。 |
-| **里程碑位置** | **M1 单节点验收切片通过、三级节点未完成；M0 治理部分完成；M3 仅 WebSocket 仿真轨完成；M4 UI 超前；M2 未启动** | ［KNOWN｜HIGH］详见 §7；不以单节点重复性冒充跨节点、外场或真实业务画像完成度。 |
+| **里程碑位置** | **M1 单节点验收切片通过、三级节点未完成；M0 治理部分完成；M3 仅 WebSocket 仿真轨完成；M4 开测自救切片通过；M2 未启动** | ［KNOWN｜HIGH］详见 §7；不以单节点重复性冒充跨节点、外场或真实业务画像完成度。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -43,7 +43,7 @@
 ### 缺口
 
 - ［KNOWN｜HIGH］体验地图目前是产品外壳，不是 M2 的 6–8 点位热力聚合与三级归因地图。
-- ［KNOWN｜HIGH］尚未完成“非开发者从安装到测试再到导出报告”的正式可用性验收；Release 签名材料也不在仓库中。
+- ［KNOWN｜HIGH］0.5.7 已完成“开测前节点/网络检查 → 权限用途说明 → 正常测试”真机切片；尚未完成不依赖 ADB 的“下载/系统安装 → 首次启动 → 测试 → 导出/分享”整链正式可用性验收，Release 签名材料也不在仓库中。
 - ［INFERRED｜MED］视觉已接近目标方向，但“达到 SpeedTest 级”仍需要真机逐屏动效、弱机帧率、无障碍和长文本回归，不能仅由代码完成度判定。
 
 ## 3. P1b 手机端测量引擎
@@ -75,6 +75,7 @@
 - ［KNOWN｜HIGH］App 0.5.3 的 AI 实时 Quick run `019f714a-b54f-787a-a992-2f0254417568` 与网络综合 Quick run `019f714b-ca9d-7aed-a669-533f4ff4a500` 已各自完成 P40 纵向验收：类型化行/信封一一对应、Schema 错误 0、摘要匹配；两类 JSONL 均从系统下载目录读回校验，分享选择器实际拉起。见 `P40_APP_0.5.3_RESULT_V1_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.5 的 Token、AI 实时、网络综合 Quick runs `019f71a6-bbf0-7c71-b8b8-b8338297c6e0` / `019f71a9-191f-7fe3-9995-d4765ed6652f` / `019f71aa-f127-7db3-a4d0-651e57e6a955` 已完成 P40 无线证据和跨语言摘要终验：无线样本分别为 119/26/18，Schema 错误 0，独立 Python 摘要全部匹配。0.5.4 摘要证据因指数词法差异被否决。见 `P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.6 的 P40 Token Quick 5-run 同条件 cohort 已完成：稳定任务 ID 对齐后，TTFT CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限；5 条信封均 Schema/摘要/类型化核心字段匹配，每条 Room/信封无线样本均为 119。该结论只适用于 P40 + Wi-Fi + E-01 + Quick，单 run 继续为 LOW/INCONCLUSIVE。见 `P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］App 0.5.7 已在 P40 验证无效节点启动前拦截、所有正式模式的无线权限用途说明及完整 Network Quick 回归。run `019f7209-e89c-7adc-8238-83f9847acdc5` 完成落库并采集 18 个无线样本，57.6/C 仍按 Quick 规则保持 LOW/INCONCLUSIVE；见 `P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧

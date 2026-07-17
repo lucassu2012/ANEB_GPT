@@ -6,6 +6,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.ui.theme.AnebTheme
 
 internal data class RadioPermissionState(
@@ -26,6 +27,21 @@ internal data class RadioPermissionState(
         }
 }
 
+/**
+ * 所有公开测试类型都会把无线层样本写入正式结果；这里用穷举分支锁住首装授权入口，
+ * 未来新增测试类型时必须明确作出证据策略决定。
+ */
+internal fun requiresRadioEvidenceRationale(
+    testMode: AnebTestMode,
+    state: RadioPermissionState,
+): Boolean = when (testMode) {
+    AnebTestMode.NETWORK_BASIC,
+    AnebTestMode.TOKEN_SIMULATION,
+    AnebTestMode.AI_REALTIME_SIMULATION,
+    AnebTestMode.TOKEN_EXPERIENCE,
+    -> !state.hasFullRadioEvidence
+}
+
 internal enum class RadioPermissionPurpose { START_TEST, DRIVE_TEST }
 
 internal enum class RadioPermissionStage { RATIONALE, DENIED }
@@ -36,7 +52,7 @@ internal data class RadioPermissionPrompt(
     val state: RadioPermissionState,
 )
 
-/** 首装/拒绝后的无线层权限说明；AQS 主测量可在无权限时继续，路测则必须精确位置。 */
+/** 首装/拒绝后的无线层权限说明；业务测量可在无权限时继续，路测则必须精确位置。 */
 @Composable
 internal fun RadioPermissionDialog(
     prompt: RadioPermissionPrompt,
@@ -53,12 +69,13 @@ internal fun RadioPermissionDialog(
     }
     val body = when {
         prompt.stage == RadioPermissionStage.DENIED && isTest ->
-            "${prompt.state.deniedSummary}。你仍可完成 AQS 测试，但运营商、小区、信号与制式只会显示为证据不足。"
+            "${prompt.state.deniedSummary}。你仍可完成本次业务测试，但运营商、小区、信号与制式只会显示为证据不足。"
         prompt.stage == RadioPermissionStage.DENIED ->
             "${prompt.state.deniedSummary}。路测坐标不会启动；请在系统设置中授予电话与精确位置权限。"
         isTest ->
             "ANEB 使用电话与精确位置权限读取当前数据卡、小区和信号。不会读取通话、联系人或 IMSI；" +
-                "拒绝后仍可用低置信无线归因继续测试。开测前还会单独请求通知权限，用于后台显示进度和取消按钮；" +
+                "三类正式结果都会保存这组无线证据，拒绝后仍可用低置信无线归因继续测试。" +
+                "开测前还会单独请求通知权限，用于后台显示进度和取消按钮；" +
                 "拒绝通知不会阻止测试。"
         else ->
             "路测会以 1Hz 记录坐标到本机 Room，并仅随本地导出使用；坐标不会进入 /results 上报体。"

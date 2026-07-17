@@ -325,8 +325,7 @@ class MainActivity : ComponentActivity() {
                     fun startRun(fromAutorun: Boolean) {
                         if (running) return
                         homeNotice = null
-                        radioEvidenceLimited = testMode == AnebTestMode.TOKEN_EXPERIENCE &&
-                            !radioPermissionState().hasFullRadioEvidence
+                        radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
                             acceptManualSessions = true
                             screen = when (testMode) {
@@ -355,12 +354,16 @@ class MainActivity : ComponentActivity() {
                     }
 
                     fun requestManualRun() {
-                        if (!hasActiveNetwork()) {
-                            homeNotice = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                        ManualRunReadiness.blocker(
+                            hasActiveNetwork = hasActiveNetwork(),
+                            serverUrl = serverUrl,
+                            allowCleartext = BuildConfig.DEBUG,
+                        )?.let {
+                            homeNotice = it
                             return
                         }
                         val state = radioPermissionState()
-                        if (testMode != AnebTestMode.TOKEN_EXPERIENCE || state.hasFullRadioEvidence) {
+                        if (!requiresRadioEvidenceRationale(testMode, state)) {
                             if (manualPermissionViewModel.beginStartTest()) {
                                 requestRunNotificationPermission()
                             }
@@ -451,8 +454,7 @@ class MainActivity : ComponentActivity() {
                             ProbeRunSession.Idle -> Unit
                             is ProbeRunSession.Running -> {
                                 if (acceptManualSessions && !session.autorun) {
-                                    radioEvidenceLimited = session.testMode == AnebTestMode.TOKEN_EXPERIENCE &&
-                                        !radioPermissionState().hasFullRadioEvidence
+                                    radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
                                     screen = when (session.testMode) {
                                         AnebTestMode.NETWORK_BASIC -> Screen.BasicTesting
                                         AnebTestMode.TOKEN_SIMULATION -> Screen.TokenSimulationTesting

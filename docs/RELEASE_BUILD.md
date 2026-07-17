@@ -1,4 +1,4 @@
-# ANEB Probe 0.5.6 release build
+# ANEB Probe 0.5.7 release build
 
 ## Ownership boundary
 
@@ -40,9 +40,9 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.5.6` (`versionCode=38`; Debug reports `0.5.6-codex`)
+- Version: `0.5.7` (`versionCode=39`; Debug reports `0.5.7-codex`)
 - Room schema: version 19, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
-- Debug APK SHA-256: `B2C56295DA3565B06D71C19523C5685DBD1514C2B67E66C88C86D005565F6E57` (`0.5.6-codex`; debug artifacts are not release evidence).
-- Quality baseline: 525 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); TTFT repeatability analyzer 5 tests, behavior model 31 tests and Go server/gateway tests pass.
-- Device validation: P40 Pro Token/AI realtime/network Quick envelopes passed Draft 2020-12 validation, independent Python canonical-digest verification and 1Hz radio evidence count reconciliation. A 5-run Token Quick cohort additionally passed task-aligned TTFT repeatability with median CV 1.425% and maximum CV 4.986% against a 10% limit. These are Debug/Quick validation artifacts, not signed release evidence.
+- Debug APK SHA-256: `D276D7C52F3549E52194B9E90C5C45EBB8969FD441FB09DA9154B7302A6BFF33` (`0.5.7-codex`; debug artifacts are not release evidence).
+- Quality baseline: 531 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); TTFT repeatability analyzer 5 tests, behavior model 31 tests and Go server/gateway tests pass.
+- Device validation: P40 Pro Token/AI realtime/network Quick envelopes passed Draft 2020-12 validation, independent Python canonical-digest verification and 1Hz radio evidence count reconciliation. A 5-run Token Quick cohort additionally passed task-aligned TTFT repeatability with median CV 1.425% and maximum CV 4.986% against a 10% limit. App 0.5.7 also passed invalid-node preflight, first-run radio-permission rationale and a complete Network Quick regression. These are Debug/Quick validation artifacts, not signed release evidence.
