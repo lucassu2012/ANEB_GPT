@@ -52,7 +52,7 @@ enum class AnebTestMode(val label: String) {
     TOKEN_EXPERIENCE("Agent 取证"),
 }
 
-enum class BasicSpeedPhase { IDLE, PREPARING, HANDSHAKE, LATENCY, DOWNLOAD, UPLOAD, DATAGRAM, FINALIZING, COMPLETE, FAILED }
+enum class BasicSpeedPhase { IDLE, PREPARING, HANDSHAKE, LATENCY, DOWNLOAD, UPLOAD, DATAGRAM, RECOVERY, FINALIZING, COMPLETE, FAILED }
 
 data class BasicSpeedTelemetry(
     val phase: BasicSpeedPhase = BasicSpeedPhase.IDLE,
@@ -71,6 +71,9 @@ data class BasicSpeedTelemetry(
     val progress: Double = 0.0,
     val historyMbps: List<Double> = emptyList(),
     val historyLoadedRttMs: List<Double> = emptyList(),
+    val recoveryElapsedMs: Double? = null,
+    val recoveryFailureCount: Int = 0,
+    val syntheticOutageActive: Boolean = false,
     /** Non-null only for an explicitly declared synthetic run. */
     val syntheticImpairmentLabel: String? = null,
 )
@@ -115,13 +118,17 @@ data class BasicSpeedResult(
     val impairmentUplinkMbps: Double? = null,
     val impairmentAddedRttMs: Int? = null,
     val impairmentJitterMs: Int? = null,
+    val impairmentOutageDurationMs: Int? = null,
     val impairmentExcludedFromShaping: List<String> = emptyList(),
     val impairmentAcknowledged: Boolean = false,
+    val recoveryTimeMs: Double? = null,
+    val recoveryFailureCount: Int = 0,
+    val postRecoverySuccessRatio: Double? = null,
 )
 
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
     suspend fun load(variant: String): ScenarioProfile = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard", "weak_capacity_latency")) { "unsupported_network_variant:$variant" }
+        require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery")) { "unsupported_network_variant:$variant" }
         val path = "published/network_comprehensive_$variant/profile.json"
         val text = context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
         val profile = ProfileParser.parseSingle(text)
@@ -129,9 +136,13 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         require(assessment.executable) {
             "network_profile_not_executable:${(assessment.contractIssues + assessment.unsupportedPhaseTypes).joinToString("|")}"
         }
-        val expectedTier = if (variant == "weak_capacity_latency") "standard" else variant
+        val expectedTier = when (variant) {
+            "weak_capacity_latency" -> "standard"
+            "weak_recovery" -> "recovery"
+            else -> variant
+        }
         require(profile.evidenceTier == expectedTier) { "network_profile_variant_mismatch" }
-        require((profile.syntheticImpairment != null) == (variant == "weak_capacity_latency")) {
+        require((profile.syntheticImpairment != null) == (variant in setOf("weak_capacity_latency", "weak_recovery"))) {
             "network_profile_impairment_mismatch"
         }
         profile
@@ -187,6 +198,13 @@ class NetworkSpeedEngine(private val context: Context) {
         val serverBase: String,
         val variant: String = "quick",
         val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
+    )
+
+    private data class RecoveryRunObservation(
+        val triggerAcknowledged: Boolean,
+        val declaredOutageMs: Int,
+        val outageFailureCount: Int,
+        val recoveryTimeMs: Double?,
     )
 
     private val _telemetry = MutableStateFlow(BasicSpeedTelemetry())
@@ -246,13 +264,15 @@ class NetworkSpeedEngine(private val context: Context) {
             )
             val acknowledgement = SyntheticAcknowledgementTracker(endpoints.expectedAcknowledgement)
             profile.syntheticImpairment?.let { impairment ->
+                val outage = impairment.outageDurationMs.takeIf { it > 0 }?.let { " · 中断 ${it}ms" }.orEmpty()
                 _telemetry.value = _telemetry.value.copy(
-                    syntheticImpairmentLabel = "合成弱网 · ↓${impairment.downlinkMbps.toInt()} ↑${impairment.uplinkMbps.toInt()} Mbps · +${impairment.addedRttMs}±${impairment.jitterMs} ms",
+                    syntheticImpairmentLabel = "合成弱网 · ↓${impairment.downlinkMbps.toInt()} ↑${impairment.uplinkMbps.toInt()} Mbps · +${impairment.addedRttMs}±${impairment.jitterMs} ms$outage",
                 )
                 log(
                     "NET_V1_IMPAIRMENT requested=${endpoints.expectedAcknowledgement} " +
                         "dl_mbps=${impairment.downlinkMbps} ul_mbps=${impairment.uplinkMbps} " +
                         "added_rtt_ms=${impairment.addedRttMs} jitter_ms=${impairment.jitterMs} " +
+                        "outage_ms=${impairment.outageDurationMs} " +
                         "excluded=${impairment.excludedFromShaping.joinToString(",")}",
                 )
             }
@@ -263,6 +283,7 @@ class NetworkSpeedEngine(private val context: Context) {
             val downloadPhase = phase(ProfilePhase.TYPE_DOWNLOAD_LOADED)
             val uploadPhase = phase(ProfilePhase.TYPE_UPLOAD_LOADED)
             val udpPhase = phase(ProfilePhase.TYPE_UDP_SEQUENCE)
+            val recoveryPhase = profile.phases.firstOrNull { it.type == ProfilePhase.TYPE_CONTROLLED_OUTAGE_RECOVERY }
             val postPhase = phase(ProfilePhase.TYPE_POST_LOAD_LATENCY)
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.HANDSHAKE, progress = 0.02)
@@ -301,9 +322,24 @@ class NetworkSpeedEngine(private val context: Context) {
             )
             log("NET_V1_PHASE run_id=$runId phase=udp sent=${udp.packetsSent} received=${udp.receivedSeqs.distinct().size} error=${udp.error ?: "none"}")
 
-            _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.FINALIZING, progress = 0.92)
+            val recovery = recoveryPhase?.let { phase ->
+                runRecoveryPhase(client, endpoints, acknowledgement, phase, profile.syntheticImpairment?.outageDurationMs ?: 0).also {
+                    log(
+                        "NET_V1_PHASE run_id=$runId phase=controlled_outage_recovery " +
+                            "trigger_ack=${it.triggerAcknowledged} failures=${it.outageFailureCount} " +
+                            "recovery_ms=${it.recoveryTimeMs ?: "null"}",
+                    )
+                }
+            }
+
+            val postStart = if (recovery != null) 0.97 else 0.92
+            _telemetry.value = _telemetry.value.copy(
+                phase = BasicSpeedPhase.FINALIZING,
+                syntheticOutageActive = false,
+                progress = postStart,
+            )
             val post = measureEcho(client, endpoints, acknowledgement, postPhase.samples) { index, _ ->
-                _telemetry.value = _telemetry.value.copy(progress = 0.92 + 0.07 * index / postPhase.samples.coerceAtLeast(1))
+                _telemetry.value = _telemetry.value.copy(progress = postStart + (0.99 - postStart) * index / postPhase.samples.coerceAtLeast(1))
             }
 
             if (profile.syntheticImpairment != null && !acknowledgement.acknowledged) {
@@ -339,6 +375,7 @@ class NetworkSpeedEngine(private val context: Context) {
                         uplinkMbps = impairment.uplinkMbps,
                         addedRttMs = impairment.addedRttMs,
                         jitterMs = impairment.jitterMs,
+                        outageDurationMs = impairment.outageDurationMs,
                         appliesTo = impairment.appliesTo,
                         excludedFromShaping = impairment.excludedFromShaping,
                         serverAcknowledged = acknowledgement.acknowledged,
@@ -346,11 +383,25 @@ class NetworkSpeedEngine(private val context: Context) {
                 },
                 invalidReason = invalidReason.get(),
             )
-            val score = NetworkComprehensiveScorer.score(evidence)
-            val metrics = score.metrics
+            val capacityScore = NetworkComprehensiveScorer.score(evidence)
+            val recoveryEvidence = recovery?.let {
+                NetworkRecoveryEvidence(
+                    serverAcknowledged = acknowledgement.acknowledged,
+                    triggerAcknowledged = it.triggerAcknowledged,
+                    declaredOutageMs = it.declaredOutageMs,
+                    outageFailureCount = it.outageFailureCount,
+                    recoveryTimeMs = it.recoveryTimeMs,
+                    postRecoveryRttMs = post,
+                    invalidReason = invalidReason.get(),
+                )
+            }
+            val score = recoveryEvidence?.let(NetworkRecoveryScorer::score) ?: capacityScore
+            val metrics = if (recoveryEvidence != null) capacityScore.metrics + score.metrics else score.metrics
+            val capacityMetrics = capacityScore.metrics
             val errors = download.errors + upload.errors + listOfNotNull(udp.error)
             val status = when {
                 score.verdict == TokenVerdict.INVALID -> "invalid"
+                recovery != null && recovery.recoveryTimeMs == null -> "failed"
                 download.totalBytes == 0L && upload.totalBytes == 0L -> "failed"
                 score.totalScore == null -> "partial"
                 else -> "completed"
@@ -359,11 +410,11 @@ class NetworkSpeedEngine(private val context: Context) {
                 runId, startedAtEpochMs, measureBase, profile.claimScope, profile.profileId, profile.version, config.variant,
                 profile.evaluation.scorePolicyId, profile.evaluation.scoreAnchorPolicyId, profile.evaluation.conclusionPolicyId,
                 status, score.totalScore, score.grade, score.verdict, score.confidence,
-                metrics["NET-B01"]?.value, metrics["NET-B02"]?.value, metrics["NET-B03"]?.value,
-                metrics["NET-B04"]?.value, metrics["NET-B05"]?.value, metrics["NET-B06"]?.value,
-                metrics["NET-B09"]?.value, metrics["NET-B07"]?.value, metrics["NET-B10"]?.value,
+                capacityMetrics["NET-B01"]?.value, capacityMetrics["NET-B02"]?.value, capacityMetrics["NET-B03"]?.value,
+                capacityMetrics["NET-B04"]?.value, capacityMetrics["NET-B05"]?.value, capacityMetrics["NET-B06"]?.value,
+                capacityMetrics["NET-B09"]?.value, capacityMetrics["NET-B07"]?.value, capacityMetrics["NET-B10"]?.value,
                 BasicSpeedMath.percentile(post.filterNotNull(), 0.50), download.totalBytes, upload.totalBytes, errors,
-                metrics, score.groupScores, score.conclusions, evidenceJson(evidence),
+                metrics, score.groupScores, score.conclusions, evidenceJson(evidence, recoveryEvidence),
                 syntheticImpairment = profile.syntheticImpairment != null,
                 impairmentProfileId = profile.syntheticImpairment?.let { profile.profileId },
                 impairmentProfileVersion = profile.syntheticImpairment?.let { profile.version },
@@ -371,8 +422,12 @@ class NetworkSpeedEngine(private val context: Context) {
                 impairmentUplinkMbps = profile.syntheticImpairment?.uplinkMbps,
                 impairmentAddedRttMs = profile.syntheticImpairment?.addedRttMs,
                 impairmentJitterMs = profile.syntheticImpairment?.jitterMs,
+                impairmentOutageDurationMs = profile.syntheticImpairment?.outageDurationMs?.takeIf { it > 0 },
                 impairmentExcludedFromShaping = profile.syntheticImpairment?.excludedFromShaping.orEmpty(),
                 impairmentAcknowledged = profile.syntheticImpairment != null && acknowledgement.acknowledged,
+                recoveryTimeMs = recovery?.recoveryTimeMs,
+                recoveryFailureCount = recovery?.outageFailureCount ?: 0,
+                postRecoverySuccessRatio = post.takeIf { recovery != null && it.isNotEmpty() }?.let { values -> values.count { it != null }.toDouble() / values.size },
             )
             publishResult(result, log)
             _telemetry.value = _telemetry.value.copy(
@@ -458,6 +513,56 @@ class NetworkSpeedEngine(private val context: Context) {
             if (index + 1 < samples) delay(ECHO_GAP_MS)
         }
         return values
+    }
+
+    private suspend fun runRecoveryPhase(
+        client: AnebClient,
+        endpoints: NetworkEndpointContext,
+        acknowledgement: SyntheticAcknowledgementTracker,
+        phase: ProfilePhase,
+        declaredOutageMs: Int,
+    ): RecoveryRunObservation {
+        _telemetry.value = _telemetry.value.copy(
+            phase = BasicSpeedPhase.RECOVERY,
+            currentMbps = null,
+            phaseAverageMbps = null,
+            recoveryElapsedMs = 0.0,
+            recoveryFailureCount = 0,
+            syntheticOutageActive = false,
+            progress = 0.91,
+        )
+        val trigger = client.triggerSyntheticOutage(endpoints.url("/api/v1/recovery"))
+        acknowledgement.observe(trigger.syntheticImpairment)
+        val triggerAcknowledged = trigger.accepted &&
+            trigger.outageDurationMs == declaredOutageMs && declaredOutageMs > 0
+        if (!triggerAcknowledged) {
+            return RecoveryRunObservation(false, declaredOutageMs, 0, null)
+        }
+
+        val startedNanos = SystemClock.elapsedRealtimeNanos()
+        var failures = 0
+        var recoveryTimeMs: Double? = null
+        val attempts = phase.samples.coerceAtLeast(1)
+        for (index in 0 until attempts) {
+            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            acknowledgement.observe(echo.syntheticImpairment)
+            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1e6
+            if (echo.error == null) {
+                recoveryTimeMs = elapsedMs
+            } else if (echo.syntheticOutageActive) {
+                failures += 1
+            }
+            _telemetry.value = _telemetry.value.copy(
+                recoveryElapsedMs = elapsedMs,
+                recoveryFailureCount = failures,
+                syntheticOutageActive = echo.syntheticOutageActive,
+                loadedRttMs = echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0),
+                progress = 0.91 + 0.06 * (index + 1) / attempts,
+            )
+            if (recoveryTimeMs != null) break
+            if (index + 1 < attempts) delay(phase.echoIntervalMs.coerceAtLeast(50).toLong())
+        }
+        return RecoveryRunObservation(triggerAcknowledged, declaredOutageMs, failures, recoveryTimeMs)
     }
 
     private enum class TransferDirection { DOWNLOAD, UPLOAD }
@@ -595,8 +700,9 @@ class NetworkSpeedEngine(private val context: Context) {
                     JsonArray(result.conclusions.map(::JsonPrimitive)).toString(), result.evidenceJson,
                     result.syntheticImpairment, result.impairmentProfileId, result.impairmentProfileVersion,
                     result.impairmentDownlinkMbps, result.impairmentUplinkMbps, result.impairmentAddedRttMs,
-                    result.impairmentJitterMs, result.impairmentExcludedFromShaping.joinToString(","),
-                    result.impairmentAcknowledged,
+                    result.impairmentJitterMs, result.impairmentOutageDurationMs,
+                    result.impairmentExcludedFromShaping.joinToString(","), result.impairmentAcknowledged,
+                    result.recoveryTimeMs, result.recoveryFailureCount, result.postRecoverySuccessRatio,
                 ),
             )
         }
@@ -648,7 +754,7 @@ class NetworkSpeedEngine(private val context: Context) {
         }
     }).toString()
 
-    private fun evidenceJson(e: NetworkComprehensiveEvidence) = buildJsonObject {
+    private fun evidenceJson(e: NetworkComprehensiveEvidence, recovery: NetworkRecoveryEvidence? = null) = buildJsonObject {
         put("contract_version", "aneb-network-evidence-v1")
         put("variant", e.variant)
         put("idle_rtt_ms", nullableArray(e.idleRttMs))
@@ -678,9 +784,21 @@ class NetworkSpeedEngine(private val context: Context) {
                 put("uplink_mbps", synthetic.uplinkMbps)
                 put("added_rtt_ms", synthetic.addedRttMs)
                 put("jitter_ms", synthetic.jitterMs)
+                put("outage_duration_ms", synthetic.outageDurationMs)
                 put("applies_to", buildJsonArray { synthetic.appliesTo.forEach { add(JsonPrimitive(it)) } })
                 put("excluded_from_shaping", buildJsonArray { synthetic.excludedFromShaping.forEach { add(JsonPrimitive(it)) } })
                 put("server_acknowledged", synthetic.serverAcknowledged)
+            }
+        } ?: JsonNull)
+        put("recovery", recovery?.let { r ->
+            buildJsonObject {
+                put("contract_version", "aneb-network-recovery-evidence-v1")
+                put("server_acknowledged", r.serverAcknowledged)
+                put("trigger_acknowledged", r.triggerAcknowledged)
+                put("declared_outage_ms", r.declaredOutageMs)
+                put("outage_failure_count", r.outageFailureCount)
+                put("recovery_time_ms", r.recoveryTimeMs?.let(::JsonPrimitive) ?: JsonNull)
+                put("post_recovery_rtt_ms", nullableArray(r.postRecoveryRttMs))
             }
         } ?: JsonNull)
         put("invalid_reason", e.invalidReason?.let(::JsonPrimitive) ?: JsonNull)

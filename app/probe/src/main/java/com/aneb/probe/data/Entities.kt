@@ -146,8 +146,12 @@ data class NetworkComprehensiveResultEntity(
     val impairmentUplinkMbps: Double? = null,
     val impairmentAddedRttMs: Int? = null,
     val impairmentJitterMs: Int? = null,
+    val impairmentOutageDurationMs: Int? = null,
     val impairmentExcludedCsv: String = "",
     val impairmentAcknowledged: Boolean = false,
+    val recoveryTimeMs: Double? = null,
+    val recoveryFailureCount: Int = 0,
+    val postRecoverySuccessRatio: Double? = null,
 )
 
 /** Profile v2 Token 仿真独立结果；不进入 TestRun/AQS，完整证据以版本化 JSON 保留。 */

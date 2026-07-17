@@ -60,6 +60,8 @@
 
 | D-48 | 2026-07-17 | **首个弱网能力采用 E-01 用户态逐 run 聚合整形，禁止修改真实无线指标或共享主机全局网络。** `aneb-server/0.6.0` 仅在 `/synthetic/weak-capacity-latency-v1` 对 echo/download/upload 套用聚合下行 3Mbps、上行 1Mbps、请求附加 RTT 120±30ms；并发连接共享 run 限速器，不同 run 独立，正常路由旁路。DNS/TCP/TLS/UDP/RSRP/SINR 明确排除，初版不模拟 IP 丢包或断线。App 0.4.7 必须核验服务器回执，Room v16 冻结参数/排除项/确认状态；弱网上行只按服务端确认字节计量，拒绝把本机 socket 写入量当线上 goodput。P40 相邻对照：Standard `019f6e96…` vs 弱网 `019f6e93…`，下载 P5 17.66→2.80Mbps、上传 P5 15.91→1.12Mbps、空闲 RTT P95 109.80→228.03ms、分数 51.2→32.0；loaded RTT 非单调，故结论只限容量/应用时延敏感性，不外推真实无线弱覆盖。`weak_recovery` 仍是待开发 Profile。 | `network_comprehensive_weak_capacity_latency@1.0.0`；`docs/TEST_SERVER_CAPABILITIES.md`；`docs/WEAK_NETWORK_TEST_PLAN_2026-07-17.md`；P40 Room v16 原始结果 |
 
+| D-49 | 2026-07-17 | **受控请求中断恢复必须是独立 Profile、独立路由与独立评分，不与无故障 Standard 或容量/时延弱网混分。** `aneb-server/0.7.0` 新增 `network_comprehensive_weak_recovery@1.0.0` / `weak-recovery-v1`：每个 run 仅能武装一次 2000ms 应用请求不可用窗口；窗口内只有同 run 请求返回带服务端确认头的 503，其他 run 与正常路由保持 200，窗口后自动恢复。合成基线为 ↓5/↑2Mbps、附加 RTT 80±20ms；DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 均排除。恢复时间固定为 trigger 202 回执到首个成功 echo，独立 `network-recovery-score-v1` 按恢复 45%、连续性 30%、响应性 25% 评分；中断未观察、恢复失败或必需样本缺失时硬失败/抑制分数；单次事件即使达标仍固定 LOW/INCONCLUSIVE。App 0.4.8/Room v17 增加 100ms 动态恢复仪表、回执核验与恢复证据字段。P40 4 次独立 run 恢复 2084.4–2227.3ms、中断失败 8–9 次、恢复后成功率均 100%，末次 RTT P95 152.6ms；动态序列捕获 1063.2ms/5 次失败/中断指针。结论只适用于 E-01 声明的应用请求中断，不外推真实蜂窝断网。 | `network_comprehensive_weak_recovery@1.0.0`；`docs/P40_WEAK_RECOVERY_VALIDATION_2026-07-17.md`；Room v17 原始结果 |
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

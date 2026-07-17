@@ -64,15 +64,25 @@ fun BasicSpeedTestingScreen(
 ) {
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
+    val recoveryActive = telemetry.phase == BasicSpeedPhase.RECOVERY
     val live = telemetry.currentMbps
     val gaugeMax = speedometerCeiling(live ?: telemetry.phaseAverageMbps)
-    val target = live?.div(gaugeMax)?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+    val target = if (recoveryActive) {
+        ((telemetry.recoveryElapsedMs ?: 0.0) / 4_000.0).toFloat().coerceIn(0f, 1f)
+    } else {
+        live?.div(gaugeMax)?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+    }
     val needle by animateFloatAsState(
         targetValue = target,
         animationSpec = if (reducedMotion) tween(0) else spring(dampingRatio = 0.66f, stiffness = 220f),
         label = "basic-speed-needle",
     )
-    val phaseColor = if (telemetry.phase == BasicSpeedPhase.UPLOAD) colors.brand2 else colors.brand
+    val phaseColor = when {
+        recoveryActive && telemetry.syntheticOutageActive -> colors.poor
+        recoveryActive -> colors.fair
+        telemetry.phase == BasicSpeedPhase.UPLOAD -> colors.brand2
+        else -> colors.brand
+    }
     val rttCeiling = latencyGaugeCeiling(telemetry.historyLoadedRttMs.maxOrNull() ?: telemetry.loadedRttMs)
     val history = telemetry.historyLoadedRttMs.map { (it / rttCeiling).toFloat().coerceIn(0f, 1f) }
 
@@ -104,13 +114,19 @@ fun BasicSpeedTestingScreen(
             }
         }
 
-        AnebMetricTrio(
+        AnebMetricTrio(if (recoveryActive) {
+            listOf(
+                AnebMetric("恢复计时", telemetry.recoveryElapsedMs.oneOrDash(), "ms", phaseColor),
+                AnebMetric("中断失败", telemetry.recoveryFailureCount.toString(), "次"),
+                AnebMetric("请求状态", if (telemetry.syntheticOutageActive) "中断" else "探测", "", phaseColor),
+            )
+        } else {
             listOf(
                 AnebMetric("负载 RTT", telemetry.loadedRttMs.oneOrDash(), "ms", colors.brand),
                 AnebMetric("下载", telemetry.downloadMbps.oneOrDash(), "Mbps"),
                 AnebMetric("上传", telemetry.uploadMbps.oneOrDash(), "Mbps", colors.brand2),
-            ),
-        )
+            )
+        })
         AnebSparkline(
             values = history,
             color = colors.brand,
@@ -121,22 +137,25 @@ fun BasicSpeedTestingScreen(
 
         AnebScoreRing(
             score = null,
-            valueText = live?.let(::oneDecimal) ?: "—",
-            fraction = if (live != null) needle else telemetry.progress.toFloat(),
+            valueText = if (recoveryActive) telemetry.recoveryElapsedMs?.let(::oneDecimal) ?: "—" else live?.let(::oneDecimal) ?: "—",
+            fraction = if (recoveryActive || live != null) needle else telemetry.progress.toFloat(),
             accent = phaseColor,
-            label = if (live != null) "Mbps" else phaseLabel(telemetry.phase),
-            supporting = if (live != null) {
+            label = if (recoveryActive) "ms" else if (live != null) "Mbps" else phaseLabel(telemetry.phase),
+            supporting = if (recoveryActive) {
+                if (telemetry.syntheticOutageActive) "服务器已确认请求中断 · 等待恢复" else "正在核验恢复状态"
+            } else if (live != null) {
                 "${phaseLabel(telemetry.phase)} · 1 秒实时窗口"
             } else {
                 "正在${phaseLabel(telemetry.phase)}"
             },
             modifier = Modifier.align(Alignment.CenterHorizontally).size(228.dp),
-            needleFraction = live?.let { needle },
+            needleFraction = if (recoveryActive || live != null) needle else null,
             speedometerLayout = true,
         )
 
         Text(
-            "负载 RTT 每 ${if (telemetry.phase in setOf(BasicSpeedPhase.DOWNLOAD, BasicSpeedPhase.UPLOAD)) "250" else "—"} ms 刷新 · 速率指针每 100 ms 刷新",
+            if (recoveryActive) "恢复计时随每次请求回执刷新 · 目标 ≤ 3000 ms" else
+                "负载 RTT 每 ${if (telemetry.phase in setOf(BasicSpeedPhase.DOWNLOAD, BasicSpeedPhase.UPLOAD)) "250" else "—"} ms 刷新 · 速率指针每 100 ms 刷新",
             fontSize = 9.sp,
             color = colors.faint,
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp),
@@ -149,13 +168,19 @@ fun BasicSpeedTestingScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
-        AnebMetricTrio(
+        AnebMetricTrio(if (recoveryActive) {
+            listOf(
+                AnebMetric("声明中断", "2000", "ms", colors.fair),
+                AnebMetric("恢复目标", "3000", "ms"),
+                AnebMetric("失败探针", telemetry.recoveryFailureCount.toString(), "次"),
+            )
+        } else {
             listOf(
                 AnebMetric("当前", live.oneOrDash(), "Mbps", phaseColor),
                 AnebMetric("时延增量", telemetry.latencyDeltaMs.oneOrDash(), "ms"),
                 AnebMetric("低速窗口", telemetry.lowSpeedWindowRatio.percentOrDash(), "%"),
-            ),
-        )
+            )
+        })
         Spacer(Modifier.height(22.dp))
     }
 }
@@ -169,9 +194,10 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
         BasicSpeedPhase.DOWNLOAD -> 2
         BasicSpeedPhase.UPLOAD -> 3
         BasicSpeedPhase.DATAGRAM -> 4
-        else -> 5
+        BasicSpeedPhase.RECOVERY -> 5
+        else -> 6
     }
-    val labels = listOf("握手", "空闲", "下载", "上传", "UDP", "结论")
+    val labels = listOf("握手", "空闲", "下载", "上传", "UDP", "恢复", "结论")
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
         labels.forEachIndexed { index, label ->
             Text(label, fontSize = 9.sp, color = if (index == active) colors.brand else colors.faint)
@@ -189,6 +215,7 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 @Composable
 fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
     val colors = AnebTheme.colors
+    val recoveryResult = result.variant == "weak_recovery"
     val accent = when (result.verdict) {
         TokenVerdict.PASS -> colors.excellent
         TokenVerdict.FAIL -> colors.poor
@@ -206,7 +233,7 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
         Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("AI 业务路径综合能力", fontSize = 22.sp, fontWeight = FontWeight.Light, color = colors.ink, modifier = Modifier.align(Alignment.Start))
             Text(
-                "${if (result.syntheticImpairment) "合成弱网" else result.variant.uppercase()} · ${confidenceLabel(result.confidence)}",
+                "${if (recoveryResult) "合成恢复" else if (result.syntheticImpairment) "合成弱网" else result.variant.uppercase()} · ${confidenceLabel(result.confidence)}",
                 fontSize = 10.sp,
                 color = if (result.syntheticImpairment) colors.fair else colors.muted,
                 modifier = Modifier.align(Alignment.Start).padding(top = 4.dp),
@@ -222,13 +249,15 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                         )
                         Text(
                             "↓${result.impairmentDownlinkMbps.oneOrDash()} Mbps · ↑${result.impairmentUplinkMbps.oneOrDash()} Mbps · " +
-                                "+${result.impairmentAddedRttMs ?: "—"}±${result.impairmentJitterMs ?: "—"} ms",
+                                "+${result.impairmentAddedRttMs ?: "—"}±${result.impairmentJitterMs ?: "—"} ms" +
+                                (result.impairmentOutageDurationMs?.let { " · 请求中断 ${it}ms" } ?: ""),
                             fontSize = 10.sp,
                             color = colors.ink,
                             modifier = Modifier.padding(top = 4.dp),
                         )
                         Text(
-                            "不含 DNS/TCP/TLS/UDP/RSRP/SINR 整形；无线样本仅作现场协变量。",
+                            if (recoveryResult) "不含 IP 断网/丢包/切网及 DNS/TCP/TLS/UDP/RSRP/SINR 整形。" else
+                                "不含 DNS/TCP/TLS/UDP/RSRP/SINR 整形；无线样本仅作现场协变量。",
                             fontSize = 9.sp,
                             lineHeight = 14.sp,
                             color = colors.muted,
@@ -248,17 +277,28 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
             )
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                BigMetric("↓", "下载 P5", result.downloadMbps.oneOrDash(), "Mbps", colors.brand, Modifier.weight(1f))
-                BigMetric("↑", "上传 P5", result.uploadMbps.oneOrDash(), "Mbps", colors.brand2, Modifier.weight(1f))
+                if (recoveryResult) {
+                    BigMetric("↻", "恢复用时", result.recoveryTimeMs.oneOrDash(), "ms", colors.fair, Modifier.weight(1f))
+                    BigMetric("×", "中断失败", result.recoveryFailureCount.toString(), "次", colors.poor, Modifier.weight(1f))
+                } else {
+                    BigMetric("↓", "下载 P5", result.downloadMbps.oneOrDash(), "Mbps", colors.brand, Modifier.weight(1f))
+                    BigMetric("↑", "上传 P5", result.uploadMbps.oneOrDash(), "Mbps", colors.brand2, Modifier.weight(1f))
+                }
             }
             Spacer(Modifier.height(10.dp))
-            AnebMetricTrio(
+            AnebMetricTrio(if (recoveryResult) {
+                listOf(
+                    AnebMetric("恢复后成功率", result.postRecoverySuccessRatio.percentOrDash(), "%"),
+                    AnebMetric("恢复后 RTT P95", result.metrics["RCV-B04"]?.value.oneOrDash(), "ms", colors.brand),
+                    AnebMetric("中断已观察", if (result.metrics["RCV-B01"]?.value == 1.0) "是" else "否", ""),
+                )
+            } else {
                 listOf(
                     AnebMetric("空闲 RTT P95", result.pingMs.oneOrDash(), "ms"),
                     AnebMetric("负载 RTT P95", result.loadedRttMs.oneOrDash(), "ms", colors.brand),
                     AnebMetric("时延增量", result.latencyDeltaMs.oneOrDash(), "ms"),
-                ),
-            )
+                )
+            })
             Spacer(Modifier.height(8.dp))
             AnebMetricTrio(listOf(
                 AnebMetric("请求失败", result.requestLossRate.percentOrDash(), "%"),
@@ -279,7 +319,13 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
             AnebGradientCard(Modifier.fillMaxWidth().padding(top = 4.dp), radius = 14.dp) {
                 Column(Modifier.padding(12.dp)) {
                     Text("业务行为特征", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-                    Text("持续下行 · 持续上行 · 负载响应性 · 路径稳定性", fontSize = 10.sp, color = colors.muted, modifier = Modifier.padding(top = 4.dp))
+                    Text(
+                        if (recoveryResult) "短时请求不可用 · 低恢复时延 · 恢复后连续性 · 恢复后响应性" else
+                            "持续下行 · 持续上行 · 负载响应性 · 路径稳定性",
+                        fontSize = 10.sp,
+                        color = colors.muted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
             Text(
@@ -322,6 +368,7 @@ private fun phaseLabel(phase: BasicSpeedPhase) = when (phase) {
     BasicSpeedPhase.DOWNLOAD -> "下载与负载时延"
     BasicSpeedPhase.UPLOAD -> "上传与负载时延"
     BasicSpeedPhase.DATAGRAM -> "测量 UDP 稳定性"
+    BasicSpeedPhase.RECOVERY -> "测量请求恢复"
     BasicSpeedPhase.FINALIZING -> "生成结论"
     BasicSpeedPhase.COMPLETE -> "测试完成"
     BasicSpeedPhase.FAILED -> "测试失败"
@@ -383,8 +430,12 @@ internal fun NetworkComprehensiveResultEntity.toDomain(): BasicSpeedResult = Bas
     impairmentUplinkMbps = impairmentUplinkMbps,
     impairmentAddedRttMs = impairmentAddedRttMs,
     impairmentJitterMs = impairmentJitterMs,
+    impairmentOutageDurationMs = impairmentOutageDurationMs,
     impairmentExcludedFromShaping = impairmentExcludedCsv.split(',').filter { it.isNotBlank() },
     impairmentAcknowledged = impairmentAcknowledged,
+    recoveryTimeMs = recoveryTimeMs,
+    recoveryFailureCount = recoveryFailureCount,
+    postRecoverySuccessRatio = postRecoverySuccessRatio,
 )
 
 private fun parseNetworkMetrics(raw: String): Map<String, NetworkMetricEvidence> = runCatching {

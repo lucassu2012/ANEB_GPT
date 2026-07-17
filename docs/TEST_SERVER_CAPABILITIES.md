@@ -7,15 +7,15 @@
 | 项目 | 当前合同 |
 |---|---|
 | 节点 | E-01，深圳，公网 `120.79.148.0:8443` |
-| 服务端 | `aneb-server/0.6.0`，Linux/amd64 |
+| 服务端 | `aneb-server/0.7.0`，Linux/amd64 |
 | 主通道 | `https://120.79.148.0:8443`；项目 App 使用自有 IP-SAN 信任锚 |
 | SNI 通道 | `https://120-79-148-0.sslip.io:8443`；部分蜂窝网络已观察到 SNI-keyed RST，只用于 REACH 对照，不作为强制主通道 |
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-17 13:40 CST；节点本机、公网 smoke 与 P40 Pro 正常/弱网相邻对照均通过 |
+| 最近验证 | 2026-07-17 15:19 CST；节点本机、公网 smoke、正常/弱网相邻对照与 P40 Pro 合成恢复均通过 |
 
-所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.6.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
+所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
 ## 2. 已部署端点
 
@@ -31,8 +31,10 @@
 | `POST /api/v1/toolloop` | 工具调用往返 | 上行 ≤64MiB；处理等待 0–60000ms；下行 0–16MiB |
 | `POST /api/v1/results` | 旧版结果合同落盘 | JSON ≤1MiB；`claim_scope` 固定为 `application_end_to_end_to_probe_node`；schema `1.0` |
 | `GET /api/v1/serverinfo` | 节点版本和运行时快照 | 版本、uptime、H3 开关、TCP slow-start-after-idle、拥塞控制 |
-| `GET /api/v1/impairments` | 已部署合成弱网合同目录 | 当前仅返回 `network_comprehensive_weak_capacity_latency@1.0.0` |
+| `GET /api/v1/impairments` | 已部署合成弱网合同目录 | 返回 `network_comprehensive_weak_capacity_latency@1.0.0` 与 `network_comprehensive_weak_recovery@1.0.0` |
 | `/synthetic/weak-capacity-latency-v1/api/v1/{echo,download,upload}` | 逐 run 隔离的用户态弱网路径 | 必须携带 `impair_run/impair_seed/impair_seq`；只支持这 3 个端点；正常 `/api/v1/*` 路径不整形 |
+| `/synthetic/weak-recovery-v1/api/v1/{echo,download,upload}` | 逐 run 隔离的恢复测试数据路径 | 基线 ↓5/↑2Mbps、附加 RTT `80±20ms`；只有同 run 已触发的窗口返回带确认头的 503 |
+| `POST /synthetic/weak-recovery-v1/api/v1/recovery` | 触发该 run 的一次性 2 秒请求中断 | 必须携带 `impair_run/impair_seed/impair_seq`；首次与重复触发均返回 202，`armed` 表示是否首次武装 |
 | UDP `:8443` | 网络综合带序号应用探针 | `ANEB1 + seq + monotonic timestamp` 魔数分流；与 H3 共端口 |
 
 ## 3. 根 Profile 清单
@@ -73,7 +75,7 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 - 禁止把故障注入参数开启在生产/取证服务上。
 - 不得只替换 Profile 而跳过合同测试和公网 smoke。
 
-每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、合成弱网目录/回执/精确字节、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
+每次部署至少验证：Go 全量测试、4 个根 Profile、s3 精确版本/阶段/字节、echo、1MiB download 精确字节、两个合成弱网合同的目录/回执/精确字节、恢复触发后同 run 503/其他 run 200/正常路由 200/窗口后同 run 200、UDP 回显、`serverinfo` 版本和 H3 开关。失败时不得把文档标成已部署。
 
 ## 5. 弱网测试边界
 
@@ -81,7 +83,7 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 
 软件可控的是**合成网络损伤**：带宽上限、附加时延、抖动、应用层未返回和短时中断。它只能用于验证 ANEB 对弱网的灵敏度和结论逻辑，结果必须标记 `synthetic_impairment=true`，并把手机实际采集的 RSRP/SINR 当作协变量，不得伪装成无线指标被改变。
 
-E-01 已启用首个**用户态、逐 run 隔离**弱网合同；仍未、也不得启用整机/整端口全局 `netem`：
+E-01 已启用两个**用户态、逐 run 隔离**弱网合同；仍未、也不得启用整机/整端口全局 `netem`：
 
 - Profile：`network_comprehensive_weak_capacity_latency@1.0.0`；路由 `weak-capacity-latency-v1`。
 - 合成条件：聚合下行 3Mbps、聚合上行 1Mbps、每个 HTTP 请求附加 RTT `120±30ms`；抖动由 `run+seed+seq` 确定性生成。
@@ -102,9 +104,29 @@ P40 Pro 0.4.7 相邻对照（同设备、同节点、同一 `AUTO` 承载，弱�
 
 正常 run 的 loaded RTT P95 为 548.74ms，反而高于弱网 run 的 365.43ms；这是实际路径满载排队与用户态整形位置不同造成的观测，证明“合成时延更高”不能被外推为所有 loaded RTT 都必然单调上升。首个 Profile 的结论只适用于容量/应用时延敏感性验证。
 
+独立恢复合同不得和容量/时延分数混算：
+
+- Profile：`network_comprehensive_weak_recovery@1.0.0`；路由 `weak-recovery-v1`；独立评分 `network-recovery-score-v1`。
+- 合成条件：聚合下行 5Mbps、上行 2Mbps、每请求附加 RTT `80±20ms`；每个 run 最多武装一次 2000ms 应用请求不可用窗口。
+- 中断证据：只有该 run 窗口内的 echo/download/upload 返回 503 并带 `X-Aneb-Synthetic-Outage: active` 才计为受控中断；其他 run 与正常路由始终旁路。中断不是 IP 丢包、无线断网或切网。
+- 恢复终点：触发 202 回执至同 run 首个成功 echo；质量目标为恢复 ≤3000ms、恢复后 12 个请求成功率 ≥95%、恢复后 12 个 RTT 中至少 95% ≤300ms。未观察到中断、未恢复或缺必需样本时分数抑制/硬失败。
+- 动态主指标：恢复用时；辅指标为服务器确认的中断状态、失败探针数与恢复后 RTT。单次事件即使达标也固定 `LOW/INCONCLUSIVE`，不能据此宣称长期 95% 恢复可靠性。
+
+P40 Pro 0.4.8 完成 4 个独立 run：
+
+| run | 恢复用时 | 中断失败 | 恢复后成功率 | 分数/结论 |
+|---|---:|---:|---:|---|
+| `019f6ee9-8c0f-7b82-99b3-040730f3e84b` | 2155.9ms | 8 | 100% | 100/A，LOW/INCONCLUSIVE |
+| `019f6eed-0a93-7943-a235-94d4363c32e6` | 2084.4ms | 8 | 100% | 100/A，LOW/INCONCLUSIVE |
+| `019f6eee-0d8a-748f-8e70-c5fef9d0a0b1` | 2119.5ms | 8 | 100% | 100/A，LOW/INCONCLUSIVE |
+| `019f6ef0-1699-7f9c-8b6e-d299b0bf6328` | 2227.3ms | 9 | 100% | 99.8/A，LOW/INCONCLUSIVE |
+
+末次 run 恢复后 RTT P95 为 152.6ms；动态画面捕获 1063.2ms 恢复计时、5 次服务器确认失败与“中断”状态。结果只证明 E-01 声明的应用请求窗口及 App 恢复算法，不代表真实蜂窝断网、RSRP/SINR 弱化或 IP 层丢包。
+
 ## 6. 变更记录
 
 | 日期 | 变更 |
 |---|---|
+| 2026-07-17 | 部署 `aneb-server/0.7.0`：新增逐 run 一次性 `weak-recovery-v1` 2 秒请求中断、同 run/其他 run/正常路由隔离 smoke；App 0.4.8/Room v17 增加独立 Recovery Profile、动态恢复仪表、独立评分与 P40 四次真机证据。 |
 | 2026-07-17 | 部署 `aneb-server/0.6.0`：新增逐 run 聚合限速的 `weak-capacity-latency-v1` 用户态适配器、目录与回执头；正常路由不整形。App 0.4.7/Room v16 完成 P40 正常/弱网相邻对照，上行改为服务器确认字节口径。 |
 | 2026-07-17 | 建立权威能力文档；Codex 接管唯一部署权；在 0.2.1 基础上合并 `s3_multimodal@0.3.0` 的两段 `download_burst`，并补客户端兼容执行与 fail-closed 字节校验。 |

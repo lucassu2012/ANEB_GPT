@@ -340,14 +340,19 @@ private fun SettingsRootScreen(
                 icon = "⌁",
                 tint = colors.brand,
                 title = "测试模式",
-                subtitle = if (testMode == AnebTestMode.TOKEN_SIMULATION) "快测、标准或 100MiB 压力测试" else "快测或标准测试",
+                subtitle = when (testMode) {
+                    AnebTestMode.NETWORK_BASIC -> "快测、标准、弱网或恢复测试"
+                    AnebTestMode.TOKEN_SIMULATION -> "快测、标准或 100MiB 压力测试"
+                    AnebTestMode.AI_REALTIME_SIMULATION -> "快测、标准或恢复测试"
+                    else -> "快测或标准测试"
+                },
             ) {
                 SegmentedControl(
                     options = modeOptions(testMode),
                     selected = mode,
                     onSelect = onModeChange,
                     label = { modeLabel(it, testMode) },
-                    modifier = Modifier.width(if (testMode == AnebTestMode.TOKEN_SIMULATION) 184.dp else 132.dp),
+                    modifier = Modifier.width(if (testMode == AnebTestMode.NETWORK_BASIC) 224.dp else if (testMode == AnebTestMode.TOKEN_SIMULATION) 184.dp else 132.dp),
                 )
             }
             HairlineDivider()
@@ -689,14 +694,17 @@ internal fun BackButton(onBack: () -> Unit) {
     )
 }
 
-private fun modeOptions(testMode: AnebTestMode): List<TestEngine.Mode> = if (
-    testMode == AnebTestMode.NETWORK_BASIC ||
-    testMode == AnebTestMode.TOKEN_SIMULATION ||
-    testMode == AnebTestMode.AI_REALTIME_SIMULATION
-) {
-    listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC, TestEngine.Mode.STRESS)
-} else {
-    listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC)
+private fun modeOptions(testMode: AnebTestMode): List<TestEngine.Mode> = when (testMode) {
+    AnebTestMode.NETWORK_BASIC -> listOf(
+        TestEngine.Mode.QUICK,
+        TestEngine.Mode.FORENSIC,
+        TestEngine.Mode.STRESS,
+        TestEngine.Mode.NETWORK_RECOVERY,
+    )
+    AnebTestMode.TOKEN_SIMULATION,
+    AnebTestMode.AI_REALTIME_SIMULATION,
+    -> listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC, TestEngine.Mode.STRESS)
+    AnebTestMode.TOKEN_EXPERIENCE -> listOf(TestEngine.Mode.QUICK, TestEngine.Mode.FORENSIC)
 }
 
 private fun modeLabel(mode: TestEngine.Mode, testMode: AnebTestMode): String = when (mode) {
@@ -707,4 +715,5 @@ private fun modeLabel(mode: TestEngine.Mode, testMode: AnebTestMode): String = w
         AnebTestMode.AI_REALTIME_SIMULATION -> "恢复"
         else -> "压力"
     }
+    TestEngine.Mode.NETWORK_RECOVERY -> "恢复"
 }

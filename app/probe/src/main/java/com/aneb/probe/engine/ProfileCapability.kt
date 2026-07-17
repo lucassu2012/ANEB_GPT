@@ -36,6 +36,7 @@ object ProfileCapability {
         ProfilePhase.TYPE_DOWNLOAD_LOADED,
         ProfilePhase.TYPE_UPLOAD_LOADED,
         ProfilePhase.TYPE_UDP_SEQUENCE,
+        ProfilePhase.TYPE_CONTROLLED_OUTAGE_RECOVERY,
         ProfilePhase.TYPE_POST_LOAD_LATENCY,
     )
     private val tokenRequiredFormulaIds = setOf(
@@ -81,6 +82,10 @@ object ProfileCapability {
         "application-request-failure-ratio-v1",
         "sequenced-udp-nonreturn-ratio-v1",
         "connection-stage-timing-v1",
+        "controlled-outage-observed-v1",
+        "trigger-ack-to-first-success-v1",
+        "post-recovery-request-success-ratio-v1",
+        "post-recovery-echo-rtt-v1",
     )
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired", "not_applicable")
@@ -219,23 +224,35 @@ object ProfileCapability {
             }
         }
         if (profile.modeId == ScenarioProfile.MODE_NETWORK_COMPREHENSIVE) {
-            if (profile.evaluation.scorePolicyId != "network-comprehensive-score-v1") add("网络综合评分策略未被当前引擎识别")
+            val recoveryProfile = profile.profileId == "network_comprehensive_weak_recovery"
+            val expectedScorePolicy = if (recoveryProfile) "network-recovery-score-v1" else "network-comprehensive-score-v1"
+            val expectedConclusionPolicy = if (recoveryProfile) "network-recovery-conclusions-v1" else "network-comprehensive-conclusions-v1"
+            if (profile.evaluation.scorePolicyId != expectedScorePolicy) add("网络综合评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("网络综合评分锚点策略未被当前引擎识别")
-            if (profile.evaluation.conclusionPolicyId != "network-comprehensive-conclusions-v1") add("网络综合结论策略未被当前引擎识别")
+            if (profile.evaluation.conclusionPolicyId != expectedConclusionPolicy) add("网络综合结论策略未被当前引擎识别")
             val requiredFormulaIds = profile.measurements
                 .filter { it.requiredForScore }
                 .map { it.formulaId }
                 .toSet()
             val unknown = requiredFormulaIds - networkRequiredFormulaIds
             if (unknown.isNotEmpty()) add("网络综合必需指标公式未被识别: ${unknown.sorted().joinToString()}")
-            if (profile.evidenceTier !in setOf("quick", "standard")) add("网络综合证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "recovery")) add("网络综合证据等级无效")
             if (profile.executionPlan != null) add("网络综合测试不得声明行为模型执行计划")
             val phaseTypes = profile.phases.map { it.type }
-            if (phaseTypes != networkComprehensivePhases.toList()) add("网络综合阶段顺序或集合不受支持")
+            val standardPhases = listOf(
+                ProfilePhase.TYPE_PATH_SETUP, ProfilePhase.TYPE_IDLE_LATENCY,
+                ProfilePhase.TYPE_DOWNLOAD_LOADED, ProfilePhase.TYPE_UPLOAD_LOADED,
+                ProfilePhase.TYPE_UDP_SEQUENCE, ProfilePhase.TYPE_POST_LOAD_LATENCY,
+            )
+            val recoveryPhases = standardPhases.toMutableList().apply {
+                add(lastIndex, ProfilePhase.TYPE_CONTROLLED_OUTAGE_RECOVERY)
+            }
+            if (phaseTypes != if (recoveryProfile) recoveryPhases else standardPhases) add("网络综合阶段顺序或集合不受支持")
             profile.syntheticImpairment?.let { impairment ->
-                if (profile.profileId != "network_comprehensive_weak_capacity_latency") add("合成弱网 Profile ID 不受支持")
+                if (profile.profileId !in setOf("network_comprehensive_weak_capacity_latency", "network_comprehensive_weak_recovery")) add("合成弱网 Profile ID 不受支持")
                 if (impairment.contractVersion != "aneb-synthetic-impairment-v1") add("合成弱网合同版本不受支持")
-                if (impairment.routeId != "weak-capacity-latency-v1") add("合成弱网路由不受支持")
+                val expectedRoute = if (recoveryProfile) "weak-recovery-v1" else "weak-capacity-latency-v1"
+                if (impairment.routeId != expectedRoute) add("合成弱网路由不受支持")
                 if (impairment.seed == 0L) add("合成弱网缺少 seed")
                 if (impairment.downlinkMbps <= 0.0 || impairment.uplinkMbps <= 0.0) add("合成弱网容量门限无效")
                 if (impairment.addedRttMs < 0 || impairment.jitterMs < 0) add("合成弱网时延参数无效")
@@ -243,6 +260,13 @@ object ProfileCapability {
                 if (!impairment.appliesTo.containsAll(requiredApplies)) add("合成弱网适用范围不完整")
                 val requiredExclusions = setOf("dns", "tcp", "tls", "udp", "radio_rsrp", "radio_sinr")
                 if (!impairment.excludedFromShaping.containsAll(requiredExclusions)) add("合成弱网排除项不完整")
+                if (recoveryProfile) {
+                    if (impairment.outageDurationMs != 2_000) add("恢复测试必须声明 2 秒应用请求不可用窗口")
+                    if ("application_request_availability_window" !in impairment.appliesTo) add("恢复测试缺少应用请求不可用范围")
+                    if (!impairment.excludedFromShaping.containsAll(setOf("ip_packet_loss", "route_change"))) add("恢复测试排除项不完整")
+                } else if (impairment.outageDurationMs != 0) {
+                    add("容量与时延弱网不得声明中断窗口")
+                }
                 val upload = profile.phases.firstOrNull { it.type == ProfilePhase.TYPE_UPLOAD_LOADED }
                 if (upload?.bytes != 131_072L || upload.chunkKb != 64 || upload.parallel != 2) {
                     add("合成弱网上传必须使用服务器确认的 128KiB 双连接分块")

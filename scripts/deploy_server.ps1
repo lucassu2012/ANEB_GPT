@@ -142,13 +142,18 @@ echo '--- smoke: isolated synthetic impairment contract ---'
 curl -sk https://127.0.0.1:8443/api/v1/impairments | python3 -c '
 import json, sys
 body = json.load(sys.stdin)
-assert len(body["policies"]) == 1, body
-p = body["policies"][0]
+assert len(body["policies"]) == 2, body
+policies = {p["route_id"]: p for p in body["policies"]}
+p = policies["weak-capacity-latency-v1"]
 assert p["contract_version"] == "aneb-synthetic-impairment-v1", p
 assert p["profile_id"] == "network_comprehensive_weak_capacity_latency", p
 assert p["version"] == "1.0.0" and p["route_id"] == "weak-capacity-latency-v1", p
 assert (p["downlink_mbps"], p["uplink_mbps"], p["added_rtt_ms"], p["jitter_ms"]) == (3, 1, 120, 30), p
-print("impairment_contract=weak_capacity_latency@1.0.0")
+r = policies["weak-recovery-v1"]
+assert r["profile_id"] == "network_comprehensive_weak_recovery", r
+assert r["version"] == "1.0.0" and r["outage_duration_ms"] == 2000, r
+assert (r["downlink_mbps"], r["uplink_mbps"], r["added_rtt_ms"], r["jitter_ms"]) == (5, 2, 80, 20), r
+print("impairment_contracts=weak_capacity_latency@1.0.0,weak_recovery@1.0.0")
 '
 synthetic='https://127.0.0.1:8443/synthetic/weak-capacity-latency-v1'
 query='impair_run=deploy-smoke&impair_seed=20260717&impair_seq=1'
@@ -160,6 +165,28 @@ query='impair_run=deploy-smoke-download&impair_seed=20260717&impair_seq=1'
 bytes=$(curl -sk "$synthetic/api/v1/download?bytes=65536&chunk_kb=16&$query" | wc -c)
 test "$bytes" -eq 65536
 echo "synthetic_download_bytes=$bytes"
+echo '--- smoke: run-scoped recovery outage ---'
+recovery='https://127.0.0.1:8443/synthetic/weak-recovery-v1'
+query='impair_run=deploy-recovery&impair_seed=20260717&impair_seq=1'
+code=$(curl -sk -D /tmp/aneb_recovery_headers -o /tmp/aneb_recovery_trigger -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/recovery?$query")
+test "$code" -eq 202
+grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_recovery@1.0.0' /tmp/aneb_recovery_headers
+grep -qi '^X-Aneb-Outage-Duration-Ms: 2000' /tmp/aneb_recovery_headers
+query='impair_run=deploy-recovery&impair_seed=20260717&impair_seq=2'
+code=$(curl -sk -D /tmp/aneb_recovery_blocked_headers -o /dev/null -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/echo?$query")
+test "$code" -eq 503
+grep -qi '^X-Aneb-Synthetic-Outage: active' /tmp/aneb_recovery_blocked_headers
+query='impair_run=deploy-recovery-other&impair_seed=20260717&impair_seq=1'
+code=$(curl -sk -o /dev/null -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/echo?$query")
+test "$code" -eq 200
+code=$(curl -sk -o /dev/null -w '%{http_code}' -X POST --data '{}' https://127.0.0.1:8443/api/v1/echo)
+test "$code" -eq 200
+sleep 3
+query='impair_run=deploy-recovery&impair_seed=20260717&impair_seq=3'
+code=$(curl -sk -o /dev/null -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/echo?$query")
+test "$code" -eq 200
+rm -f /tmp/aneb_recovery_headers /tmp/aneb_recovery_trigger /tmp/aneb_recovery_blocked_headers
+echo 'recovery_isolation=trigger202,same503,other200,normal200,recovered200'
 echo '--- smoke: shared UDP 8443 sequenced echo ---'
 python3 - <<'PY'
 import socket, struct, time

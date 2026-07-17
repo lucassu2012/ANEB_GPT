@@ -19,6 +19,7 @@ data class SyntheticNetworkEvidence(
     val uplinkMbps: Double,
     val addedRttMs: Int,
     val jitterMs: Int,
+    val outageDurationMs: Int = 0,
     val appliesTo: List<String>,
     val excludedFromShaping: List<String>,
     val serverAcknowledged: Boolean,
@@ -193,7 +194,8 @@ object NetworkComprehensiveScorer {
             add(
                 "本次为服务器确认的合成弱网：下行 ${synthetic.downlinkMbps.toDisplay()}Mbps、" +
                     "上行 ${synthetic.uplinkMbps.toDisplay()}Mbps、应用请求附加 RTT " +
-                    "${synthetic.addedRttMs}±${synthetic.jitterMs}ms。",
+                    "${synthetic.addedRttMs}±${synthetic.jitterMs}ms" +
+                    (synthetic.outageDurationMs.takeIf { it > 0 }?.let { "、应用请求中断 ${it}ms。" } ?: "。"),
             )
             add(
                 "未模拟 ${synthetic.excludedFromShaping.joinToString("、")}；" +

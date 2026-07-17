@@ -199,6 +199,7 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.QUICK -> "quick"
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "weak_capacity_latency"
+                                    TestEngine.Mode.NETWORK_RECOVERY -> "weak_recovery"
                                 },
                                 transport = config.transport,
                             ),
@@ -219,6 +220,7 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.QUICK -> "quick"
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "stress"
+                                    TestEngine.Mode.NETWORK_RECOVERY -> error("network_recovery_requires_network_test")
                                 },
                                 transport = config.transport,
                             ),
@@ -239,6 +241,7 @@ class ProbeRunService : Service() {
                                     TestEngine.Mode.QUICK -> "quick"
                                     TestEngine.Mode.FORENSIC -> "standard"
                                     TestEngine.Mode.STRESS -> "recovery"
+                                    TestEngine.Mode.NETWORK_RECOVERY -> error("network_recovery_requires_network_test")
                                 },
                                 transport = config.transport,
                             ),

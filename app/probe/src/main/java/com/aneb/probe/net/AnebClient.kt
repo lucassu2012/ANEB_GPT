@@ -101,6 +101,8 @@ class AnebClient(bound: BoundNetwork? = null) {
         val observed: String? = null,
         /** Server-confirmed synthetic profile; absent means no synthetic claim. */
         val syntheticImpairment: String? = null,
+        /** True only when the server explicitly marks this 503 as the declared synthetic outage. */
+        val syntheticOutageActive: Boolean = false,
     )
 
     suspend fun echo(url: String): EchoResult {
@@ -117,6 +119,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                     EchoResult(
                         t0Us, null, null, t3Us, null, null, resp.code, "http ${resp.code}", timing,
                         syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
+                        syntheticOutageActive = resp.header("X-Aneb-Synthetic-Outage") == "active",
                     )
                 } else {
                     val wire = json.decodeFromString(
@@ -129,6 +132,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                         t0Us, wire.t1Us, wire.t2Us, t3Us, offsetUs, rttUs,
                         resp.code, null, timing, observed = wire.observed,
                         syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
+                        syntheticOutageActive = resp.header("X-Aneb-Synthetic-Outage") == "active",
                     )
                 }
             }
@@ -136,6 +140,35 @@ class AnebClient(bound: BoundNetwork? = null) {
             throw e // 不吞取消（fail-closed §4.6/§4.7）
         } catch (e: Exception) {
             EchoResult(t0Us, null, null, null, null, null, null, e.toString(), timingFactory.recordFor(call))
+        }
+    }
+
+    data class SyntheticOutageTriggerResult(
+        val accepted: Boolean,
+        val httpCode: Int?,
+        val syntheticImpairment: String?,
+        val outageDurationMs: Int?,
+        val error: String?,
+    )
+
+    suspend fun triggerSyntheticOutage(url: String): SyntheticOutageTriggerResult {
+        val body = "{}".toRequestBody("application/json".toMediaType())
+        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        return try {
+            executeCancellable(call) { resp ->
+                resp.body?.close()
+                SyntheticOutageTriggerResult(
+                    accepted = resp.code == 202,
+                    httpCode = resp.code,
+                    syntheticImpairment = resp.header("X-Aneb-Synthetic-Impairment"),
+                    outageDurationMs = resp.header("X-Aneb-Outage-Duration-Ms")?.toIntOrNull(),
+                    error = if (resp.code == 202) null else "http ${resp.code}",
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            SyntheticOutageTriggerResult(false, null, null, null, e.toString())
         }
     }
 

@@ -43,7 +43,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v14：Profile v2——新增 realtime_simulation_result 独立表；不并入 TestRun/AQS。
     // v15：Profile v2——新增 network_comprehensive_result 独立证据表。
     // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
-    version = 16,
+    // v17：合成恢复——冻结中断时长、恢复用时、失败探针数和恢复后成功率。
+    version = 17,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -374,6 +375,19 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_16_17_SQL = listOf(
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `impairmentOutageDurationMs` INTEGER",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `recoveryTimeMs` REAL",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `recoveryFailureCount` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE `network_comprehensive_result` ADD COLUMN `postRecoverySuccessRatio` REAL",
+        )
+
+        internal val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_16_17_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -386,6 +400,7 @@ abstract class AnebDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+                        MIGRATION_16_17,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigration()

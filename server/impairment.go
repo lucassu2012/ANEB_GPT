@@ -16,25 +16,42 @@ import (
 )
 
 const (
-	syntheticImpairmentHeader = "X-Aneb-Synthetic-Impairment"
-	syntheticParametersHeader = "X-Aneb-Impairment-Parameters"
-	maxSyntheticRuns          = 4096
-	syntheticRunTTL           = 15 * time.Minute
+	syntheticImpairmentHeader     = "X-Aneb-Synthetic-Impairment"
+	syntheticParametersHeader     = "X-Aneb-Impairment-Parameters"
+	syntheticOutageHeader         = "X-Aneb-Synthetic-Outage"
+	syntheticOutageDurationHeader = "X-Aneb-Outage-Duration-Ms"
+	maxSyntheticRuns              = 4096
+	syntheticRunTTL               = 15 * time.Minute
 )
 
 var syntheticRunIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 type syntheticImpairmentPolicy struct {
-	ContractVersion string   `json:"contract_version"`
-	ProfileID       string   `json:"profile_id"`
-	Version         string   `json:"version"`
-	RouteID         string   `json:"route_id"`
-	DownlinkMbps    float64  `json:"downlink_mbps"`
-	UplinkMbps      float64  `json:"uplink_mbps"`
-	AddedRTTMs      int      `json:"added_rtt_ms"`
-	JitterMs        int      `json:"jitter_ms"`
-	AppliesTo       []string `json:"applies_to"`
-	Excluded        []string `json:"excluded_from_shaping"`
+	ContractVersion  string   `json:"contract_version"`
+	ProfileID        string   `json:"profile_id"`
+	Version          string   `json:"version"`
+	RouteID          string   `json:"route_id"`
+	DownlinkMbps     float64  `json:"downlink_mbps"`
+	UplinkMbps       float64  `json:"uplink_mbps"`
+	AddedRTTMs       int      `json:"added_rtt_ms"`
+	JitterMs         int      `json:"jitter_ms"`
+	OutageDurationMs int      `json:"outage_duration_ms,omitempty"`
+	AppliesTo        []string `json:"applies_to"`
+	Excluded         []string `json:"excluded_from_shaping"`
+}
+
+var weakRecoveryPolicy = syntheticImpairmentPolicy{
+	ContractVersion:  "aneb-synthetic-impairment-v1",
+	ProfileID:        "network_comprehensive_weak_recovery",
+	Version:          "1.0.0",
+	RouteID:          "weak-recovery-v1",
+	DownlinkMbps:     5,
+	UplinkMbps:       2,
+	AddedRTTMs:       80,
+	JitterMs:         20,
+	OutageDurationMs: 2_000,
+	AppliesTo:        []string{"http_request_delay", "http_request_body", "http_response_body", "application_request_availability_window"},
+	Excluded:         []string{"dns", "tcp", "tls", "udp", "ip_packet_loss", "route_change", "radio_rsrp", "radio_sinr"},
 }
 
 var weakCapacityLatencyPolicy = syntheticImpairmentPolicy{
@@ -51,8 +68,10 @@ var weakCapacityLatencyPolicy = syntheticImpairmentPolicy{
 }
 
 func syntheticPolicyByRoute(routeID string) (syntheticImpairmentPolicy, bool) {
-	if routeID == weakCapacityLatencyPolicy.RouteID {
-		return weakCapacityLatencyPolicy, true
+	for _, policy := range []syntheticImpairmentPolicy{weakCapacityLatencyPolicy, weakRecoveryPolicy} {
+		if routeID == policy.RouteID {
+			return policy, true
+		}
 	}
 	return syntheticImpairmentPolicy{}, false
 }
@@ -66,7 +85,7 @@ func (a *app) handleSyntheticImpairments(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
 		Policies []syntheticImpairmentPolicy `json:"policies"`
-	}{Policies: []syntheticImpairmentPolicy{weakCapacityLatencyPolicy}})
+	}{Policies: []syntheticImpairmentPolicy{weakCapacityLatencyPolicy, weakRecoveryPolicy}})
 }
 
 type syntheticImpairmentRegistry struct {
@@ -75,9 +94,29 @@ type syntheticImpairmentRegistry struct {
 }
 
 type syntheticRunState struct {
-	uplink   serialByteLimiter
-	downlink serialByteLimiter
-	lastSeen time.Time
+	uplink          serialByteLimiter
+	downlink        serialByteLimiter
+	lastSeen        time.Time
+	outageMu        sync.Mutex
+	outageTriggered bool
+	outageUntil     time.Time
+}
+
+func (s *syntheticRunState) triggerOutage(now time.Time, duration time.Duration) (bool, time.Time) {
+	s.outageMu.Lock()
+	defer s.outageMu.Unlock()
+	if !s.outageTriggered {
+		s.outageTriggered = true
+		s.outageUntil = now.Add(duration)
+		return true, s.outageUntil
+	}
+	return false, s.outageUntil
+}
+
+func (s *syntheticRunState) outageActive(now time.Time) bool {
+	s.outageMu.Lock()
+	defer s.outageMu.Unlock()
+	return s.outageTriggered && now.Before(s.outageUntil)
 }
 
 func (r *syntheticImpairmentRegistry) get(policy syntheticImpairmentPolicy, runID string) (*syntheticRunState, error) {
@@ -158,7 +197,9 @@ func (a *app) syntheticImpairmentHandler(api http.Handler) http.Handler {
 			return
 		}
 		rewrittenPath := "/" + parts[1]
-		if rewrittenPath != "/api/v1/echo" && rewrittenPath != "/api/v1/download" && rewrittenPath != "/api/v1/upload" {
+		isRecoveryTrigger := rewrittenPath == "/api/v1/recovery"
+		if rewrittenPath != "/api/v1/echo" && rewrittenPath != "/api/v1/download" && rewrittenPath != "/api/v1/upload" &&
+			!(isRecoveryTrigger && policy.OutageDurationMs > 0) {
 			http.Error(w, "endpoint not supported by synthetic impairment", http.StatusNotFound)
 			return
 		}
@@ -188,11 +229,40 @@ func (a *app) syntheticImpairmentHandler(api http.Handler) http.Handler {
 			return
 		}
 
+		w.Header().Set(syntheticImpairmentHeader, policy.ProfileID+"@"+policy.Version)
+		parameters := fmt.Sprintf("dl=%.3g;ul=%.3g;rtt=%d;jitter=%d", policy.DownlinkMbps, policy.UplinkMbps, policy.AddedRTTMs, policy.JitterMs)
+		if policy.OutageDurationMs > 0 {
+			parameters += fmt.Sprintf(";outage=%d", policy.OutageDurationMs)
+			w.Header().Set(syntheticOutageDurationHeader, strconv.Itoa(policy.OutageDurationMs))
+		}
+		w.Header().Set(syntheticParametersHeader, parameters)
+		limitedWriter := &limitedResponseWriter{ResponseWriter: w, limiter: &state.downlink, ctx: r.Context()}
+
+		if isRecoveryTrigger {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			armed, _ := state.triggerOutage(time.Now(), time.Duration(policy.OutageDurationMs)*time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(limitedWriter).Encode(struct {
+				Armed            bool `json:"armed"`
+				OutageDurationMs int  `json:"outage_duration_ms"`
+			}{Armed: armed, OutageDurationMs: policy.OutageDurationMs})
+			return
+		}
+
+		if policy.OutageDurationMs > 0 && state.outageActive(time.Now()) {
+			w.Header().Set(syntheticOutageHeader, "active")
+			w.Header().Set("Retry-After", "1")
+			http.Error(limitedWriter, "synthetic application request outage", http.StatusServiceUnavailable)
+			return
+		}
+
 		r.URL.Path = rewrittenPath
 		r.Body = &limitedReadCloser{ReadCloser: r.Body, limiter: &state.uplink, ctx: r.Context()}
-		w.Header().Set(syntheticImpairmentHeader, policy.ProfileID+"@"+policy.Version)
-		w.Header().Set(syntheticParametersHeader, fmt.Sprintf("dl=%.3g;ul=%.3g;rtt=%d;jitter=%d", policy.DownlinkMbps, policy.UplinkMbps, policy.AddedRTTMs, policy.JitterMs))
-		api.ServeHTTP(&limitedResponseWriter{ResponseWriter: w, limiter: &state.downlink, ctx: r.Context()}, r)
+		api.ServeHTTP(limitedWriter, r)
 	})
 }
 

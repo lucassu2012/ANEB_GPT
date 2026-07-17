@@ -171,6 +171,7 @@ data class ProfilePhase(
         const val TYPE_DOWNLOAD_LOADED = "download_loaded"
         const val TYPE_UPLOAD_LOADED = "upload_loaded"
         const val TYPE_UDP_SEQUENCE = "udp_sequence"
+        const val TYPE_CONTROLLED_OUTAGE_RECOVERY = "controlled_outage_recovery"
         const val TYPE_POST_LOAD_LATENCY = "post_load_latency"
     }
 }
@@ -188,6 +189,7 @@ data class ProfileSyntheticImpairment(
     @SerialName("uplink_mbps") val uplinkMbps: Double,
     @SerialName("added_rtt_ms") val addedRttMs: Int,
     @SerialName("jitter_ms") val jitterMs: Int,
+    @SerialName("outage_duration_ms") val outageDurationMs: Int = 0,
     @SerialName("applies_to") val appliesTo: List<String>,
     @SerialName("excluded_from_shaping") val excludedFromShaping: List<String>,
 )
@@ -251,6 +253,7 @@ object ProfileParser {
         "published/network_comprehensive_quick/profile.json",
         "published/network_comprehensive_standard/profile.json",
         "published/network_comprehensive_weak_capacity_latency/profile.json",
+        "published/network_comprehensive_weak_recovery/profile.json",
     )
 
     private val json = Json { ignoreUnknownKeys = true }

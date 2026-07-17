@@ -91,6 +91,7 @@ fun HomeScreen(
     var confirmStress by remember { mutableStateOf(false) }
     var confirmRecovery by remember { mutableStateOf(false) }
     var confirmWeakNetwork by remember { mutableStateOf(false) }
+    var confirmNetworkRecovery by remember { mutableStateOf(false) }
     val density = LocalDensity.current
     val collapsedHeight = 150.dp
     val halfHeight = 250.dp
@@ -138,6 +139,8 @@ fun HomeScreen(
                 onStart = {
                     if (testMode == AnebTestMode.NETWORK_BASIC && mode == TestEngine.Mode.STRESS) {
                         confirmWeakNetwork = true
+                    } else if (testMode == AnebTestMode.NETWORK_BASIC && mode == TestEngine.Mode.NETWORK_RECOVERY) {
+                        confirmNetworkRecovery = true
                     } else if (testMode == AnebTestMode.TOKEN_SIMULATION && mode == TestEngine.Mode.STRESS) {
                         confirmStress = true
                     } else if (testMode == AnebTestMode.AI_REALTIME_SIMULATION && mode == TestEngine.Mode.STRESS) {
@@ -149,10 +152,10 @@ fun HomeScreen(
             )
             Text(
                 when (testMode) {
-                    AnebTestMode.NETWORK_BASIC -> if (mode == TestEngine.Mode.STRESS) {
-                        "隔离模拟 ↓3 / ↑1 Mbps 与 +120±30ms 应用时延，真实无线信号保持不变"
-                    } else {
-                        "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
+                    AnebTestMode.NETWORK_BASIC -> when (mode) {
+                        TestEngine.Mode.STRESS -> "隔离模拟 ↓3 / ↑1 Mbps 与 +120±30ms 应用时延，真实无线信号保持不变"
+                        TestEngine.Mode.NETWORK_RECOVERY -> "隔离模拟一次 2 秒应用请求不可用窗口，动态测量恢复用时与恢复后稳定性"
+                        else -> "并行测量上下行容量、负载 RTT、稳定性与 UDP 应用探针"
                     }
                     AnebTestMode.TOKEN_SIMULATION -> if (mode == TestEngine.Mode.STRESS) {
                         "100MiB 视频上传 + 100MiB 大对象返回，动态测量容量与负载 RTT"
@@ -299,20 +302,22 @@ fun HomeScreen(
                         symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
                         label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "测试档位",
                         value = when (testMode) {
-                            AnebTestMode.NETWORK_BASIC -> if (mode == TestEngine.Mode.STRESS) {
-                                "当前：合成弱网 · 约 42 秒 · ↓3 ↑1 Mbps · +120±30ms"
-                            } else {
-                                modeSummary(mode, "约 20 秒", "约 42 秒")
+                            AnebTestMode.NETWORK_BASIC -> when (mode) {
+                                TestEngine.Mode.STRESS -> "当前：合成弱网 · 约 42 秒 · ↓3 ↑1 Mbps · +120±30ms"
+                                TestEngine.Mode.NETWORK_RECOVERY -> "当前：合成恢复 · 约 30 秒 · 单次 2 秒请求中断"
+                                else -> modeSummary(mode, "约 20 秒", "约 42 秒")
                             }
                             AnebTestMode.TOKEN_SIMULATION -> when (mode) {
                                 TestEngine.Mode.QUICK -> "当前：快测 · 约 2 分钟"
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 23 分钟"
                                 TestEngine.Mode.STRESS -> "当前：压力 · 约 2–5 分钟 · 约 200MiB 流量"
+                                TestEngine.Mode.NETWORK_RECOVERY -> "当前：不可用于 Token 仿真"
                             }
                             AnebTestMode.AI_REALTIME_SIMULATION -> when (mode) {
                                 TestEngine.Mode.QUICK -> "当前：快测 · 约 25 秒"
                                 TestEngine.Mode.FORENSIC -> "当前：标准 · 约 22 分钟"
                                 TestEngine.Mode.STRESS -> "当前：恢复 · 约 1 分钟 · 2 次受控中断"
+                                TestEngine.Mode.NETWORK_RECOVERY -> "当前：不可用于 AI 实时"
                             }
                             AnebTestMode.TOKEN_EXPERIENCE -> "完成首次测试后显示"
                         },
@@ -379,6 +384,25 @@ fun HomeScreen(
                 },
             )
         }
+
+        if (confirmNetworkRecovery) {
+            AlertDialog(
+                onDismissRequest = { confirmNetworkRecovery = false },
+                title = { Text("开始合成恢复测试？") },
+                text = {
+                    Text(
+                        "本次只对 ANEB 当前 run 制造一次 2 秒应用请求不可用窗口，并动态测量触发响应到首个成功请求的时间。" +
+                            "其他 run 和正常路由不受影响；这不是 IP 断网、丢包、切网或 RSRP/SINR 变化。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { confirmNetworkRecovery = false; onStart() }) { Text("开始恢复测试") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmNetworkRecovery = false }) { Text("取消") }
+                },
+            )
+        }
     }
 }
 
@@ -386,6 +410,7 @@ private fun modeSummary(mode: TestEngine.Mode, quick: String, standard: String):
     TestEngine.Mode.QUICK -> "当前：快测 · $quick"
     TestEngine.Mode.FORENSIC -> "当前：标准 · $standard"
     TestEngine.Mode.STRESS -> "当前：快测 · $quick"
+    TestEngine.Mode.NETWORK_RECOVERY -> "当前：恢复测试"
 }
 
 @Composable

@@ -13,20 +13,20 @@
 - `profiles/` — Profile Contract v2（客户端/服务端共享，发布即冻结，改动须升版本）
   - `token_multimodal_quick/standard/stress`：多模态 Token 行为仿真与 100MiB 大对象压力测试
   - `ai_realtime_voice_quick/standard/recovery`：20ms 双向帧 AI 实时交互仿真与受控恢复
-  - `network_comprehensive_quick/standard/weak_capacity_latency`：容量、loaded RTT、稳定性、UDP 应用探针与隔离式合成弱网
+  - `network_comprehensive_quick/standard/weak_capacity_latency/weak_recovery`：容量、loaded RTT、稳定性、UDP 应用探针与隔离式合成弱网/恢复
 - `evidence/` — 验收证据目录（四态证据制，规则见其 README）
 - `app/` — Android 客户端（Kotlin，minSdk 29；Compose + OkHttp/Cronet + Room）
 - `server/` — Go 仿真服务器（SSE token 发生器 / 上行汇 / 结果落盘；标准库 + quic-go 专项，E-01 已部署）
 
 **命名消歧**：本项目对外称 **ANEB Probe**；并行姊妹项目（Application Echo RTT 垂直切片）称 **ANEB Android Echo 切片**，两者同属 ANEB 研究计划、范围互补。
 
-## 当前状态（2026-07-17，0.4.7）
+## 当前状态（2026-07-17，0.4.8）
 
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
-- E-01 已部署 `aneb-server/0.6.0`：保留 Token/实时交互/H3/UDP 全部能力，并新增逐 run 隔离的 `weak-capacity-latency-v1` 用户态弱网路径（↓3/↑1Mbps、请求附加 RTT 120±30ms）；正常路由不整形，DNS/TCP/TLS/UDP/RSRP/SINR 不伪造。权威能力与部署纪律见 `docs/TEST_SERVER_CAPABILITIES.md`。
-- Token、AI 实时和网络综合均已在 P40 Pro 完成端到端验收；Token Stress 完成 100MiB 上下行，AI 实时 Standard/Recovery 已完成长测。合成弱网与相邻正常 Standard 已完成 P40 对照：下载 P5 17.66→2.80Mbps、上传 P5 15.91→1.12Mbps、空闲 RTT P95 增加 118.24ms；Room 已到 v16。
-- 最终质量门：434 JVM tests、0 failures；Android Lint 0 errors；行为模型 14 tests PASS；Go tests PASS；0.4.7 Debug APK 已生成并安装到 Codex 独立包。
-- 当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-47。
+- E-01 已部署 `aneb-server/0.7.0`：保留 Token/实时交互/H3/UDP 全部能力；容量/时延弱网与 2 秒请求中断恢复均逐 run 隔离，正常路由和其他 run 不受影响。DNS/TCP/TLS/UDP/IP 丢包/切网/RSRP/SINR 不伪造。权威能力与部署纪律见 `docs/TEST_SERVER_CAPABILITIES.md`。
+- Token、AI 实时和网络综合均已在 P40 Pro 完成端到端验收；Token Stress 完成 100MiB 上下行，AI 实时 Standard/Recovery 已完成长测。网络合成恢复完成 4 次独立 run：恢复 2084.4–2227.3ms、恢复后请求成功率均为 100%，并捕获真实动态恢复计时与中断指针；Room 已到 v17。
+- 最终质量门：439 JVM tests、0 failures；Android Lint 0 errors；行为模型 14 tests PASS；Go tests PASS；0.4.8 Debug APK 已生成并安装到 Codex 独立包，SHA-256 为 `63A5300744DE3EB84E1E0CA6A310C9E04274234B60A5EA74F11EBAED3FFDB317`。
+- 当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量裁定见 `docs/DECISION_LOG.md` D-36～D-49。
 
 后续扩展项包括三类 Standard 长时回归、Stress 的取消/断网/切后台恢复、`agent_control` / `background_continuity` / `realtime_visual` Profile、海外节点和 CAMARA QoD。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。
