@@ -45,6 +45,28 @@ class RealtimeSimulationScorerTest {
     }
 
     @Test
+    fun `standard fail conclusion names every missed required quality gate`() {
+        val base = goodEvidence("standard", 10, 12)
+        val degraded = base.copy(
+            sessions = base.sessions.mapIndexed { sessionIndex, session ->
+                session.copy(
+                    turns = session.turns.mapIndexed { turnIndex, turn ->
+                        turn.copy(responseExcessMs = if ((sessionIndex * 12 + turnIndex) % 10 == 0) 250.0 else 40.0)
+                    },
+                )
+            },
+        )
+
+        val result = RealtimeSimulationScorer.score(degraded)
+
+        assertEquals(TokenConfidence.HIGH, result.confidence)
+        assertEquals(TokenVerdict.FAIL, result.verdict)
+        assertTrue(result.conclusions.any { it.contains("LIVE-B04 响应超额时延达标率 90.0% < 95.0%") })
+        assertTrue(result.conclusions.any { it.contains("即使综合分或等级较高") })
+        assertTrue(result.conclusions.any { it.contains("响应超额时延 P95 250.0ms") })
+    }
+
+    @Test
     fun `missing required RTT suppresses score`() {
         val evidence = goodEvidence("standard", 10, 12).copy(
             sessions = goodEvidence("standard", 10, 12).sessions.map { it.copy(rttSamplesMs = emptyList()) },

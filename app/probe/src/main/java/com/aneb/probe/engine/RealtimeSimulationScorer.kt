@@ -105,6 +105,22 @@ object RealtimeSimulationScorer {
         "LIVE-N02" to 10,
     )
 
+    private val qualityGateLabels = mapOf(
+        "LIVE-B01" to "会话建立成功率",
+        "LIVE-B02" to "会话建立时延",
+        "LIVE-B04" to "响应超额时延",
+        "LIVE-B05" to "音频准时帧率",
+        "LIVE-B06" to "音频卡顿率",
+        "LIVE-B07" to "音频掩盖样本率",
+        "LIVE-B08" to "打断响应时延",
+        "LIVE-B09" to "轮次成功率",
+        "LIVE-B10" to "会话中断率",
+        "LIVE-N01" to "WebSocket 握手时延",
+        "LIVE-N02" to "会话内 RTT",
+        "LIVE-N03" to "帧到达变化",
+        "LIVE-N04" to "应用音频帧未返回率",
+    )
+
     fun score(
         evidence: RealtimeRunEvidence,
         scorePolicyId: String = "realtime-interaction-score-v1",
@@ -447,10 +463,26 @@ object RealtimeSimulationScorer {
         capReason: String?,
     ): List<String> = buildList {
         add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
-        if (variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
         fun percent(id: String) = metrics[id]?.complianceRatio
             ?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) }
             ?: "不可用"
+        val failedQualityGates = specs
+            .filterValues { it.required }
+            .mapNotNull { (id, spec) ->
+                metrics[id]?.complianceRatio
+                    ?.takeIf { it + 1e-12 < spec.targetCompliance }
+                    ?.let { compliance ->
+                        "$id ${qualityGateLabels[id] ?: "必需指标"}达标率 " +
+                            "${String.format(Locale.ROOT, "%.1f%%", compliance * 100)} < " +
+                            "${String.format(Locale.ROOT, "%.1f%%", spec.targetCompliance * 100)}"
+                    }
+            }
+        if (failedQualityGates.isNotEmpty()) {
+            add("未达质量门限：${failedQualityGates.joinToString("；")}。")
+            add("ANEB 采用必需门限优先：任一必需指标未达，即使综合分或等级较高，结论仍为 FAIL。")
+        }
+        if (variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
+        add("相对业务计划的响应超额时延 P95 ${value("LIVE-B04", metrics, "ms")}（建议 ≤200ms，达标 ${percent("LIVE-B04")}）。")
         add("2 秒音频准时帧率 ${percent("LIVE-B05")}（目标 ≥99%，样本 ${metrics["LIVE-B05"]?.sampleCount ?: 0} 帧）。")
         add(
             "会话 RTT P95 ${value("LIVE-N02", metrics, "ms")}（建议 ≤100ms，达标 ${percent("LIVE-N02")}）；" +
