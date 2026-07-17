@@ -21,6 +21,27 @@ class RealtimeSimulationScorerTest {
         assertEquals(100.0, result.totalScore!!, 1e-9)
         assertEquals(TokenConfidence.HIGH, result.confidence)
         assertEquals(TokenVerdict.PASS, result.verdict)
+        assertEquals(
+            setOf(
+                "LIVE-B01", "LIVE-B02", "LIVE-B03", "LIVE-B04", "LIVE-B05", "LIVE-B06",
+                "LIVE-B07", "LIVE-B08", "LIVE-B09", "LIVE-B10", "LIVE-B11", "LIVE-B12",
+                "LIVE-N01", "LIVE-N02", "LIVE-N03", "LIVE-N04", "LIVE-N05", "LIVE-N06",
+                "LIVE-N07", "LIVE-N08", "LIVE-R01",
+            ),
+            result.metrics.keys,
+        )
+        assertEquals(0.512, result.metrics.getValue("LIVE-N06").componentValues.getValue("uplink_p05_mbps"), 1e-9)
+        assertEquals(120.0, result.metrics.getValue("LIVE-N07").value!!, 1e-9)
+        assertEquals(0.0, result.metrics.getValue("LIVE-N03").value!!, 1e-9)
+    }
+
+    @Test
+    fun `partial standard evidence cannot pass before minimum coverage`() {
+        val result = RealtimeSimulationScorer.score(goodEvidence("standard", 5, 12))
+
+        assertNotNull(result.totalScore)
+        assertEquals(TokenConfidence.MEDIUM, result.confidence)
+        assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
     }
 
     @Test
@@ -46,6 +67,30 @@ class RealtimeSimulationScorerTest {
         assertNotNull(result.capReason)
     }
 
+    @Test
+    fun `untriggered optional recovery stays unavailable without suppressing score`() {
+        val result = RealtimeSimulationScorer.score(goodEvidence("standard", 10, 12))
+
+        assertNotNull(result.totalScore)
+        assertNull(result.metrics.getValue("LIVE-B11").value)
+        assertEquals(0, result.metrics.getValue("LIVE-B11").sampleCount)
+        assertTrue(result.conclusions.any { it.contains("未触发连接中断") })
+    }
+
+    @Test
+    fun `observed reconnect freezes recovery evidence`() {
+        val base = goodEvidence("standard", 10, 12)
+        val sessions = base.sessions.toMutableList()
+        sessions[0] = sessions[0].copy(unexpectedDisconnect = true, error = "network_lost")
+        sessions[1] = sessions[1].copy(recoveryMs = 1_500.0, reconnectEvents = 1)
+
+        val result = RealtimeSimulationScorer.score(base.copy(sessions = sessions))
+
+        assertEquals(1_500.0, result.metrics.getValue("LIVE-B11").value!!, 1e-9)
+        assertEquals(1.0, result.metrics.getValue("LIVE-N08").value!!, 1e-9)
+        assertTrue(result.conclusions.any { it.contains("连接恢复 P95") })
+    }
+
     private fun goodEvidence(variant: String, sessionCount: Int, turnsPerSession: Int): RealtimeRunEvidence =
         RealtimeRunEvidence(
             variant = variant,
@@ -67,10 +112,16 @@ class RealtimeSimulationScorerTest {
                             bargeResponseMs = if (turnIndex < 2 || (variant == "quick" && turnIndex == 0)) 80.0 else null,
                             interrupted = turnIndex < 2 || (variant == "quick" && turnIndex == 0),
                             success = true,
+                            responseMs = 540.0,
+                            maxMissingRunFrames = 0,
+                            uplinkGoodputKbps = 512.0,
+                            downlinkGoodputKbps = 640.0,
+                            unplannedOverlap = if (turnIndex == 0) null else false,
                         )
                     },
                     unexpectedDisconnect = false,
                     error = null,
+                    loadedRttSamplesMs = List(20) { 120.0 },
                 )
             },
         )

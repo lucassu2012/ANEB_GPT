@@ -136,7 +136,13 @@ class TokenSimulationEngine(private val context: Context) {
                             delay(LOADED_ECHO_IDLE_GAP_MS)
                             continue
                         }
-                        val echo = runCatching { client.echo("$measureBase/api/v1/echo") }.getOrNull()
+                        val echo = try {
+                            client.echo("$measureBase/api/v1/echo")
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
                         val sample = echo?.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
                         loadedRttSamples += sample
                         _telemetry.value = _telemetry.value.copy(

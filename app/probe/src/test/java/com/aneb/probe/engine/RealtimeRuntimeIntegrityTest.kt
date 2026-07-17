@@ -24,6 +24,17 @@ class RealtimeRuntimeIntegrityTest {
             assertEquals(variant, plan.variant)
             assertEquals(plan.sessionCount, plan.sessions.size)
             assertTrue(plan.sessions.flatMap { it.turns }.any { it.interrupted })
+            assertEquals(
+                setOf(
+                    "LIVE-B01", "LIVE-B02", "LIVE-B03", "LIVE-B04", "LIVE-B05", "LIVE-B06",
+                    "LIVE-B07", "LIVE-B08", "LIVE-B09", "LIVE-B10", "LIVE-B11", "LIVE-B12",
+                    "LIVE-N01", "LIVE-N02", "LIVE-N03", "LIVE-N04", "LIVE-N05", "LIVE-N06",
+                    "LIVE-N07", "LIVE-N08", "LIVE-R01",
+                ),
+                profile.measurements.map { it.metricId }.toSet(),
+            )
+            assertEquals("AUDIO_ON_TIME_RATIO_2S", profile.livePresentation.primaryMetricId)
+            assertTrue(profile.livePresentation.secondaryMetricIds.contains("RTT_LIVE"))
         }
     }
 

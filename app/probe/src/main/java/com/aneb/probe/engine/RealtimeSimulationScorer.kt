@@ -1,5 +1,6 @@
 package com.aneb.probe.engine
 
+import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -15,6 +16,11 @@ data class RealtimeTurnEvidence(
     val bargeResponseMs: Double?,
     val interrupted: Boolean,
     val success: Boolean,
+    val responseMs: Double? = null,
+    val maxMissingRunFrames: Int? = null,
+    val uplinkGoodputKbps: Double? = null,
+    val downlinkGoodputKbps: Double? = null,
+    val unplannedOverlap: Boolean? = null,
 )
 
 data class RealtimeSessionEvidence(
@@ -25,6 +31,9 @@ data class RealtimeSessionEvidence(
     val turns: List<RealtimeTurnEvidence>,
     val unexpectedDisconnect: Boolean,
     val error: String?,
+    val loadedRttSamplesMs: List<Double?> = emptyList(),
+    val recoveryMs: Double? = null,
+    val reconnectEvents: Int = 0,
 )
 
 data class RealtimeRunEvidence(
@@ -41,6 +50,7 @@ data class RealtimeMetricEvidence(
     val minimumSampleCount: Int,
     val targetComplianceRatio: Double,
     val score: Double?,
+    val componentValues: Map<String, Double> = emptyMap(),
 )
 
 data class RealtimeScoreResult(
@@ -55,22 +65,34 @@ data class RealtimeScoreResult(
 )
 
 object RealtimeSimulationScorer {
-    private data class Spec(val minimum: Int, val target: Double)
+    private data class Spec(
+        val minimum: Int,
+        val targetCompliance: Double,
+        val required: Boolean = false,
+    )
 
     private val specs = linkedMapOf(
-        "LIVE-B01" to Spec(10, 0.99),
-        "LIVE-B02" to Spec(10, 0.95),
-        "LIVE-B04" to Spec(10, 0.95),
-        "LIVE-B05" to Spec(500, 0.99),
-        "LIVE-B06" to Spec(500, 0.99),
-        "LIVE-B07" to Spec(500, 0.99),
-        "LIVE-B08" to Spec(2, 0.95),
-        "LIVE-B09" to Spec(10, 0.99),
-        "LIVE-B10" to Spec(10, 0.99),
-        "LIVE-N01" to Spec(10, 0.95),
-        "LIVE-N02" to Spec(20, 0.95),
-        "LIVE-N03" to Spec(100, 0.95),
-        "LIVE-N04" to Spec(500, 0.99),
+        "LIVE-B01" to Spec(10, 0.99, required = true),
+        "LIVE-B02" to Spec(10, 0.95, required = true),
+        "LIVE-B03" to Spec(10, 0.95),
+        "LIVE-B04" to Spec(10, 0.95, required = true),
+        "LIVE-B05" to Spec(500, 0.99, required = true),
+        "LIVE-B06" to Spec(500, 0.99, required = true),
+        "LIVE-B07" to Spec(500, 0.99, required = true),
+        "LIVE-B08" to Spec(2, 0.95, required = true),
+        "LIVE-B09" to Spec(10, 0.99, required = true),
+        "LIVE-B10" to Spec(10, 0.99, required = true),
+        "LIVE-B11" to Spec(2, 0.95),
+        "LIVE-B12" to Spec(10, 0.99),
+        "LIVE-N01" to Spec(10, 0.95, required = true),
+        "LIVE-N02" to Spec(20, 0.95, required = true),
+        "LIVE-N03" to Spec(100, 0.95, required = true),
+        "LIVE-N04" to Spec(500, 0.99, required = true),
+        "LIVE-N05" to Spec(500, 0.95),
+        "LIVE-N06" to Spec(20, 0.95),
+        "LIVE-N07" to Spec(20, 0.95),
+        "LIVE-N08" to Spec(1, 0.0),
+        "LIVE-R01" to Spec(1, 0.0),
     )
 
     fun score(evidence: RealtimeRunEvidence): RealtimeScoreResult {
@@ -91,18 +113,28 @@ object RealtimeSimulationScorer {
         val variations = turns.flatMap { it.arrivalVariationMs }
         val barge = turns.filter { it.interrupted }.mapNotNull { it.bargeResponseMs }
         val rtt = sessions.flatMap { it.rttSamplesMs }
+        val loadedRttAttempts = sessions.flatMap { it.loadedRttSamplesMs }
+        val loadedRtt = loadedRttAttempts.filterNotNull()
 
-        fun metric(id: String, value: Double?, compliance: Double?, count: Int): RealtimeMetricEvidence {
+        fun metric(
+            id: String,
+            value: Double?,
+            compliance: Double?,
+            count: Int,
+            components: Map<String, Double> = emptyMap(),
+        ): RealtimeMetricEvidence {
             val spec = checkNotNull(specs[id])
             return RealtimeMetricEvidence(
-                id, value, compliance?.coerceIn(0.0, 1.0), count, spec.minimum, spec.target,
+                id, value, compliance?.coerceIn(0.0, 1.0), count, spec.minimum, spec.targetCompliance,
                 compliance?.let(TokenSimulationScorer::complianceScore),
+                components,
             )
         }
 
         val establishRatio = ratio(sessions.map { it.established })
         val setup = sessions.mapNotNull { it.setupMs }
         val setupPass = sessions.map { (it.setupMs ?: Double.POSITIVE_INFINITY) <= 2_000.0 }
+        val responseRaw = turns.mapNotNull { it.responseMs }
         val response = turns.mapNotNull { it.responseExcessMs }
         val responsePass = response.map { it <= 200.0 }
         val onTimeRatio = framesExpected.takeIf { it > 0 }?.let { onTimeFrames.toDouble() / it }
@@ -114,12 +146,34 @@ object RealtimeSimulationScorer {
         val handshake = sessions.mapNotNull { it.handshakeMs }
         val handshakePass = sessions.map { (it.handshakeMs ?: Double.POSITIVE_INFINITY) <= 1_000.0 }
         val rttPass = rtt.map { it <= 100.0 }
-        val variationPass = variations.map { kotlin.math.abs(it) <= 30.0 }
+        val absoluteVariations = variations.map { kotlin.math.abs(it) }
+        val variationPass = absoluteVariations.map { it <= 30.0 }
+        val variationSpread = percentile(absoluteVariations, 0.95)?.let { p95 ->
+            percentile(absoluteVariations, 0.50)?.let { p50 -> (p95 - p50).coerceAtLeast(0.0) }
+        }
         val completeness = framesExpected.takeIf { it > 0 }?.let { framesUnique.toDouble() / it }
+        val recoveries = sessions.mapNotNull { it.recoveryMs }
+        val recoveryPass = recoveries.map { it <= 3_000.0 }
+        val overlaps = turns.mapNotNull { it.unplannedOverlap }
+        val overlapRate = overlaps.takeIf { it.isNotEmpty() }?.let { values -> values.count { it }.toDouble() / values.size }
+        val missingRuns = turns.mapNotNull { it.maxMissingRunFrames }
+        val uplinkMbps = turns.mapNotNull { it.uplinkGoodputKbps?.div(1_000.0) }
+        val downlinkMbps = turns.mapNotNull { it.downlinkGoodputKbps?.div(1_000.0) }
+        val uplinkP05 = percentile(uplinkMbps, 0.05)
+        val downlinkP05 = percentile(downlinkMbps, 0.05)
+        val goodputComponents = buildMap {
+            uplinkP05?.let { put("uplink_p05_mbps", it) }
+            downlinkP05?.let { put("downlink_p05_mbps", it) }
+        }
+        val goodputCompliance = ratio(
+            uplinkMbps.map { it >= 0.50 } + downlinkMbps.map { it >= 0.50 },
+        )
+        val loadedPass = loadedRttAttempts.map { it != null && it <= 150.0 }
 
         val metrics = linkedMapOf(
             "LIVE-B01" to metric("LIVE-B01", establishRatio, establishRatio, sessions.size),
             "LIVE-B02" to metric("LIVE-B02", percentile(setup, 0.95), ratio(setupPass), sessions.size),
+            "LIVE-B03" to metric("LIVE-B03", percentile(responseRaw, 0.95), ratio(responsePass), responseRaw.size),
             "LIVE-B04" to metric("LIVE-B04", percentile(response, 0.95), ratio(responsePass), response.size),
             "LIVE-B05" to metric("LIVE-B05", onTimeRatio, onTimeRatio, framesExpected),
             "LIVE-B06" to metric("LIVE-B06", stallRate, stallRate?.let { 1.0 - it }, framesExpected),
@@ -127,13 +181,33 @@ object RealtimeSimulationScorer {
             "LIVE-B08" to metric("LIVE-B08", percentile(barge, 0.95), ratio(bargePass), barge.size),
             "LIVE-B09" to metric("LIVE-B09", turnSuccess, turnSuccess, turns.size),
             "LIVE-B10" to metric("LIVE-B10", sessionContinuity?.let { 1.0 - it }, sessionContinuity, sessions.size),
+            "LIVE-B11" to metric("LIVE-B11", percentile(recoveries, 0.95), ratio(recoveryPass), recoveries.size),
+            "LIVE-B12" to metric("LIVE-B12", overlapRate, overlapRate?.let { 1.0 - it }, overlaps.size),
             "LIVE-N01" to metric("LIVE-N01", percentile(handshake, 0.95), ratio(handshakePass), sessions.size),
             "LIVE-N02" to metric("LIVE-N02", percentile(rtt, 0.95), ratio(rttPass), rtt.size),
-            "LIVE-N03" to metric("LIVE-N03", percentile(variations.map { kotlin.math.abs(it) }, 0.95), ratio(variationPass), variations.size),
+            "LIVE-N03" to metric("LIVE-N03", variationSpread, ratio(variationPass), variations.size),
             "LIVE-N04" to metric("LIVE-N04", completeness?.let { 1.0 - it }, completeness, framesExpected),
+            "LIVE-N05" to metric(
+                "LIVE-N05",
+                missingRuns.maxOrNull()?.toDouble(),
+                missingRuns.maxOrNull()?.let { if (it <= 3) 1.0 else 0.0 },
+                framesExpected,
+            ),
+            "LIVE-N06" to metric(
+                "LIVE-N06",
+                listOfNotNull(uplinkP05, downlinkP05).takeIf { it.size == 2 }?.minOrNull(),
+                goodputCompliance,
+                uplinkMbps.size + downlinkMbps.size,
+                goodputComponents,
+            ),
+            "LIVE-N07" to metric("LIVE-N07", percentile(loadedRtt, 0.95), ratio(loadedPass), loadedRttAttempts.size),
+            "LIVE-N08" to metric("LIVE-N08", sessions.sumOf { it.reconnectEvents }.toDouble(), null, sessions.size),
+            "LIVE-R01" to metric("LIVE-R01", null, null, 0),
         )
-        val confidence = confidence(evidence.variant, metrics.values)
-        val missing = specs.keys.filter { metrics[it]?.complianceRatio == null }
+        val requiredIds = specs.filterValues { it.required }.keys
+        val requiredMetrics = requiredIds.mapNotNull(metrics::get)
+        val confidence = confidence(evidence.variant, requiredMetrics)
+        val missing = requiredIds.filter { metrics[it]?.complianceRatio == null }
         if (missing.isNotEmpty()) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
@@ -177,11 +251,11 @@ object RealtimeSimulationScorer {
             else -> null
         }
         if (capReason != null) total = minOf(total, 54.0)
-        val allTargetsMet = metrics.values.all { metric ->
+        val allTargetsMet = requiredMetrics.all { metric ->
             metric.complianceRatio?.let { it + 1e-12 >= metric.targetComplianceRatio } == true
         }
         val verdict = when {
-            confidence == TokenConfidence.LOW -> TokenVerdict.INCONCLUSIVE
+            confidence != TokenConfidence.HIGH -> TokenVerdict.INCONCLUSIVE
             capReason != null || !allTargetsMet -> TokenVerdict.FAIL
             else -> TokenVerdict.PASS
         }
@@ -213,13 +287,50 @@ object RealtimeSimulationScorer {
     ): List<String> = buildList {
         add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
         if (variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
-        fun percent(id: String) = metrics[id]?.complianceRatio?.let { "%.1f%%".format(it * 100) } ?: "不可用"
-        add("2 秒音频准时帧目标达标比例 ${percent("LIVE-B05")}（目标 ≥99%）。")
-        add("会话内 RTT <100ms 达标比例 ${percent("LIVE-N02")}（目标 ≥95%）。")
-        add("打断响应 <300ms 达标比例 ${percent("LIVE-B08")}（目标 ≥95%）。")
+        fun percent(id: String) = metrics[id]?.complianceRatio
+            ?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) }
+            ?: "不可用"
+        add("2 秒音频准时帧率 ${percent("LIVE-B05")}（目标 ≥99%，样本 ${metrics["LIVE-B05"]?.sampleCount ?: 0} 帧）。")
+        add(
+            "会话 RTT P95 ${value("LIVE-N02", metrics, "ms")}（建议 ≤100ms，达标 ${percent("LIVE-N02")}）；" +
+                "到达变化 P95−P50 ${value("LIVE-N03", metrics, "ms")}（建议 ≤30ms）。",
+        )
+        val loaded = metrics["LIVE-N07"]
+        add(
+            if (loaded?.value == null) {
+                "本次未取得有效负载 RTT 样本，不对通话负载时延作结论。"
+            } else {
+                "通话负载 RTT P95 ${value("LIVE-N07", metrics, "ms")}（建议 ≤150ms，达标 ${percent("LIVE-N07")}）。"
+            },
+        )
+        val goodput = metrics["LIVE-N06"]?.componentValues.orEmpty()
+        add(
+            "持续净荷速率 P05：上行 ${format(goodput["uplink_p05_mbps"], "Mbps")}、" +
+                "下行 ${format(goodput["downlink_p05_mbps"], "Mbps")}；本模型业务基线分别为 0.256/0.384Mbps。",
+        )
+        add("打断响应 P95 ${value("LIVE-B08", metrics, "ms")}（建议 ≤300ms，达标 ${percent("LIVE-B08")}）。")
+        val recovery = metrics["LIVE-B11"]
+        if (recovery?.sampleCount == 0) {
+            val reconnects = metrics["LIVE-N08"]?.value?.toInt() ?: 0
+            add(
+                if (reconnects == 0) {
+                    "本次未触发连接中断，不能评估恢复时延；恢复目标仍为 P95 ≤3000ms。"
+                } else {
+                    "检测到 $reconnects 次重连尝试但未取得成功恢复样本，不能宣称已恢复。"
+                },
+            )
+        } else {
+            add("连接恢复 P95 ${value("LIVE-B11", metrics, "ms")}（建议 ≤3000ms，样本 ${recovery?.sampleCount ?: 0}）。")
+        }
         add("该业务需要持续双向小包、低尾时延、低到达变化和稳定长连接；带宽不是首要瓶颈。")
         if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
     }
+
+    private fun value(id: String, metrics: Map<String, RealtimeMetricEvidence>, unit: String): String =
+        format(metrics[id]?.value, unit)
+
+    private fun format(value: Double?, unit: String): String =
+        value?.takeIf { it.isFinite() }?.let { String.format(Locale.ROOT, "%.1f%s", it, unit) } ?: "不可用"
 
     private fun ratio(values: List<Boolean>): Double? =
         values.takeIf { it.isNotEmpty() }?.let { list -> list.count { it }.toDouble() / list.size }

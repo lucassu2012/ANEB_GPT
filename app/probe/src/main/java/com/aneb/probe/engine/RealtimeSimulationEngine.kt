@@ -17,17 +17,24 @@ import com.aneb.probe.net.RealtimeSessionWireResult
 import com.aneb.probe.net.RealtimeSimulationWire
 import com.aneb.probe.net.RealtimeTurnWirePlan
 import com.aneb.probe.net.RealtimeWireCallbacks
+import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -67,6 +74,9 @@ data class RealtimeSimulationResult(
     val behaviorModelHash: String,
     val calibrationStatus: String,
     val variant: String,
+    val scorePolicyId: String,
+    val scoreAnchorPolicyId: String,
+    val conclusionPolicyId: String,
     val score: RealtimeScoreResult,
     val evidence: RealtimeRunEvidence,
 )
@@ -125,10 +135,36 @@ class RealtimeSimulationEngine(private val context: Context) {
             var invalidReason: String? = null
             val totalTurns = plan.sessions.sumOf { it.turnCount }.coerceAtLeast(1)
             var completedTurns = 0
+            var recoveryStartNanos: Long? = null
             for ((sessionIndex, session) in plan.sessions.withIndex()) {
+                val isRecoveryAttempt = recoveryStartNanos != null
                 val offsetUs = AtomicLong(Long.MIN_VALUE)
                 val onTimeWindow = ConcurrentLinkedQueue<Pair<Long, Boolean>>()
                 val downlinkWindow = ConcurrentLinkedQueue<Pair<Long, Int>>()
+                val loadedRttSamples = Collections.synchronizedList(mutableListOf<Double?>())
+                val loadedMonitorEnabled = AtomicBoolean(false)
+                var loadedMonitorJob: Job? = launch {
+                    while (isActive) {
+                        if (!loadedMonitorEnabled.get()) {
+                            delay(LOADED_ECHO_IDLE_GAP_MS)
+                            continue
+                        }
+                        val echo = try {
+                            client.echo("$measureBase/api/v1/echo")
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val sample = echo?.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
+                        loadedRttSamples += sample
+                        _telemetry.value = _telemetry.value.copy(
+                            liveRttMs = sample,
+                            updatedAtNanos = SystemClock.elapsedRealtimeNanos(),
+                        )
+                        delay(LOADED_ECHO_GAP_MS)
+                    }
+                }
                 val sessionStartProgress = completedTurns.toDouble() / totalTurns
                 _telemetry.value = _telemetry.value.copy(
                     phase = RealtimeSimulationPhase.CONNECTING,
@@ -181,6 +217,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                             )
                         },
                         onUplink = { turn, bytes, now ->
+                            loadedMonitorEnabled.set(true)
                             val started = uplinkStarted.putIfAbsent(turn, now) ?: now
                             val seconds = (now - started).coerceAtLeast(1) / 1_000_000_000.0
                             _telemetry.value = _telemetry.value.copy(
@@ -199,6 +236,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                             )
                         },
                         onDownlink = { frame ->
+                            loadedMonitorEnabled.set(true)
                             val responseMs = if (firstDownlinkTurns.add(frame.turnIndex)) {
                                 commitByTurn[frame.turnIndex]?.let { (frame.arrivalNanos - it).coerceAtLeast(0) / 1_000_000.0 }
                             } else null
@@ -213,8 +251,37 @@ class RealtimeSimulationEngine(private val context: Context) {
                         },
                     ),
                 )
-                val measured = measureSession(session, wire)
+                loadedMonitorEnabled.set(false)
+                loadedMonitorJob?.cancelAndJoin()
+                loadedMonitorJob = null
+                val loadedRttSnapshot = synchronized(loadedRttSamples) { loadedRttSamples.toList() }
+                val firstRecoveredAudioNanos = wire.turns
+                    .flatMap { it.downlinkFrames }
+                    .minOfOrNull { it.arrivalNanos }
+                val recoveryMs = if (isRecoveryAttempt && firstRecoveredAudioNanos != null) {
+                    recoveryStartNanos?.let { start ->
+                        (firstRecoveredAudioNanos - start).coerceAtLeast(0) / 1_000_000.0
+                    }
+                } else null
+                val measured = measureSession(
+                    session = session,
+                    wire = wire,
+                    loadedRttSamplesMs = loadedRttSnapshot,
+                    recoveryMs = recoveryMs,
+                    reconnectEvents = if (isRecoveryAttempt) 1 else 0,
+                )
                 evidence += measured
+                if (isRecoveryAttempt) {
+                    log(
+                        "REALTIME_V1_RECOVERY run_id=$runId session=${session.sessionId} " +
+                            "recovery_ms=${recoveryMs ?: "null"} established=${measured.established}",
+                    )
+                }
+                recoveryStartNanos = when {
+                    measured.unexpectedDisconnect -> recoveryStartNanos ?: wire.endNanos
+                    recoveryMs != null -> null
+                    else -> recoveryStartNanos
+                }
                 if (wire.ready?.contractVersion != "aneb-realtime-session-v1") invalidReason = "node_contract_mismatch"
                 completedTurns += session.turnCount
                 _telemetry.value = _telemetry.value.copy(progress = completedTurns.toDouble() / totalTurns)
@@ -226,7 +293,8 @@ class RealtimeSimulationEngine(private val context: Context) {
             val result = RealtimeSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
                 plan.modelId, plan.modelVersion, plan.modelHash, plan.calibrationStatus,
-                plan.variant, score, runEvidence,
+                plan.variant, profile.evaluation.scorePolicyId, profile.evaluation.scoreAnchorPolicyId,
+                profile.evaluation.conclusionPolicyId, score, runEvidence,
             )
             publishResult(result, log)
             _telemetry.value = _telemetry.value.copy(
@@ -276,9 +344,15 @@ class RealtimeSimulationEngine(private val context: Context) {
         )
     }
 
-    private fun measureSession(session: RealtimeRuntimeSession, wire: RealtimeSessionWireResult): RealtimeSessionEvidence {
+    private fun measureSession(
+        session: RealtimeRuntimeSession,
+        wire: RealtimeSessionWireResult,
+        loadedRttSamplesMs: List<Double?>,
+        recoveryMs: Double?,
+        reconnectEvents: Int,
+    ): RealtimeSessionEvidence {
         val offset = medianLong(wire.rttSamples.map { it.offsetUs })
-        val measuredTurns = session.turns.map { turn ->
+        val measuredTurns = session.turns.mapIndexed { turnIndex, turn ->
             val result = wire.turns.firstOrNull { it.plan.turnId == turn.turnId }
             val expected = if (turn.interrupted) turn.bargeInAfterFrames ?: turn.downlinkFramesBeforeStop else turn.plannedDownlinkFrames
             val unique = result?.downlinkFrames.orEmpty().filter { it.seq in 0 until expected }.associateBy { it.seq }
@@ -290,12 +364,38 @@ class RealtimeSimulationEngine(private val context: Context) {
                 if (b != a + 1) null else
                     (unique.getValue(b).arrivalNanos - unique.getValue(a).arrivalNanos) / 1_000_000.0 - session.frameMs
             }
-            val firstLateness = latenessBySeq[0]?.coerceAtLeast(0.0)
+            val responseMs = if (result != null) {
+                unique[0]?.arrivalNanos?.let { arrival ->
+                    (arrival - result.commitSentNanos).coerceAtLeast(0) / 1_000_000.0
+                }
+            } else null
+            val responseExcessMs = responseMs?.let { (it - turn.responseWaitMs).coerceAtLeast(0.0) }
             val bargeResponse = if (result?.bargeSentNanos != null && result.summaryArrivalNanos != null) {
                 (result.summaryArrivalNanos - result.bargeSentNanos).coerceAtLeast(0) / 1_000_000.0
             } else null
+            val presentFrames = (0 until expected).map(unique::containsKey)
+            val uplinkGoodputKbps = if (result?.uplinkStartNanos != null && result.uplinkEndNanos != null) {
+                val seconds = (result.uplinkEndNanos - result.uplinkStartNanos).coerceAtLeast(1) / 1_000_000_000.0
+                result.uplinkBytesAccepted * 8.0 / seconds / 1_000.0
+            } else null
+            val orderedFrames = unique.values.sortedBy { it.arrivalNanos }
+            val downlinkGoodputKbps = orderedFrames.takeIf { it.isNotEmpty() }?.let { frames ->
+                val durationNanos = if (frames.size == 1) {
+                    session.frameMs * 1_000_000L
+                } else {
+                    (frames.last().arrivalNanos - frames.first().arrivalNanos).coerceAtLeast(0) + session.frameMs * 1_000_000L
+                }
+                val seconds = durationNanos.coerceAtLeast(1) / 1_000_000_000.0
+                frames.sumOf { it.payloadBytes }.toDouble() * 8.0 / seconds / 1_000.0
+            }
+            val previousSummaryArrival = wire.turns.getOrNull(turnIndex - 1)?.summaryArrivalNanos
+            val unplannedOverlap = if (turnIndex == 0) {
+                null
+            } else {
+                result?.uplinkStartNanos?.let { start -> previousSummaryArrival?.let { start < it } }
+            }
             RealtimeTurnEvidence(
-                responseExcessMs = firstLateness,
+                responseExcessMs = responseExcessMs,
                 expectedFrames = expected,
                 uniqueFrames = unique.size,
                 onTimeFrames = usable.count { it },
@@ -305,6 +405,11 @@ class RealtimeSimulationEngine(private val context: Context) {
                 bargeResponseMs = bargeResponse,
                 interrupted = turn.interrupted,
                 success = result?.summary?.protocolOk == true && unique.size == expected,
+                responseMs = responseMs,
+                maxMissingRunFrames = maxBadRun(presentFrames),
+                uplinkGoodputKbps = uplinkGoodputKbps,
+                downlinkGoodputKbps = downlinkGoodputKbps,
+                unplannedOverlap = unplannedOverlap,
             )
         }
         return RealtimeSessionEvidence(
@@ -315,6 +420,9 @@ class RealtimeSimulationEngine(private val context: Context) {
             turns = measuredTurns,
             unexpectedDisconnect = wire.error != null || wire.summary?.protocolOk != true,
             error = wire.error,
+            loadedRttSamplesMs = loadedRttSamplesMs,
+            recoveryMs = recoveryMs,
+            reconnectEvents = reconnectEvents,
         )
     }
 
@@ -331,6 +439,20 @@ class RealtimeSimulationEngine(private val context: Context) {
         return total
     }
 
+    private fun maxBadRun(values: List<Boolean>): Int {
+        var run = 0
+        var maximum = 0
+        values.forEach { good ->
+            if (good) {
+                run = 0
+            } else {
+                run++
+                maximum = maxOf(maximum, run)
+            }
+        }
+        return maximum
+    }
+
     private suspend fun finishFailed(
         runId: String,
         startedAt: Long,
@@ -343,7 +465,8 @@ class RealtimeSimulationEngine(private val context: Context) {
         publishResult(RealtimeSimulationResult(
             runId, startedAt, server, "ai_realtime_voice_$variant", "unknown",
             "unknown", "unknown", "unknown", "unknown", variant,
-            RealtimeSimulationScorer.score(evidence), evidence,
+            "realtime-interaction-score-v1", "compliance-anchors-v1",
+            "realtime-interaction-conclusions-v1", RealtimeSimulationScorer.score(evidence), evidence,
         ), log)
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.FAILED)
     }
@@ -374,9 +497,9 @@ class RealtimeSimulationEngine(private val context: Context) {
         behaviorModelHash = behaviorModelHash,
         calibrationStatus = calibrationStatus,
         variant = variant,
-        scorePolicyId = "realtime-interaction-score-v1",
-        scoreAnchorPolicyId = "compliance-anchors-v1",
-        conclusionPolicyId = "realtime-interaction-conclusions-v1",
+        scorePolicyId = scorePolicyId,
+        scoreAnchorPolicyId = scoreAnchorPolicyId,
+        conclusionPolicyId = conclusionPolicyId,
         totalScore = score.totalScore,
         grade = score.grade,
         verdict = score.verdict.name,
@@ -391,6 +514,9 @@ class RealtimeSimulationEngine(private val context: Context) {
                     put("minimum_sample_count", metric.minimumSampleCount)
                     put("target_compliance_ratio", metric.targetComplianceRatio)
                     putNullableDouble("score", metric.score)
+                    put("component_values", buildJsonObject {
+                        metric.componentValues.forEach { (name, value) -> put(name, value) }
+                    })
                 })
             }
         }),
@@ -414,10 +540,14 @@ class RealtimeSimulationEngine(private val context: Context) {
                     put("unexpected_disconnect", session.unexpectedDisconnect)
                     put("error", session.error?.let(::JsonPrimitive) ?: JsonNull)
                     put("rtt_samples_ms", JsonArray(session.rttSamplesMs.map(::JsonPrimitive)))
+                    put("loaded_rtt_samples_ms", JsonArray(session.loadedRttSamplesMs.map { it?.let(::JsonPrimitive) ?: JsonNull }))
+                    putNullableDouble("recovery_ms", session.recoveryMs)
+                    put("reconnect_events", session.reconnectEvents)
                     put("turns", buildJsonArray {
                         session.turns.forEach { turn ->
                             add(buildJsonObject {
                                 putNullableDouble("response_excess_ms", turn.responseExcessMs)
+                                putNullableDouble("response_ms", turn.responseMs)
                                 put("expected_frames", turn.expectedFrames)
                                 put("unique_frames", turn.uniqueFrames)
                                 put("on_time_frames", turn.onTimeFrames)
@@ -425,6 +555,10 @@ class RealtimeSimulationEngine(private val context: Context) {
                                 put("conceal_frames", turn.concealFrames)
                                 put("arrival_variation_ms", JsonArray(turn.arrivalVariationMs.map(::JsonPrimitive)))
                                 putNullableDouble("barge_response_ms", turn.bargeResponseMs)
+                                put("max_missing_run_frames", turn.maxMissingRunFrames?.let(::JsonPrimitive) ?: JsonNull)
+                                putNullableDouble("uplink_goodput_kbps", turn.uplinkGoodputKbps)
+                                putNullableDouble("downlink_goodput_kbps", turn.downlinkGoodputKbps)
+                                put("unplanned_overlap", turn.unplannedOverlap?.let(::JsonPrimitive) ?: JsonNull)
                                 put("interrupted", turn.interrupted)
                                 put("success", turn.success)
                             })
@@ -444,5 +578,7 @@ class RealtimeSimulationEngine(private val context: Context) {
 
     private companion object {
         const val PLAYOUT_DEADLINE_MS = 150.0
+        const val LOADED_ECHO_GAP_MS = 250L
+        const val LOADED_ECHO_IDLE_GAP_MS = 50L
     }
 }

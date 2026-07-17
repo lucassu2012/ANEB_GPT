@@ -131,6 +131,7 @@ data class RealtimeSessionWireResult(
     val turns: List<RealtimeTurnWireResult>,
     val summary: RealtimeSessionSummaryWire?,
     val error: String?,
+    val endNanos: Long,
 )
 
 data class RealtimeWireCallbacks(
@@ -265,6 +266,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
             socket.close(1000, "complete")
             RealtimeSessionWireResult(
                 connectStart, openNanos, ready, readyArrival, rtt, turnResults, sessionSummary, null,
+                SystemClock.elapsedRealtimeNanos(),
             )
         } catch (e: CancellationException) {
             socket.cancel()
@@ -273,6 +275,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
             socket.cancel()
             RealtimeSessionWireResult(
                 connectStart, openNanos, ready, readyArrival, rtt, turnResults, sessionSummary, e.toString(),
+                SystemClock.elapsedRealtimeNanos(),
             )
         } finally {
             events.close()
@@ -335,7 +338,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
     }
 
     private fun failed(start: Long, error: String) = RealtimeSessionWireResult(
-        start, null, null, null, emptyList(), emptyList(), null, error,
+        start, null, null, null, emptyList(), emptyList(), null, error, SystemClock.elapsedRealtimeNanos(),
     )
 
     private sealed interface WireEvent {

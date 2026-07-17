@@ -166,6 +166,7 @@ fun RealtimeSimulationResultScreen(result: RealtimeSimulationResult, onBack: () 
         metrics = result.score.metrics,
         conclusions = result.score.conclusions,
         modelLine = "${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}",
+        policyLine = "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}",
         onBack = onBack,
     )
 }
@@ -205,6 +206,7 @@ fun RealtimeSimulationStoredResultScreen(result: RealtimeSimulationResultEntity,
         metrics = metrics,
         conclusions = conclusions,
         modelLine = "${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}",
+        policyLine = "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}",
         onBack = onBack,
     )
 }
@@ -220,6 +222,7 @@ private fun RealtimeResultContent(
     metrics: Map<String, RealtimeMetricEvidence>,
     conclusions: List<String>,
     modelLine: String,
+    policyLine: String,
     onBack: () -> Unit,
 ) {
     val colors = AnebTheme.colors
@@ -271,7 +274,7 @@ private fun RealtimeResultContent(
                 }
             }
             Text(
-                "评分 realtime-interaction-score-v1 · 锚点 compliance-anchors-v1\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
+                "$policyLine\n范围仅限本机到当前 ANEB 自建节点；不代表第三方 AI 服务性能",
                 fontSize = 9.sp,
                 lineHeight = 14.sp,
                 textAlign = TextAlign.Center,
