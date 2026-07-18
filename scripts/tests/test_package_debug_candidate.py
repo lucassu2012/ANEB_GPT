@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.package_debug_candidate import CandidateError, package_candidate, parse_identity, sha256
+from scripts.package_debug_candidate import CandidateError, build_tool, package_candidate, parse_identity, sha256
 
 
 BADGING = """package: name='com.aneb.probe.codex' versionCode='42' versionName='0.5.10-codex' platformBuildVersionName='15'
@@ -79,6 +81,35 @@ class DebugCandidatePackagingTest(unittest.TestCase):
     def test_parser_requires_complete_aapt_and_signer_identity(self) -> None:
         with self.assertRaisesRegex(CandidateError, "apk_identity_output_incomplete"):
             parse_identity("package: name='x'", SIGNER)
+
+    def test_parser_accepts_sdk_alias_reordered_fields_and_colon_digest(self) -> None:
+        badging = """package: versionName='0.5.10-codex' name='com.aneb.probe.codex' versionCode='42'
+sdkVersion:'29'
+targetSdkVersion:'35'
+"""
+        digest = "66" * 32
+        signer = SIGNER.replace(
+            "6644ddcf728b5bc9efaa07361fc828b9f419d977681000f2e4136c24340b89d9",
+            ":".join(digest[index : index + 2] for index in range(0, len(digest), 2)),
+        )
+        identity = parse_identity(badging, signer)
+        self.assertEqual("com.aneb.probe.codex", identity.package_id)
+        self.assertEqual(42, identity.version_code)
+        self.assertEqual(29, identity.min_sdk)
+        self.assertEqual(digest.upper(), identity.signer_sha256)
+
+    def test_build_tool_can_pin_exact_version(self) -> None:
+        sdk = self.root / "sdk"
+        tool_dir = sdk / "build-tools" / "35.0.0"
+        tool_dir.mkdir(parents=True)
+        suffix = ".exe" if os.name == "nt" else ""
+        expected = tool_dir / f"aapt2{suffix}"
+        expected.touch()
+        newer = sdk / "build-tools" / "99.0.0"
+        newer.mkdir()
+        (newer / f"aapt2{suffix}").touch()
+        with patch.dict(os.environ, {"ANDROID_HOME": str(sdk), "ANDROID_SDK_ROOT": ""}):
+            self.assertEqual(expected, build_tool("aapt2", "35.0.0"))
 
     def test_rejects_apk_and_gradle_identity_mismatch(self) -> None:
         mismatch = BADGING.replace("versionCode='42'", "versionCode='43'")

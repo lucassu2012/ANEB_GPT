@@ -18,14 +18,16 @@ from pathlib import Path
 
 CONTRACT_VERSION = "aneb-debug-candidate-v1"
 EXPECTED_PACKAGE = "com.aneb.probe.codex"
-PACKAGE_RE = re.compile(
-    r"package:\s+name='(?P<package>[^']+)'\s+versionCode='(?P<code>[^']+)'\s+"
-    r"versionName='(?P<name>[^']+)'"
-)
-MIN_SDK_RE = re.compile(r"minSdkVersion:'(?P<value>[^']+)'")
+PACKAGE_NAME_RE = re.compile(r"package:.*?\bname='(?P<value>[^']+)'")
+VERSION_CODE_RE = re.compile(r"package:.*?\bversionCode='(?P<value>[^']+)'")
+VERSION_NAME_RE = re.compile(r"package:.*?\bversionName='(?P<value>[^']+)'")
+MIN_SDK_RE = re.compile(r"(?:minSdkVersion|sdkVersion):'(?P<value>[^']+)'")
 TARGET_SDK_RE = re.compile(r"targetSdkVersion:'(?P<value>[^']+)'")
 CERT_DN_RE = re.compile(r"Signer #1 certificate DN:\s*(?P<value>.+)")
-CERT_SHA_RE = re.compile(r"Signer #1 certificate SHA-256 digest:\s*(?P<value>[0-9a-fA-F]{64})")
+CERT_SHA_RE = re.compile(
+    r"Signer #1 certificate SHA-256 digest:\s*"
+    r"(?P<value>(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}|[0-9a-fA-F]{64})"
+)
 
 
 class CandidateError(ValueError):
@@ -52,22 +54,34 @@ def sha256(path: Path) -> str:
 
 
 def parse_identity(badging: str, signer: str) -> ApkIdentity:
-    package = PACKAGE_RE.search(badging)
+    package = PACKAGE_NAME_RE.search(badging)
+    version_code = VERSION_CODE_RE.search(badging)
+    version_name = VERSION_NAME_RE.search(badging)
     min_sdk = MIN_SDK_RE.search(badging)
     target_sdk = TARGET_SDK_RE.search(badging)
     signer_dn = CERT_DN_RE.search(signer)
     signer_sha = CERT_SHA_RE.search(signer)
-    if not all((package, min_sdk, target_sdk, signer_dn, signer_sha)):
-        raise CandidateError("apk_identity_output_incomplete")
+    fields = {
+        "package": package,
+        "version_code": version_code,
+        "version_name": version_name,
+        "min_sdk": min_sdk,
+        "target_sdk": target_sdk,
+        "signer_dn": signer_dn,
+        "signer_sha256": signer_sha,
+    }
+    missing = [name for name, value in fields.items() if value is None]
+    if missing:
+        raise CandidateError("apk_identity_output_incomplete:" + ",".join(missing))
     try:
         return ApkIdentity(
-            package_id=package.group("package"),
-            version_code=int(package.group("code")),
-            version_name=package.group("name"),
+            package_id=package.group("value"),
+            version_code=int(version_code.group("value")),
+            version_name=version_name.group("value"),
             min_sdk=int(min_sdk.group("value")),
             target_sdk=int(target_sdk.group("value")),
             signer_dn=signer_dn.group("value").strip(),
-            signer_sha256=signer_sha.group("value").upper(),
+            signer_sha256=signer_sha.group("value").replace(":", "").upper(),
         )
     except ValueError as error:
         raise CandidateError("apk_identity_number_invalid") from error
@@ -213,7 +227,7 @@ def package_candidate(
     return manifest
 
 
-def build_tool(name: str) -> Path:
+def build_tool(name: str, version: str = "") -> Path:
     android_home = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
     if not android_home:
         raise CandidateError("android_sdk_environment_missing")
@@ -225,14 +239,20 @@ def build_tool(name: str) -> Path:
         values = re.findall(r"\d+", path.name)
         return tuple(int(value) for value in values) if values else (0,)
 
-    candidates = sorted((path for path in root.iterdir() if path.is_dir()), key=version_key, reverse=True)
+    if version:
+        if re.fullmatch(r"\d+(?:\.\d+){1,3}", version) is None:
+            raise CandidateError("android_build_tools_version_invalid")
+        candidates = [root / version]
+    else:
+        candidates = sorted((path for path in root.iterdir() if path.is_dir()), key=version_key, reverse=True)
     suffixes = [".exe"] if name == "aapt2" and os.name == "nt" else [".bat", ".cmd", ".exe"] if os.name == "nt" else [""]
     for directory in candidates:
         for suffix in suffixes:
             candidate = directory / f"{name}{suffix}"
             if candidate.is_file():
                 return candidate
-    raise CandidateError(f"android_build_tool_missing:{name}")
+    requested = f":{version}" if version else ""
+    raise CandidateError(f"android_build_tool_missing:{name}{requested}")
 
 
 def run_tool(tool: Path, *arguments: str) -> str:
@@ -254,14 +274,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-sha", default="")
     parser.add_argument("--source-ref", default="")
     parser.add_argument("--run-url", default="")
+    parser.add_argument(
+        "--build-tools-version",
+        default=os.environ.get("ANEB_BUILD_TOOLS_VERSION", ""),
+        help="Exact Android build-tools version used for identity/signature verification.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        badging = run_tool(build_tool("aapt2"), "dump", "badging", str(args.apk))
-        signer = run_tool(build_tool("apksigner"), "verify", "--print-certs", str(args.apk))
+        badging = run_tool(build_tool("aapt2", args.build_tools_version), "dump", "badging", str(args.apk))
+        signer = run_tool(
+            build_tool("apksigner", args.build_tools_version),
+            "verify",
+            "--print-certs",
+            str(args.apk),
+        )
         manifest = package_candidate(
             args.apk,
             args.metadata,

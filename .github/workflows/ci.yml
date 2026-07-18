@@ -31,6 +31,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+      - name: Install pinned Android identity tools
+        run: sdkmanager "build-tools;35.0.0"
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, lint, and build Android probe
         working-directory: app
@@ -57,6 +59,7 @@ jobs:
           --source-sha "${{ github.sha }}"
           --source-ref "${{ github.ref }}"
           --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          --build-tools-version "35.0.0"
       - name: Attest exact Debug APK provenance
         if: github.event_name != 'pull_request'
         uses: actions/attest@v4

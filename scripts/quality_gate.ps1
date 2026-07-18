@@ -72,6 +72,7 @@ try {
         '--apk' (Join-Path $repo 'app\probe\build\outputs\apk\debug\probe-debug.apk') `
         '--metadata' (Join-Path $repo 'app\probe\build\outputs\apk\debug\output-metadata.json') `
         '--output' $candidateTmp `
+        '--build-tools-version' '35.0.0' `
         '--source-ref' 'local-quality-gate'
     if ($LASTEXITCODE -ne 0) {
         throw "Debug-candidate packaging failed with exit code $LASTEXITCODE."
