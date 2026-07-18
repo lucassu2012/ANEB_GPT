@@ -13,7 +13,7 @@
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-18 12:01 CST；E-01 为 0.7.0/`active`；根 Profile、`download_burst`、两个合成弱网合同 1.1.0、恢复 run 隔离及本机/公网 TCP+UDP 8443 smoke 通过；未修改防火墙、Docker 链或全局网卡整形 |
+| 最近验证 | 2026-07-18 19:52 CST；E-01 已自动回滚并确认为 0.7.0/`active`，PID `3775079`，二进制 SHA-256 前缀 `9208aba2…`；根 Profile 与全量旧端点 smoke 通过。三次连续规范化 `full/v4/v6/nft/Docker` 防火墙组件和 `eth0` qdisc 指纹逐项稳定；`wg-aneb-lab`、`ifb-aneb-lab`、`ANEB_LAB` 规则及 UDP 51820 监听均不存在。当前处于“待交接”，须经另一固定角色或受限自动 `Verifier` 独立只读复核后才能重新接手部署 |
 
 所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
@@ -21,6 +21,14 @@
 
 > ［KNOWN｜HIGH］E-01 当前仍是 `aneb-server/0.7.0`。本小节只说明仓库中的 0.8.0
 > 候选和未来切换门禁，不能作为已部署、已公网验证或已完成 P40 验收的证据。
+
+> ［KNOWN｜HIGH］2026-07-18 首次 0.8.0 切换尝试中，候选能力回执和全量旧端点 smoke
+> 均通过；旧部署器随后因把 `iptables-save`/`ip6tables-save` 每次运行产生的
+> `Generated/Completed` 时间写入全量哈希而误报共享防火墙变化，并自动回滚到 0.7.0。
+> 该尝试不能写成“0.8.0 已部署”。两秒配对复核证明 raw v4/v6 SHA 会仅因时间变化，而裁掉
+> 这两类运行时间后的 v4/v6 指纹稳定；三次事故后规范化组件复核也稳定。由于旧部署器未保留
+> 可用于事后语义对比的切换前 raw 快照，这些证据仍不能追溯证明切换窗口绝无并发语义变更；
+> 因此先完成独立交接复核，再用新 lease 重试，而不是直接解除门禁。
 
 - ［KNOWN｜HIGH］0.8.0 候选在启动时读取受控的已发布 Profile 目录，只为
   `token_multimodal_quick@1.2.0` 验证 `profile.json`、`runtime_plan.json` 与
@@ -69,7 +77,7 @@
    当前任务/交接说明中恰有一个合法 lease marker；手工或旧版无 lease 的“待交接”不得被释放。
 2. ［KNOWN｜HIGH］候选已经通过 P2 Go 全量测试、P3/catalog 校验、部署脚本离线安全测试、
    Android 97 suites / 577 JVM tests（0 failure / 0 error / 0 skipped）、assembleDebug、Lint、
-   60 项脚本测试（59 通过、1 项按设计跳过）、P3 38 项测试和 2026-07-18 全仓质量门；提交前还须在
+   87 项脚本测试（86 通过、1 项按设计跳过）、P3 38 项测试和 2026-07-18 全仓质量门；提交前还须在
    新增文件全部进入暂存区后重跑凭据扫描，任何一项失败都不得切换。
 3. ［KNOWN｜HIGH］部署脚本必须接收本次 `-LeaseId`，并通过状态机 `assert-lease` 精确核对
    “进行中 + Codex + 同一 lease-id + E-01”；资源按约定分隔符拆成 token 后全等匹配，禁止用
@@ -77,7 +85,11 @@
    验证 0.7.0 的 `serverinfo.version` 与 `X-Aneb-Server`，并跑通与回滚相同的 Profile/echo/1MiB
    download/impairment/recovery/UDP smoke；只有健康的 0.7.0 才能作为回滚基线。随后冻结二进制
    SHA、Profile/service 以及 Docker iptables-save、`eth0` qdisc、全防火墙规则指纹；PID 因
-   升级/回滚重启可变化，不作为不变量。
+   升级/回滚重启可变化，不作为不变量。最终修复提交 `4030179` 只删除 iptables-save 每次运行生成的
+   `Generated/Completed` 时间，工具版本、backend、warning、链、policy、规则、规则注释和 nft
+   语义全部保留；冻结时须在同一组连续采集两份规范化快照并要求完全相同，同时记录
+   v4/v6/nft/Docker/full 分项指纹。采集失败、字段异常、两次快照不稳定或任一语义分项变化都须
+   fail closed，不得用宽松过滤绕过共享主机门禁。
 4. ［KNOWN｜HIGH］切换后必须同时核对 `X-Aneb-Server: aneb-server/0.8.0`、上述完整回执、
    manifest 精确哈希、既有 TCP/UDP 8443 与合成弱网 smoke；全部通过前不能宣布部署完成。
 
@@ -91,8 +103,15 @@
 3. ［KNOWN｜HIGH］备份裁剪发生在成功验收并解除回滚保险丝之后；裁剪失败只报告维护 warning，
    不得回滚已验收部署，也不得把部署结果伪报为失败。
 4. ［KNOWN｜HIGH］部署脚本返回后仍保留“进行中”，因为同一 lease 还要完成 P40 联调。只有主
-   编排器完成真机测试和清理后，才用同 actor + 同 lease-id 自动改为“待交接”；只有 Claude 独立
-   复核后才能改回“空闲”。清理失败则由当前执行者用同 lease 置为“异常锁定”。
+   编排器完成真机测试和清理后，才用同 actor + 同 lease-id 自动改为“待交接”；只有另一固定角色
+   或受限自动 `Verifier` 独立复核后才能改回“空闲”。`Verifier` 不能领取/操作/清理资源，必须做
+   T+0/T+10 两轮只读检查并绑定状态文件原始 SHA；确定失败只能转“异常锁定”。清理失败则由当前
+   执行者用同 lease 置为“异常锁定”。
+
+［KNOWN｜HIGH］当前事故收口与下次重试顺序固定为：另一固定角色或受限自动 `Verifier` 独立复核并将“待交接”释放为“空闲” → Codex
+生成全新 128-bit lease 并重新 claim → 用修复后的唯一入口从 0.7.0 重新执行完整切换门禁 → 0.8.0
+公网正向验收通过后才进行 P40 Token Quick 正向 run。不得复用事故 lease，也不得把本次候选 smoke
+或负向真机结果替代正向部署验收。
 
 ## 2. 已部署端点
 
@@ -210,6 +229,7 @@ E-01 已启用两个**用户态、逐 run 隔离**弱网合同；仍未、也不
 
 | 日期 | 变更 |
 |---|---|
+| 2026-07-18 | ［KNOWN｜HIGH］首次 0.8.0 切换的候选回执和旧端点 smoke 通过，但旧脚本把 iptables-save/ip6tables-save 运行时间纳入 raw 防火墙哈希，触发误报并自动回滚至 0.7.0；不得记为已部署。两秒 raw/规范化配对和三次事故后分项复核支持“时间噪声已识别、当前 0.7.0/共享主机稳定”，但不能事后证明切换窗口绝无并发语义变化。最终提交 `4030179` 仅规范化运行时间，新增同组双快照、v4/v6/nft/Docker/full 分项指纹、严格 wrapper/tool 校验及采集失败闭锁；GitHub CI 6/6、本地全仓质量门和 87 项脚本测试通过，当前等待独立交接后以新 lease 重试。 |
 | 2026-07-18 | ［KNOWN｜HIGH］登记 `aneb-server/0.8.0` 执行能力候选及切换/回滚门禁；该候选尚未部署到 E-01，当前部署基线继续为 0.7.0。 |
 | 2026-07-18 | 保持 `aneb-server/0.7.0` 二进制能力，部署弱网 Profile 1.1.0：仅升级可审计语义结论策略；根 Profile、`download_burst`、逐 run 弱网回执、恢复隔离、本机及公网 TCP/UDP 8443 smoke 通过。 |
 | 2026-07-17 | 部署 `aneb-server/0.7.0`：新增逐 run 一次性 `weak-recovery-v1` 2 秒请求中断、同 run/其他 run/正常路由隔离 smoke；App 0.4.8/Room v17 增加独立 Recovery Profile、动态恢复仪表、独立评分与 P40 四次真机证据。 |

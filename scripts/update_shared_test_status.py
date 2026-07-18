@@ -3,12 +3,17 @@
 
 The command intentionally prints only the transition result. User-supplied task,
 resource, note, and evidence text are never echoed to stdout or stderr.
+
+Verifier is a fixed, review-only role. It can independently release or lock a
+handoff after pinning the exact raw status-file bytes, but it can never own or
+operate shared resources.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import os
 import re
 import stat
@@ -25,7 +30,10 @@ RUNNING = "进行中"
 HANDOFF = "待交接"
 LOCKED = "异常锁定"
 ALLOWED_STATES = frozenset({IDLE, RUNNING, HANDOFF, LOCKED})
-EXECUTORS = {"codex": "Codex", "claude": "Claude"}
+EXECUTORS = {"codex": "Codex", "claude": "Claude", "verifier": "Verifier"}
+OPERATORS = frozenset({"Codex", "Claude"})
+VERIFIER = "Verifier"
+REVIEW_COMMANDS = frozenset({"review-release", "review-lock"})
 OUTPUT_STATE = {
     IDLE: "idle",
     RUNNING: "running",
@@ -61,6 +69,7 @@ _SENSITIVE = re.compile(
     flags=re.IGNORECASE,
 )
 _LEASE_ID = re.compile(r"^[0-9a-f]{32}$")
+_STATUS_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _LEASE_MARKER = re.compile(r"\[ANEB_LEASE_ID:([0-9a-f]{32})\]")
 _LEASE_MARKER_RESERVED = re.compile(r"\[ANEB_LEASE_ID:", flags=re.IGNORECASE)
 _RESOURCE_SEPARATOR = re.compile(r"[、,;/]")
@@ -205,6 +214,7 @@ class StatusDocument:
         else:
             if snapshot.executor != _canonical_executor(snapshot.executor):
                 raise StatusError("executor_role_not_canonical")
+            _require_operator(snapshot.executor)
             _validated_resource_list(snapshot.resources)
             _snapshot_lease_marker(snapshot, required=True)
 
@@ -244,10 +254,16 @@ class StatusDocument:
         note: str | None = None,
         evidence: str | None = None,
         lease_id: str | None = None,
+        review_hash_verified: bool = False,
     ) -> tuple[str, str]:
         timestamp = _shanghai_timestamp(now)
         actor = _canonical_executor(actor)
         before = self.snapshot
+
+        if command in {"claim", "handoff", "lock"}:
+            _require_operator(actor)
+        if actor == VERIFIER and command in REVIEW_COMMANDS and not review_hash_verified:
+            raise StatusError("expected_status_sha256_required")
 
         if command == "claim":
             if before.state != IDLE:
@@ -332,6 +348,27 @@ class StatusDocument:
             }
             history = (actor, task_value, f"异常锁定；{note_value}")
             after = LOCKED
+        elif command == "review-lock":
+            if before.state != HANDOFF:
+                raise StatusError("review_lock_requires_handoff")
+            if _identity(actor) == _identity(before.executor):
+                raise StatusError("reviewer_must_be_independent")
+            evidence_value = _validated_value(evidence, "evidence", 2000)
+            lease_marker = _snapshot_lease_marker(before, required=True)
+            note_prefix = "" if lease_marker in before.task else f"{lease_marker} "
+            fields = {
+                "状态": f"**{LOCKED}**",
+                "最近更新": timestamp,
+                "交接说明": (
+                    f"{note_prefix}{actor} 独立复核失败并触发异常锁定：{evidence_value}"
+                ),
+            }
+            history = (
+                f"{before.executor} → {actor}",
+                before.task,
+                f"独立复核失败；异常锁定；{evidence_value}",
+            )
+            after = LOCKED
         elif command == "review-release":
             if before.state != HANDOFF:
                 raise StatusError("review_release_requires_handoff")
@@ -368,6 +405,7 @@ class StatusDocument:
         """Verify the current lease without mutating the shared status file."""
 
         actor = _canonical_executor(actor)
+        _require_operator(actor)
         lease_value = _validated_lease_id(lease_id)
         resource_value = _validated_resource_token(resource)
         if self.snapshot.state != RUNNING:
@@ -475,6 +513,36 @@ def _canonical_executor(value: str | None) -> str:
         return EXECUTORS[_identity(normalized)]
     except KeyError as exc:
         raise StatusError("executor_role_invalid") from exc
+
+
+def _require_operator(actor: str) -> str:
+    if actor not in OPERATORS:
+        raise StatusError("verifier_operation_forbidden")
+    return actor
+
+
+def _validated_status_sha256(value: str | None) -> str:
+    if value is None or _STATUS_SHA256.fullmatch(value) is None:
+        raise StatusError("expected_status_sha256_invalid")
+    return value.lower()
+
+
+def _verify_review_baseline(
+    *, command: str, actor: str, expected: str | None, baseline: bytes
+) -> bool:
+    """Verify an optional review pin against raw bytes while the sidecar is held."""
+
+    actor = _canonical_executor(actor)
+    if command not in REVIEW_COMMANDS:
+        return False
+    if actor == VERIFIER and expected is None:
+        raise StatusError("expected_status_sha256_required")
+    if expected is None:
+        return False
+    expected_value = _validated_status_sha256(expected)
+    if not hmac.compare_digest(expected_value, _sha256(baseline)):
+        raise StatusError("expected_status_sha256_mismatch")
+    return True
 
 
 def _validated_lease_id(value: str | None) -> str:
@@ -621,7 +689,10 @@ def atomic_replace_if_unchanged(path: Path, baseline: bytes, replacement: bytes)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="原子更新 Codex / Claude 共享测试状态（失败时不改文件）。",
+        description=(
+            "原子更新 Codex / Claude 共享测试状态；Verifier 仅可独立复核"
+            "（失败时不改文件）。"
+        ),
         allow_abbrev=False,
     )
     _add_common_arguments(parser)
@@ -658,11 +729,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     review = commands.add_parser(
-        "review-release", help="仅由另一执行者独立复核后执行 待交接 → 空闲。"
+        "review-release",
+        help="仅由另一 Codex/Claude 或 Verifier 独立复核后执行 待交接 → 空闲。",
     )
     _add_common_arguments(review, suppress_defaults=True)
     review.add_argument("--executor", required=True, help="独立复核执行者。")
     review.add_argument("--evidence", required=True)
+    review.add_argument(
+        "--expected-status-sha256",
+        help="Verifier 必填：进入 sidecar 锁后核对的原始状态文件 SHA-256。",
+    )
+
+    review_lock = commands.add_parser(
+        "review-lock", help="独立复核失败时仅执行 待交接 → 异常锁定。"
+    )
+    _add_common_arguments(review_lock, suppress_defaults=True)
+    review_lock.add_argument("--executor", required=True, help="独立复核执行者。")
+    review_lock.add_argument("--evidence", required=True)
+    review_lock.add_argument(
+        "--expected-status-sha256",
+        help="Verifier 必填：进入 sidecar 锁后核对的原始状态文件 SHA-256。",
+    )
 
     assertion = commands.add_parser(
         "assert-lease", help="只读验证当前执行者、本次 lease-id 和占用资源。"
@@ -711,6 +798,12 @@ def execute(args: argparse.Namespace, *, now: datetime | None = None) -> tuple[s
             baseline = path.read_bytes()
         except OSError as exc:
             raise StatusError("status_file_read_failed") from exc
+        review_hash_verified = _verify_review_baseline(
+            command=args.command,
+            actor=args.executor,
+            expected=getattr(args, "expected_status_sha256", None),
+            baseline=baseline,
+        )
         document = StatusDocument.parse(baseline)
         if args.command == "assert-lease":
             document.assert_lease(
@@ -728,6 +821,7 @@ def execute(args: argparse.Namespace, *, now: datetime | None = None) -> tuple[s
             note=getattr(args, "note", None),
             evidence=getattr(args, "evidence", None),
             lease_id=getattr(args, "lease_id", None),
+            review_hash_verified=review_hash_verified,
         )
         if not args.dry_run:
             atomic_replace_if_unchanged(path, baseline, document.to_bytes())

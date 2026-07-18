@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
+import scripts.update_shared_test_status as status_module
 from scripts.update_shared_test_status import (
     HANDOFF,
     IDLE,
@@ -70,6 +73,9 @@ class SharedTestStatusStateMachineTest(unittest.TestCase):
 
     def parsed(self) -> StatusDocument:
         return StatusDocument.parse(self.status.read_bytes())
+
+    def status_sha256(self) -> str:
+        return hashlib.sha256(self.status.read_bytes()).hexdigest()
 
     def claim(self, executor: str = "Codex") -> None:
         self.run_at(
@@ -158,9 +164,14 @@ class SharedTestStatusStateMachineTest(unittest.TestCase):
             f"[ANEB_LEASE_ID:{LEASE_ID}]", self.parsed().snapshot.note
         )
 
-    def test_only_fixed_codex_and_claude_roles_are_accepted(self) -> None:
+    def test_only_fixed_roles_are_accepted(self) -> None:
         original = self.status.read_bytes()
-        for invalid in ("Codex reviewer", "Claude reviewer", "operator"):
+        for invalid in (
+            "Codex reviewer",
+            "Claude reviewer",
+            "Verifier reviewer",
+            "operator",
+        ):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(StatusError, "executor_role_invalid"):
                     self.run_at(
@@ -179,6 +190,58 @@ class SharedTestStatusStateMachineTest(unittest.TestCase):
         )
         self.status.write_text(malformed, encoding="utf-8", newline="")
         with self.assertRaisesRegex(StatusError, "executor_role_invalid"):
+            self.parsed()
+
+    def test_verifier_cannot_operate_or_own_shared_resources(self) -> None:
+        idle = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "verifier_operation_forbidden"):
+            self.claim(executor="Verifier")
+        self.assertEqual(idle, self.status.read_bytes())
+
+        with self.assertRaisesRegex(StatusError, "verifier_operation_forbidden"):
+            self.run_at(
+                "lock",
+                "--executor", "Verifier",
+                "--note", "不得由复核角色接管。",
+                "--lease-id", LEASE_ID,
+            )
+        self.assertEqual(idle, self.status.read_bytes())
+
+        self.claim()
+        running = self.status.read_bytes()
+        forbidden_commands = (
+            (
+                "handoff",
+                "--executor", "Verifier",
+                "--note", "不得交接。",
+                "--lease-id", LEASE_ID,
+            ),
+            (
+                "lock",
+                "--executor", "Verifier",
+                "--note", "不得普通锁定。",
+                "--lease-id", LEASE_ID,
+            ),
+            (
+                "assert-lease",
+                "--executor", "Verifier",
+                "--lease-id", LEASE_ID,
+                "--resource", "P40 Pro",
+            ),
+        )
+        for command in forbidden_commands:
+            with self.subTest(command=command[0]):
+                with self.assertRaisesRegex(
+                    StatusError, "verifier_operation_forbidden"
+                ):
+                    self.run_at(*command)
+                self.assertEqual(running, self.status.read_bytes())
+
+        malformed = self.status.read_text(encoding="utf-8").replace(
+            "| 当前执行者 | Codex |", "| 当前执行者 | Verifier |"
+        )
+        self.status.write_text(malformed, encoding="utf-8", newline="")
+        with self.assertRaisesRegex(StatusError, "verifier_operation_forbidden"):
             self.parsed()
 
     def test_claim_requires_fresh_128_bit_hex_lease(self) -> None:
@@ -355,6 +418,232 @@ class SharedTestStatusStateMachineTest(unittest.TestCase):
         self.assertEqual("无", snapshot.resources)
         self.assertEqual("无", snapshot.started_at)
         self.assertEqual("T+0/T+10 均无 PID，tun0=0。", snapshot.note)
+
+    def test_codex_and_claude_can_review_release_each_other(self) -> None:
+        for owner, reviewer in (("Codex", "Claude"), ("Claude", "Codex")):
+            with self.subTest(owner=owner, reviewer=reviewer):
+                self.status.write_bytes(BASE.replace("\n", "\r\n").encode("utf-8"))
+                self.claim(executor=owner)
+                self.run_at(
+                    "handoff",
+                    "--executor", owner,
+                    "--note", "已清理，等待复核。",
+                    "--lease-id", LEASE_ID,
+                )
+                self.assertEqual(
+                    (HANDOFF, IDLE, "written"),
+                    self.run_at(
+                        "review-release",
+                        "--executor", reviewer,
+                        "--evidence", "另一固定角色复核通过。",
+                    ),
+                )
+
+    def test_verifier_review_release_requires_exact_raw_status_sha(self) -> None:
+        self.claim()
+        self.run_at(
+            "handoff",
+            "--executor", "Codex",
+            "--note", "已退出并清理。",
+            "--lease-id", LEASE_ID,
+        )
+        pending = self.status.read_bytes()
+        raw_sha = hashlib.sha256(pending).hexdigest()
+        normalized_sha = hashlib.sha256(pending.replace(b"\r\n", b"\n")).hexdigest()
+        self.assertNotEqual(raw_sha, normalized_sha)
+
+        failures = (
+            (
+                "expected_status_sha256_required",
+                (),
+            ),
+            (
+                "expected_status_sha256_invalid",
+                ("--expected-status-sha256", "g" * 64),
+            ),
+            (
+                "expected_status_sha256_mismatch",
+                ("--expected-status-sha256", normalized_sha),
+            ),
+        )
+        for code, extra in failures:
+            with self.subTest(code=code):
+                with self.assertRaisesRegex(StatusError, code):
+                    self.run_at(
+                        "review-release",
+                        "--executor", "Verifier",
+                        "--evidence", "独立复核通过。",
+                        *extra,
+                    )
+                self.assertEqual(pending, self.status.read_bytes())
+
+        self.status.write_bytes(pending + b"<!-- non-cooperating change -->\r\n")
+        changed = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "expected_status_sha256_mismatch"):
+            self.run_at(
+                "review-release",
+                "--executor", "Verifier",
+                "--evidence", "不得使用陈旧快照。",
+                "--expected-status-sha256", raw_sha,
+            )
+        self.assertEqual(changed, self.status.read_bytes())
+
+        self.status.write_bytes(pending)
+        self.assertEqual(
+            (HANDOFF, IDLE, "written"),
+            self.run_at(
+                "review-release",
+                "--executor", "verifier",
+                "--evidence", "精确原始字节复核通过。",
+                "--expected-status-sha256", raw_sha.upper(),
+            ),
+        )
+
+    def test_review_sha_is_checked_while_sidecar_lock_is_held(self) -> None:
+        self.claim()
+        self.run_at(
+            "handoff",
+            "--executor", "Codex",
+            "--note", "已清理，等待复核。",
+            "--lease-id", LEASE_ID,
+        )
+        lock_path = self.status.with_name(
+            self.status.name + ".aneb-status.lock"
+        )
+        observed_lock_state: list[bool] = []
+        original = status_module._verify_review_baseline
+
+        def observe(**kwargs):
+            observed_lock_state.append(lock_path.is_file())
+            return original(**kwargs)
+
+        with mock.patch.object(
+            status_module, "_verify_review_baseline", side_effect=observe
+        ):
+            self.run_at(
+                "review-release",
+                "--executor", "Verifier",
+                "--evidence", "锁内复核通过。",
+                "--expected-status-sha256", self.status_sha256(),
+            )
+        self.assertEqual([True], observed_lock_state)
+        self.assertFalse(lock_path.exists())
+
+    def test_review_lock_only_accepts_an_independent_handoff_reviewer(self) -> None:
+        idle = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "review_lock_requires_handoff"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Claude",
+                "--evidence", "空闲态不能复核锁定。",
+            )
+        self.assertEqual(idle, self.status.read_bytes())
+
+        self.claim()
+        running = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "review_lock_requires_handoff"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Claude",
+                "--evidence", "运行态不能复核锁定。",
+            )
+        self.assertEqual(running, self.status.read_bytes())
+        self.run_at(
+            "lock",
+            "--executor", "Codex",
+            "--note", "执行者发现异常。",
+            "--lease-id", LEASE_ID,
+        )
+        locked = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "review_lock_requires_handoff"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Claude",
+                "--evidence", "已锁定态不能再次复核锁定。",
+            )
+        self.assertEqual(locked, self.status.read_bytes())
+
+        self.run_at(
+            "handoff",
+            "--executor", "Codex",
+            "--note", "异常已清理，等待复核。",
+            "--lease-id", LEASE_ID,
+        )
+        pending = self.status.read_bytes()
+        with self.assertRaisesRegex(StatusError, "reviewer_must_be_independent"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Codex",
+                "--evidence", "不能自我复核。",
+            )
+        self.assertEqual(pending, self.status.read_bytes())
+        self.assertEqual(
+            (HANDOFF, LOCKED, "written"),
+            self.run_at(
+                "review-lock",
+                "--executor", "Claude",
+                "--evidence", "发现 VPN 仍活动。",
+            ),
+        )
+
+    def test_verifier_review_lock_pins_sha_and_preserves_owner_lease(self) -> None:
+        self.claim()
+        self.run_at(
+            "handoff",
+            "--executor", "Codex",
+            "--note", "已清理，等待独立复核。",
+            "--lease-id", LEASE_ID,
+        )
+        before = self.parsed().snapshot
+        pending = self.status.read_bytes()
+        pending_sha = self.status_sha256()
+
+        with self.assertRaisesRegex(StatusError, "expected_status_sha256_required"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Verifier",
+                "--evidence", "发现残留服务。",
+            )
+        self.assertEqual(pending, self.status.read_bytes())
+        with self.assertRaisesRegex(StatusError, "expected_status_sha256_mismatch"):
+            self.run_at(
+                "review-lock",
+                "--executor", "Verifier",
+                "--evidence", "发现残留服务。",
+                "--expected-status-sha256", "0" * 64,
+            )
+        self.assertEqual(pending, self.status.read_bytes())
+
+        self.assertEqual(
+            (HANDOFF, LOCKED, "written"),
+            self.run_at(
+                "review-lock",
+                "--executor", "Verifier",
+                "--evidence", "发现残留服务与 tun0。",
+                "--expected-status-sha256", pending_sha,
+            ),
+        )
+        after = self.parsed().snapshot
+        self.assertEqual(LOCKED, after.state)
+        self.assertEqual(before.executor, after.executor)
+        self.assertEqual(before.task, after.task)
+        self.assertEqual(before.resources, after.resources)
+        self.assertEqual(before.started_at, after.started_at)
+        self.assertEqual(1, after.note.count(f"[ANEB_LEASE_ID:{LEASE_ID}]"))
+        self.assertIn("Verifier 独立复核失败", after.note)
+        self.assertIn("发现残留服务与 tun0。", after.note)
+        text = self.status.read_text(encoding="utf-8")
+        self.assertIn("Codex → Verifier", text)
+
+        self.assertEqual(
+            (LOCKED, HANDOFF, "written"),
+            self.run_at(
+                "handoff",
+                "--executor", "Codex",
+                "--note", "所有残留已清理。",
+                "--lease-id", LEASE_ID,
+            ),
+        )
 
     def test_every_active_snapshot_requires_exactly_one_lease_marker(self) -> None:
         marker = f"[ANEB_LEASE_ID:{LEASE_ID}]"
