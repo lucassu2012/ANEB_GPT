@@ -196,7 +196,9 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         self.assertIn('-addr "127.0.0.1:$STAGE_PORT"', self.remote)
         self.assertIn("-udp-echo-addr ''", self.remote)
         self.assertIn("setsid runuser -u aneb", self.remote)
-        self.assertIn('kill -TERM -- "-$STAGE_PID"', self.remote)
+        self.assertIn('local stage_pid="$STAGE_PID"', self.remote)
+        self.assertIn('kill -TERM -- "-$stage_pid"', self.remote)
+        self.assertIn("STAGED_SERVER_STOP_FAILED", self.remote)
 
     def test_pre_switch_requires_exact_070_identity_and_freezes_shared_host(self) -> None:
         freeze_call = self.remote.index("freeze_live_baseline\n")
@@ -628,7 +630,8 @@ COMMIT
         self.assertIn("assert_restored_aneb_baseline", self.remote)
         self.assertIn("assert_shared_host_baseline rollback", self.remote)
         self.assertIn("ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97", self.remote)
-        self.assertIn("exit 97", self.remote)
+        self.assertIn("final_rc=97", self.remote)
+        self.assertIn("result_status='rollback_failed'", self.remote)
 
     def test_partial_ip_certificate_pair_is_rejected_locally(self) -> None:
         self.assertIn("$ipCertPresent -xor $ipKeyPresent", self.source)
@@ -719,6 +722,274 @@ COMMIT
             r"(?m)^\s*Add-ArtifactDigestEntry .*IpKey",
         )
         self.assertIn('file_sha256 "$STAGE/tls/ip-key.pem"', self.remote)
+
+    def test_remote_build_validation_uses_uploaded_evidence_without_go_tooling(self) -> None:
+        validation = self.remote.split("validate_build_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn('EXPECTED_SOURCE_COMMIT="${6:?source commit required}"', self.remote)
+        self.assertIn('"$EXPECTED_SOURCE_COMMIT"', validation)
+        self.assertIn("commit != expected_commit", validation)
+        self.assertIn(
+            "provenance commit does not match expected source commit",
+            validation,
+        )
+        self.assertIn("'$($script:ExpectedSourceCommit)'", self.source)
+        self.assertIn('"$STAGE/build-provenance.json"', validation)
+        self.assertIn('"$STAGE/go-buildinfo.json"', validation)
+        self.assertIn('"$STAGE/artifact-manifest.sha256"', validation)
+        self.assertIn("manifest/provenance binary mismatch", validation)
+        self.assertIn("provenance Go build info record mismatch", validation)
+        self.assertIn("manifest/provenance Go build info mismatch", validation)
+        self.assertIn(
+            'STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"',
+            self.remote,
+        )
+        self.assertIn("validate_build_evidence\n", self.remote)
+        self.assertIn("validate_receipt \\", self.remote)
+        self.assertIn(
+            'STAGED_RECEIPT_SHA="$(cat "$STAGE/staged-receipt.sha256")"',
+            self.remote,
+        )
+        self.assertNotIn("go version -m", validation)
+
+    def test_uploaded_build_evidence_validator_rejects_each_binding_mutation(self) -> None:
+        validation = self.remote.split("validate_build_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        program = validation.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        commit = "a" * 40
+        artifact_sources = {
+            "aneb-server.service": "server/aneb-server.service",
+            "root-profiles/basic_network.json": "profiles/basic_network.json",
+            "root-profiles/s1_chat.json": "profiles/s1_chat.json",
+            "root-profiles/s2_coding_agent.json": "profiles/s2_coding_agent.json",
+            "root-profiles/s3_multimodal.json": "profiles/s3_multimodal.json",
+            "execution-profiles/token_multimodal_quick/profile.json": (
+                "profiles/published/token_multimodal_quick/profile.json"
+            ),
+            "execution-profiles/token_multimodal_quick/runtime_plan.json": (
+                "profiles/published/token_multimodal_quick/runtime_plan.json"
+            ),
+            "execution-profiles/token_multimodal_quick/manifest.sha256": (
+                "profiles/published/token_multimodal_quick/manifest.sha256"
+            ),
+        }
+
+        def canonical_json(path: Path, value: object) -> None:
+            path.write_text(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+        def record(path: Path) -> dict[str, object]:
+            payload = path.read_bytes()
+            return {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+
+        def write_manifest(path: Path, entries: dict[str, str]) -> None:
+            path.write_text(
+                "".join(f"{entries[name]}  {name}\n" for name in sorted(entries)),
+                encoding="ascii",
+                newline="\n",
+            )
+
+        def create_fixture(stage: Path) -> dict[str, object]:
+            binary_path = stage / "aneb-server-linux"
+            binary_path.write_bytes(b"\x7fELF-aneb-candidate\n")
+            for index, name in enumerate(sorted(artifact_sources)):
+                path = stage.joinpath(*name.split("/"))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"artifact-{index}:{name}\n".encode())
+
+            buildinfo_path = stage / "go-buildinfo.json"
+            buildinfo: dict[str, object] = {
+                "GoVersion": "go1.25.0",
+                "Settings": [
+                    {"Key": "vcs", "Value": "git"},
+                    {"Key": "vcs.revision", "Value": commit},
+                    {"Key": "vcs.modified", "Value": "false"},
+                    {"Key": "GOOS", "Value": "linux"},
+                    {"Key": "GOARCH", "Value": "amd64"},
+                    {"Key": "GOAMD64", "Value": "v1"},
+                    {"Key": "CGO_ENABLED", "Value": "0"},
+                    {"Key": "-trimpath", "Value": "true"},
+                    {"Key": "GOFIPS140", "Value": "off"},
+                ],
+            }
+            canonical_json(buildinfo_path, buildinfo)
+            provenance_path = stage / "build-provenance.json"
+            provenance: dict[str, object] = {
+                "schema": "aneb-server-build-provenance-v1",
+                "commit": commit,
+                "GoVersion": "go1.25.0",
+                "canonical_flags": [
+                    "-trimpath",
+                    "-buildvcs=true",
+                    "-mod=readonly",
+                    "-pgo=off",
+                ],
+                "environment": {
+                    "GOOS": "linux",
+                    "GOARCH": "amd64",
+                    "GOAMD64": "v1",
+                    "CGO_ENABLED": "0",
+                    "GOENV": "off",
+                    "GOFLAGS": "",
+                    "GOEXPERIMENT": "",
+                    "GOFIPS140": "off",
+                    "GOWORK": "off",
+                    "GOTOOLCHAIN": "local",
+                },
+                "binary": record(binary_path),
+                "module_files": {
+                    "go.mod": {"path": "server/go.mod", "bytes": 1, "sha256": "1" * 64},
+                    "go.sum": {"path": "server/go.sum", "bytes": 1, "sha256": "2" * 64},
+                },
+                "artifacts": [
+                    {
+                        "name": name,
+                        "path": artifact_sources[name],
+                        **record(stage.joinpath(*name.split("/"))),
+                    }
+                    for name in sorted(artifact_sources)
+                ],
+                "go_buildinfo": record(buildinfo_path),
+            }
+            canonical_json(provenance_path, provenance)
+            manifest_entries = {
+                "aneb-server-linux": str(record(binary_path)["sha256"]),
+                "build-provenance.json": str(record(provenance_path)["sha256"]),
+                "go-buildinfo.json": str(record(buildinfo_path)["sha256"]),
+                **{
+                    name: str(record(stage.joinpath(*name.split("/")))["sha256"])
+                    for name in artifact_sources
+                },
+            }
+            manifest_path = stage / "artifact-manifest.sha256"
+            write_manifest(manifest_path, manifest_entries)
+            return {
+                "binary_path": binary_path,
+                "buildinfo": buildinfo,
+                "buildinfo_path": buildinfo_path,
+                "provenance": provenance,
+                "provenance_path": provenance_path,
+                "manifest_entries": manifest_entries,
+                "manifest_path": manifest_path,
+            }
+
+        def run_validator(
+            stage: Path, fixture: dict[str, object], expected_commit: str
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    str(stage),
+                    "0",
+                    expected_commit,
+                    str(fixture["provenance_path"]),
+                    str(fixture["buildinfo_path"]),
+                    str(fixture["manifest_path"]),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        mutations = (
+            "binary_byte",
+            "buildinfo",
+            "provenance_binary_record",
+            "provenance_buildinfo_record",
+            "expected_commit",
+            "manifest_binary_entry",
+            "manifest_buildinfo_entry",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            valid_stage = base / "valid"
+            valid_stage.mkdir()
+            valid_fixture = create_fixture(valid_stage)
+            accepted = run_validator(valid_stage, valid_fixture, commit)
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            self.assertIn("build_evidence=verified", accepted.stdout)
+
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    stage = base / mutation
+                    stage.mkdir()
+                    fixture = create_fixture(stage)
+                    expected_commit = commit
+                    if mutation == "binary_byte":
+                        binary_path = fixture["binary_path"]
+                        assert isinstance(binary_path, Path)
+                        binary_path.write_bytes(binary_path.read_bytes() + b"!")
+                    elif mutation == "buildinfo":
+                        buildinfo = fixture["buildinfo"]
+                        buildinfo_path = fixture["buildinfo_path"]
+                        assert isinstance(buildinfo, dict) and isinstance(buildinfo_path, Path)
+                        buildinfo["GoVersion"] = "go1.25.1"
+                        canonical_json(buildinfo_path, buildinfo)
+                    elif mutation in {
+                        "provenance_binary_record",
+                        "provenance_buildinfo_record",
+                    }:
+                        provenance = fixture["provenance"]
+                        provenance_path = fixture["provenance_path"]
+                        assert isinstance(provenance, dict) and isinstance(provenance_path, Path)
+                        key = (
+                            "binary"
+                            if mutation == "provenance_binary_record"
+                            else "go_buildinfo"
+                        )
+                        value = provenance[key]
+                        assert isinstance(value, dict)
+                        value["sha256"] = "f" * 64
+                        canonical_json(provenance_path, provenance)
+                    elif mutation == "expected_commit":
+                        expected_commit = "b" * 40
+                    else:
+                        entries = fixture["manifest_entries"]
+                        manifest_path = fixture["manifest_path"]
+                        assert isinstance(entries, dict) and isinstance(manifest_path, Path)
+                        key = (
+                            "aneb-server-linux"
+                            if mutation == "manifest_binary_entry"
+                            else "go-buildinfo.json"
+                        )
+                        entries[key] = "f" * 64
+                        write_manifest(manifest_path, entries)
+
+                    rejected = run_validator(stage, fixture, expected_commit)
+                    self.assertNotEqual(
+                        0,
+                        rejected.returncode,
+                        msg=f"mutation unexpectedly accepted: {mutation}",
+                    )
+
+    def test_remote_preflight_does_not_require_go(self) -> None:
+        preflight = self.remote.split('test -d "$STAGE"', 1)[1].split(
+            "validate_uploaded_artifacts", 1
+        )[0]
+        for runtime_dependency in (
+            "/usr/bin/python3",
+            "/usr/bin/curl",
+            "runuser",
+            "setsid",
+            "awk",
+            "cmp",
+        ):
+            self.assertIn(runtime_dependency, preflight)
+        self.assertNotRegex(preflight, r"(?m)^\s*command -v go(?:\s|$)")
 
     def test_receipt_rejects_duplicate_primitives_extra_structure_and_wrong_h3(self) -> None:
         valid = self.valid_receipt_body()
@@ -1074,17 +1345,76 @@ fi
             self.assertNotIn("rm -rf -- /opt/aneb/bin/aneb-server\n", events)
 
     def test_evidence_failure_removes_staged_key_without_touching_live(self) -> None:
-        persist = self.remote.index("if ! persist_stage_evidence staged_validated")
+        persist = self.remote.index("if persist_stage_evidence staged_validated")
         live_boundary = self.remote.index("LIVE_TOUCHED=1", persist)
         failure_block = self.remote[persist:live_boundary]
+        self.assertIn("STAGED_EVIDENCE_COMMITTED=1", failure_block)
+        self.assertIn("record_primary_failure staged_evidence_persist_failed", failure_block)
         self.assertIn('rm -f -- "$STAGE/tls/ip-key.pem"', failure_block)
         self.assertIn("exit 96", failure_block)
         cleanup = self.remote.split("\ncleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
         remove_key = cleanup.index('rm -f -- "$STAGE/tls/ip-key.pem"')
-        failure_evidence = cleanup.index("commit_terminal_evidence", remove_key)
+        staged_gate = cleanup.index("STAGED_EVIDENCE_COMMITTED -eq 1", remove_key)
+        failure_evidence = cleanup.index("commit_terminal_evidence", staged_gate)
         remove_stage = cleanup.index('rm -rf -- "$STAGE"', failure_evidence)
-        self.assertLess(remove_key, failure_evidence)
+        self.assertLess(remove_key, staged_gate)
+        self.assertLess(staged_gate, failure_evidence)
         self.assertLess(failure_evidence, remove_stage)
+
+    def test_pre_staging_cleanup_skips_terminal_evidence_and_preserves_primary_rc(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        cleanup = "cleanup() {" + self.remote.split("\ncleanup() {", 1)[1].split(
+            "\n}\ntrap cleanup EXIT", 1
+        )[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{cleanup}
+TRACE="$1"
+STAGE="$2"
+EVIDENCE="$3"
+DEPLOY_ID=20260718123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+BACKUP_ROOT="$2/backups-do-not-exist"
+LIVE_TOUCHED=0
+ROLLBACK_FAILED=0
+DEPLOY_RESULT=failed
+FINAL_EVIDENCE_COMMITTED=0
+STAGED_EVIDENCE_COMMITTED=0
+DEPLOY_SUCCESS_MESSAGE=''
+stop_staged_server() {{ :; }}
+rollback_live() {{ printf 'rollback_attempted\n' >> "$TRACE"; return 0; }}
+commit_terminal_evidence() {{
+    printf 'terminal_attempted\n' >> "$TRACE"
+    return 73
+}}
+cancel_cleanup_watchdog() {{ printf 'watchdog_cancel\n' >> "$TRACE"; }}
+prune_backups() {{ return 0; }}
+rm() {{ return 0; }}
+trap cleanup EXIT
+exit 42
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            trace = base / "trace.txt"
+            stage = base / "stage"
+            stage.mkdir()
+            evidence = base / "evidence-does-not-exist"
+            completed = subprocess.run(
+                [bash, "-c", script, "--", str(trace), str(stage), str(evidence)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(42, completed.returncode, completed.stderr)
+            events = trace.read_text(encoding="utf-8")
+            self.assertNotIn("terminal_attempted", events)
+            self.assertNotIn("rollback_attempted", events)
+            self.assertIn("terminal_evidence=skipped", completed.stderr)
+            self.assertIn("primary_rc=42", completed.stderr)
+            self.assertNotIn(
+                "DEPLOY_EVIDENCE_PERSIST_FAILED terminal=1",
+                completed.stderr,
+            )
 
     def test_live_binary_and_receipt_must_match_staged_candidate(self) -> None:
         self.assertIn('STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"', self.remote)
@@ -1336,12 +1666,42 @@ fi
         cleanup = self.remote.split("\ncleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
         self.assertNotIn("prune_backups || ROLLBACK_FAILED=1", cleanup)
         self.assertIn("trap '' HUP INT TERM", cleanup)
-        self.assertIn("( rollback_live ) || ROLLBACK_FAILED=1", cleanup)
+        self.assertIn("if ( rollback_live ); then", cleanup)
+        self.assertIn("ROLLBACK_FAILED=1", cleanup)
+        self.assertIn("rollback_status='failed'", cleanup)
         self.assertGreaterEqual(cleanup.count("set +e"), 2)
         rollback = self.remote.split("rollback_live() {", 1)[1].split(
             "\n}\n\n", 1
         )[0]
         self.assertNotIn("set -e", rollback)
+
+    def test_cleanup_result_reports_independent_machine_readable_surfaces(self) -> None:
+        cleanup = self.remote.split("\ncleanup() {", 1)[1].split(
+            "\n}\ntrap cleanup EXIT", 1
+        )[0]
+        result_line = next(
+            line for line in cleanup.splitlines() if "ANEB_DEPLOY_RESULT schema=" in line
+        )
+        for field in (
+            "staged_process=",
+            "watchdog=",
+            "backup_prune=",
+            "owned_path_cleanup=",
+        ):
+            self.assertIn(field, result_line)
+        self.assertNotRegex(result_line, r"(?:^|\s)cleanup=")
+
+        stop_failure = cleanup.split("if ! stop_staged_server; then", 1)[1].split(
+            "fi", 1
+        )[0]
+        self.assertIn("staged_process_status='failed'", stop_failure)
+        self.assertIn("cleanup_failed=1", stop_failure)
+
+        watchdog_failure = cleanup.split("if cancel_cleanup_watchdog; then", 1)[1].split(
+            "fi", 1
+        )[0]
+        self.assertIn("watchdog_status='failed'", watchdog_failure)
+        self.assertIn("cleanup_failed=1", watchdog_failure)
 
     def test_cleanup_ignores_second_hup_and_reaches_terminal_cleanup(self) -> None:
         bash = self.find_gnu_bash()
@@ -1360,6 +1720,7 @@ LIVE_TOUCHED=0
 ROLLBACK_FAILED=0
 DEPLOY_RESULT=failed
 FINAL_EVIDENCE_COMMITTED=0
+STAGED_EVIDENCE_COMMITTED=1
 DEPLOY_SUCCESS_MESSAGE=''
 stop_staged_server() {{
     kill -HUP "$BASHPID"

@@ -364,6 +364,7 @@ SHIP_IP_CERT="${2:?IP certificate marker required}"
 EXPECTED_IP_CERT_SHA="${3:?IP certificate SHA-256 marker required}"
 EXPECTED_IP_KEY_SHA="${4:?IP private-key SHA-256 marker required}"
 EXPECTED_ARTIFACT_MANIFEST_SHA="${5:?artifact manifest SHA-256 required}"
+EXPECTED_SOURCE_COMMIT="${6:?source commit required}"
 if [[ ! "$DEPLOY_ID" =~ ^[0-9]{14}-[0-9a-f]{32}$ ]]; then
     echo "unsafe deployment id" >&2
     exit 2
@@ -389,6 +390,10 @@ fi
     echo 'invalid expected artifact manifest SHA-256' >&2
     exit 2
 }
+[[ "$EXPECTED_SOURCE_COMMIT" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || {
+    echo 'invalid expected source commit' >&2
+    exit 2
+}
 
 STAGE="/tmp/aneb-deploy-$DEPLOY_ID"
 BACKUP_ROOT="/opt/aneb/backups"
@@ -403,7 +408,15 @@ LIVE_TOUCHED=0
 ROLLBACK_FAILED=0
 DEPLOY_RESULT="failed"
 FINAL_EVIDENCE_COMMITTED=0
+STAGED_EVIDENCE_COMMITTED=0
 DEPLOY_SUCCESS_MESSAGE=""
+CURRENT_STAGE="bootstrap"
+PRIMARY_REASON="none"
+PRIMARY_STAGE="none"
+PRIMARY_RC=0
+TERMINAL_EVIDENCE_STATUS="not_attempted"
+TERMINAL_EVIDENCE_STAGE="none"
+TERMINAL_EVIDENCE_RC=0
 STAGED_BINARY_SHA=""
 LIVE_BINARY_SHA=""
 STAGED_RECEIPT_SHA=""
@@ -423,6 +436,30 @@ BASE_FIREWALL_SHA=""
 DEPLOY_LOCK_PATH="/run/lock/aneb-deploy.lock"
 
 export LC_ALL=C
+
+record_primary_failure() {
+    local reason="${1:?failure reason required}"
+    local stage="${2:?failure stage required}"
+    local rc="${3:?failure rc required}"
+    case "$reason" in
+        none|unclassified_failure|staged_evidence_persist_failed|final_evidence_commit_failed|cleanup_failed) ;;
+        *) reason='observability_contract_violation' ;;
+    esac
+    case "$stage" in
+        none|bootstrap|preflight_tools|preflight_artifacts|uploaded_artifacts|build_evidence|certificate|live_baseline|staged_candidate|staged_receipt|staged_evidence|live_snapshot|live_mutation|live_validation|terminal_evidence|cleanup|complete) ;;
+        *) stage='bootstrap'; reason='observability_contract_violation' ;;
+    esac
+    if [[ ! "$rc" =~ ^[0-9]+$ ]] || (( rc < 0 || rc > 255 )); then
+        rc=70
+        stage='bootstrap'
+        reason='observability_contract_violation'
+    fi
+    if [[ "$PRIMARY_REASON" == 'none' ]]; then
+        PRIMARY_REASON="$reason"
+        PRIMARY_STAGE="$stage"
+        PRIMARY_RC="$rc"
+    fi
+}
 
 acquire_deploy_lock() {
     command -v flock >/dev/null 2>&1 || {
@@ -455,8 +492,14 @@ if [[ $DEPLOY_LOCK_RC -ne 0 ]]; then
 fi
 
 cancel_cleanup_watchdog() {
-    systemctl stop "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || true
+    local watchdog_rc=0
+    systemctl stop "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || watchdog_rc=1
     systemctl reset-failed "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$WATCHDOG_TIMER" || \
+        systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
+        watchdog_rc=1
+    fi
+    return "$watchdog_rc"
 }
 
 early_cleanup() {
@@ -466,7 +509,12 @@ early_cleanup() {
     set +e
     rm -f -- "$STAGE/tls/ip-key.pem"
     if rm -rf -- "$STAGE"; then
-        cancel_cleanup_watchdog
+        if ! cancel_cleanup_watchdog; then
+            echo 'EARLY_WATCHDOG_CLEANUP_FAILED maintenance_required=1' >&2
+            if [[ $rc -eq 0 ]]; then
+                rc=99
+            fi
+        fi
     else
         echo 'EARLY_STAGE_CLEANUP_FAILED watchdog_retained=1' >&2
         if [[ $rc -eq 0 ]]; then
@@ -485,11 +533,33 @@ fi
 
 stop_staged_server() {
     if [[ -n "$STAGE_PID" ]]; then
-        kill -TERM -- "-$STAGE_PID" >/dev/null 2>&1 || \
-            kill "$STAGE_PID" >/dev/null 2>&1 || true
-        wait "$STAGE_PID" >/dev/null 2>&1 || true
+        local stage_pid="$STAGE_PID"
+        if kill -0 -- "-$stage_pid" >/dev/null 2>&1 || \
+            kill -0 "$stage_pid" >/dev/null 2>&1; then
+            kill -TERM -- "-$stage_pid" >/dev/null 2>&1 || \
+                kill "$stage_pid" >/dev/null 2>&1 || true
+            for _ in $(seq 1 20); do
+                if ! kill -0 -- "-$stage_pid" >/dev/null 2>&1 && \
+                    ! kill -0 "$stage_pid" >/dev/null 2>&1; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if kill -0 -- "-$stage_pid" >/dev/null 2>&1 || \
+                kill -0 "$stage_pid" >/dev/null 2>&1; then
+                kill -KILL -- "-$stage_pid" >/dev/null 2>&1 || \
+                    kill -KILL "$stage_pid" >/dev/null 2>&1 || true
+            fi
+        fi
+        wait "$stage_pid" >/dev/null 2>&1 || true
+        if kill -0 -- "-$stage_pid" >/dev/null 2>&1 || \
+            kill -0 "$stage_pid" >/dev/null 2>&1; then
+            echo 'STAGED_SERVER_STOP_FAILED maintenance_required=1' >&2
+            return 1
+        fi
         STAGE_PID=""
     fi
+    return 0
 }
 
 hash_stream() {
@@ -707,13 +777,10 @@ PY
 }
 
 validate_build_evidence() {
-    go version -m -json "$STAGE/aneb-server-linux" \
-        > "$STAGE/go-buildinfo.remote.json"
     python3 - \
-        "$STAGE" "$SHIP_IP_CERT" \
+        "$STAGE" "$SHIP_IP_CERT" "$EXPECTED_SOURCE_COMMIT" \
         "$STAGE/build-provenance.json" \
         "$STAGE/go-buildinfo.json" \
-        "$STAGE/go-buildinfo.remote.json" \
         "$STAGE/artifact-manifest.sha256" <<'PY'
 import hashlib
 import json
@@ -724,9 +791,9 @@ import sys
 
 stage = Path(sys.argv[1]).resolve()
 ship_ip_cert = sys.argv[2]
-provenance_path = Path(sys.argv[3])
-buildinfo_path = Path(sys.argv[4])
-remote_buildinfo_path = Path(sys.argv[5])
+expected_commit = sys.argv[3]
+provenance_path = Path(sys.argv[4])
+buildinfo_path = Path(sys.argv[5])
 manifest_path = Path(sys.argv[6])
 
 def reject_duplicate_members(pairs):
@@ -782,9 +849,6 @@ def file_record(path):
 
 provenance, provenance_raw = load_json_object(provenance_path, canonical=True)
 buildinfo, buildinfo_raw = load_json_object(buildinfo_path, canonical=True)
-remote_buildinfo, _ = load_json_object(remote_buildinfo_path, canonical=False)
-if buildinfo != remote_buildinfo:
-    raise SystemExit('uploaded Go build info does not match staged binary')
 
 expected_provenance_keys = {
     'schema',
@@ -804,6 +868,8 @@ if provenance['schema'] != 'aneb-server-build-provenance-v1':
 commit = provenance['commit']
 if not isinstance(commit, str) or re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', commit) is None:
     raise SystemExit('provenance commit invalid')
+if commit != expected_commit:
+    raise SystemExit('provenance commit does not match expected source commit')
 go_version = provenance['GoVersion']
 if not isinstance(go_version, str) or re.fullmatch(
     r'go[0-9]+(?:\.[0-9]+)+(?:[A-Za-z0-9._-]*)?', go_version
@@ -2245,21 +2311,75 @@ PY
 
 commit_terminal_evidence() {
     local outcome="${1:?terminal evidence outcome required}"
-    persist_stage_evidence "$outcome" || return 1
-    verify_terminal_evidence "$outcome" || return 1
+    local terminal_rc
+    TERMINAL_EVIDENCE_STATUS='not_attempted'
+    TERMINAL_EVIDENCE_STAGE='persist'
+    if persist_stage_evidence "$outcome"; then
+        :
+    else
+        terminal_rc=$?
+        TERMINAL_EVIDENCE_STATUS='failed'
+        TERMINAL_EVIDENCE_RC="$terminal_rc"
+        return "$terminal_rc"
+    fi
+    TERMINAL_EVIDENCE_STAGE='verify'
+    if verify_terminal_evidence "$outcome"; then
+        :
+    else
+        terminal_rc=$?
+        TERMINAL_EVIDENCE_STATUS='failed'
+        TERMINAL_EVIDENCE_RC="$terminal_rc"
+        return "$terminal_rc"
+    fi
     FINAL_EVIDENCE_COMMITTED=1
+    TERMINAL_EVIDENCE_STATUS='committed'
+    TERMINAL_EVIDENCE_STAGE='none'
+    TERMINAL_EVIDENCE_RC=0
 }
 
 cleanup() {
     local rc=$?
+    local final_rc="$rc"
+    local failure_stage="${CURRENT_STAGE:-bootstrap}"
     local cleanup_failed=0
     local evidence_failed=0
+    local rollback_status='not_needed'
+    local result_status='failed'
+    local staged_process_status='not_needed'
+    local watchdog_status='not_run'
+    local backup_prune_status='not_run'
     trap - EXIT
     trap '' HUP INT TERM
+    CURRENT_STAGE='cleanup'
+    if [[ $rc -ne 0 ]]; then
+        if [[ "${PRIMARY_REASON:-none}" == 'none' ]]; then
+            PRIMARY_REASON='unclassified_failure'
+            PRIMARY_STAGE="$failure_stage"
+            PRIMARY_RC="$rc"
+        fi
+    fi
+    PRIMARY_RC="${PRIMARY_RC:-0}"
+    PRIMARY_REASON="${PRIMARY_REASON:-none}"
+    PRIMARY_STAGE="${PRIMARY_STAGE:-none}"
+    STAGED_EVIDENCE_COMMITTED="${STAGED_EVIDENCE_COMMITTED:-0}"
+    TERMINAL_EVIDENCE_STATUS="${TERMINAL_EVIDENCE_STATUS:-not_attempted}"
+    TERMINAL_EVIDENCE_STAGE="${TERMINAL_EVIDENCE_STAGE:-none}"
+    TERMINAL_EVIDENCE_RC="${TERMINAL_EVIDENCE_RC:-0}"
     set +e
-    stop_staged_server
+    if [[ -n "${STAGE_PID:-}" ]]; then
+        staged_process_status='stopped'
+    fi
+    if ! stop_staged_server; then
+        staged_process_status='failed'
+        cleanup_failed=1
+    fi
     if [[ $rc -ne 0 && $LIVE_TOUCHED -eq 1 ]]; then
-        ( rollback_live ) || ROLLBACK_FAILED=1
+        if ( rollback_live ); then
+            rollback_status='succeeded'
+        else
+            ROLLBACK_FAILED=1
+            rollback_status='failed'
+        fi
     fi
     set +e
     rm -f -- "$STAGE/tls/ip-key.pem" || cleanup_failed=1
@@ -2271,7 +2391,16 @@ cleanup() {
         DEPLOY_RESULT='failed'
     fi
     if [[ $FINAL_EVIDENCE_COMMITTED -eq 0 ]]; then
-        commit_terminal_evidence "$DEPLOY_RESULT" || evidence_failed=1
+        if [[ $STAGED_EVIDENCE_COMMITTED -eq 1 ]]; then
+            CURRENT_STAGE='terminal_evidence'
+            if ! commit_terminal_evidence "$DEPLOY_RESULT"; then
+                evidence_failed=1
+            fi
+        else
+            TERMINAL_EVIDENCE_STATUS='skipped'
+            TERMINAL_EVIDENCE_STAGE='none'
+            TERMINAL_EVIDENCE_RC=0
+        fi
     fi
     rm -rf -- \
         "/opt/aneb/bin/aneb-server.new-$DEPLOY_ID" \
@@ -2293,37 +2422,64 @@ cleanup() {
         "/opt/aneb/tls/ip/key.pem.restore-$DEPLOY_ID" \
         "/opt/aneb/tls/ip/key.pem.absent-$DEPLOY_ID" || cleanup_failed=1
     if [[ -d "$BACKUP_ROOT" ]]; then
-        prune_backups || echo 'WARNING backup_prune_failed maintenance_required=1' >&2
+        if prune_backups; then
+            backup_prune_status='ok'
+        else
+            backup_prune_status='warning'
+            echo 'WARNING backup_prune_failed maintenance_required=1' >&2
+        fi
     fi
     if rm -rf -- "$STAGE"; then
-        cancel_cleanup_watchdog
+        if cancel_cleanup_watchdog; then
+            watchdog_status='cleared'
+        else
+            watchdog_status='failed'
+            cleanup_failed=1
+            echo 'WATCHDOG_CLEANUP_FAILED maintenance_required=1' >&2
+        fi
     else
         cleanup_failed=1
+        watchdog_status='retained'
         echo 'STAGE_CLEANUP_FAILED watchdog_retained=1' >&2
     fi
     if [[ $ROLLBACK_FAILED -ne 0 ]]; then
-        exit 97
+        final_rc=97
+        result_status='rollback_failed'
     fi
     if [[ $evidence_failed -ne 0 ]]; then
         echo 'DEPLOY_EVIDENCE_PERSIST_FAILED terminal=1 maintenance_required=1' >&2
-        if [[ $rc -eq 0 ]]; then
-            exit 98
+        if [[ "$PRIMARY_REASON" == 'none' ]]; then
+            PRIMARY_REASON='final_evidence_commit_failed'
+            PRIMARY_STAGE='terminal_evidence'
+            PRIMARY_RC="${TERMINAL_EVIDENCE_RC:-1}"
+        fi
+        if [[ $final_rc -eq 0 ]]; then
+            final_rc=98
         fi
     fi
     if [[ $cleanup_failed -ne 0 ]]; then
         echo 'DEPLOY_CLEANUP_FAILED maintenance_required=1' >&2
-        if [[ $rc -eq 0 ]]; then
-            exit 99
+        if [[ "$PRIMARY_REASON" == 'none' ]]; then
+            PRIMARY_REASON='cleanup_failed'
+            PRIMARY_STAGE='cleanup'
+            PRIMARY_RC=99
+        fi
+        if [[ $final_rc -eq 0 ]]; then
+            final_rc=99
         fi
     fi
-    if [[ $rc -eq 0 ]]; then
+    if [[ $final_rc -eq 0 ]]; then
         if [[ $FINAL_EVIDENCE_COMMITTED -ne 1 || -z "$DEPLOY_SUCCESS_MESSAGE" ]]; then
             echo 'DEPLOY_SUCCESS_GATE_INCOMPLETE exit=98' >&2
-            exit 98
+            final_rc=98
+            record_primary_failure final_evidence_commit_failed terminal_evidence 98
+        else
+            result_status='success'
+            echo "$DEPLOY_SUCCESS_MESSAGE"
         fi
-        echo "$DEPLOY_SUCCESS_MESSAGE"
     fi
-    exit "$rc"
+    echo "ANEB_DEPLOY_RESULT schema=aneb-deploy-result-v1 status=$result_status exit_code=$final_rc primary_reason=$PRIMARY_REASON primary_stage=$PRIMARY_STAGE primary_rc=$PRIMARY_RC staged_evidence=$STAGED_EVIDENCE_COMMITTED terminal_evidence=$TERMINAL_EVIDENCE_STATUS terminal_stage=$TERMINAL_EVIDENCE_STAGE terminal_rc=$TERMINAL_EVIDENCE_RC rollback=$rollback_status staged_process=$staged_process_status watchdog=$watchdog_status backup_prune=$backup_prune_status owned_path_cleanup=$([[ $cleanup_failed -eq 0 ]] && echo ok || echo failed)" >&2
+    exit "$final_rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -2477,17 +2633,18 @@ print(
 PY
 }
 
+CURRENT_STAGE='preflight_tools'
 test -d "$STAGE"
 test -x /usr/bin/python3
 test -x /usr/bin/curl
 command -v runuser >/dev/null 2>&1
 command -v setsid >/dev/null 2>&1
-command -v go >/dev/null 2>&1
 command -v awk >/dev/null 2>&1
 command -v cmp >/dev/null 2>&1
 command -v iptables-save >/dev/null 2>&1
 command -v ip6tables-save >/dev/null 2>&1
 command -v tc >/dev/null 2>&1
+CURRENT_STAGE='preflight_artifacts'
 test -f "$STAGE/aneb-server-linux"
 test -f "$STAGE/aneb-server.service"
 test -f "$STAGE/build-provenance.json"
@@ -2496,11 +2653,14 @@ test -f "$STAGE/artifact-manifest.sha256"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/profile.json"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/runtime_plan.json"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/manifest.sha256"
+CURRENT_STAGE='uploaded_artifacts'
 validate_uploaded_artifacts
 STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"
 [[ "$STAGED_BINARY_SHA" =~ ^[0-9a-f]{64}$ ]]
+CURRENT_STAGE='build_evidence'
 validate_build_evidence
 if [[ "$SHIP_IP_CERT" == "1" ]]; then
+    CURRENT_STAGE='certificate'
     command -v openssl >/dev/null 2>&1
     test -f "$STAGE/tls/ip-cert.pem"
     test -f "$STAGE/tls/ip-key.pem"
@@ -2510,6 +2670,7 @@ if [[ "$SHIP_IP_CERT" == "1" ]]; then
 fi
 
 # Upgrade is fail-closed: an existing healthy ANEB service is the rollback baseline.
+CURRENT_STAGE='live_baseline'
 id -u aneb >/dev/null 2>&1
 systemctl is-active --quiet aneb-server
 test -f /opt/aneb/bin/aneb-server
@@ -2520,6 +2681,7 @@ chmod 0755 "$STAGE" "$STAGE/aneb-server-linux"
 chmod -R a+rX "$STAGE/root-profiles" "$STAGE/execution-profiles"
 install -d -m 0750 -o aneb -g aneb "$STAGE/data"
 
+CURRENT_STAGE='staged_candidate'
 STAGE_PORT="$(choose_loopback_port)"
 setsid runuser -u aneb -- "$STAGE/aneb-server-linux" \
     -addr "127.0.0.1:$STAGE_PORT" \
@@ -2547,6 +2709,7 @@ if [[ $STAGE_READY -ne 1 ]]; then
     cat "$STAGE/candidate.log" >&2
     exit 1
 fi
+CURRENT_STAGE='staged_receipt'
 validate_receipt \
     "http://127.0.0.1:$STAGE_PORT" \
     "$STAGE/execution-profiles/token_multimodal_quick/manifest.sha256" \
@@ -2560,9 +2723,18 @@ stop_staged_server
 
 # Durable, redacted staging evidence is a hard gate. The private key is never
 # copied into evidence; if persistence fails, delete its staged copy before exit.
-if ! persist_stage_evidence staged_validated; then
-    rm -f -- "$STAGE/tls/ip-key.pem"
-    echo 'DEPLOY_EVIDENCE_PERSIST_FAILED live_touched=0 staged_private_key=removed' >&2
+CURRENT_STAGE='staged_evidence'
+if persist_stage_evidence staged_validated; then
+    STAGED_EVIDENCE_COMMITTED=1
+else
+    evidence_rc=$?
+    record_primary_failure staged_evidence_persist_failed staged_evidence "$evidence_rc"
+    key_removal='confirmed'
+    if ! rm -f -- "$STAGE/tls/ip-key.pem"; then
+        key_removal='deferred'
+        echo 'STAGED_PRIVATE_KEY_REMOVAL_DEFERRED cleanup_retry=1' >&2
+    fi
+    echo "DEPLOY_EVIDENCE_PERSIST_FAILED live_touched=0 staged_private_key=$key_removal" >&2
     exit 96
 fi
 
@@ -2570,6 +2742,7 @@ fi
 # Freeze the exact 0.7 rollback identity and every shared-host surface before
 # replacing any ANEB-owned live file. PID is intentionally not frozen because
 # both upgrade and rollback restart the ANEB service.
+CURRENT_STAGE='live_snapshot'
 freeze_live_baseline
 install -d -m 0700 "$BACKUP_ROOT"
 mkdir -m 0700 "$BACKUP"
@@ -2584,6 +2757,7 @@ if [[ "$SHIP_IP_CERT" == "1" ]]; then
     snapshot_item ip-key /opt/aneb/tls/ip/key.pem
 fi
 
+CURRENT_STAGE='live_mutation'
 LIVE_TOUCHED=1
 
 install -m 0755 "$STAGE/aneb-server-linux" \
@@ -2636,6 +2810,7 @@ systemctl daemon-reload
 systemctl restart aneb-server
 systemctl is-active --quiet aneb-server
 
+CURRENT_STAGE='live_validation'
 if ! wait_live_server; then
     journalctl -u aneb-server -n 80 --no-pager >&2 || true
     exit 1
@@ -2797,7 +2972,12 @@ validate_legacy_surface live-0.8
 # treated as a deployment failure while rollback is still armed.
 assert_shared_host_baseline live
 DEPLOY_RESULT='success'
-if ! commit_terminal_evidence success; then
+CURRENT_STAGE='terminal_evidence'
+if commit_terminal_evidence success; then
+    :
+else
+    terminal_commit_rc=$?
+    record_primary_failure final_evidence_commit_failed terminal_evidence "$terminal_commit_rc"
     echo 'FINAL_EVIDENCE_COMMIT_FAILED rollback_armed=1 exit=98' >&2
     exit 98
 fi
@@ -2808,6 +2988,7 @@ if ! prune_backups; then
     echo 'WARNING backup_prune_failed maintenance_required=1' >&2
 fi
 DEPLOY_SUCCESS_MESSAGE="DEPLOY_OK backup=$BACKUP retained_backups=3 backup_prune=$PRUNE_RESULT"
+CURRENT_STAGE='complete'
 '@
 
     $remoteScriptPath = Join-Path $LocalStage 'remote_deploy.sh'
@@ -2839,7 +3020,7 @@ DEPLOY_SUCCESS_MESSAGE="DEPLOY_OK backup=$BACKUP retained_backups=3 backup_prune
     $ipMarker = if ($HaveIpCert) { '1' } else { '0' }
     $certPin = if ($HaveIpCert) { $ExpectedIpCertificateSha256.ToLowerInvariant() } else { 'none' }
     $keyPin = if ($HaveIpCert) { $ExpectedIpPrivateKeySha256.ToLowerInvariant() } else { 'none' }
-    & ssh @SshOpts $Remote "bash '$RemoteStage/remote_deploy.sh' '$DeploymentId' '$ipMarker' '$certPin' '$keyPin' '$ArtifactManifestSha'"
+    & ssh @SshOpts $Remote "bash '$RemoteStage/remote_deploy.sh' '$DeploymentId' '$ipMarker' '$certPin' '$keyPin' '$ArtifactManifestSha' '$($script:ExpectedSourceCommit)'"
     if ($LASTEXITCODE -ne 0) {
         throw "guarded remote deployment failed with exit code $LASTEXITCODE"
     }
