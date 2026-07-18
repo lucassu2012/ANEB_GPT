@@ -15,6 +15,7 @@ from scripts import build_server_candidate as candidate_builder
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "build_server_candidate.py"
+CI_WORKFLOW = SCRIPT.parents[1] / ".github" / "workflows" / "ci.yml"
 PUBLIC_CERTIFICATE = SCRIPT.parents[1] / "server" / "certs" / "aneb_local_cert.pem"
 SCHEMA = "aneb-server-build-provenance-v1"
 CANONICAL_FLAGS = [
@@ -51,6 +52,23 @@ ARTIFACT_PATHS = {
         "profiles/published/token_multimodal_quick/manifest.sha256"
     ),
 }
+
+
+class CiWorkflowContractTest(unittest.TestCase):
+    def test_contract_tests_install_repository_go_toolchain_first(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        contracts = workflow.split("\n  contracts:\n", 1)[1].split(
+            "\n  server:\n", 1
+        )[0]
+
+        setup_go = contracts.index("- uses: actions/setup-go@v5")
+        script_tests = contracts.index(
+            "python -m unittest discover -s scripts/tests -v"
+        )
+
+        self.assertLess(setup_go, script_tests)
+        self.assertIn("go-version-file: server/go.mod", contracts)
+        self.assertIn("cache: false", contracts)
 
 
 def sha256(path: Path) -> str:

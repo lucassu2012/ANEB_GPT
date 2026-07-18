@@ -1218,14 +1218,14 @@ fi
 
         bash = self.find_gnu_bash()
         if bash is None:
-            return
+            self.skipTest("GNU Bash is unavailable; live flock contention was not run")
         has_flock = subprocess.run(
             [bash, "-lc", "command -v flock >/dev/null 2>&1"],
             capture_output=True,
             check=False,
         )
         if has_flock.returncode != 0:
-            return
+            self.skipTest("flock is unavailable; live lock contention was not run")
         with tempfile.TemporaryDirectory() as temporary:
             lock_path = Path(temporary) / "deploy.lock"
             first = subprocess.Popen(
@@ -1242,13 +1242,18 @@ fi
                 text=True,
             )
             try:
+                self.assertEqual(
+                    f"DEPLOY_LOCK_ACQUIRED path={lock_path}\n",
+                    first.stdout.readline(),
+                )
                 self.assertEqual("held", first.stdout.read(4))
                 second = subprocess.run(
                     [
                         bash,
                         "-c",
                         function
-                        + '\nDEPLOY_LOCK_PATH="$1"\nacquire_deploy_lock\nprintf mutated',
+                        + '\nDEPLOY_LOCK_PATH="$1"\n'
+                        + 'acquire_deploy_lock || exit $?\nprintf mutated',
                         "--",
                         str(lock_path),
                     ],
