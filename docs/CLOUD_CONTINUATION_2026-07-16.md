@@ -25,14 +25,14 @@
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
 - E-01 已升级到 `aneb-server/0.7.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复路径。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
-- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、6 个 Schema/catalog、TTFT 重复性分析器、行为模型 31 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 539 项 JVM 测试、0 failures/0 skipped、Lint 0 errors（11 warnings）、5 项重复性测试、Go/行为模型测试和 0.5.7 APK 构建通过；最终 Debug APK SHA-256 为 `0940BA48682FE00D7E464E61BA154532D4BACEF39BB98AACC667D6CEEDFC642A`。
+- `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、8 个 Schema/catalog、版本化 JSONL/TTFT 分析、行为模型 31 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 541 项 JVM 测试、0 failures/0 skipped、Lint 0 errors（11 warnings）、12 项测量分析测试、Go/行为模型测试和 0.5.8 APK 构建通过；最终 Debug APK 为 61,754,256 bytes，SHA-256 `B857A8AD2E6CA443CC6B0B60162DE7E5D73A7E4532D9E27F2A92808A83F8DAF0`。
 - App 0.5.5 / Room v19 已使 Token、AI 实时和网络综合新 run 在同一事务冻结类型化行、`aneb-result-v1`、1Hz 无线样本和环境事件；三类结果页可保存或分享经身份/摘要校验的原样 JSONL，Profile 未测指标显式 `missing`，无线时间序列由 R01 证据引用。P40 最终 runs `019f71a6-bbf0-7c71-b8b8-b8338297c6e0` / `019f71a9-191f-7fe3-9995-d4765ed6652f` / `019f71aa-f127-7db3-a4d0-651e57e6a955` 的 Schema 均为零错误、无线样本数一一相符，独立 Python 摘要全部匹配；0.5.4 的 JVM/Python 指数词法缺陷已否决并修复。详见 `docs/P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
 - App 0.5.6 已冻结 Token 原始任务的稳定 ID、节点处理时延和端到端 TTFT，并加入严格同条件、任务对齐的重复性分析器。P40 5-run cohort 的 TTFT CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限；5 条信封均为 completed/valid，Schema、独立摘要、类型化核心字段和 Room/信封无线样本 119/119 一致。Quick 单 run 仍保持 LOW/INCONCLUSIVE。详见 `docs/P40_APP_0.5.6_TTFT_REPEATABILITY_VALIDATION_2026-07-18.md`。
 - App 0.5.7 开始收口 M4 非开发者路径：所有测试类型在无线证据不完整时先说明用途并允许低置信继续；无网络或非法节点在 Service 启动前给出可操作提示。P40 已验证非法地址零服务启动、Network 模式权限说明、完整 Quick、后台通知/回到结果和主动取消。正常 runs `019f7209-e89c-7adc-8238-83f9847acdc5` / `019f7211-0c5d-723d-a84f-49115ddd48da` 各采 18 个无线样本；取消 run `019f7212-0268-7280-9fa6-385b32a8fed1` 保留 cancelled/invalid 信封并抑制分数/等级。详见 `docs/P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - 同一 0.5.7 设置页已加入“导出可验证结果”：逐条核验全部冻结信封，合法记录按时间输出原样 JSONL，异常记录 fail-closed 且向用户报告数量。P40 22 条历史中 18 条导出成功、4 条 0.5.3/0.5.4 摘要异常明确跳过；输出 18 行、18 个唯一 run，独立 canonical digest 18/18 匹配且拒绝 id 未混入。
 - AI 实时已完成后台正常与真实 Wi-Fi 中断相邻回归：正常 run `019f7238-d040-71a0-b874-6c211f051e0d` 3/3 轮成功；中断 run `019f7240-bf42-7a48-b23b-3235286da018` 观察到 1/1 会话中断、2/3 轮失败、帧返回率 51.8%，score/grade 为 null。结果页优先写业务任务受损并给出 ≤1% 中断率/≥99% 帧返回率目标，同时明确没有 PATH_CHANGE 冻结证据时不作单因归因。两条信封摘要匹配，最终批量导出 21/25 条时已包含该中断结果且 21/21 摘要匹配。
 - 三类正式引擎现共用默认网络 PATH_CHANGE 收集器：Android 平台网络句柄只在内存中使用，持久结果只含 run 内匿名路径别名与承载；稳定回放不记变化，丢失/切换/恢复/验证/暂停事件去重冻结，只有通过 VALIDATED 且未暂停的新网络才标记 ready。最终 P40 run `019f72f5-557c-71b0-a7d9-b462055f0545` 记录默认 Wi-Fi 丢失、1/1 会话中断和 3/3 轮失败；结果页把事件翻译成中文，只宣称同窗共现与关联定位，不宣称单因因果。信封当前 Schema/摘要均通过，最终 JSONL `aneb_results_27_of_31_20260718_100304.jsonl` 为 27 行、27/27 摘要匹配，SHA-256 `86B7C1CBDD125120C2D1926828B9C121D17DAEA48B206A7C77DA0712DB4603E6`。
-- 历史离线审计另发现 3 条 0.5.2/0.5.5 Token 信封虽然身份与摘要完整，却缺少当前同名 v1 Schema 后加的任务字段；这是旧 Schema 未升版本造成的治理债务。不得回填或改写旧结果；下一次结构演进必须升 Schema 版本并保留对应验证器。
+- 历史离线审计发现的同名 v1 收紧债务已在 0.5.8 闭环：结果 Schema 拆为只含兼容公共约束的内部 core、兼容 v1 和严格 v2；27 条不可变历史按 v1 为 27/27 通过，三类新生产者统一发 v2。设备导出同时支持 v1/v2，未来版本不支持与摘要/身份异常分开报告；离线 `verify_result_jsonl.py` 按每条记录自身版本做结构校验。P40 v2 Token run `019f730f-a0d5-7417-9e01-0866bacdfc57` 3/3 任务字段完整、120 条无线样本、严格 Schema 零错误且独立摘要匹配，详见 `docs/P40_APP_0.5.8_RESULT_VERSIONING_VALIDATION_2026-07-18.md`。
 - App 0.5.1 已删除正式 API Probe UI/Key 存储，改为 Debug-only、`android.permission.DUMP` 保护且无 intent-filter 的一次性 ADB 诊断 Activity；Release 合并清单自动验收不含该组件。普通 autorun 仅 Debug 首次创建消费并立即清除，避免 Activity 重建重复测试。
 - AI 实时结果采用 `ensureActive → NonCancellable(Room insert + publish)` 最终提交边界；DB 失败不发布，取消与提交碰撞时 durable result 优先。每会话 loaded RTT 监控在 `finally` 中 `cancelAndJoin`；固定 Wi-Fi/蜂窝绑定失效后在下一会话按同承载重获，失败不降级。手动权限流程由 `SavedStateHandle` 恢复，不持有 Activity/Composable/lambda。
 - P40 Pro 0.5.1 真机 run `019f709d-33bf-7dbf-a732-35e28a71b447` 完成 AI 实时 Quick：1/1 会话、3 轮、Room 写入 `ok=true`、98.6/A、`LOW/INCONCLUSIVE`、终态 completed；Debug API 缺参安全拒绝通过且未发出真实 API 请求。测试后已回桌面并强停 Codex，两套 ANEB 均无 PID/服务。首次截图因 ADB 短暂离线为全黑无效帧，不计入 UI 验收；详见 `docs/P40_APP_0.5.1_VALIDATION_2026-07-17.md`。
@@ -49,7 +49,7 @@
 
 ## 3. 下一阶段（按顺序）
 
-1. `aneb-result-v1`、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector 和 TTFT 同条件重复性复测已完成。
+1. 版本化结果合同（compatible v1 + strict v2）、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector 和 TTFT 同条件重复性复测已完成；共享 P40 释放后补 v1+v2 混合批量导出用户路径。
 2. P3 v0.2.0 的授权观测、训练/留出隔离、校准验证和 validated 发布复算流水线已完成；真实授权数据仍是外部输入，到位前保持 hypothesis。
 3. M4 的开测前自救与历史批量导出切片已通过；下一项继续做不依赖 ADB 的安装/首次启动/导出整链与发布候选可用性。签名密钥仍由 Product Owner 在仓库外保管，缺密钥不能冒充正式 Release。
 4. 继续补 AI 实时真实断网、切后台恢复和打断边缘条件真机回归；真实网络事件不得混用受控服务端恢复分数。

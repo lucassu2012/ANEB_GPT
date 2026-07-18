@@ -634,7 +634,7 @@ class RealtimeSimulationEngine(private val context: Context) {
         radio: FormalRadioEvidence,
         log: suspend (String) -> Unit,
     ) {
-        val envelope = RealtimeResultEnvelopeV1.build(
+        val envelope = RealtimeResultEnvelopeV2.build(
             RealtimeResultEnvelopeInput(
                 result = result,
                 source = source,

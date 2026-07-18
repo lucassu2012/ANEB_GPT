@@ -1403,7 +1403,7 @@ class NetworkSpeedEngine(private val context: Context) {
         log: suspend (String) -> Unit,
     ) {
         val radio = radioCollector.freeze()
-        val envelope = NetworkResultEnvelopeV1.build(
+        val envelope = NetworkResultEnvelopeV2.build(
             NetworkResultEnvelopeInput(
                 result = result,
                 source = source,

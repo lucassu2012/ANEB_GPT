@@ -1207,7 +1207,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Exports one immutable aneb-result-v1 envelope; sharing never rebuilds or rescales it. */
+    /** Exports one immutable supported result envelope; sharing never rebuilds or rescales it. */
     private fun doExportUnifiedResult(
         runId: String,
         share: Boolean,
@@ -1216,14 +1216,28 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val record = db.resultEnvelopeDao().byId(runId)
             if (record == null) {
-                android.util.Log.w("AnebProbe", "RESULT_V1_EXPORT run_id=$runId status=missing")
+                android.util.Log.w("AnebProbe", "RESULT_EXPORT run_id=$runId status=missing")
                 withContext(Dispatchers.Main) { onStatus("无法导出：这条记录没有统一结果信封。") }
                 return@launch
             }
             val content = runCatching { AnebResultJsonlExporter.export(listOf(record)) }
                 .getOrElse { error ->
-                    android.util.Log.e("AnebProbe", "RESULT_V1_EXPORT run_id=$runId status=integrity_fail", error)
-                    withContext(Dispatchers.Main) { onStatus("失败：结果完整性校验未通过。") }
+                    val unsupported = (error as? AnebResultJsonlExporter.VerificationException)?.kind ==
+                        AnebResultJsonlExporter.RejectionKind.UNSUPPORTED_SCHEMA
+                    android.util.Log.e(
+                        "AnebProbe",
+                        "RESULT_EXPORT run_id=$runId status=${if (unsupported) "schema_unsupported" else "integrity_fail"}",
+                        error,
+                    )
+                    withContext(Dispatchers.Main) {
+                        onStatus(
+                            if (unsupported) {
+                                "无法导出：这条结果的格式版本暂不受支持，原记录未损坏。"
+                            } else {
+                                "失败：结果完整性校验未通过。"
+                            },
+                        )
+                    }
                     return@launch
                 }
             val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -1236,7 +1250,8 @@ class MainActivity : ComponentActivity() {
                 content,
             )
             val line =
-                "RESULT_V1_EXPORT run_id=$runId type=${record.testType} share=$share file=$fileName " +
+                "RESULT_EXPORT run_id=$runId schema=${record.schemaVersion} type=${record.testType} " +
+                    "share=$share file=$fileName " +
                     "bytes=${outcome.bytes} status=${if (outcome.ok) "ok" else "fail"} " +
                     "uri=${outcome.uri ?: "null"} error=${outcome.error?.replace(' ', '_') ?: "none"}"
             android.util.Log.i("AnebProbe", line)
@@ -1266,7 +1281,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val records = db.resultEnvelopeDao().all()
             if (records.isEmpty()) {
-                android.util.Log.i("AnebProbe", "RESULT_V1_BULK_EXPORT status=empty")
+                android.util.Log.i("AnebProbe", "RESULT_BULK_EXPORT status=empty")
                 withContext(Dispatchers.Main) { onStatus("暂无可导出的正式测试结果。") }
                 return@launch
             }
@@ -1274,19 +1289,30 @@ class MainActivity : ComponentActivity() {
                 .getOrElse { error ->
                     android.util.Log.e(
                         "AnebProbe",
-                        "RESULT_V1_BULK_EXPORT status=selection_fail records=${records.size}",
+                        "RESULT_BULK_EXPORT status=selection_fail records=${records.size}",
                         error,
                     )
                     withContext(Dispatchers.Main) { onStatus("失败：结果记录存在重复标识，未生成文件。") }
                     return@launch
                 }
             if (selection.accepted.isEmpty()) {
+                val unsupportedCount = selection.rejected.count {
+                    it.kind == AnebResultJsonlExporter.RejectionKind.UNSUPPORTED_SCHEMA
+                }
                 android.util.Log.e(
                     "AnebProbe",
-                    "RESULT_V1_BULK_EXPORT status=no_verifiable_record records=${records.size} " +
+                    "RESULT_BULK_EXPORT status=no_verifiable_record records=${records.size} " +
                         "rejected_ids=${selection.rejected.joinToString(",") { it.runId }}",
                 )
-                withContext(Dispatchers.Main) { onStatus("失败：没有通过完整性校验的结果，未生成文件。") }
+                withContext(Dispatchers.Main) {
+                    onStatus(
+                        if (unsupportedCount == selection.rejected.size) {
+                            "未生成文件：现有结果均为暂不支持的格式版本，原记录未损坏。"
+                        } else {
+                            "失败：没有通过完整性校验的结果，未生成文件。"
+                        },
+                    )
+                }
                 return@launch
             }
             val content = AnebResultJsonlExporter.export(selection.accepted)
@@ -1300,7 +1326,7 @@ class MainActivity : ComponentActivity() {
             )
             android.util.Log.i(
                 "AnebProbe",
-                "RESULT_V1_BULK_EXPORT records=${records.size} accepted=${selection.accepted.size} " +
+                "RESULT_BULK_EXPORT records=${records.size} accepted=${selection.accepted.size} " +
                     "rejected=${selection.rejected.size} " +
                     "rejected_ids=${selection.rejected.joinToString(",") { it.runId }} " +
                     "file=$fileName bytes=${outcome.bytes} " +
@@ -1313,8 +1339,12 @@ class MainActivity : ComponentActivity() {
                         if (selection.rejected.isEmpty()) {
                             "已导出 ${selection.accepted.size} 条可验证结果。文件已保存到系统下载目录。"
                         } else {
+                            val unsupportedCount = selection.rejected.count {
+                                it.kind == AnebResultJsonlExporter.RejectionKind.UNSUPPORTED_SCHEMA
+                            }
+                            val integrityCount = selection.rejected.size - unsupportedCount
                             "已导出 ${selection.accepted.size}/${records.size} 条；" +
-                                "${selection.rejected.size} 条完整性异常已跳过。"
+                                "$unsupportedCount 条格式暂不支持，$integrityCount 条完整性异常。"
                         }
                     } else {
                         "失败：无法写入系统下载目录。"

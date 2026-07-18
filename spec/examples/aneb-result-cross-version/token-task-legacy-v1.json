@@ -1,0 +1,20 @@
+{
+  "workload_kind": "text",
+  "upload_bytes": 8192,
+  "response_artifact_bytes": 0,
+  "success": true,
+  "network_failure": false,
+  "error": null,
+  "click_to_node_receive_ms": 12.0,
+  "ttft_excess_ms": 40.0,
+  "upload_goodput_mbps": 5.4,
+  "download_goodput_mbps": null,
+  "artifact_download_duration_ms": null,
+  "expected_tokens": 10,
+  "unique_tokens": 10,
+  "duplicate_tokens": 0,
+  "token_lateness_ms": [40.0],
+  "itl_residual_ms": [2.0],
+  "request_count": 1,
+  "failed_request_count": 0
+}

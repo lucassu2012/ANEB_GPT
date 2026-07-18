@@ -9,11 +9,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class NetworkResultEnvelopeV1Test {
+class NetworkResultEnvelopeV2Test {
     @Test fun collectedRadioIsEmbeddedAndNotMarkedMissing() {
         val result = result(metrics = emptyMap(), evidenceJson = completeEvidenceJson())
         val root = Json.parseToJsonElement(
-            NetworkResultEnvelopeV1.build(
+            NetworkResultEnvelopeV2.build(
                 input(
                     result,
                     NetworkResultEnvelopeSource(
@@ -56,8 +56,8 @@ class NetworkResultEnvelopeV1Test {
             ),
         )
 
-        val first = NetworkResultEnvelopeV1.build(input)
-        val second = NetworkResultEnvelopeV1.build(input)
+        val first = NetworkResultEnvelopeV2.build(input)
+        val second = NetworkResultEnvelopeV2.build(input)
         assertEquals(first.bodyJson, second.bodyJson)
         assertEquals(first.canonicalSha256, second.canonicalSha256)
         assertEquals(TokenRuntimeIntegrity.canonicalSha256(first.bodyJson), first.canonicalSha256)
@@ -90,7 +90,7 @@ class NetworkResultEnvelopeV1Test {
             evidenceJson = """{"invalid_reason":"guard_rejected:vpn_active"}""",
             conclusions = listOf("Measurement did not start."),
         )
-        val envelope = NetworkResultEnvelopeV1.build(
+        val envelope = NetworkResultEnvelopeV2.build(
                 input(failed, NetworkResultEnvelopeSource(profile = null), status = "failed"),
             )
         val root = Json.parseToJsonElement(envelope.bodyJson).jsonObject

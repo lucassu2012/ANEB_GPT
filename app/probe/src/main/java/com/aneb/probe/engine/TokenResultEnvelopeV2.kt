@@ -58,17 +58,17 @@ internal data class TokenResultEnvelopeInput(
 )
 
 /**
- * Builds the first production vertical slice of aneb-result-v1.
+ * Builds the current production result envelope under aneb-result-v2.
  *
  * This runs inside the measurement engine, before the durable transaction. Metric values,
  * scores, confidence and conclusion text are copied from [TokenScoreResult]. Profile metadata is
  * joined only from the exact hash-bound [ScenarioProfile] used by the run. Missing context stays
  * null with an explicit completeness path; no exporter-side reconstruction is allowed.
  */
-internal object TokenResultEnvelopeV1 {
-    const val SCHEMA_VERSION = "aneb-result-v1"
+internal object TokenResultEnvelopeV2 {
+    const val SCHEMA_VERSION = "aneb-result-v2"
     const val TEST_TYPE = "token_simulation"
-    const val EXPORTER_VERSION = "aneb-result-exporter-v1"
+    const val EXPORTER_VERSION = "aneb-result-exporter-v2"
 
     fun build(input: TokenResultEnvelopeInput): ResultEnvelopeEntity {
         val result = input.result

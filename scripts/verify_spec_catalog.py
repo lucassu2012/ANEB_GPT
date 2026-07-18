@@ -266,9 +266,14 @@ def _validate_schemas(root: Path, catalog: dict[str, Any], errors: list[str]) ->
         if value.get("$id") != entry.get("json_schema_id"):
             errors.append(f"{label}: JSON Schema $id does not match catalog")
         contract = entry.get("contract_version")
+        if schema_id == "aneb-result-core-v1":
+            if value.get("x-aneb-internal-contract") != contract:
+                errors.append(f"{label}: schema x-aneb-internal-contract does not match catalog contract")
+            continue
         property_name = {
             "aneb-behavior-trace-v1": "trace_contract_version",
             "aneb-result-v1": "schema_version",
+            "aneb-result-v2": "schema_version",
             "aneb-token-observation-v1": "observation_contract_version",
             "aneb-calibration-dataset-v1": "dataset_contract_version",
             "aneb-model-validation-v1": "validation_contract_version",

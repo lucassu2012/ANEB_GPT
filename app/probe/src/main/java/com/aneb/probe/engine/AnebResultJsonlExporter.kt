@@ -13,7 +13,22 @@ import kotlinx.serialization.json.jsonPrimitive
  * emitted. UI/file sharing can call this core later without gaining authority to change results.
  */
 internal object AnebResultJsonlExporter {
-    data class RejectedRecord(val runId: String, val reason: String)
+    enum class RejectionKind {
+        UNSUPPORTED_SCHEMA,
+        INTEGRITY,
+    }
+
+    class VerificationException internal constructor(
+        val kind: RejectionKind,
+        message: String,
+        cause: Throwable? = null,
+    ) : IllegalArgumentException(message, cause)
+
+    data class RejectedRecord(
+        val runId: String,
+        val kind: RejectionKind,
+        val reason: String,
+    )
 
     data class VerifiableSelection(
         val accepted: List<ResultEnvelopeEntity>,
@@ -48,6 +63,7 @@ internal object AnebResultJsonlExporter {
                 } catch (error: Exception) {
                     rejected += RejectedRecord(
                         runId = record.runId,
+                        kind = (error as? VerificationException)?.kind ?: RejectionKind.INTEGRITY,
                         reason = error.message ?: "aneb_result_export_unknown_integrity_failure",
                     )
                 }
@@ -56,22 +72,33 @@ internal object AnebResultJsonlExporter {
     }
 
     private fun verify(record: ResultEnvelopeEntity) {
-        require(record.schemaVersion == TokenResultEnvelopeV1.SCHEMA_VERSION) {
-            "aneb_result_export_schema_not_supported:${record.schemaVersion}"
+        if (record.schemaVersion !in SUPPORTED_SCHEMA_VERSIONS) {
+            reject(
+                RejectionKind.UNSUPPORTED_SCHEMA,
+                "aneb_result_export_schema_not_supported:${record.schemaVersion}",
+            )
         }
-        require(TokenRuntimeIntegrity.canonicalSha256(record.bodyJson) == record.canonicalSha256) {
-            "aneb_result_export_digest_mismatch:${record.runId}"
+        if (TokenRuntimeIntegrity.canonicalSha256(record.bodyJson) != record.canonicalSha256) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_digest_mismatch:${record.runId}")
         }
         val body = runCatching { Json.parseToJsonElement(record.bodyJson).jsonObject }
-            .getOrElse { throw IllegalArgumentException("aneb_result_export_body_invalid:${record.runId}", it) }
-        require(body["schema_version"]?.jsonPrimitive?.content == record.schemaVersion) {
-            "aneb_result_export_schema_identity_mismatch:${record.runId}"
+            .getOrElse {
+                reject(RejectionKind.INTEGRITY, "aneb_result_export_body_invalid:${record.runId}", it)
+            }
+        if (body["schema_version"]?.jsonPrimitive?.content != record.schemaVersion) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_schema_identity_mismatch:${record.runId}")
         }
-        require(body["test_type"]?.jsonPrimitive?.content == record.testType) {
-            "aneb_result_export_test_type_mismatch:${record.runId}"
+        if (body["test_type"]?.jsonPrimitive?.content != record.testType) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_test_type_mismatch:${record.runId}")
         }
-        require(body["run"]?.jsonObject?.get("run_id")?.jsonPrimitive?.content == record.runId) {
-            "aneb_result_export_run_identity_mismatch:${record.runId}"
+        if (body["run"]?.jsonObject?.get("run_id")?.jsonPrimitive?.content != record.runId) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_run_identity_mismatch:${record.runId}")
         }
     }
+
+    private fun reject(kind: RejectionKind, message: String, cause: Throwable? = null): Nothing {
+        throw VerificationException(kind, message, cause)
+    }
+
+    private val SUPPORTED_SCHEMA_VERSIONS = setOf("aneb-result-v1", TokenResultEnvelopeV2.SCHEMA_VERSION)
 }

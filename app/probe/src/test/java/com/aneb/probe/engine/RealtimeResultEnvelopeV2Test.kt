@@ -9,7 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RealtimeResultEnvelopeV1Test {
+class RealtimeResultEnvelopeV2Test {
     @Test fun collectedRadioIsEmbeddedAndNotMarkedMissing() {
         val evidence = RealtimeRunEvidence("quick", emptyList())
         val result = result(
@@ -22,7 +22,7 @@ class RealtimeResultEnvelopeV1Test {
             evidence,
         )
         val root = Json.parseToJsonElement(
-            RealtimeResultEnvelopeV1.build(
+            RealtimeResultEnvelopeV2.build(
                 input(
                     result,
                     RealtimeResultEnvelopeSource(
@@ -84,8 +84,8 @@ class RealtimeResultEnvelopeV1Test {
             ),
         )
 
-        val first = RealtimeResultEnvelopeV1.build(input)
-        val second = RealtimeResultEnvelopeV1.build(input)
+        val first = RealtimeResultEnvelopeV2.build(input)
+        val second = RealtimeResultEnvelopeV2.build(input)
         assertEquals(first.bodyJson, second.bodyJson)
         assertEquals(first.canonicalSha256, second.canonicalSha256)
         assertEquals(TokenRuntimeIntegrity.canonicalSha256(first.bodyJson), first.canonicalSha256)
@@ -114,7 +114,7 @@ class RealtimeResultEnvelopeV1Test {
         val evidence = RealtimeRunEvidence("quick", emptyList(), "guard_rejected:vpn_active")
         val result = result(RealtimeSimulationScorer.score(evidence), evidence)
         val root = Json.parseToJsonElement(
-            RealtimeResultEnvelopeV1.build(
+            RealtimeResultEnvelopeV2.build(
                 input(result, RealtimeResultEnvelopeSource(profile = null), status = "failed"),
             ).bodyJson,
         ).jsonObject
@@ -136,7 +136,7 @@ class RealtimeResultEnvelopeV1Test {
         val result = result(RealtimeSimulationScorer.score(evidence, "realtime-recovery-score-v2"), evidence)
             .copy(variant = "recovery", profileId = "ai_realtime_voice_recovery")
         val root = Json.parseToJsonElement(
-            RealtimeResultEnvelopeV1.build(
+            RealtimeResultEnvelopeV2.build(
                 input(result, RealtimeResultEnvelopeSource(profile = null), status = "failed"),
             ).bodyJson,
         ).jsonObject

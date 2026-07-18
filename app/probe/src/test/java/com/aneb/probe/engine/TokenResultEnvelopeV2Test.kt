@@ -10,7 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class TokenResultEnvelopeV1Test {
+class TokenResultEnvelopeV2Test {
     @Test fun rawTaskEvidenceCarriesAlignedEndToEndTtftBasis() {
         val evidence = TokenRunEvidence(
             variant = "quick",
@@ -41,7 +41,7 @@ class TokenResultEnvelopeV1Test {
             rttSamplesMs = listOf(30.0),
         )
 
-        val task = TokenResultEnvelopeV1.rawEvidenceJson(evidence)
+        val task = TokenResultEnvelopeV2.rawEvidenceJson(evidence)
             .getValue("tasks").jsonArray.single().jsonObject
         assertEquals("quick-text-0", task.getValue("task_id").jsonPrimitive.content)
         assertEquals(300.0, task.getValue("server_processing_ms").jsonPrimitive.content.toDouble(), 0.0)
@@ -59,7 +59,7 @@ class TokenResultEnvelopeV1Test {
             ),
             evidence,
         )
-        val body = TokenResultEnvelopeV1.build(
+        val body = TokenResultEnvelopeV2.build(
             input(
                 result,
                 TokenResultEnvelopeSource(
@@ -185,14 +185,18 @@ class TokenResultEnvelopeV1Test {
             ),
         )
 
-        val first = TokenResultEnvelopeV1.build(input)
-        val second = TokenResultEnvelopeV1.build(input)
+        val first = TokenResultEnvelopeV2.build(input)
+        val second = TokenResultEnvelopeV2.build(input)
         assertEquals(first.bodyJson, second.bodyJson)
         assertEquals(first.canonicalSha256, second.canonicalSha256)
         assertEquals(TokenRuntimeIntegrity.canonicalSha256(first.bodyJson), first.canonicalSha256)
 
         val root = Json.parseToJsonElement(first.bodyJson).jsonObject
-        assertEquals("aneb-result-v1", root.getValue("schema_version").jsonPrimitive.content)
+        assertEquals("aneb-result-v2", root.getValue("schema_version").jsonPrimitive.content)
+        assertEquals(
+            "aneb-result-exporter-v2",
+            root.getValue("producer").jsonObject.getValue("exporter_version").jsonPrimitive.content,
+        )
         assertEquals(88.0, root.getValue("evaluation").jsonObject
             .getValue("score").jsonObject.getValue("value").jsonPrimitive.content.toDouble(), 0.0)
         assertEquals(DIGEST_A, root.getValue("profile").jsonObject
@@ -221,7 +225,7 @@ class TokenResultEnvelopeV1Test {
         )
         val result = tokenResult(TokenSimulationScorer.score(evidence), evidence)
         val root = Json.parseToJsonElement(
-            TokenResultEnvelopeV1.build(
+            TokenResultEnvelopeV2.build(
                 input(result, TokenResultEnvelopeSource(profile = null), status = "failed"),
             ).bodyJson,
         ).jsonObject

@@ -9,10 +9,10 @@
 
 | 单元 | 当前版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.7 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出统一结果信封、1Hz 公开 Android 无线环境证据并支持 JSONL 导出/分享；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
+| P1 / ANEB Probe Android | 0.5.8 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出 `aneb-result-v2`、1Hz 公开 Android 无线环境证据并支持 v1/v2 JSONL 原样导出；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
 | P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
 | P3 / aneb-ai-behavior-model | 0.2.0 | 维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划的 v2 发布包，并只允许通过绑定留出报告的候选升为 validated |
-| Profile 横切机制 | 1.1.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；新增 P3 授权校准三合同 |
+| Profile 横切机制 | 1.2.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；结果合同以共享核心、兼容 v1 和严格 v2 独立演进 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 这是一项治理声明，不代表现有 P1/P2 已实现远端版本协商；任何不兼容字段或语义变化都必须
@@ -61,8 +61,9 @@ fail closed。
 
 - `aneb-profile-v2.schema.json`：供 P1、P3、Profile 使用。
 - `aneb-behavior-trace-v1.schema.json`：供 P3、Profile 使用。
-- `spec/schemas/aneb-result-v1.schema.json`：P1/P3/Profile 共用的三类正式测试结果合同；
-  明确区分 run 状态与评估 verdict，冻结缺失/invalid/无线未采集语义，并禁止导出阶段重算。
+- `spec/schemas/aneb-result-core-v1.schema.json`：只供版本化结果 Schema 复用的内部结构核心，不是可由 App 发出的公开版本。
+- `spec/schemas/aneb-result-v1.schema.json`：已发布 v1 的兼容验证器；允许 0.5.6 之前没有任务对齐 TTFT 三字段的历史 Token 任务，也允许后来同名 v1 生产者发出的可选三字段。
+- `spec/schemas/aneb-result-v2.schema.json`：当前三类正式测试结果合同；Token 任务强制包含 `task_id/server_processing_ms/ttft_ms`，并继续冻结 run/verdict、缺失/invalid/无线未采集语义。
 - `aneb-token-observation-v1.schema.json`：只允许 P3 Token 校准所需的派生 session 统计，未知字段拒绝。
 - `aneb-calibration-dataset-v1.schema.json`：冻结授权、观测范围、主体隔离训练/留出分区和规范化摘要。
 - `aneb-model-validation-v1.schema.json`：冻结候选模型、数据集和逐 workload 留出门限结果。
@@ -81,11 +82,12 @@ fail closed。
 ```powershell
 python scripts/verify_spec_catalog.py
 python scripts/verify_result_schema.py
+python scripts/verify_result_jsonl.py <export.jsonl>
 python -m unittest tools/aneb-ai-behavior-model/tests/test_spec_catalog.py -v
 python -m unittest tools/aneb-ai-behavior-model/tests/test_result_schema.py -v
 ```
 
-校验器只使用 Python 标准库，并采取 fail-closed 策略：
+catalog 校验器只使用 Python 标准库；结果 Schema/JSONL 校验器使用 `jsonschema` 与 `referencing`。所有路径都采取 fail-closed 策略：
 
 - catalog 或任何 JSON 不能解析、存在重复 key 或非有限数时失败；
 - 引用缺失、越出仓库、ID/版本不一致、重复 Profile ID 时失败；
@@ -95,19 +97,20 @@ python -m unittest tools/aneb-ai-behavior-model/tests/test_result_schema.py -v
 - catalog 出现当前校验器不认识的字段时失败，要求先同步升级校验器。
 
 catalog 校验器负责目录完整性、交叉引用和当前合同不变量；`verify_result_schema.py` 使用
-`jsonschema` 的 Draft 2020-12 实现校验三个合法样例、非法运行与无线/缺失值反例。P3 的
+`jsonschema` 的 Draft 2020-12 同时校验共享核心、兼容 v1、严格 v2、三个类别样例和跨版本冻结任务向量；
+`verify_result_jsonl.py` 按每条记录自身的 `schema_version` 路由验证器，版本不支持与结构损坏分开报告。P3 的
 Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须保留，各层不能互相替代。
 
-## `aneb-result-v1` 当前接线状态
+## 版本化结果合同当前接线状态
 
 - ［KNOWN｜HIGH］Token、AI 实时和网络综合的新 run 均在 Room v19 中把类型化结果与统一结果信封同事务落库；
   Profile/运行计划指纹（网络综合为不适用）、评分审计字段与原始证据在引擎最终化时冻结。
-- ［KNOWN｜HIGH］JSONL 核心按开始时间/run id 确定排序，核验 run/test/schema 身份和规范化
-  SHA-256 后原样输出 `bodyJson`，不解析重算。
+- ［KNOWN｜HIGH］App 0.5.8 的三类新 run 统一发出 `aneb-result-v2`；v1 兼容验证器保留已发布历史，v2 对 Token 任务对齐字段执行严格必填。共享核心没有公开版本身份，App 不得发出它。
+- ［KNOWN｜HIGH］JSONL 核心按开始时间/run id 确定排序，支持 v1/v2，核验 run/test/schema 身份和规范化 SHA-256 后原样输出 `bodyJson`，不解析重算；未来版本暂不支持与摘要/身份异常使用不同错误类型和用户提示。
 - ［KNOWN｜HIGH］三类结果页均可将单条冻结信封保存为 JSONL 或以文件分享；旧记录没有信封时明确禁用，不做历史补算。
 - ［KNOWN｜HIGH］App 0.5.6 的三个正式新引擎均以每 run 独立 RadioCollector 采集 1Hz Android 公开无线环境证据，并把类型化结果、信封、无线样本和环境事件同事务冻结；R01 使用 `observed + null scalar + sample_count + radio-context evidence ref` 引用时间序列，不虚构单值。
 - ［KNOWN｜HIGH］权限拒绝、设备不可用和未采集分别写 `permission_denied`、`unavailable`、`not_collected`；可分享信封移除经纬度。0.5.5 的规范化数字词法已用 Python 冻结向量锁定，避免 JVM/Python 指数表示差异造成摘要漂移。
-- ［KNOWN｜HIGH］Token 原始任务证据自 0.5.6 起冻结稳定 `task_id`、服务端处理时延和“节点确认上传完成→App 收到首 Token”的端到端 TTFT；B03/B04 由同一冻结证据生成。`scripts/analyze_ttft_repeatability.py` 只接受同 Profile/运行包/App/设备/节点/承载的相邻 cohort，以至少 5 个 run 的任务对齐样本 CV 中位数执行 ≤10% 的 fail-closed 复现性判据。
+- ［KNOWN｜HIGH］Token 原始任务证据自 0.5.6 起冻结稳定 `task_id`、服务端处理时延和“节点确认上传完成→App 收到首 Token”的端到端 TTFT；B03/B04 由同一冻结证据生成。`scripts/analyze_ttft_repeatability.py` 接受单一 v1 或单一 v2 的同 Profile/运行包/App/设备/节点/承载相邻 cohort，但拒绝混合版本，以至少 5 个 run 的任务对齐样本 CV 中位数执行 ≤10% 的 fail-closed 复现性判据。
 
 ## P3 校准发布闸门
 

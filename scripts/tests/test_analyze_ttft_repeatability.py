@@ -78,6 +78,20 @@ class TtftRepeatabilityTest(unittest.TestCase):
         self.assertEqual(15, report["total_ttft_samples"])
         self.assertLess(report["median_task_ttft_cv"], 0.01)
 
+    def test_current_v2_cohort_passes_without_schema_downgrade(self) -> None:
+        documents = [result(i, (340.0 + i, 460.0 + i, 580.0 + i)) for i in range(5)]
+        for document in documents:
+            document["schema_version"] = "aneb-result-v2"
+        report = analyze(documents)
+        self.assertEqual("aneb-result-v2", report["cohort"]["schema_version"])
+        self.assertEqual("pass", report["status"])
+
+    def test_mixed_schema_versions_are_rejected_as_heterogeneous(self) -> None:
+        documents = [result(i, (340.0, 460.0, 580.0)) for i in range(5)]
+        documents[-1]["schema_version"] = "aneb-result-v2"
+        with self.assertRaisesRegex(RepeatabilityError, "heterogeneous_cohort"):
+            analyze(documents)
+
     def test_high_variation_fails_without_becoming_invalid(self) -> None:
         values = (300.0, 600.0, 900.0, 1200.0, 1500.0)
         documents = [result(i, (values[i], values[i] * 1.2, values[i] * 1.4)) for i in range(5)]

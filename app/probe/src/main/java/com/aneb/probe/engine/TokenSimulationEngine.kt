@@ -570,7 +570,7 @@ class TokenSimulationEngine(private val context: Context) {
         log: suspend (String) -> Unit,
     ) {
         val radio = radioCollector.freeze()
-        val envelope = TokenResultEnvelopeV1.build(
+        val envelope = TokenResultEnvelopeV2.build(
             TokenResultEnvelopeInput(
                 result = result,
                 source = source,
@@ -644,7 +644,7 @@ class TokenSimulationEngine(private val context: Context) {
         ),
         evidenceJson = Json.encodeToString(
             JsonObject.serializer(),
-            TokenResultEnvelopeV1.rawEvidenceJson(evidence).withContractVersion(variant),
+            TokenResultEnvelopeV2.rawEvidenceJson(evidence).withContractVersion(variant),
         ),
     )
 

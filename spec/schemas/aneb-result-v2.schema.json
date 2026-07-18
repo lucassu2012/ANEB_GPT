@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aneb:schema:result:v2",
+  "title": "ANEB unified measurement result v2",
+  "description": "Versioned ANEB result contract. Token task evidence requires task-aligned server processing and TTFT fields; non-Token category contracts retain the shared v1 core structure.",
+  "properties": {
+    "schema_version": {
+      "const": "aneb-result-v2"
+    }
+  },
+  "required": ["schema_version"],
+  "allOf": [
+    {
+      "$ref": "urn:aneb:schema:result:core:v1"
+    },
+    {
+      "if": {
+        "properties": {
+          "test_type": {
+            "const": "token_simulation"
+          }
+        },
+        "required": ["test_type"]
+      },
+      "then": {
+        "properties": {
+          "category_payload": {
+            "properties": {
+              "raw_evidence": {
+                "properties": {
+                  "tasks": {
+                    "items": {
+                      "properties": {
+                        "task_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "server_processing_ms": {},
+                        "ttft_ms": {}
+                      },
+                      "required": [
+                        "task_id",
+                        "server_processing_ms",
+                        "ttft_ms"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

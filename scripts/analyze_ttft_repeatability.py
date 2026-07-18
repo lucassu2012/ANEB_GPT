@@ -157,7 +157,7 @@ def analyze(
 
     identities = [_cohort_identity(document) for document in documents]
     identity = identities[0]
-    if identity["schema_version"] != "aneb-result-v1" or identity["test_type"] != "token_simulation":
+    if identity["schema_version"] not in {"aneb-result-v1", "aneb-result-v2"} or identity["test_type"] != "token_simulation":
         raise RepeatabilityError("unsupported_result_family")
     if identity["active_transport"] not in {"wifi", "cellular"}:
         raise RepeatabilityError("active_transport_not_observed")

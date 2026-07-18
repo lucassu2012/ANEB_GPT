@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.1.0",
+  "catalog_version": "1.2.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.7",
+      "current_version": "0.5.8",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -20,7 +20,8 @@
         "consume_server_root_profiles",
         "consume_published_profile_v2",
         "verify_runtime_bound_bundles",
-        "emit_aneb_result_v1"
+        "emit_aneb_result_v2",
+        "export_aneb_result_v1_v2_integrity"
       ]
     },
     "P2": {
@@ -51,7 +52,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.1.0",
+      "current_version": "1.2.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -98,11 +99,35 @@
       ]
     },
     {
+      "schema_id": "aneb-result-core-v1",
+      "schema_version": "1.0.0",
+      "path": "spec/schemas/aneb-result-core-v1.schema.json",
+      "json_schema_id": "urn:aneb:schema:result:core:v1",
+      "contract_version": "aneb-result-core-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
       "schema_id": "aneb-result-v1",
       "schema_version": "1.0.0",
       "path": "spec/schemas/aneb-result-v1.schema.json",
       "json_schema_id": "urn:aneb:schema:result:v1",
       "contract_version": "aneb-result-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-result-v2",
+      "schema_version": "2.0.0",
+      "path": "spec/schemas/aneb-result-v2.schema.json",
+      "json_schema_id": "urn:aneb:schema:result:v2",
+      "contract_version": "aneb-result-v2",
       "consumers": [
         "P1",
         "P3",
