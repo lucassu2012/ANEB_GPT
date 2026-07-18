@@ -38,6 +38,7 @@ jobs:
           ./gradlew
           :probe:testDebugUnitTest
           :probe:lintDebug
+          :probe:processReleaseMainManifest
           :probe:assembleDebug
           --no-daemon
           --no-parallel
