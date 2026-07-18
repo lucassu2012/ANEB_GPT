@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "token_multimodal_stress",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "mode_id": "token_simulation",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node",
@@ -21,7 +21,7 @@
     ],
     "behavior_model_id": "token-multimodal-stress-behavior-v0.1",
     "behavior_model_version": "0.1.0",
-    "behavior_model_hash": "sha256:d7845b4e7f96f54b5721ddc0daf1f60a2660467edae291882844055a448bb08f",
+    "behavior_model_hash": "sha256:57d88f6bdffffd99bac70841388d360ea451dfc3af2b60fc6a4096dc5002a59b",
     "calibration_status": "hypothesis",
     "model_source_kind": "product_requirement_hypothesis"
   },
@@ -41,7 +41,7 @@
     "target_set_id": "token-stress-targets-v1",
     "score_policy_id": "token-stress-score-v1",
     "score_anchor_policy_id": "compliance-anchors-v1",
-    "conclusion_policy_id": "token-stress-conclusions-v1",
+    "conclusion_policy_id": "token-stress-conclusions-v2",
     "required_metric_ids": [
       "TOK-B01",
       "TOK-B02",
@@ -561,10 +561,10 @@
       "type": "behavior_trace",
       "model_id": "token-multimodal-stress-behavior-v0.1",
       "model_version": "0.1.0",
-      "model_hash": "sha256:d7845b4e7f96f54b5721ddc0daf1f60a2660467edae291882844055a448bb08f",
+      "model_hash": "sha256:57d88f6bdffffd99bac70841388d360ea451dfc3af2b60fc6a4096dc5002a59b",
       "seed": 20260716,
       "runtime_artifact": "runtime_plan.json",
-      "runtime_artifact_hash": "sha256:2b41ffa27bd9878cc8c8b86d42f2fab308eebe34947fe3333059a650408c0ab6"
+      "runtime_artifact_hash": "sha256:cbbc7cb28b8ed50fc8042f79bafc5919bec9e1e0e1670639ee852ed920c80ca1"
     }
   ],
   "evidence_tier": "stress",
@@ -572,7 +572,7 @@
   "execution_plan": {
     "contract_version": "aneb-token-runtime-plan-v1",
     "artifact": "runtime_plan.json",
-    "artifact_hash": "sha256:2b41ffa27bd9878cc8c8b86d42f2fab308eebe34947fe3333059a650408c0ab6",
+    "artifact_hash": "sha256:cbbc7cb28b8ed50fc8042f79bafc5919bec9e1e0e1670639ee852ed920c80ca1",
     "seed": 20260716,
     "variant": "stress"
   }

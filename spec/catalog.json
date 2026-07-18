@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.2.0",
+  "catalog_version": "1.3.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.8",
+      "current_version": "0.5.9",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -52,7 +52,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.2.0",
+      "current_version": "1.3.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -339,7 +339,7 @@
       "profiles": [
         {
           "profile_id": "ai_realtime_voice_quick",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/ai_realtime_voice_quick/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
@@ -347,7 +347,7 @@
         },
         {
           "profile_id": "ai_realtime_voice_recovery",
-          "version": "1.2.0",
+          "version": "1.3.0",
           "path": "profiles/published/ai_realtime_voice_recovery/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/ai_realtime_voice_recovery/runtime_plan.json",
@@ -355,7 +355,7 @@
         },
         {
           "profile_id": "ai_realtime_voice_standard",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/ai_realtime_voice_standard/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/ai_realtime_voice_standard/runtime_plan.json",
@@ -363,43 +363,43 @@
         },
         {
           "profile_id": "network_comprehensive_gateway_loss",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_gateway_loss/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "network_comprehensive_gateway_recovery",
-          "version": "1.1.0",
+          "version": "1.2.0",
           "path": "profiles/published/network_comprehensive_gateway_recovery/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "network_comprehensive_quick",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_quick/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "network_comprehensive_standard",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_standard/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "network_comprehensive_weak_capacity_latency",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_weak_capacity_latency/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "network_comprehensive_weak_recovery",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_weak_recovery/profile.json",
           "validation_group_id": "network_embedded_phases"
         },
         {
           "profile_id": "token_multimodal_quick",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/token_multimodal_quick/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
@@ -407,7 +407,7 @@
         },
         {
           "profile_id": "token_multimodal_standard",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/token_multimodal_standard/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/token_multimodal_standard/runtime_plan.json",
@@ -415,7 +415,7 @@
         },
         {
           "profile_id": "token_multimodal_stress",
-          "version": "1.0.0",
+          "version": "1.1.0",
           "path": "profiles/published/token_multimodal_stress/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/token_multimodal_stress/runtime_plan.json",

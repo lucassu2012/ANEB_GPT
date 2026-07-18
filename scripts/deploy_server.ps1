@@ -147,18 +147,18 @@ policies = {p["route_id"]: p for p in body["policies"]}
 p = policies["weak-capacity-latency-v1"]
 assert p["contract_version"] == "aneb-synthetic-impairment-v1", p
 assert p["profile_id"] == "network_comprehensive_weak_capacity_latency", p
-assert p["version"] == "1.0.0" and p["route_id"] == "weak-capacity-latency-v1", p
+assert p["version"] == "1.1.0" and p["route_id"] == "weak-capacity-latency-v1", p
 assert (p["downlink_mbps"], p["uplink_mbps"], p["added_rtt_ms"], p["jitter_ms"]) == (3, 1, 120, 30), p
 r = policies["weak-recovery-v1"]
 assert r["profile_id"] == "network_comprehensive_weak_recovery", r
-assert r["version"] == "1.0.0" and r["outage_duration_ms"] == 2000, r
+assert r["version"] == "1.1.0" and r["outage_duration_ms"] == 2000, r
 assert (r["downlink_mbps"], r["uplink_mbps"], r["added_rtt_ms"], r["jitter_ms"]) == (5, 2, 80, 20), r
-print("impairment_contracts=weak_capacity_latency@1.0.0,weak_recovery@1.0.0")
+print("impairment_contracts=weak_capacity_latency@1.1.0,weak_recovery@1.1.0")
 '
 synthetic='https://127.0.0.1:8443/synthetic/weak-capacity-latency-v1'
 query='impair_run=deploy-smoke&impair_seed=20260717&impair_seq=1'
 curl -sk -D /tmp/aneb_impair_headers -o /tmp/aneb_impair_echo -X POST --data ping "$synthetic/api/v1/echo?$query"
-grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_capacity_latency@1.0.0' /tmp/aneb_impair_headers
+grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_capacity_latency@1.1.0' /tmp/aneb_impair_headers
 python3 -c 'import json; json.load(open("/tmp/aneb_impair_echo"))'
 rm -f /tmp/aneb_impair_headers /tmp/aneb_impair_echo
 query='impair_run=deploy-smoke-download&impair_seed=20260717&impair_seq=1'
@@ -170,7 +170,7 @@ recovery='https://127.0.0.1:8443/synthetic/weak-recovery-v1'
 query='impair_run=deploy-recovery&impair_seed=20260717&impair_seq=1'
 code=$(curl -sk -D /tmp/aneb_recovery_headers -o /tmp/aneb_recovery_trigger -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/recovery?$query")
 test "$code" -eq 202
-grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_recovery@1.0.0' /tmp/aneb_recovery_headers
+grep -qi '^X-Aneb-Synthetic-Impairment: network_comprehensive_weak_recovery@1.1.0' /tmp/aneb_recovery_headers
 grep -qi '^X-Aneb-Outage-Duration-Ms: 2000' /tmp/aneb_recovery_headers
 query='impair_run=deploy-recovery&impair_seed=20260717&impair_seq=2'
 code=$(curl -sk -D /tmp/aneb_recovery_blocked_headers -o /dev/null -w '%{http_code}' -X POST --data '{}' "$recovery/api/v1/echo?$query")

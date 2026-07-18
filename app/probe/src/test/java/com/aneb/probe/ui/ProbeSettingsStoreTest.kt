@@ -37,6 +37,22 @@ class ProbeSettingsStoreTest {
     }
 
     @Test
+    fun `legacy sni default migrates once to bare ip main channel`() {
+        assertEquals(
+            ProbeSettings.DEFAULT_SERVER_URL,
+            migrateLegacyDefaultServerUrl(ProbeSettings.LEGACY_SNI_SERVER_URL + "/", migrationApplied = false),
+        )
+        assertEquals(
+            ProbeSettings.LEGACY_SNI_SERVER_URL,
+            migrateLegacyDefaultServerUrl(ProbeSettings.LEGACY_SNI_SERVER_URL, migrationApplied = true),
+        )
+        assertEquals(
+            "https://node.example:8443",
+            migrateLegacyDefaultServerUrl("https://node.example:8443", migrationApplied = false),
+        )
+    }
+
+    @Test
     fun `legacy hidden mode migrates to public token simulation`() {
         val decoded = ProbeSettingsCodec.decode(null, null, null, false, "TOKEN_EXPERIENCE")
         assertEquals(AnebTestMode.TOKEN_SIMULATION, decoded.testMode)

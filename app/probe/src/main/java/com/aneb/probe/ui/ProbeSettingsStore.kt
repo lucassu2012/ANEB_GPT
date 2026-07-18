@@ -14,7 +14,22 @@ internal data class ProbeSettings(
     val driveTest: Boolean = false,
 ) {
     companion object {
-        const val DEFAULT_SERVER_URL = "https://120-79-148-0.sslip.io:8443"
+        const val DEFAULT_SERVER_URL = "https://120.79.148.0:8443"
+        const val LEGACY_SNI_SERVER_URL = "https://120-79-148-0.sslip.io:8443"
+    }
+}
+
+/**
+ * 0.5.9 将已证实容易受运营商 SNI 干扰的旧默认端点迁移到 E-01 bare-IP 主通道。
+ * 迁移只执行一次；用户随后仍可在设置中显式选择 sslip.io 做可达性对照。
+ */
+internal fun migrateLegacyDefaultServerUrl(serverUrl: String?, migrationApplied: Boolean): String? {
+    if (migrationApplied) return serverUrl
+    val normalized = serverUrl?.trim()?.trimEnd('/')
+    return if (normalized == ProbeSettings.LEGACY_SNI_SERVER_URL) {
+        ProbeSettings.DEFAULT_SERVER_URL
+    } else {
+        serverUrl
     }
 }
 
@@ -86,13 +101,26 @@ internal fun resolveLaunchSettings(
 internal class ProbeSettingsStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun load(): ProbeSettings = ProbeSettingsCodec.decode(
-        serverUrl = prefs.getString(KEY_SERVER_URL, null),
-        mode = prefs.getString(KEY_MODE, null),
-        transport = prefs.getString(KEY_TRANSPORT, null),
-        driveTest = prefs.getBoolean(KEY_DRIVE_TEST, false),
-        testMode = prefs.getString(KEY_TEST_MODE, null),
-    )
+    fun load(): ProbeSettings {
+        val migrationApplied = prefs.getBoolean(KEY_SERVER_DEFAULT_V2_MIGRATED, false)
+        val storedServerUrl = prefs.getString(KEY_SERVER_URL, null)
+        val migratedServerUrl = migrateLegacyDefaultServerUrl(storedServerUrl, migrationApplied)
+        if (!migrationApplied) {
+            prefs.edit {
+                putBoolean(KEY_SERVER_DEFAULT_V2_MIGRATED, true)
+                if (migratedServerUrl != storedServerUrl && migratedServerUrl != null) {
+                    putString(KEY_SERVER_URL, migratedServerUrl)
+                }
+            }
+        }
+        return ProbeSettingsCodec.decode(
+            serverUrl = migratedServerUrl,
+            mode = prefs.getString(KEY_MODE, null),
+            transport = prefs.getString(KEY_TRANSPORT, null),
+            driveTest = prefs.getBoolean(KEY_DRIVE_TEST, false),
+            testMode = prefs.getString(KEY_TEST_MODE, null),
+        )
+    }
 
     fun saveServerUrl(value: String) {
         prefs.edit { putString(KEY_SERVER_URL, value.trim()) }
@@ -121,5 +149,6 @@ internal class ProbeSettingsStore(context: Context) {
         const val KEY_TEST_MODE = "test_mode"
         const val KEY_TRANSPORT = "transport"
         const val KEY_DRIVE_TEST = "drive_test"
+        const val KEY_SERVER_DEFAULT_V2_MIGRATED = "server_default_v2_migrated"
     }
 }

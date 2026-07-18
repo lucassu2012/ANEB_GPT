@@ -164,13 +164,22 @@ internal object NetworkResultEnvelopeV2 {
                     }
                 })
                 put("conclusions", buildJsonArray {
-                    result.conclusions.forEachIndexed { index, text ->
+                    result.conclusionItems.ifEmpty {
+                        result.conclusions.mapIndexed { index, text ->
+                            AnebConclusionItem(
+                                conclusionId = "network-legacy-conclusion-${(index + 1).toString().padStart(3, '0')}",
+                                severity = if (index == 0) verdictSeverity(result.verdict) else AnebConclusionSeverity.INFO,
+                                text = text,
+                                basis = listOf("evidence:network-raw"),
+                            )
+                        }
+                    }.forEach { conclusion ->
                         add(buildJsonObject {
-                            put("conclusion_id", "network-conclusion-${(index + 1).toString().padStart(3, '0')}")
-                            put("severity", conclusionSeverity(result.verdict, index))
+                            put("conclusion_id", conclusion.conclusionId)
+                            put("severity", conclusion.severity.wireValue)
                             put("policy_id", result.conclusionPolicyId)
-                            put("text", text)
-                            put("basis", buildJsonArray { add(JsonPrimitive("evidence:network-raw")) })
+                            put("text", conclusion.text)
+                            put("basis", JsonArray(conclusion.basis.map(::JsonPrimitive)))
                         })
                     }
                 })
@@ -413,10 +422,4 @@ internal object NetworkResultEnvelopeV2 {
         else -> "diagnostic"
     }
 
-    private fun conclusionSeverity(verdict: TokenVerdict, index: Int): String = when {
-        index > 0 -> "recommendation"
-        verdict == TokenVerdict.FAIL || verdict == TokenVerdict.INVALID -> "failure"
-        verdict == TokenVerdict.INCONCLUSIVE -> "warning"
-        else -> "info"
-    }
 }

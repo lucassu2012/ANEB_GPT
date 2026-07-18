@@ -59,13 +59,15 @@ data class TokenScoreResult(
     val groupScores: Map<String, Double>,
     val metrics: Map<String, TokenMetricEvidence>,
     val capReason: String?,
-    val conclusions: List<String>,
+    val conclusionItems: List<AnebConclusionItem>,
     /** Frozen audit basis emitted by the scorer; exporters must not derive it again. */
     val confidenceMethodId: String = "token-sample-coverage-v1",
     val coverageRatio: Double? = null,
     val minimumSampleSatisfied: Boolean? = null,
     val notComputableReason: String? = null,
-)
+) {
+    val conclusions: List<String> get() = conclusionItems.map(AnebConclusionItem::text)
+}
 
 /** Token Simulation Score v1 + compliance-anchors-v1 (D-37/D-39). */
 object TokenSimulationScorer {
@@ -93,12 +95,22 @@ object TokenSimulationScorer {
 
     private val allSpecs = requiredSpecs + optionalSpecs
 
-    fun score(evidence: TokenRunEvidence): TokenScoreResult {
+    fun score(
+        evidence: TokenRunEvidence,
+        behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds(evidence.variant),
+    ): TokenScoreResult {
         if (evidence.invalidReason != null) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
-                listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                listOf(
+                    AnebConclusionItem(
+                        conclusionId = "token-invalid-evidence",
+                        severity = AnebConclusionSeverity.FAILURE,
+                        text = "测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。",
+                        basis = listOf("evidence:token-raw", "invalid_reason"),
+                    ),
+                ),
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
                 notComputableReason = "invalid_run:${evidence.invalidReason}",
@@ -172,7 +184,16 @@ object TokenSimulationScorer {
         if (missing.isNotEmpty()) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
-                listOf("必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。"),
+                listOf(
+                    taskCompletionConclusion(evidence),
+                    AnebConclusionItem(
+                        conclusionId = "token-missing-required-metrics",
+                        severity = AnebConclusionSeverity.WARNING,
+                        text = "必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。",
+                        basis = missing.map { "metric:$it" },
+                    ),
+                    behaviorConclusion(behaviorFeatureIds, evidence.variant),
+                ),
                 coverageRatio = coverageRatio,
                 minimumSampleSatisfied = minimumSampleSatisfied,
                 notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
@@ -217,7 +238,7 @@ object TokenSimulationScorer {
             groupScores = groupScores.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = buildConclusions(evidence, metrics, verdict, confidence, capReason),
+            conclusionItems = buildConclusions(evidence, metrics, verdict, confidence, capReason, behaviorFeatureIds),
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -280,18 +301,130 @@ object TokenSimulationScorer {
         verdict: TokenVerdict,
         confidence: TokenConfidence,
         capReason: String?,
-    ): List<String> = buildList {
-        add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
-        if (evidence.variant == "quick") add("快测仅覆盖文本、文档、图片各一个任务，不用于 95% 稳定性强结论。")
+        behaviorFeatureIds: List<String>,
+    ): List<AnebConclusionItem> = buildList {
+        add(
+            AnebConclusionItem(
+                conclusionId = "token-verdict",
+                severity = verdictSeverity(verdict),
+                text = "结论：${verdict.name}；证据置信度 ${confidence.name}。",
+                basis = listOf("score:verdict", "score:confidence"),
+            ),
+        )
+        add(taskCompletionConclusion(evidence))
+        add(behaviorConclusion(behaviorFeatureIds, evidence.variant))
+        if (evidence.variant == "quick") {
+            add(
+                AnebConclusionItem(
+                    conclusionId = "token-quick-evidence-limit",
+                    severity = AnebConclusionSeverity.WARNING,
+                    text = "快测仅覆盖文本、文档、图片各一个任务，不用于 95% 稳定性强结论。",
+                    basis = listOf("profile:evidence_tier", "evidence:token-raw"),
+                ),
+            )
+        }
         fun percent(id: String) = metrics[id]?.complianceRatio?.let { "%.1f%%".format(it * 100.0) } ?: "不可用"
-        add("应用 RTT <100ms 达标比例 ${percent("TOK-N03")}（目标 ≥95%）。")
-        add("上行速率达到各业务门限比例 ${percent("TOK-N06")}（目标 ≥95%）。")
-        add("仿真 Token 准时到达比例 ${percent("TOK-B07")}（目标 ≥95%）。")
+        add(
+            AnebConclusionItem(
+                "token-target-rtt",
+                targetSeverity(metrics["TOK-N03"]),
+                "应用 RTT <100ms 达标比例 ${percent("TOK-N03")}（目标 ≥95%）。",
+                listOf("metric:TOK-N03"),
+            ),
+        )
+        add(
+            AnebConclusionItem(
+                "token-target-uplink",
+                targetSeverity(metrics["TOK-N06"]),
+                "上行速率达到各业务门限比例 ${percent("TOK-N06")}（目标 ≥95%）。",
+                listOf("metric:TOK-N06"),
+            ),
+        )
+        add(
+            AnebConclusionItem(
+                "token-target-stream-timeliness",
+                targetSeverity(metrics["TOK-B07"]),
+                "仿真 Token 准时到达比例 ${percent("TOK-B07")}（目标 ≥95%）。",
+                listOf("metric:TOK-B07"),
+            ),
+        )
         val networkFailures = evidence.tasks.count { it.networkFailure }
-        if (networkFailures > 0) add("观察到 $networkFailures 个任务因应用层网络请求失败而未完成。")
+        if (networkFailures > 0) {
+            add(
+                AnebConclusionItem(
+                    "token-network-failures",
+                    AnebConclusionSeverity.FAILURE,
+                    "观察到 $networkFailures 个任务因应用层网络请求失败而未完成。",
+                    listOf("metric:TOK-B01", "metric:TOK-N05", "evidence:token-raw"),
+                ),
+            )
+        }
         val overhead = metrics["TOK-B14"]?.value
-        if (overhead != null && overhead > 0.0) add("重试/重复发送使仿真 Token 传输量增加 ${"%.1f".format(overhead * 100)}%。")
-        if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
+        if (overhead != null && overhead > 0.0) {
+            add(
+                AnebConclusionItem(
+                    "token-retry-overhead",
+                    AnebConclusionSeverity.WARNING,
+                    "重试/重复发送使仿真 Token 传输量增加 ${"%.1f".format(overhead * 100)}%。",
+                    listOf("metric:TOK-B14", "evidence:token-raw"),
+                ),
+            )
+        }
+        requiredSpecs.keys.mapNotNull(metrics::get).filter { it.score != null }.minByOrNull { it.score!! }?.let { bottleneck ->
+            add(
+                AnebConclusionItem(
+                    "token-primary-bottleneck",
+                    AnebConclusionSeverity.RECOMMENDATION,
+                    "本次主要瓶颈：${bottleneck.metricId}，达标比例 ${percent(bottleneck.metricId)}；优先改善该指标。",
+                    listOf("metric:${bottleneck.metricId}"),
+                ),
+            )
+        }
+        if (capReason != null) {
+            add(
+                AnebConclusionItem(
+                    "token-score-cap",
+                    AnebConclusionSeverity.FAILURE,
+                    "评分封顶：$capReason，总分最高 54。",
+                    listOf("score:cap_reason"),
+                ),
+            )
+        }
+    }
+
+    private fun behaviorConclusion(featureIds: List<String>, variant: String) = AnebConclusionItem(
+        conclusionId = "token-behavior-profile",
+        severity = AnebConclusionSeverity.INFO,
+        text = AnebBehaviorFeatureCatalogV1.sentence(featureIds, defaultBehaviorFeatureIds(variant)),
+        basis = listOf(if (featureIds.isEmpty()) "policy:behavior-feature-catalog-v1" else "profile:business.behavior_feature_ids"),
+    )
+
+    private fun taskCompletionConclusion(evidence: TokenRunEvidence): AnebConclusionItem {
+        val completed = evidence.tasks.count(TokenTaskEvidence::success)
+        val total = evidence.tasks.size
+        val severity = when {
+            total == 0 -> AnebConclusionSeverity.WARNING
+            completed == total -> AnebConclusionSeverity.INFO
+            else -> AnebConclusionSeverity.FAILURE
+        }
+        return AnebConclusionItem(
+            conclusionId = "token-task-completion",
+            severity = severity,
+            text = "任务完成 $completed/$total；任务成功率 ${if (total > 0) "%.1f%%".format(completed * 100.0 / total) else "不可用"}。",
+            basis = listOf("metric:TOK-B01", "evidence:token-raw"),
+        )
+    }
+
+    private fun targetSeverity(metric: TokenMetricEvidence?): AnebConclusionSeverity = when {
+        metric?.complianceRatio == null -> AnebConclusionSeverity.WARNING
+        metric.complianceRatio + 1e-12 < metric.targetComplianceRatio -> AnebConclusionSeverity.RECOMMENDATION
+        else -> AnebConclusionSeverity.INFO
+    }
+
+    private fun defaultBehaviorFeatureIds(variant: String): List<String> = if (variant == "stress") {
+        listOf("very_large_uplink_burst", "large_downlink", "loaded_latency_sensitive", "stream_continuity")
+    } else {
+        listOf("uplink_burst", "low_latency_start", "stream_continuity", "large_downlink_optional")
     }
 
     private fun ratio(values: List<Boolean>): Double? = values.takeIf { it.isNotEmpty() }?.let { list -> list.count { it }.toDouble() / list.size }

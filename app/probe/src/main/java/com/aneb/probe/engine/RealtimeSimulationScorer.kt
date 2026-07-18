@@ -66,12 +66,14 @@ data class RealtimeScoreResult(
     val groupScores: Map<String, Double>,
     val metrics: Map<String, RealtimeMetricEvidence>,
     val capReason: String?,
-    val conclusions: List<String>,
+    val conclusionItems: List<AnebConclusionItem>,
     val confidenceMethodId: String = "realtime-sample-coverage-v1",
     val coverageRatio: Double? = null,
     val minimumSampleSatisfied: Boolean? = null,
     val notComputableReason: String? = null,
-)
+) {
+    val conclusions: List<String> get() = conclusionItems.map(AnebConclusionItem::text)
+}
 
 object RealtimeSimulationScorer {
     private data class Spec(
@@ -130,18 +132,26 @@ object RealtimeSimulationScorer {
     fun score(
         evidence: RealtimeRunEvidence,
         scorePolicyId: String = "realtime-interaction-score-v1",
-    ): RealtimeScoreResult = score(evidence, scorePolicyId, emptyList())
+    ): RealtimeScoreResult = score(evidence, scorePolicyId, emptyList(), defaultBehaviorFeatureIds(evidence.variant))
 
     fun score(
         evidence: RealtimeRunEvidence,
         scorePolicyId: String,
         environmentEvents: List<EnvEvent>,
+        behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds(evidence.variant),
     ): RealtimeScoreResult {
         if (evidence.invalidReason != null) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
-                listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                listOf(
+                    AnebConclusionItem(
+                        "realtime-invalid-evidence",
+                        AnebConclusionSeverity.FAILURE,
+                        "测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。",
+                        listOf("evidence:realtime-raw", "invalid_reason"),
+                    ),
+                ),
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
                 notComputableReason = "invalid_run:${evidence.invalidReason}",
@@ -286,13 +296,20 @@ object RealtimeSimulationScorer {
             "LIVE-R01" to metric("LIVE-R01", null, null, 0),
         )
         if (scorePolicyId == "realtime-recovery-score-v2") {
-            return scoreRecovery(evidence, metrics)
+            return scoreRecovery(evidence, metrics, behaviorFeatureIds)
         }
         if (scorePolicyId != "realtime-interaction-score-v1") {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), metrics, "unsupported_score_policy:$scorePolicyId",
-                listOf("评分策略不受当前引擎支持；原始证据已保留。"),
+                listOf(
+                    AnebConclusionItem(
+                        "realtime-unsupported-score-policy",
+                        AnebConclusionSeverity.FAILURE,
+                        "评分策略不受当前引擎支持；原始证据已保留。",
+                        listOf("score_policy:$scorePolicyId", "evidence:realtime-raw"),
+                    ),
+                ),
             )
         }
         val requiredIds = specs.filterValues { it.required }.keys
@@ -306,11 +323,17 @@ object RealtimeSimulationScorer {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
                 buildList {
-                    taskFailureSummary(evidence)?.let(::add)
-                    connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let(::add)
-                    add("必需指标缺失：${missing.joinToString()}；本次总分不可计算。")
+                    taskFailureSummary(evidence)?.let { text ->
+                        add(AnebConclusionItem("realtime-task-failure", AnebConclusionSeverity.FAILURE, text, listOf("metric:LIVE-B09", "metric:LIVE-B10", "evidence:realtime-raw")))
+                    }
+                    add(completionConclusion(evidence))
+                    add(behaviorConclusion(behaviorFeatureIds, evidence.variant))
+                    connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let { text ->
+                        add(AnebConclusionItem("realtime-connection-stability", AnebConclusionSeverity.RECOMMENDATION, text, listOf("metric:LIVE-B10", "metric:LIVE-N04", "evidence:environment-events")))
+                    }
+                    add(AnebConclusionItem("realtime-missing-required-metrics", AnebConclusionSeverity.WARNING, "必需指标缺失：${missing.joinToString()}；本次总分不可计算。", missing.map { "metric:$it" }))
                     if (evidence.variant == "quick") {
-                        add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
+                        add(AnebConclusionItem("realtime-quick-evidence-limit", AnebConclusionSeverity.WARNING, "快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。", listOf("profile:evidence_tier", "evidence:realtime-raw")))
                     }
                 },
                 coverageRatio = coverageRatio,
@@ -371,7 +394,7 @@ object RealtimeSimulationScorer {
             groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = conclusions(evidence, metrics, verdict, confidence, capReason, environmentEvents),
+            conclusionItems = conclusions(evidence, metrics, verdict, confidence, capReason, environmentEvents, behaviorFeatureIds),
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -380,6 +403,7 @@ object RealtimeSimulationScorer {
     private fun scoreRecovery(
         evidence: RealtimeRunEvidence,
         metrics: Map<String, RealtimeMetricEvidence>,
+        behaviorFeatureIds: List<String>,
     ): RealtimeScoreResult {
         val sessions = evidence.sessions
         val expected = sessions.count { it.controlledDisconnectExpected }
@@ -399,7 +423,16 @@ object RealtimeSimulationScorer {
         if (expected == 0 || missing.isNotEmpty()) {
             return RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
-                listOf("受控恢复必需证据缺失：${(missing + if (expected == 0) listOf("controlled_disconnect") else emptyList()).joinToString()}。"),
+                listOf(
+                    AnebConclusionItem(
+                        "realtime-recovery-missing-evidence",
+                        AnebConclusionSeverity.WARNING,
+                        "受控恢复必需证据缺失：${(missing + if (expected == 0) listOf("controlled_disconnect") else emptyList()).joinToString()}。",
+                        (missing.map { "metric:$it" } + if (expected == 0) listOf("evidence:controlled_disconnect") else emptyList()),
+                    ),
+                    recoveryCompletionConclusion(evidence),
+                    behaviorConclusion(behaviorFeatureIds, evidence.variant),
+                ),
                 coverageRatio = coverageRatio,
                 minimumSampleSatisfied = minimumSampleSatisfied,
                 notComputableReason = "missing_recovery_evidence:" +
@@ -458,20 +491,18 @@ object RealtimeSimulationScorer {
             ?.componentValues
             ?.get("probe_business_baseline_p95_ms")
         val conclusions = buildList {
-            add("结论：${verdict.name}；受控恢复证据置信度 ${confidence.name}。")
-            add("计划受控中断 $expected 次，客户端观察到 $observed 次，成功恢复到有效音频 $successful 次。")
-            add(
-                "恢复到首个有效音频 P95 ${format(recoveryP95, "ms")}（目标 ≤3000ms，达标 " +
-                    "${metrics["LIVE-B11"]?.complianceRatio?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) } ?: "不可用"}）。",
-            )
-            add("固定恢复刺激的业务计划基线 P95 ${format(recoveryBaselineP95, "ms")}（1.2 秒语音 + 350ms 模型等待）。")
-            add(
-                "恢复后音频准时率 ${String.format(Locale.ROOT, "%.1f%%", recoveredOnTime * 100)}，" +
-                    "轮次成功率 ${String.format(Locale.ROOT, "%.1f%%", recoveredTurnSuccess * 100)}，" +
-                    "RTT≤100ms 比例 ${String.format(Locale.ROOT, "%.1f%%", recoveredRttCompliance * 100)}。",
-            )
-            add("本结论只适用于 ANEB 节点受控服务端中断后的应用恢复，不代表蜂窝断网、跨网迁移或目标 AI 服务可用性。")
-            if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
+            add(AnebConclusionItem("realtime-recovery-verdict", verdictSeverity(verdict), "结论：${verdict.name}；受控恢复证据置信度 ${confidence.name}。", listOf("score:verdict", "score:confidence")))
+            add(recoveryCompletionConclusion(evidence))
+            add(behaviorConclusion(behaviorFeatureIds, evidence.variant))
+            add(AnebConclusionItem("realtime-recovery-attempts", if (expected > 0 && successful == expected) AnebConclusionSeverity.INFO else AnebConclusionSeverity.FAILURE, "计划受控中断 $expected 次，客户端观察到 $observed 次，成功恢复到有效音频 $successful 次。", listOf("metric:LIVE-N08", "metric:LIVE-B11", "evidence:realtime-raw")))
+            add(AnebConclusionItem("realtime-recovery-target", targetSeverity(metrics["LIVE-B11"]), "恢复到首个有效音频 P95 ${format(recoveryP95, "ms")}（目标 ≤3000ms，达标 ${metrics["LIVE-B11"]?.complianceRatio?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) } ?: "不可用"}）。", listOf("metric:LIVE-B11")))
+            add(AnebConclusionItem("realtime-recovery-plan-baseline", AnebConclusionSeverity.INFO, "固定恢复刺激的业务计划基线 P95 ${format(recoveryBaselineP95, "ms")}（1.2 秒语音 + 350ms 模型等待）。", listOf("metric:LIVE-B11", "profile:execution_plan")))
+            add(AnebConclusionItem("realtime-recovery-post-quality", if (recoveredOnTime >= 0.99 && recoveredTurnSuccess >= 0.99 && recoveredRttCompliance >= 0.95) AnebConclusionSeverity.INFO else AnebConclusionSeverity.RECOMMENDATION, "恢复后音频准时率 ${String.format(Locale.ROOT, "%.1f%%", recoveredOnTime * 100)}，轮次成功率 ${String.format(Locale.ROOT, "%.1f%%", recoveredTurnSuccess * 100)}，RTT≤100ms 比例 ${String.format(Locale.ROOT, "%.1f%%", recoveredRttCompliance * 100)}。", listOf("metric:LIVE-B05", "metric:LIVE-B09", "metric:LIVE-N02")))
+            add(AnebConclusionItem("realtime-recovery-claim-scope", AnebConclusionSeverity.WARNING, "本结论只适用于 ANEB 节点受控服务端中断后的应用恢复，不代表蜂窝断网、跨网迁移或目标 AI 服务可用性。", listOf("profile:claim_scope", "profile:impairment_layer")))
+            recoveryMinimums.keys.mapNotNull(metrics::get).filter { it.score != null }.minByOrNull { it.score!! }?.let { bottleneck ->
+                add(AnebConclusionItem("realtime-recovery-primary-bottleneck", AnebConclusionSeverity.RECOMMENDATION, "本次主要瓶颈：${bottleneck.metricId}，达标比例 ${formatPercent(bottleneck.complianceRatio)}；优先改善该指标。", listOf("metric:${bottleneck.metricId}")))
+            }
+            if (capReason != null) add(AnebConclusionItem("realtime-recovery-score-cap", AnebConclusionSeverity.FAILURE, "评分封顶：$capReason，总分最高 54。", listOf("score:cap_reason")))
         }
         return RealtimeScoreResult(
             totalScore = (total * 10.0).roundToInt() / 10.0,
@@ -481,7 +512,7 @@ object RealtimeSimulationScorer {
             groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = conclusions,
+            conclusionItems = conclusions,
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -508,10 +539,17 @@ object RealtimeSimulationScorer {
         confidence: TokenConfidence,
         capReason: String?,
         environmentEvents: List<EnvEvent>,
-    ): List<String> = buildList {
-        add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
-        taskFailureSummary(evidence)?.let(::add)
-        connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let(::add)
+        behaviorFeatureIds: List<String>,
+    ): List<AnebConclusionItem> = buildList {
+        add(AnebConclusionItem("realtime-verdict", verdictSeverity(verdict), "结论：${verdict.name}；证据置信度 ${confidence.name}。", listOf("score:verdict", "score:confidence")))
+        add(completionConclusion(evidence))
+        add(behaviorConclusion(behaviorFeatureIds, evidence.variant))
+        taskFailureSummary(evidence)?.let { text ->
+            add(AnebConclusionItem("realtime-task-failure", AnebConclusionSeverity.FAILURE, text, listOf("metric:LIVE-B09", "metric:LIVE-B10", "evidence:realtime-raw")))
+        }
+        connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let { text ->
+            add(AnebConclusionItem("realtime-connection-stability", AnebConclusionSeverity.RECOMMENDATION, text, listOf("metric:LIVE-B10", "metric:LIVE-N04", "evidence:environment-events")))
+        }
         fun percent(id: String) = metrics[id]?.complianceRatio
             ?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) }
             ?: "不可用"
@@ -521,52 +559,81 @@ object RealtimeSimulationScorer {
                 metrics[id]?.complianceRatio
                     ?.takeIf { it + 1e-12 < spec.targetCompliance }
                     ?.let { compliance ->
-                        "$id ${qualityGateLabels[id] ?: "必需指标"}达标率 " +
+                        id to ("$id ${qualityGateLabels[id] ?: "必需指标"}达标率 " +
                             "${String.format(Locale.ROOT, "%.1f%%", compliance * 100)} < " +
-                            "${String.format(Locale.ROOT, "%.1f%%", spec.targetCompliance * 100)}"
+                            "${String.format(Locale.ROOT, "%.1f%%", spec.targetCompliance * 100)}")
                     }
-            }
+        }
         if (failedQualityGates.isNotEmpty()) {
-            add("未达质量门限：${failedQualityGates.joinToString("；")}。")
-            add("ANEB 采用必需门限优先：任一必需指标未达，即使综合分或等级较高，结论仍为 FAIL。")
+            add(AnebConclusionItem("realtime-failed-quality-gates", AnebConclusionSeverity.FAILURE, "未达质量门限：${failedQualityGates.joinToString("；") { it.second }}。", failedQualityGates.map { "metric:${it.first}" }))
+            add(AnebConclusionItem("realtime-required-gate-policy", AnebConclusionSeverity.WARNING, "ANEB 采用必需门限优先：任一必需指标未达，即使综合分或等级较高，也不能判为 PASS；最终判定仍服从证据等级。", listOf("score_policy:required_metric_gate", "score:confidence")))
         }
-        if (evidence.variant == "quick") add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
-        add("相对业务计划的响应超额时延 P95 ${value("LIVE-B04", metrics, "ms")}（建议 ≤200ms，达标 ${percent("LIVE-B04")}）。")
-        add("2 秒音频准时帧率 ${percent("LIVE-B05")}（目标 ≥99%，样本 ${metrics["LIVE-B05"]?.sampleCount ?: 0} 帧）。")
-        add(
-            "会话 RTT P95 ${value("LIVE-N02", metrics, "ms")}（建议 ≤100ms，达标 ${percent("LIVE-N02")}）；" +
-                "到达变化 P95−P50 ${value("LIVE-N03", metrics, "ms")}（建议 ≤30ms）。",
-        )
+        if (evidence.variant == "quick") add(AnebConclusionItem("realtime-quick-evidence-limit", AnebConclusionSeverity.WARNING, "快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。", listOf("profile:evidence_tier", "evidence:realtime-raw")))
+        add(AnebConclusionItem("realtime-target-response", targetSeverity(metrics["LIVE-B04"]), "相对业务计划的响应超额时延 P95 ${value("LIVE-B04", metrics, "ms")}（建议 ≤200ms，达标 ${percent("LIVE-B04")}）。", listOf("metric:LIVE-B04")))
+        add(AnebConclusionItem("realtime-target-playout", targetSeverity(metrics["LIVE-B05"]), "2 秒音频准时帧率 ${percent("LIVE-B05")}（目标 ≥99%，样本 ${metrics["LIVE-B05"]?.sampleCount ?: 0} 帧）。", listOf("metric:LIVE-B05")))
+        add(AnebConclusionItem("realtime-target-rtt-variation", if (listOf("LIVE-N02", "LIVE-N03").all { metrics[it]?.let { metric -> metric.complianceRatio?.let { it + 1e-12 >= metric.targetComplianceRatio } } == true }) AnebConclusionSeverity.INFO else AnebConclusionSeverity.RECOMMENDATION, "会话 RTT P95 ${value("LIVE-N02", metrics, "ms")}（建议 ≤100ms，达标 ${percent("LIVE-N02")}）；到达变化 P95−P50 ${value("LIVE-N03", metrics, "ms")}（建议 ≤30ms）。", listOf("metric:LIVE-N02", "metric:LIVE-N03")))
         val loaded = metrics["LIVE-N07"]
-        add(
-            if (loaded?.value == null) {
-                "本次未取得有效负载 RTT 样本，不对通话负载时延作结论。"
-            } else {
-                "通话负载 RTT P95 ${value("LIVE-N07", metrics, "ms")}（建议 ≤150ms，达标 ${percent("LIVE-N07")}）。"
-            },
-        )
+        add(if (loaded?.value == null) AnebConclusionItem("realtime-loaded-rtt-unavailable", AnebConclusionSeverity.WARNING, "本次未取得有效负载 RTT 样本，不对通话负载时延作结论。", listOf("metric:LIVE-N07")) else AnebConclusionItem("realtime-target-loaded-rtt", targetSeverity(loaded), "通话负载 RTT P95 ${value("LIVE-N07", metrics, "ms")}（建议 ≤150ms，达标 ${percent("LIVE-N07")}）。", listOf("metric:LIVE-N07")))
         val goodput = metrics["LIVE-N06"]?.componentValues.orEmpty()
-        add(
-            "持续净荷速率 P05：上行 ${format(goodput["uplink_p05_mbps"], "Mbps")}、" +
-                "下行 ${format(goodput["downlink_p05_mbps"], "Mbps")}；本模型业务基线分别为 0.256/0.384Mbps。",
-        )
-        add("打断响应 P95 ${value("LIVE-B08", metrics, "ms")}（建议 ≤300ms，达标 ${percent("LIVE-B08")}）。")
+        add(AnebConclusionItem("realtime-goodput-baseline", targetSeverity(metrics["LIVE-N06"]), "持续净荷速率 P05：上行 ${format(goodput["uplink_p05_mbps"], "Mbps")}、下行 ${format(goodput["downlink_p05_mbps"], "Mbps")}；本模型业务基线分别为 0.256/0.384Mbps。", listOf("metric:LIVE-N06")))
+        add(AnebConclusionItem("realtime-target-barge-in", targetSeverity(metrics["LIVE-B08"]), "打断响应 P95 ${value("LIVE-B08", metrics, "ms")}（建议 ≤300ms，达标 ${percent("LIVE-B08")}）。", listOf("metric:LIVE-B08")))
         val recovery = metrics["LIVE-B11"]
-        if (recovery?.sampleCount == 0) {
+        if (recovery == null || recovery.sampleCount == 0) {
             val reconnects = metrics["LIVE-N08"]?.value?.toInt() ?: 0
-            add(
-                if (reconnects == 0) {
-                    "本次未触发连接中断，不能评估恢复时延；恢复目标仍为 P95 ≤3000ms。"
-                } else {
-                    "检测到 $reconnects 次重连尝试但未取得成功恢复样本，不能宣称已恢复。"
-                },
-            )
+            add(if (reconnects == 0) AnebConclusionItem("realtime-recovery-not-exercised", AnebConclusionSeverity.INFO, "本次未触发连接中断，不能评估恢复时延；恢复目标仍为 P95 ≤3000ms。", listOf("metric:LIVE-B11", "metric:LIVE-N08")) else AnebConclusionItem("realtime-recovery-unsuccessful", AnebConclusionSeverity.FAILURE, "检测到 $reconnects 次重连尝试但未取得成功恢复样本，不能宣称已恢复。", listOf("metric:LIVE-B11", "metric:LIVE-N08")))
         } else {
-            add("连接恢复 P95 ${value("LIVE-B11", metrics, "ms")}（建议 ≤3000ms，样本 ${recovery?.sampleCount ?: 0}）。")
+            add(AnebConclusionItem("realtime-target-recovery", targetSeverity(recovery), "连接恢复 P95 ${value("LIVE-B11", metrics, "ms")}（建议 ≤3000ms，样本 ${recovery.sampleCount}）。", listOf("metric:LIVE-B11")))
         }
-        add("该业务需要持续双向小包、低尾时延、低到达变化和稳定长连接；带宽不是首要瓶颈。")
-        if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
+        interactionBottleneckMetricIds.mapNotNull(metrics::get).filter { it.score != null }.minByOrNull { it.score!! }?.let { bottleneck ->
+            add(AnebConclusionItem("realtime-primary-bottleneck", AnebConclusionSeverity.RECOMMENDATION, "本次主要瓶颈：${bottleneck.metricId}，达标比例 ${formatPercent(bottleneck.complianceRatio)}；优先改善该指标。", listOf("metric:${bottleneck.metricId}")))
+        }
+        if (capReason != null) add(AnebConclusionItem("realtime-score-cap", AnebConclusionSeverity.FAILURE, "评分封顶：$capReason，总分最高 54。", listOf("score:cap_reason")))
     }
+
+    private fun completionConclusion(evidence: RealtimeRunEvidence): AnebConclusionItem {
+        val turns = evidence.sessions.flatMap(RealtimeSessionEvidence::turns)
+        val completed = turns.count(RealtimeTurnEvidence::success)
+        return AnebConclusionItem(
+            "realtime-task-completion",
+            if (turns.isNotEmpty() && completed == turns.size && evidence.sessions.none { it.unexpectedDisconnect }) AnebConclusionSeverity.INFO else AnebConclusionSeverity.FAILURE,
+            "交互轮次完成 $completed/${turns.size}；意外中断会话 ${evidence.sessions.count { it.unexpectedDisconnect }}/${evidence.sessions.size}。",
+            listOf("metric:LIVE-B09", "metric:LIVE-B10", "evidence:realtime-raw"),
+        )
+    }
+
+    private fun recoveryCompletionConclusion(evidence: RealtimeRunEvidence): AnebConclusionItem {
+        val expected = evidence.sessions.count(RealtimeSessionEvidence::controlledDisconnectExpected)
+        val recovered = evidence.sessions.count { it.controlledDisconnectExpected && it.recoveryMs != null }
+        return AnebConclusionItem(
+            "realtime-recovery-task-completion",
+            if (expected > 0 && recovered == expected) AnebConclusionSeverity.INFO else AnebConclusionSeverity.FAILURE,
+            "受控中断恢复任务完成 $recovered/$expected。",
+            listOf("metric:LIVE-B11", "metric:LIVE-N08", "evidence:realtime-raw"),
+        )
+    }
+
+    private fun behaviorConclusion(featureIds: List<String>, variant: String) = AnebConclusionItem(
+        "realtime-behavior-profile",
+        AnebConclusionSeverity.INFO,
+        AnebBehaviorFeatureCatalogV1.sentence(featureIds, defaultBehaviorFeatureIds(variant)),
+        listOf(if (featureIds.isEmpty()) "policy:behavior-feature-catalog-v1" else "profile:business.behavior_feature_ids"),
+    )
+
+    private fun targetSeverity(metric: RealtimeMetricEvidence?): AnebConclusionSeverity = when {
+        metric?.complianceRatio == null -> AnebConclusionSeverity.WARNING
+        metric.complianceRatio + 1e-12 < metric.targetComplianceRatio -> AnebConclusionSeverity.RECOMMENDATION
+        else -> AnebConclusionSeverity.INFO
+    }
+
+    private fun defaultBehaviorFeatureIds(variant: String): List<String> = buildList {
+        addAll(listOf("full_duplex", "continuous_small_uplink", "low_latency_response", "barge_in", "stream_continuity"))
+        if (variant == "recovery") add("controlled_server_disconnect_recovery")
+    }
+
+    private val interactionBottleneckMetricIds = listOf(
+        "LIVE-B01", "LIVE-B02", "LIVE-B04", "LIVE-B05", "LIVE-B06", "LIVE-B07",
+        "LIVE-B08", "LIVE-B09", "LIVE-B10", "LIVE-N01", "LIVE-N02", "LIVE-N03", "LIVE-N04",
+    )
 
     /** Separates a completed measurement workflow from failure of the simulated user task. */
     private fun taskFailureSummary(evidence: RealtimeRunEvidence): String? {

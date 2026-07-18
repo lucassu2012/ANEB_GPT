@@ -13,6 +13,9 @@ class NetworkComprehensiveScorerTest {
         assertEquals(TokenConfidence.HIGH, result.confidence)
         assertNotNull(result.totalScore)
         assertEquals("A", result.grade)
+        assertTrue(result.conclusionItems.any { it.conclusionId == "network-task-completion" })
+        assertTrue(result.conclusionItems.any { it.conclusionId == "network-behavior-profile" && it.text.contains("负载响应能力") })
+        assertTrue(result.conclusionItems.any { it.conclusionId == "network-primary-bottleneck" && it.basis.single().startsWith("metric:") })
     }
 
     @Test fun quickIsAlwaysLowAndInconclusive() {
@@ -29,6 +32,7 @@ class NetworkComprehensiveScorerTest {
         assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
         assertNull(result.totalScore)
         assertNull(result.metrics.getValue("NET-B10").value)
+        assertTrue(result.conclusionItems.any { it.conclusionId == "network-udp-unavailable" && it.severity == AnebConclusionSeverity.WARNING })
     }
 
     @Test fun loadedLatencyRegressionFailsStandard() {

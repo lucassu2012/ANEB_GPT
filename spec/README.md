@@ -9,10 +9,10 @@
 
 | 单元 | 当前版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.8 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出 `aneb-result-v2`、1Hz 公开 Android 无线环境证据并支持 v1/v2 JSONL 原样导出；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
+| P1 / ANEB Probe Android | 0.5.9 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出 `aneb-result-v2`、1Hz 公开 Android 无线环境证据并支持 v1/v2 JSONL 原样导出；结论项冻结稳定 ID、严重级别、依据及 Profile 业务行为；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
 | P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
 | P3 / aneb-ai-behavior-model | 0.2.0 | 维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划的 v2 发布包，并只允许通过绑定留出报告的候选升为 validated |
-| Profile 横切机制 | 1.2.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；结果合同以共享核心、兼容 v1 和严格 v2 独立演进 |
+| Profile 横切机制 | 1.3.0 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；结论策略升级时同步提升 Profile 版本与哈希绑定；结果合同以共享核心、兼容 v1 和严格 v2 独立演进 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 这是一项治理声明，不代表现有 P1/P2 已实现远端版本协商；任何不兼容字段或语义变化都必须

@@ -121,6 +121,7 @@ data class BasicSpeedResult(
     val metrics: Map<String, NetworkMetricEvidence> = emptyMap(),
     val groupScores: Map<String, Double> = emptyMap(),
     val conclusions: List<String> = emptyList(),
+    val conclusionItems: List<AnebConclusionItem> = emptyList(),
     val evidenceJson: String = "{}",
     val confidenceMethodId: String = "network-sample-coverage-v1",
     val coverageRatio: Double? = null,
@@ -732,7 +733,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 },
                 invalidReason = invalidReason.get(),
             )
-            val capacityScore = NetworkComprehensiveScorer.score(evidence)
+            val capacityScore = NetworkComprehensiveScorer.score(evidence, profile.business.behaviorFeatureIds)
             val recoveryEvidence = recovery?.let {
                 NetworkRecoveryEvidence(
                     serverAcknowledged = acknowledgement.acknowledged,
@@ -746,7 +747,7 @@ class NetworkSpeedEngine(private val context: Context) {
                     bypassObserved = it.gatewayBypassObserved,
                 )
             }
-            val score = recoveryEvidence?.let(NetworkRecoveryScorer::score) ?: capacityScore
+            val score = recoveryEvidence?.let { NetworkRecoveryScorer.score(it, profile.business.behaviorFeatureIds) } ?: capacityScore
             val metrics = if (recoveryEvidence != null) capacityScore.metrics + score.metrics else score.metrics
             val capacityMetrics = capacityScore.metrics
             val errors = download.errors + upload.errors + listOfNotNull(udp.error)
@@ -765,7 +766,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 capacityMetrics["NET-B04"]?.value, capacityMetrics["NET-B05"]?.value, capacityMetrics["NET-B06"]?.value,
                 capacityMetrics["NET-B09"]?.value, capacityMetrics["NET-B07"]?.value, capacityMetrics["NET-B10"]?.value,
                 BasicSpeedMath.percentile(post.filterNotNull(), 0.50), download.totalBytes, upload.totalBytes, errors,
-                metrics, score.groupScores, score.conclusions, evidenceJson(evidence, recoveryEvidence),
+                metrics, score.groupScores, score.conclusions, score.conclusionItems, evidenceJson(evidence, recoveryEvidence),
                 confidenceMethodId = score.confidenceMethodId,
                 coverageRatio = score.coverageRatio,
                 minimumSampleSatisfied = score.minimumSampleSatisfied,
@@ -1528,6 +1529,7 @@ class NetworkSpeedEngine(private val context: Context) {
         metrics = emptyMap(),
         groupScores = emptyMap(),
         conclusions = listOf("测试未完成：$reason"),
+        conclusionItems = listOf(AnebConclusionItem("network-invalid-evidence", AnebConclusionSeverity.FAILURE, "测试未完成：$reason", listOf("evidence:network-raw", "invalid_reason"))),
         evidenceJson = buildJsonObject { put("invalid_reason", reason) }.toString(),
     )
 
@@ -1668,7 +1670,7 @@ class NetworkSpeedEngine(private val context: Context) {
         const val CLAIM_SCOPE = "application_end_to_end_to_probe_node"
         const val SCORE_POLICY = "network-comprehensive-score-v1"
         const val SCORE_ANCHOR_POLICY = "compliance-anchors-v1"
-        const val CONCLUSION_POLICY = "network-comprehensive-conclusions-v1"
+        const val CONCLUSION_POLICY = "network-comprehensive-conclusions-v2"
         private const val ECHO_GAP_MS = 75L
         private const val TELEMETRY_MS = 100L
         private const val HISTORY_POINTS = 40

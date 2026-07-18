@@ -392,7 +392,7 @@ class TokenSimulationEngine(private val context: Context) {
                 invalidReason = invalidReason,
                 loadedRttSamplesMs = loadedRttSnapshot,
             )
-            val score = score(evidence)
+            val score = score(evidence, profile.business.behaviorFeatureIds)
             val endedAt = System.currentTimeMillis()
             val result = TokenSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
@@ -542,7 +542,7 @@ class TokenSimulationEngine(private val context: Context) {
             profile?.evaluation?.scorePolicyId?.takeIf { it.isNotBlank() } ?: policies.first,
             profile?.evaluation?.scoreAnchorPolicyId?.takeIf { it.isNotBlank() } ?: policies.second,
             profile?.evaluation?.conclusionPolicyId?.takeIf { it.isNotBlank() } ?: policies.third,
-            score(evidence), evidence,
+            score(evidence, profile?.business?.behaviorFeatureIds.orEmpty()), evidence,
         )
         publishResult(
             result = result,
@@ -698,13 +698,17 @@ class TokenSimulationEngine(private val context: Context) {
 
     private fun medianLong(values: List<Long>): Long? = values.sorted().takeIf { it.isNotEmpty() }?.let { sorted -> sorted[sorted.size / 2] }
 
-    private fun score(evidence: TokenRunEvidence): TokenScoreResult =
-        if (evidence.variant == "stress") TokenStressScorer.score(evidence) else TokenSimulationScorer.score(evidence)
+    private fun score(evidence: TokenRunEvidence, behaviorFeatureIds: List<String>): TokenScoreResult =
+        if (evidence.variant == "stress") {
+            TokenStressScorer.score(evidence, behaviorFeatureIds)
+        } else {
+            TokenSimulationScorer.score(evidence, behaviorFeatureIds)
+        }
 
     private fun policies(variant: String): Triple<String, String, String> = if (variant == "stress") {
-        Triple("token-stress-score-v1", "compliance-anchors-v1", "token-stress-conclusions-v1")
+        Triple("token-stress-score-v1", "compliance-anchors-v1", "token-stress-conclusions-v2")
     } else {
-        Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v1")
+        Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v2")
     }
 
     private companion object {

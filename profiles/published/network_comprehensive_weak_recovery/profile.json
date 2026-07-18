@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "network_comprehensive_weak_recovery",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "mode_id": "network_comprehensive",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node_with_declared_synthetic_request_outage",
@@ -25,7 +25,7 @@
     "target_set_id": "network-recovery-targets-v1",
     "score_policy_id": "network-recovery-score-v1",
     "score_anchor_policy_id": "compliance-anchors-v1",
-    "conclusion_policy_id": "network-recovery-conclusions-v1",
+    "conclusion_policy_id": "network-recovery-conclusions-v2",
     "required_metric_ids": ["RCV-B01", "RCV-B02", "RCV-B03", "RCV-B04"],
     "guardrail_metric_ids": ["RCV-B01", "RCV-B02", "RCV-B03"],
     "group_weights": {"recovery": 0.45, "continuity": 0.30, "responsiveness": 0.25},

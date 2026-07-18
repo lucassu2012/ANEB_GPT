@@ -2,7 +2,7 @@
   "contract_version": "aneb-token-runtime-plan-v1",
   "model_id": "token-multimodal-behavior-v0.1",
   "model_version": "0.1.0",
-  "model_hash": "sha256:d3ae808a9de635ab16917f35cc7bbbcea1e6e7a7194f4fe3dd2935877a03bafe",
+  "model_hash": "sha256:76d4e93bdcd2951291169a867674004c7a13a28cd2a393f3da3aa0d14bd3cb5b",
   "calibration_status": "hypothesis",
   "seed": 20260716,
   "task_count": 20,

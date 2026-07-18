@@ -294,8 +294,7 @@ private fun RealtimeResultContent(
             }
             AnebGradientCard(Modifier.fillMaxWidth().padding(top = 4.dp), radius = 14.dp) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("业务行为特征", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-                    Text("持续双向小包 · 低尾时延 · 低到达变动 · 稳定长连接 · 可打断播放", fontSize = 10.sp, lineHeight = 16.sp, color = colors.muted, modifier = Modifier.padding(top = 4.dp))
+                    Text("行为模型", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
                     Text(modelLine, fontSize = 9.sp, color = colors.faint, modifier = Modifier.padding(top = 6.dp))
                 }
             }

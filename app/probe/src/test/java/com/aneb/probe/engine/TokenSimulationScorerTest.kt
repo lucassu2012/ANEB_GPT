@@ -26,13 +26,20 @@ class TokenSimulationScorerTest {
 
     @Test
     fun `standard fully compliant run passes high confidence`() {
-        val result = TokenSimulationScorer.score(goodEvidence("standard", 20))
+        val result = TokenSimulationScorer.score(
+            goodEvidence("standard", 20),
+            behaviorFeatureIds = listOf("uplink_burst", "low_latency_start", "stream_continuity"),
+        )
         assertEquals(100.0, result.totalScore!!, 1e-9)
         assertEquals(TokenConfidence.HIGH, result.confidence)
         assertEquals(TokenVerdict.PASS, result.verdict)
         assertEquals(350.0, result.metrics.getValue("TOK-B03").value!!, 1e-9)
         assertEquals(390.0, result.metrics.getValue("TOK-B04").value!!, 1e-9)
         assertEquals(1.0, result.metrics.getValue("TOK-B04").complianceRatio!!, 1e-9)
+        assertEquals(result.conclusionItems.size, result.conclusionItems.map { it.conclusionId }.distinct().size)
+        assertTrue(result.conclusionItems.first { it.conclusionId == "token-behavior-profile" }.text.contains("上行突发需求"))
+        assertEquals(listOf("metric:TOK-N03"), result.conclusionItems.first { it.conclusionId == "token-target-rtt" }.basis)
+        assertTrue(result.conclusionItems.any { it.conclusionId == "token-primary-bottleneck" })
     }
 
     @Test
@@ -41,7 +48,11 @@ class TokenSimulationScorerTest {
         val result = TokenSimulationScorer.score(evidence)
         assertNull(result.totalScore)
         assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
-        assertTrue(result.conclusions.first().contains("必需指标缺失"))
+        assertEquals("token-task-completion", result.conclusionItems.first().conclusionId)
+        assertEquals(AnebConclusionSeverity.INFO, result.conclusionItems.first().severity)
+        val missing = result.conclusionItems.first { it.conclusionId == "token-missing-required-metrics" }
+        assertEquals(AnebConclusionSeverity.WARNING, missing.severity)
+        assertTrue(missing.basis.all { it.startsWith("metric:") })
     }
 
     @Test

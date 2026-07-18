@@ -38,7 +38,9 @@ class TokenStressScorerTest {
 
         assertNull(result.totalScore)
         assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
-        assertTrue(result.conclusions.first().contains("必需指标缺失"))
+        assertEquals("token-stress-task-completion", result.conclusionItems.first().conclusionId)
+        assertEquals(AnebConclusionSeverity.INFO, result.conclusionItems.first().severity)
+        assertTrue(result.conclusionItems.any { it.conclusionId == "token-stress-missing-required-metrics" })
     }
 
     @Test

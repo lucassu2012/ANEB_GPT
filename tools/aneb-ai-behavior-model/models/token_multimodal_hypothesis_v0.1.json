@@ -96,7 +96,7 @@
   "profile_export": {
     "contract_version": "aneb-profile-v2",
     "profile_id": "token_multimodal_standard",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "mode_id": "token_simulation",
     "execution_target": "aneb_probe_simulator",
     "claim_scope": "application_end_to_end_to_probe_node",
@@ -119,7 +119,7 @@
       "target_set_id": "token-sim-targets-v1",
       "score_policy_id": "token-sim-score-v1",
       "score_anchor_policy_id": "compliance-anchors-v1",
-      "conclusion_policy_id": "token-sim-conclusions-v1",
+      "conclusion_policy_id": "token-sim-conclusions-v2",
       "required_metric_ids": ["TOK-B01", "TOK-B02", "TOK-B05", "TOK-B07", "TOK-B09", "TOK-B10", "TOK-B11", "TOK-B14", "TOK-N03", "TOK-N04", "TOK-N05", "TOK-N06"],
       "guardrail_metric_ids": ["TOK-B10"],
       "group_weights": {"task_completion": 0.25, "interaction": 0.30, "multimodal_transfer": 0.25, "network_stability": 0.15, "efficiency": 0.05},

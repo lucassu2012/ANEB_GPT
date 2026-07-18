@@ -371,18 +371,6 @@ fun BasicSpeedResultScreen(
                     }
                 }
             }
-            AnebGradientCard(Modifier.fillMaxWidth().padding(top = 4.dp), radius = 14.dp) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("业务行为特征", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-                    Text(
-                        if (recoveryResult) "短时请求不可用 · 低恢复时延 · 恢复后连续性 · 恢复后响应性" else
-                            "持续下行 · 持续上行 · 负载响应性 · 路径稳定性",
-                        fontSize = 10.sp,
-                        color = colors.muted,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-            }
             UnifiedResultExportActions(exportAvailable, exportStatus, onExportJsonl, onShareJsonl)
             Text(
                 "评分 ${result.scorePolicyId} · 锚点 ${result.scoreAnchorPolicyId}\n范围仅限本机到当前 ANEB 节点，不代表运营商全网评级",

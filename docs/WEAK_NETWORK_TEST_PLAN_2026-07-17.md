@@ -22,8 +22,8 @@ ANEB 可以稳定、可重复地模拟“低速率、高时延、抖动、短时
 
 | Profile | 目的 | 合成条件（初版） |
 |---|---|---|
-| `network_comprehensive_weak_capacity_latency@1.0.0` | **已上线**；验证容量、响应性和稳定性评分 | 下行 3Mbps、上行 1Mbps、附加 RTT 120ms、抖动 30ms；不主动断线 |
-| `network_comprehensive_weak_recovery@1.0.0` | **已上线**；验证短时中断与恢复 | 下行 5Mbps、上行 2Mbps、附加 RTT 80ms、抖动 20ms；每 run 独立注入一次 2s 应用请求中断 |
+| `network_comprehensive_weak_capacity_latency@1.1.0` | **已上线**；验证容量、响应性和稳定性评分，使用语义结论策略 v2 | 下行 3Mbps、上行 1Mbps、附加 RTT 120ms、抖动 30ms；不主动断线 |
+| `network_comprehensive_weak_recovery@1.1.0` | **已上线**；验证短时中断与恢复，使用语义结论策略 v2 | 下行 5Mbps、上行 2Mbps、附加 RTT 80ms、抖动 20ms；每 run 独立注入一次 2s 应用请求中断 |
 
 初版数值是测试刺激，不是运营商 SLA，也不是“弱网”的行业唯一标准。每个 Profile 的正常网络对照 run 必须使用同一设备、同一节点、相邻时间窗口；评分算法应能预测方向：TTFT/loaded RTT 上升、吞吐下降、任务超时与重试 Token 开销上升。若没有按预期变化，先判测试机制或算法不敏感，不能反过来宣称网络良好。
 

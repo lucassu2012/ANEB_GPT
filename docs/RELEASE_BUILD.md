@@ -1,4 +1,4 @@
-# ANEB Probe 0.5.8 release build
+# ANEB Probe 0.5.9 release build
 
 ## Ownership boundary
 
@@ -40,9 +40,9 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.5.8` (`versionCode=40`; Debug reports `0.5.8-codex`)
+- Version: `0.5.9` (`versionCode=41`; Debug reports `0.5.9-codex`)
 - Room schema: version 19, exported under `app/probe/schemas/`
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
-- Debug APK SHA-256: `B857A8AD2E6CA443CC6B0B60162DE7E5D73A7E4532D9E27F2A92808A83F8DAF0` (`0.5.8-codex`; 61,754,256 bytes; debug artifacts are not release evidence).
-- Quality baseline: 541 JVM tests, 0 failures/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); 12 measurement-analysis tests, behavior model 31 tests and Go server/gateway tests pass. Catalog contains 8 schemas: internal shared result core, compatible result v1, strict result v2, plus the existing profile/model contracts.
-- Device validation: P40 Pro run `019f730f-a0d5-7417-9e01-0866bacdfc57` is the first 0.5.8 `aneb-result-v2` vertical slice: Token Quick completed 3/3 tasks, froze all v2 task-alignment fields and 120 radio samples, scored 97.0/A while retaining `LOW/INCONCLUSIVE`, passed strict v2 with zero errors, and matched independent canonical SHA-256 `bf6bbbbdc6d7d914f1e06384433d52b8cbaa81696e4fda20cea016271117f8b3`. The immutable 27-line historical export now passes 27/27 through the restored compatible v1 validator without rewriting any record; its four digest-mismatch records remain correctly excluded by device integrity export. Mixed v1/v2 device export is still pending while the Claude package owns the shared P40. These are Debug/Quick validation artifacts, not signed release evidence.
+- Debug APK SHA-256: `4C7EA2FB0554E661EAE536100AD0BA273FC03B66EC1A15FE0EB24CBCC08EDAE9` (`0.5.9-codex`; 58,477,100 bytes; Android Debug certificate SHA-256 `6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`; debug artifacts are not release evidence).
+- Quality baseline: 545 JVM tests in 89 suites, 0 failures/0 errors/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); 12 measurement-analysis tests, behavior model 31 tests and Go server/gateway tests pass. Profile catalog 1.3.0 contains 8 schemas, 2 families, 16 profiles, 6 hash-bound runtime bundles, 6 embedded-network profiles and 4 behavior models.
+- Device validation: a directly preceding 0.5.9 P40 cellular AI realtime Quick candidate, run `019f7377-9a61-7db5-a8c4-1ac57de1a486`, completed 3/3 turns with 99.8/A and `LOW/INCONCLUSIVE`; dynamic UI, frozen semantic conclusions and user-path JSONL export were exercised. The downloaded strict-v2 JSONL passed Schema/identity/digest validation and has SHA-256 `FE964695E19997796F5FEB84E05F50FB69F61F2C6299FA0C577263E5198F7EA9`. The exact APK hash above was rebuilt afterwards only for two semantic edge paths: failed-gate basis now lists only metrics that actually failed, and Token/Token Stress preserve task completion when required metrics are missing. Targeted and full regression cover both paths, but exact-binary device installation remains pending while the shared P40 is reserved by Experience Lab. Neither artifact is signed release evidence.

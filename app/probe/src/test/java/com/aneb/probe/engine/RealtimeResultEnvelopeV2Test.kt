@@ -15,7 +15,8 @@ class RealtimeResultEnvelopeV2Test {
         val result = result(
             RealtimeScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
-                emptyMap(), emptyMap(), null, listOf("Insufficient evidence."),
+                emptyMap(), emptyMap(), null,
+                listOf(AnebConclusionItem("realtime-test-insufficient", AnebConclusionSeverity.WARNING, "Insufficient evidence.", listOf("evidence:realtime-raw"))),
                 coverageRatio = 0.0, minimumSampleSatisfied = false,
                 notComputableReason = "test_fixture",
             ),
@@ -67,7 +68,7 @@ class RealtimeResultEnvelopeV2Test {
             groupScores = mapOf("network_readiness" to 91.0),
             metrics = mapOf(metric.metricId to metric),
             capReason = null,
-            conclusions = listOf("PASS with sufficient controlled evidence."),
+            conclusionItems = listOf(AnebConclusionItem("realtime-test-pass", AnebConclusionSeverity.INFO, "PASS with sufficient controlled evidence.", listOf("score:verdict"))),
             coverageRatio = 1.0,
             minimumSampleSatisfied = true,
         )
@@ -98,6 +99,10 @@ class RealtimeResultEnvelopeV2Test {
             .getValue("profile_fingerprint").jsonObject.getValue("value").jsonPrimitive.content)
         assertEquals(91.0, root.getValue("evaluation").jsonObject.getValue("score").jsonObject
             .getValue("value").jsonPrimitive.content.toDouble(), 0.0)
+        val conclusion = root.getValue("evaluation").jsonObject.getValue("conclusions").jsonArray.single().jsonObject
+        assertEquals("realtime-test-pass", conclusion.getValue("conclusion_id").jsonPrimitive.content)
+        assertEquals("info", conclusion.getValue("severity").jsonPrimitive.content)
+        assertEquals("score:verdict", conclusion.getValue("basis").jsonArray.single().jsonPrimitive.content)
         assertEquals("realtime-sample-coverage-v1", root.getValue("evaluation").jsonObject
             .getValue("score").jsonObject.getValue("confidence_basis").jsonObject
             .getValue("method_id").jsonPrimitive.content)

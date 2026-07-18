@@ -37,7 +37,7 @@ class ProfileCapabilityTest {
         "stale_after_ms":1500,"missing_behavior":"show_unavailable_never_zero"},
       "evaluation":{"target_set_id":"token-targets-v1","score_policy_id":"token-sim-score-v1",
         "score_anchor_policy_id":"compliance-anchors-v1",
-        "conclusion_policy_id":"token-sim-conclusions-v1","required_metric_ids":["TOK-B01"],
+        "conclusion_policy_id":"token-sim-conclusions-v2","required_metric_ids":["TOK-B01"],
         "guardrail_metric_ids":[],"group_weights":{"responsiveness":1.0},
         "missing_required_metric":"score_null","invalid_run":"retain_raw_suppress_score"},
       "evidence_tier":"quick",

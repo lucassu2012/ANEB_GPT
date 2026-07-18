@@ -53,7 +53,8 @@ class TokenResultEnvelopeV2Test {
         val result = tokenResult(
             TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
-                emptyMap(), emptyMap(), null, listOf("Insufficient evidence."),
+                emptyMap(), emptyMap(), null,
+                listOf(AnebConclusionItem("token-test-insufficient", AnebConclusionSeverity.WARNING, "Insufficient evidence.", listOf("evidence:token-raw"))),
                 coverageRatio = 0.0, minimumSampleSatisfied = false,
                 notComputableReason = "test_fixture",
             ),
@@ -110,7 +111,7 @@ class TokenResultEnvelopeV2Test {
             groupScores = mapOf("network_stability" to 91.0),
             metrics = mapOf(metric.metricId to metric),
             capReason = null,
-            conclusions = listOf("结论：PASS；证据置信度 HIGH。"),
+            conclusionItems = listOf(AnebConclusionItem("token-test-pass", AnebConclusionSeverity.INFO, "结论：PASS；证据置信度 HIGH。", listOf("score:verdict"))),
             coverageRatio = 1.0,
             minimumSampleSatisfied = true,
         )
@@ -199,6 +200,10 @@ class TokenResultEnvelopeV2Test {
         )
         assertEquals(88.0, root.getValue("evaluation").jsonObject
             .getValue("score").jsonObject.getValue("value").jsonPrimitive.content.toDouble(), 0.0)
+        val conclusion = root.getValue("evaluation").jsonObject.getValue("conclusions").jsonArray.single().jsonObject
+        assertEquals("token-test-pass", conclusion.getValue("conclusion_id").jsonPrimitive.content)
+        assertEquals("info", conclusion.getValue("severity").jsonPrimitive.content)
+        assertEquals("score:verdict", conclusion.getValue("basis").jsonArray.single().jsonPrimitive.content)
         assertEquals(DIGEST_A, root.getValue("profile").jsonObject
             .getValue("profile_fingerprint").jsonObject.getValue("value").jsonPrimitive.content)
         val frozenMetrics = root.getValue("evaluation").jsonObject.getValue("metrics").jsonObject

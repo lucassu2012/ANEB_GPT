@@ -231,18 +231,7 @@ fun TokenSimulationResultScreen(
             }
             AnebGradientCard(Modifier.fillMaxWidth().padding(top = 4.dp), radius = 14.dp) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("业务行为特征", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-                    Text(
-                        if (result.variant == "stress") {
-                            "100MiB 视频突发上行 · 100MiB 大对象下行 · 负载时延敏感 · Token 连续性"
-                        } else {
-                            "上行突发 · 低时延启动 · Token 连续性 · 可选大文件下行"
-                        },
-                        fontSize = 10.sp,
-                        lineHeight = 16.sp,
-                        color = colors.muted,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    Text("行为模型", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
                     Text("${result.behaviorModelId}@${result.behaviorModelVersion} · ${result.calibrationStatus}", fontSize = 9.sp, color = colors.faint, modifier = Modifier.padding(top = 6.dp))
                 }
             }

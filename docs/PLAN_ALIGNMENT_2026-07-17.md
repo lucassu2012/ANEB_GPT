@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.8 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；541 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量分析测试、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.9 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.0；545 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量分析测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -18,11 +18,11 @@
 
 | 计划单元 | Codex 当前状态 | 结论 |
 |---|---|---|
-| **P1a 前台 UI** | **0.5.8 产品化大部完成；开测自救与版本化导出已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL，设置页可把全部独立验真的 v1/v2 历史按时间导出，并分别提示格式不支持与完整性异常。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。0.5.7 补齐无线权限用途说明、低置信继续和节点地址开测前校验；0.5.8 不改变主视觉。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
-| **P1b 测量引擎** | **M1 单节点验收切片闭环** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果均先落 Room 再发布，0.5.8 起在同一事务冻结 `aneb-result-v2`、1Hz 无线样本与环境事件，兼容 v1 保留历史验证。0.5.6 的 5-run TTFT 任务对齐 CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限。 |
+| **P1a 前台 UI** | **0.5.9 产品化大部完成；开测、导出和统一结论已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL，设置页可把全部独立验真的 v1/v2 历史按时间导出，并分别提示格式不支持与完整性异常。0.5.9 直接展示评分器冻结的完成性、Profile 业务行为、门限与瓶颈，不再另写一套硬编码行为文案。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
+| **P1b 测量引擎** | **M1 单节点验收切片闭环** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果均先落 Room 再发布，0.5.8 起在同一事务冻结 `aneb-result-v2`、1Hz 无线样本与环境事件，0.5.9 起每条结论冻结稳定 ID、严重级别及指标/证据依据，兼容 v1 保留历史验证。0.5.6 的 5-run TTFT 任务对齐 CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限。 |
 | **P2 服务器侧** | **当前 App 所需单节点矩阵完成；原计划 P2 部分完成** | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.7.0`，已覆盖当前 App 使用的 Token、上传、下载、工具循环、WebSocket 实时双工、测速、UDP、结果与逐 run 合成弱网；对照原计划仍缺 RTP/WebRTC 语音回环、通用 100MiB/1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
 | **P3 标准与业务模型** | **0.2.0 校准流水线闭环；真实画像未校准** | ［KNOWN｜HIGH］除确定性 Token/Stress/AI 实时/Recovery 生成外，现已实现授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算；现有 4 个模型仍明确为 `hypothesis`，没有获准观测数据，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
-| **横切 Profile 体系** | **目录与版本化结果/校准合同已冻结，执行合同仍分叉** | ［KNOWN｜HIGH］`spec/catalog.json` 已机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、6 个运行包及消费者边界；结果合同分为内部共享 core、兼容 v1 与严格 v2，另含 Token 观测、校准数据集和留出验证合同。P1/P2 尚未共同解释同一份 v2 descriptor。 |
+| **横切 Profile 体系** | **1.3.0 目录与版本化结果/结论/校准合同已冻结，执行合同仍分叉** | ［KNOWN｜HIGH］`spec/catalog.json` 已机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、6 个运行包及消费者边界；12 个正式 Profile 已随结论策略升级小版本，Token/AI 实时运行计划重新绑定规范化哈希。结果合同分为内部共享 core、兼容 v1 与严格 v2，另含 Token 观测、校准数据集和留出验证合同。P1/P2 尚未共同解释同一份 v2 descriptor。 |
 | **里程碑位置** | **M1 单节点验收切片通过、三级节点未完成；M0 治理部分完成；M3 仅 WebSocket 仿真轨完成；M4 开测自救切片通过；M2 未启动** | ［KNOWN｜HIGH］详见 §7；不以单节点重复性冒充跨节点、外场或真实业务画像完成度。 |
 
 ## 2. P1a 手机端前台 UI
@@ -80,6 +80,7 @@
 - ［KNOWN｜HIGH］AI 实时后台正常 Quick run `019f7238-d040-71a0-b874-6c211f051e0d` 完成 3/3 轮；后台真实 Wi-Fi 中断 run `019f7240-bf42-7a48-b23b-3235286da018` 观察到 1/1 会话中断、2/3 轮失败和 51.8% 帧返回率，分数/等级为 null。结果首屏先报告业务任务受损，再给出 ≤1% 会话中断率与 ≥99% 帧返回率目标，同时禁止缺少 PATH_CHANGE 证据时单因归因。两条信封摘要均匹配。
 - ［KNOWN｜HIGH］最终 PATH_CHANGE run `019f72f5-557c-71b0-a7d9-b462055f0545` 在真实 Wi-Fi 关闭窗口冻结 `default_network_lost path=path-1 transport=wifi`、5 个无线样本、1/1 会话中断与 3/3 轮失败；结果页以“默认 Wi-Fi 网络丢失”展示同窗关联，并明确不能单独证明因果。该信封当前 Schema 错误 0、摘要匹配。最终批量 JSONL 导出 27/31 条，27/27 摘要匹配且 4 个旧摘要异常 id 未混入。
 - ［KNOWN｜HIGH］App 0.5.8 已落实结果版本边界：27 条不可变历史在兼容 v1 下 27/27 结构通过；三类新生产者改发严格 v2。P40 Token Quick run `019f730f-a0d5-7417-9e01-0866bacdfc57` 为 v2、3/3 任务对齐字段完整、120 条无线样本、Schema 零错误且独立摘要匹配，97.0/A 仍保持 LOW/INCONCLUSIVE。见 `P40_APP_0.5.8_RESULT_VERSIONING_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］App 0.5.9 把三类字符串结论升级为评分器冻结的语义项：稳定 `conclusion_id`、准确 `info/recommendation/warning/failure`、原始文本和指标/证据 basis；导出器不再按条目位置猜级别，结果页不再另写行为特征。正常、必需指标缺失、无效证据及默认网络变化共现均有回归；计划受控中断单独按恢复任务完成性评价，Token 缺指标时也不再吞掉已观察到的任务完成事实。12 个 Profile 与对应结论策略已升小版本，6 个 Token/AI 实时运行包重新哈希绑定。545 项 JVM 测试、Lint 零 error、Schema/catalog、测量分析、行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条冻结结论和系统下载目录 strict-v2 JSONL 均复验通过。当前精确 APK 只在其后调整失败门限 basis 与 Token 缺指标结论，已自动化验证但尚待共享手机释放后做同二进制安装确认。酒店 Wi-Fi 的前序失败发生在门户未认证时，不作为网络质量 A/B。见 `APP_0.5.9_SEMANTIC_CONCLUSION_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧

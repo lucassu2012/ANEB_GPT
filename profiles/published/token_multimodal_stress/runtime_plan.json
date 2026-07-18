@@ -2,7 +2,7 @@
   "contract_version": "aneb-token-runtime-plan-v1",
   "model_id": "token-multimodal-stress-behavior-v0.1",
   "model_version": "0.1.0",
-  "model_hash": "sha256:d7845b4e7f96f54b5721ddc0daf1f60a2660467edae291882844055a448bb08f",
+  "model_hash": "sha256:57d88f6bdffffd99bac70841388d360ea451dfc3af2b60fc6a4096dc5002a59b",
   "calibration_status": "hypothesis",
   "seed": 20260716,
   "task_count": 1,

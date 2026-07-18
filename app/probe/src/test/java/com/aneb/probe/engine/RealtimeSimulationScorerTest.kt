@@ -10,6 +10,13 @@ import org.junit.Test
 
 class RealtimeSimulationScorerTest {
     @Test
+    fun `missing ready is connection failure not node contract mismatch`() {
+        assertNull(realtimeContractInvalidReason(null))
+        assertNull(realtimeContractInvalidReason("aneb-realtime-session-v1"))
+        assertEquals("node_contract_mismatch", realtimeContractInvalidReason("aneb-realtime-session-v2"))
+    }
+
+    @Test
     fun `quick score remains low confidence and inconclusive`() {
         val result = RealtimeSimulationScorer.score(goodEvidence("quick", 1, 3))
         assertNotNull(result.totalScore)
@@ -63,7 +70,15 @@ class RealtimeSimulationScorerTest {
 
         assertEquals(TokenConfidence.HIGH, result.confidence)
         assertEquals(TokenVerdict.FAIL, result.verdict)
+        assertTrue(
+            result.conclusionItems.single { it.conclusionId == "realtime-required-gate-policy" }
+                .text.contains("不能判为 PASS；最终判定仍服从证据等级"),
+        )
         assertTrue(result.conclusions.any { it.contains("LIVE-B04 响应超额时延达标率 90.0% < 95.0%") })
+        assertEquals(
+            listOf("metric:LIVE-B04"),
+            result.conclusionItems.single { it.conclusionId == "realtime-failed-quality-gates" }.basis,
+        )
         assertTrue(result.conclusions.any { it.contains("即使综合分或等级较高") })
         assertTrue(result.conclusions.any { it.contains("响应超额时延 P95 250.0ms") })
     }
@@ -145,12 +160,15 @@ class RealtimeSimulationScorerTest {
         )
 
         val attribution = result.conclusions.first { it.contains("系统默认网络变化证据") }
+        val attributionItem = result.conclusionItems.first { it.conclusionId == "realtime-connection-stability" }
         assertTrue(attribution.contains("3 条"))
         assertTrue(attribution.contains("默认 Wi-Fi 网络丢失"))
         assertTrue(attribution.contains("与连接异常共现"))
         assertTrue(attribution.contains("不能单独证明因果"))
         assertTrue(!attribution.contains("monitor_unavailable"))
         assertTrue(!attribution.contains("path=path-1"))
+        assertEquals(AnebConclusionSeverity.RECOMMENDATION, attributionItem.severity)
+        assertTrue(attributionItem.basis.contains("evidence:environment-events"))
     }
 
     @Test

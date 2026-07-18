@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "ai_realtime_voice_quick",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "mode_id": "ai_realtime_simulation",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node",
@@ -20,7 +20,7 @@
     ],
     "behavior_model_id": "ai-realtime-voice-behavior-v0.2",
     "behavior_model_version": "0.2.0",
-    "behavior_model_hash": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6",
+    "behavior_model_hash": "sha256:e7c945dbf65be0aa6850861f610bc339bf515a7438eae5d2a00fc6c50a04939f",
     "calibration_status": "hypothesis",
     "model_source_kind": "product_requirement_hypothesis"
   },
@@ -41,7 +41,7 @@
     "target_set_id": "realtime-interaction-targets-v1",
     "score_policy_id": "realtime-interaction-score-v1",
     "score_anchor_policy_id": "compliance-anchors-v1",
-    "conclusion_policy_id": "realtime-interaction-conclusions-v1",
+    "conclusion_policy_id": "realtime-interaction-conclusions-v2",
     "required_metric_ids": [
       "LIVE-B01",
       "LIVE-B02",
@@ -473,10 +473,10 @@
       "type": "behavior_trace",
       "model_id": "ai-realtime-voice-behavior-v0.2",
       "model_version": "0.2.0",
-      "model_hash": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6",
+      "model_hash": "sha256:e7c945dbf65be0aa6850861f610bc339bf515a7438eae5d2a00fc6c50a04939f",
       "seed": 20260716,
       "runtime_artifact": "runtime_plan.json",
-      "runtime_artifact_hash": "sha256:0713d4ef9ac485c1919a260084ea7df361b102a7f31cf0c7d25348bfb16b3f41"
+      "runtime_artifact_hash": "sha256:f2472d2faa7a3ab51582e1496a6925d106806fdd9747e097e20e38e921d9dc07"
     }
   ],
   "evidence_tier": "quick",
@@ -484,7 +484,7 @@
   "execution_plan": {
     "contract_version": "aneb-realtime-runtime-plan-v1",
     "artifact": "runtime_plan.json",
-    "artifact_hash": "sha256:0713d4ef9ac485c1919a260084ea7df361b102a7f31cf0c7d25348bfb16b3f41",
+    "artifact_hash": "sha256:f2472d2faa7a3ab51582e1496a6925d106806fdd9747e097e20e38e921d9dc07",
     "seed": 20260716,
     "variant": "quick"
   }

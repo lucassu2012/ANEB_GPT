@@ -379,7 +379,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                     sessionEndNanos = wire.endNanos,
                     recoveryMs = recoveryMs,
                 )
-                if (wire.ready?.contractVersion != "aneb-realtime-session-v1") invalidReason = "node_contract_mismatch"
+                realtimeContractInvalidReason(wire.ready?.contractVersion)?.let { invalidReason = it }
                 completedTurns += session.turnCount
                 _telemetry.value = _telemetry.value.copy(progress = completedTurns.toDouble() / totalTurns)
                 log("REALTIME_V1_SESSION_END run_id=$runId session=${session.sessionId} success=${measured.established && !measured.unexpectedDisconnect} error=${measured.error ?: "none"}")
@@ -391,6 +391,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                 runEvidence,
                 profile.evaluation.scorePolicyId,
                 radio.events,
+                profile.business.behaviorFeatureIds,
             )
             val result = RealtimeSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
@@ -605,8 +606,8 @@ class RealtimeSimulationEngine(private val context: Context) {
             scorePolicy,
             profile?.evaluation?.scoreAnchorPolicyId?.takeIf(String::isNotBlank) ?: "compliance-anchors-v1",
             profile?.evaluation?.conclusionPolicyId?.takeIf(String::isNotBlank)
-                ?: if (variant == "recovery") "realtime-recovery-conclusions-v2" else "realtime-interaction-conclusions-v1",
-            RealtimeSimulationScorer.score(evidence, scorePolicy, radio.events),
+                ?: if (variant == "recovery") "realtime-recovery-conclusions-v3" else "realtime-interaction-conclusions-v2",
+            RealtimeSimulationScorer.score(evidence, scorePolicy, radio.events, profile?.business?.behaviorFeatureIds.orEmpty()),
             evidence,
         )
         publishResult(
@@ -807,6 +808,12 @@ class RealtimeSimulationEngine(private val context: Context) {
         const val LOADED_ECHO_IDLE_GAP_MS = 50L
     }
 }
+
+/** 没有收到 ready 是连接/任务失败证据，不等于节点回显了错误合同。 */
+internal fun realtimeContractInvalidReason(contractVersion: String?): String? =
+    contractVersion
+        ?.takeUnless { it == "aneb-realtime-session-v1" }
+        ?.let { "node_contract_mismatch" }
 
 internal fun nextRealtimeRecoveryStartNanos(
     controlledPairing: Boolean,

@@ -146,8 +146,8 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(10.dp))
         val presets = listOf(
-            ServerPreset("sslip.io（默认，自动旁路）", ProbeSettings.DEFAULT_SERVER_URL),
-            ServerPreset("bare-IP（运营商 SNI 旁路）", "https://120.79.148.0:8443"),
+            ServerPreset("bare-IP（默认主通道）", ProbeSettings.DEFAULT_SERVER_URL),
+            ServerPreset("sslip.io（SNI 可达性对照）", ProbeSettings.LEGACY_SNI_SERVER_URL),
         )
         GroupedCard {
             presets.forEachIndexed { i, p ->

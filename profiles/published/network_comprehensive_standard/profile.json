@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "network_comprehensive_standard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "mode_id": "network_comprehensive",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node",
@@ -25,7 +25,7 @@
     "target_set_id": "network-comprehensive-targets-v1",
     "score_policy_id": "network-comprehensive-score-v1",
     "score_anchor_policy_id": "compliance-anchors-v1",
-    "conclusion_policy_id": "network-comprehensive-conclusions-v1",
+    "conclusion_policy_id": "network-comprehensive-conclusions-v2",
     "required_metric_ids": ["NET-B01", "NET-B02", "NET-B03", "NET-B04", "NET-B05", "NET-B06", "NET-B07", "NET-B09", "NET-B10", "NET-B12"],
     "guardrail_metric_ids": ["NET-B09", "NET-B10"],
     "group_weights": {"responsiveness": 0.30, "capacity": 0.35, "stability": 0.35},

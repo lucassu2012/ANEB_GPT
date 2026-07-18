@@ -179,7 +179,7 @@ object ProfileCapability {
         if (profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION) {
             val stress = profile.evidenceTier == "stress"
             val expectedScorePolicy = if (stress) "token-stress-score-v1" else "token-sim-score-v1"
-            val expectedConclusionPolicy = if (stress) "token-stress-conclusions-v1" else "token-sim-conclusions-v1"
+            val expectedConclusionPolicy = if (stress) "token-stress-conclusions-v2" else "token-sim-conclusions-v2"
             if (profile.evaluation.scorePolicyId != expectedScorePolicy) add("Token 评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("Token 评分锚点策略未被当前引擎识别")
             if (profile.evaluation.conclusionPolicyId != expectedConclusionPolicy) add("Token 结论策略未被当前引擎识别")
@@ -203,8 +203,8 @@ object ProfileCapability {
         }
         if (profile.modeId == ScenarioProfile.MODE_AI_REALTIME_SIMULATION) {
             val realtimePolicies = mapOf(
-                "realtime-interaction-score-v1" to "realtime-interaction-conclusions-v1",
-                "realtime-recovery-score-v2" to "realtime-recovery-conclusions-v2",
+                "realtime-interaction-score-v1" to "realtime-interaction-conclusions-v2",
+                "realtime-recovery-score-v2" to "realtime-recovery-conclusions-v3",
             )
             if (profile.evaluation.scorePolicyId !in realtimePolicies) add("实时交互评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("实时交互评分锚点策略未被当前引擎识别")
@@ -239,10 +239,10 @@ object ProfileCapability {
                 else -> "network-comprehensive-score-v1"
             }
             val expectedConclusionPolicy = when {
-                gatewayRecovery -> "network-gateway-recovery-conclusions-v2"
-                gatewayLoss -> "network-gateway-conclusions-v1"
-                syntheticRecovery -> "network-recovery-conclusions-v1"
-                else -> "network-comprehensive-conclusions-v1"
+                gatewayRecovery -> "network-gateway-recovery-conclusions-v3"
+                gatewayLoss -> "network-gateway-conclusions-v2"
+                syntheticRecovery -> "network-recovery-conclusions-v2"
+                else -> "network-comprehensive-conclusions-v2"
             }
             if (profile.evaluation.scorePolicyId != expectedScorePolicy) add("网络综合评分策略未被当前引擎识别")
             if (profile.evaluation.scoreAnchorPolicyId != "compliance-anchors-v1") add("网络综合评分锚点策略未被当前引擎识别")

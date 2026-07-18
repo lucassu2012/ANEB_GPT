@@ -44,7 +44,7 @@
   "profile_export": {
     "contract_version": "aneb-profile-v2",
     "profile_id": "token_multimodal_stress",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "mode_id": "token_simulation",
     "execution_target": "aneb_probe_simulator",
     "claim_scope": "application_end_to_end_to_probe_node",
@@ -67,7 +67,7 @@
       "target_set_id": "token-stress-targets-v1",
       "score_policy_id": "token-stress-score-v1",
       "score_anchor_policy_id": "compliance-anchors-v1",
-      "conclusion_policy_id": "token-stress-conclusions-v1",
+      "conclusion_policy_id": "token-stress-conclusions-v2",
       "required_metric_ids": ["TOK-B01", "TOK-B02", "TOK-B11", "TOK-N05", "TOK-N06", "TOK-N07", "TOK-N08", "TOK-N09"],
       "guardrail_metric_ids": ["TOK-B01", "TOK-B11"],
       "group_weights": {"task_completion": 0.2, "uplink_capacity": 0.3, "downlink_capacity": 0.25, "loaded_responsiveness": 0.25},

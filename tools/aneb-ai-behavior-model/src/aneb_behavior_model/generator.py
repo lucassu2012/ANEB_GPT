@@ -188,7 +188,7 @@ def derive_realtime_runtime_variant(
         plan["sessions"] = selected_sessions
         plan["session_count"] = len(selected_sessions)
         profile["profile_id"] = "ai_realtime_voice_recovery"
-        profile["version"] = "1.2.0"
+        profile["version"] = "1.3.0"
         profile["claim_scope"] = "controlled_server_disconnect_recovery_to_probe_node"
         business = profile.setdefault("business", {})
         business["label"] = "AI 实时语音受控恢复"
@@ -198,7 +198,7 @@ def derive_realtime_runtime_variant(
         evaluation = profile.setdefault("evaluation", {})
         evaluation["target_set_id"] = "realtime-recovery-targets-v1"
         evaluation["score_policy_id"] = "realtime-recovery-score-v2"
-        evaluation["conclusion_policy_id"] = "realtime-recovery-conclusions-v2"
+        evaluation["conclusion_policy_id"] = "realtime-recovery-conclusions-v3"
         evaluation["required_metric_ids"] = ["LIVE-B05", "LIVE-B09", "LIVE-B11", "LIVE-N02"]
         evaluation["guardrail_metric_ids"] = ["LIVE-B11"]
         evaluation["group_weights"] = {"recovery_path": 0.65, "recovered_quality": 0.35}

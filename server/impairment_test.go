@@ -62,7 +62,7 @@ func TestSyntheticRecoveryOutageIsRunScopedAndNormalPathIsUnaffected(t *testing.
 	if trigger.StatusCode != http.StatusAccepted {
 		t.Fatalf("trigger status=%d", trigger.StatusCode)
 	}
-	if got := trigger.Header.Get(syntheticImpairmentHeader); got != "network_comprehensive_weak_recovery@1.0.0" {
+	if got := trigger.Header.Get(syntheticImpairmentHeader); got != "network_comprehensive_weak_recovery@1.1.0" {
 		t.Fatalf("trigger ack=%q", got)
 	}
 	if got := trigger.Header.Get(syntheticOutageDurationHeader); got != "2000" {
@@ -184,7 +184,7 @@ func TestSyntheticEchoRequiresContractAndAcknowledgesPolicy(t *testing.T) {
 	if elapsed := time.Since(started); elapsed < 85*time.Millisecond {
 		t.Fatalf("synthetic echo returned without declared delay: %v", elapsed)
 	}
-	if got := resp.Header.Get(syntheticImpairmentHeader); got != "network_comprehensive_weak_capacity_latency@1.0.0" {
+	if got := resp.Header.Get(syntheticImpairmentHeader); got != "network_comprehensive_weak_capacity_latency@1.1.0" {
 		t.Fatalf("ack=%q", got)
 	}
 	if got := resp.Header.Get(syntheticParametersHeader); got != "dl=3;ul=1;rtt=120;jitter=30" {

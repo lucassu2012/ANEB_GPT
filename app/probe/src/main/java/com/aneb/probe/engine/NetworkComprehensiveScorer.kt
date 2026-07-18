@@ -71,12 +71,14 @@ data class NetworkComprehensiveScoreResult(
     val confidence: TokenConfidence,
     val groupScores: Map<String, Double>,
     val metrics: Map<String, NetworkMetricEvidence>,
-    val conclusions: List<String>,
+    val conclusionItems: List<AnebConclusionItem>,
     val confidenceMethodId: String = "network-sample-coverage-v1",
     val coverageRatio: Double? = null,
     val minimumSampleSatisfied: Boolean? = null,
     val notComputableReason: String? = null,
-)
+) {
+    val conclusions: List<String> get() = conclusionItems.map(AnebConclusionItem::text)
+}
 
 /** D-37 冻结的网络综合独立评分；不与 Token、实时交互或旧 AQS 混分。 */
 object NetworkComprehensiveScorer {
@@ -86,11 +88,14 @@ object NetworkComprehensiveScorer {
         "NET-B10" to 100, "NET-B12" to 3,
     )
 
-    fun score(evidence: NetworkComprehensiveEvidence): NetworkComprehensiveScoreResult {
+    fun score(
+        evidence: NetworkComprehensiveEvidence,
+        behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds(evidence.variant),
+    ): NetworkComprehensiveScoreResult {
         if (evidence.invalidReason != null) {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID, emptyMap(), emptyMap(),
-                listOf("测试证据无效：${evidence.invalidReason}；原始证据保留，评分被抑制。"),
+                listOf(AnebConclusionItem("network-invalid-evidence", AnebConclusionSeverity.FAILURE, "测试证据无效：${evidence.invalidReason}；原始证据保留，评分被抑制。", listOf("evidence:network-raw", "invalid_reason"))),
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
                 notComputableReason = "invalid_run:${evidence.invalidReason}",
@@ -168,7 +173,7 @@ object NetworkComprehensiveScorer {
         if (missing.isNotEmpty()) {
             return NetworkComprehensiveScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics,
-                conclusions(evidence, metrics, TokenVerdict.INCONCLUSIVE, confidence, missing),
+                conclusions(evidence, metrics, TokenVerdict.INCONCLUSIVE, confidence, missing, behaviorFeatureIds),
                 coverageRatio = coverageRatio,
                 minimumSampleSatisfied = minimumSampleSatisfied,
                 notComputableReason = "missing_required_metrics:${missing.joinToString(",")}",
@@ -205,7 +210,7 @@ object NetworkComprehensiveScorer {
             confidence = confidence,
             groupScores = groups.mapValues { round1(it.value) },
             metrics = metrics,
-            conclusions = conclusions(evidence, metrics, verdict, confidence, emptyList()),
+            conclusionItems = conclusions(evidence, metrics, verdict, confidence, emptyList(), behaviorFeatureIds),
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -217,44 +222,87 @@ object NetworkComprehensiveScorer {
         verdict: TokenVerdict,
         confidence: TokenConfidence,
         missing: List<String>,
-    ) = buildList {
-        add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
+        behaviorFeatureIds: List<String>,
+    ): List<AnebConclusionItem> = buildList {
+        add(AnebConclusionItem("network-verdict", verdictSeverity(verdict), "结论：${verdict.name}；证据置信度 ${confidence.name}。", listOf("score:verdict", "score:confidence")))
+        add(
+            AnebConclusionItem(
+                "network-task-completion",
+                if (evidence.appRequestAttempts > 0 && evidence.appRequestSuccesses == evidence.appRequestAttempts) AnebConclusionSeverity.INFO else AnebConclusionSeverity.FAILURE,
+                "应用请求完成 ${evidence.appRequestSuccesses}/${evidence.appRequestAttempts}；下载窗口 ${evidence.downloadWindowsMbps.size} 个、上传窗口 ${evidence.uploadWindowsMbps.size} 个。",
+                listOf("metric:NET-B09", "evidence:network-raw"),
+            ),
+        )
+        add(AnebConclusionItem("network-behavior-profile", AnebConclusionSeverity.INFO, AnebBehaviorFeatureCatalogV1.sentence(behaviorFeatureIds, defaultBehaviorFeatureIds(evidence.variant)), listOf(if (behaviorFeatureIds.isEmpty()) "policy:behavior-feature-catalog-v1" else "profile:business.behavior_feature_ids")))
         evidence.syntheticImpairment?.let { synthetic ->
             add(
-                "本次为服务器确认的合成弱网：下行 ${synthetic.downlinkMbps.toDisplay()}Mbps、" +
-                    "上行 ${synthetic.uplinkMbps.toDisplay()}Mbps、应用请求附加 RTT " +
-                    "${synthetic.addedRttMs}±${synthetic.jitterMs}ms" +
-                    (synthetic.outageDurationMs.takeIf { it > 0 }?.let { "、应用请求中断 ${it}ms。" } ?: "。"),
+                AnebConclusionItem(
+                    "network-synthetic-impairment-scope",
+                    AnebConclusionSeverity.INFO,
+                    "本次为服务器确认的合成弱网：下行 ${synthetic.downlinkMbps.toDisplay()}Mbps、" +
+                        "上行 ${synthetic.uplinkMbps.toDisplay()}Mbps、应用请求附加 RTT " +
+                        "${synthetic.addedRttMs}±${synthetic.jitterMs}ms" +
+                        (synthetic.outageDurationMs.takeIf { it > 0 }?.let { "、应用请求中断 ${it}ms。" } ?: "。"),
+                    listOf("evidence:network-raw", "profile:synthetic_impairment"),
+                ),
             )
             add(
-                "未模拟 ${synthetic.excludedFromShaping.joinToString("、")}；" +
-                    "真实 RSRP/SINR 与 UDP 指标仅作现场协变量，不代表受控无线弱网。",
+                AnebConclusionItem(
+                    "network-synthetic-claim-limit",
+                    AnebConclusionSeverity.WARNING,
+                    "未模拟 ${synthetic.excludedFromShaping.joinToString("、")}；" +
+                        "真实 RSRP/SINR 与 UDP 指标仅作现场协变量，不代表受控无线弱网。",
+                    listOf("profile:synthetic_impairment.excluded_from_shaping", "evidence:radio"),
+                ),
             )
         }
         evidence.gatewayImpairment?.let { gateway ->
             add(
-                "本次为专用网关确认的 IP 转发层弱网：下行 ${gateway.downlink.rateMbps.toDisplay()}Mbps、" +
-                    "上行 ${gateway.uplink.rateMbps.toDisplay()}Mbps、双向单程附加时延 " +
-                    "${gateway.downlink.delayMs}/${gateway.uplink.delayMs}ms、丢包 " +
-                    "${gateway.downlink.lossPct.toDisplay()}%/${gateway.uplink.lossPct.toDisplay()}%。",
+                AnebConclusionItem(
+                    "network-gateway-impairment-scope",
+                    AnebConclusionSeverity.INFO,
+                    "本次为专用网关确认的 IP 转发层弱网：下行 ${gateway.downlink.rateMbps.toDisplay()}Mbps、" +
+                        "上行 ${gateway.uplink.rateMbps.toDisplay()}Mbps、双向单程附加时延 " +
+                        "${gateway.downlink.delayMs}/${gateway.uplink.delayMs}ms、丢包 " +
+                        "${gateway.downlink.lossPct.toDisplay()}%/${gateway.uplink.lossPct.toDisplay()}%。",
+                    listOf("evidence:network-raw", "profile:gateway_impairment"),
+                ),
             )
             add(
-                "网关实验与清理均有回执；未改变 ${gateway.excludedFromImpairment.joinToString("、")}，" +
-                    "因此不得把本结果解释为真实无线信号或基站调度变化。",
+                AnebConclusionItem(
+                    "network-gateway-claim-limit",
+                    AnebConclusionSeverity.WARNING,
+                    "网关实验与清理均有回执；未改变 ${gateway.excludedFromImpairment.joinToString("、")}，" +
+                        "因此不得把本结果解释为真实无线信号或基站调度变化。",
+                    listOf("evidence:network-raw", "profile:gateway_impairment.excluded_from_impairment"),
+                ),
             )
         }
-        if (evidence.variant == "quick") add("快测样本不足以证明 95% 长期稳定性，只允许方向性判断。")
-        if (missing.isNotEmpty()) add("必需指标缺失：${missing.joinToString()}；本次总分不可计算。")
+        if (evidence.variant == "quick") add(AnebConclusionItem("network-quick-evidence-limit", AnebConclusionSeverity.WARNING, "快测样本不足以证明 95% 长期稳定性，只允许方向性判断。", listOf("profile:evidence_tier", "evidence:network-raw")))
+        if (missing.isNotEmpty()) add(AnebConclusionItem("network-missing-required-metrics", AnebConclusionSeverity.WARNING, "必需指标缺失：${missing.joinToString()}；本次总分不可计算。", missing.map { "metric:$it" }))
         if (evidence.udpUnavailableReason != null) {
-            add("UDP 应用探针不可达（${evidence.udpUnavailableReason}），未把零回包伪装成精确 IP 丢包率。")
+            add(AnebConclusionItem("network-udp-unavailable", AnebConclusionSeverity.WARNING, "UDP 应用探针不可达（${evidence.udpUnavailableReason}），未把零回包伪装成精确 IP 丢包率。", listOf("metric:NET-B10", "evidence:network-raw")))
         }
         fun pct(id: String) = metrics[id]?.complianceRatio?.let { "%.1f%%".format(it * 100.0) } ?: "不可用"
-        add("下载 ≥25Mbps 达标比例 ${pct("NET-B01")}；上传 ≥10Mbps 达标比例 ${pct("NET-B02")}。")
-        add("空闲 RTT ≤100ms 达标比例 ${pct("NET-B03")}；负载 RTT ≤200ms 达标比例 ${pct("NET-B04")}。")
-        add("该路径需要持续上下行容量、负载下低时延与长期稳定性；峰值带宽不能替代负载响应性。")
+        add(AnebConclusionItem("network-target-capacity", combinedSeverity(metrics, "NET-B01", "NET-B02"), "下载 ≥25Mbps 达标比例 ${pct("NET-B01")}；上传 ≥10Mbps 达标比例 ${pct("NET-B02")}。", listOf("metric:NET-B01", "metric:NET-B02")))
+        add(AnebConclusionItem("network-target-latency", combinedSeverity(metrics, "NET-B03", "NET-B04"), "空闲 RTT ≤100ms 达标比例 ${pct("NET-B03")}；负载 RTT ≤200ms 达标比例 ${pct("NET-B04")}。", listOf("metric:NET-B03", "metric:NET-B04")))
         metrics.values.filter { it.score != null }.minByOrNull { it.score!! }?.let {
-            add("本次主要瓶颈：${it.metricId}，达标比例 ${"%.1f%%".format((it.complianceRatio ?: 0.0) * 100.0)}。")
+            add(AnebConclusionItem("network-primary-bottleneck", AnebConclusionSeverity.RECOMMENDATION, "本次主要瓶颈：${it.metricId}，达标比例 ${"%.1f%%".format((it.complianceRatio ?: 0.0) * 100.0)}；优先改善该指标。", listOf("metric:${it.metricId}")))
         }
+    }
+
+    private fun combinedSeverity(metrics: Map<String, NetworkMetricEvidence>, vararg ids: String): AnebConclusionSeverity = when {
+        ids.any { metrics[it]?.complianceRatio == null } -> AnebConclusionSeverity.WARNING
+        ids.any { (metrics[it]?.complianceRatio ?: 0.0) + 1e-12 < 0.95 } -> AnebConclusionSeverity.RECOMMENDATION
+        else -> AnebConclusionSeverity.INFO
+    }
+
+    private fun defaultBehaviorFeatureIds(variant: String): List<String> = when (variant) {
+        "weak_capacity_latency" -> listOf("constrained_downlink", "constrained_uplink", "added_application_rtt", "loaded_responsiveness")
+        "weak_recovery" -> listOf("constrained_capacity", "added_application_rtt", "single_request_blackout", "post_recovery_stability")
+        "gateway_loss" -> listOf("constrained_downlink", "constrained_uplink", "ip_layer_loss", "loaded_responsiveness")
+        "gateway_recovery" -> listOf("ip_forwarding_blackout", "low_latency_recovery", "post_recovery_stability")
+        else -> listOf("sustained_downlink", "sustained_uplink", "loaded_responsiveness", "path_stability")
     }
 
     private fun handshakePass(value: NetworkHandshakeEvidence): Boolean {

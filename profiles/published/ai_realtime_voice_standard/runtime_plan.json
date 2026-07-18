@@ -2,7 +2,7 @@
   "contract_version": "aneb-realtime-runtime-plan-v1",
   "model_id": "ai-realtime-voice-behavior-v0.2",
   "model_version": "0.2.0",
-  "model_hash": "sha256:deba73cf120f1ea83af28fb4740e55aba6de53709ceb764a1a2e33577bb31cd6",
+  "model_hash": "sha256:e7c945dbf65be0aa6850861f610bc339bf515a7438eae5d2a00fc6c50a04939f",
   "calibration_status": "hypothesis",
   "seed": 20260716,
   "session_count": 10,

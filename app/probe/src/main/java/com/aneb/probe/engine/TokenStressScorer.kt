@@ -32,12 +32,22 @@ object TokenStressScorer {
 
     private val allSpecs = specs + optionalSpecs
 
-    fun score(evidence: TokenRunEvidence): TokenScoreResult {
+    fun score(
+        evidence: TokenRunEvidence,
+        behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds,
+    ): TokenScoreResult {
         if (evidence.invalidReason != null) {
             return TokenScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
-                listOf("测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。"),
+                listOf(
+                    AnebConclusionItem(
+                        "token-stress-invalid-evidence",
+                        AnebConclusionSeverity.FAILURE,
+                        "测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。",
+                        listOf("evidence:token-raw", "invalid_reason"),
+                    ),
+                ),
                 confidenceMethodId = "token-stress-sample-coverage-v1",
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
@@ -117,7 +127,16 @@ object TokenStressScorer {
             return TokenScoreResult(
                 null, null, TokenVerdict.INCONCLUSIVE, TokenConfidence.LOW,
                 emptyMap(), metrics, null,
-                listOf("必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。"),
+                listOf(
+                    taskCompletionConclusion(evidence),
+                    AnebConclusionItem(
+                        "token-stress-missing-required-metrics",
+                        AnebConclusionSeverity.WARNING,
+                        "必需指标缺失：${missing.joinToString()}；按策略不重分权，本次总分不可计算。",
+                        missing.map { "metric:$it" },
+                    ),
+                    behaviorConclusion(behaviorFeatureIds),
+                ),
                 confidenceMethodId = "token-stress-sample-coverage-v1",
                 coverageRatio = coverageRatio,
                 minimumSampleSatisfied = minimumSampleSatisfied,
@@ -154,7 +173,7 @@ object TokenStressScorer {
             groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = conclusions(metrics, verdict, capReason),
+            conclusionItems = conclusions(evidence, metrics, verdict, capReason, behaviorFeatureIds),
             confidenceMethodId = "token-stress-sample-coverage-v1",
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
@@ -162,17 +181,58 @@ object TokenStressScorer {
     }
 
     private fun conclusions(
+        evidence: TokenRunEvidence,
         metrics: Map<String, TokenMetricEvidence>,
         verdict: TokenVerdict,
         capReason: String?,
-    ): List<String> = buildList {
-        add("结论：${verdict.name}；Stress 为单次方向性证据，置信度 LOW，不支持 95% 长期稳定性承诺。")
-        add("业务行为特征：100MiB 视频突发上行、仿真 Token 流和 100MiB 大对象下行，对容量及负载时延同时敏感。")
-        add("100MiB 上行有效速率 ${value("TOK-N06", metrics, "Mbps")}（建议 ≥20Mbps，并在重复测试中达到 95%）。")
-        add("100MiB 下行有效速率 ${value("TOK-N07", metrics, "Mbps")}（建议 ≥25Mbps，并在重复测试中达到 95%）。")
-        add("负载 RTT P95 ${value("TOK-N08", metrics, "ms")}；负载时延增量 ${value("TOK-N09", metrics, "ms")}（建议分别 ≤200ms/≤100ms）。")
-        if (capReason != null) add("评分封顶：$capReason，总分最高 54。")
+        behaviorFeatureIds: List<String>,
+    ): List<AnebConclusionItem> = buildList {
+        add(AnebConclusionItem("token-stress-verdict", verdictSeverity(verdict), "结论：${verdict.name}；Stress 为单次方向性证据，置信度 LOW，不支持 95% 长期稳定性承诺。", listOf("score:verdict", "score:confidence", "profile:evidence_tier")))
+        add(taskCompletionConclusion(evidence))
+        add(behaviorConclusion(behaviorFeatureIds))
+        add(AnebConclusionItem("token-stress-target-uplink", targetSeverity(metrics["TOK-N06"]), "100MiB 上行有效速率 ${value("TOK-N06", metrics, "Mbps")}（建议 ≥20Mbps，并在重复测试中达到 95%）。", listOf("metric:TOK-N06")))
+        add(AnebConclusionItem("token-stress-target-downlink", targetSeverity(metrics["TOK-N07"]), "100MiB 下行有效速率 ${value("TOK-N07", metrics, "Mbps")}（建议 ≥25Mbps，并在重复测试中达到 95%）。", listOf("metric:TOK-N07")))
+        add(AnebConclusionItem("token-stress-target-loaded-latency", if (listOf("TOK-N08", "TOK-N09").all { metrics[it]?.complianceRatio?.let { ratio -> ratio >= 0.95 } == true }) AnebConclusionSeverity.INFO else AnebConclusionSeverity.RECOMMENDATION, "负载 RTT P95 ${value("TOK-N08", metrics, "ms")}；负载时延增量 ${value("TOK-N09", metrics, "ms")}（建议分别 ≤200ms/≤100ms）。", listOf("metric:TOK-N08", "metric:TOK-N09")))
+        specs.keys.mapNotNull(metrics::get).filter { it.score != null }.minByOrNull { it.score!! }?.let { bottleneck ->
+            add(AnebConclusionItem("token-stress-primary-bottleneck", AnebConclusionSeverity.RECOMMENDATION, "本次主要瓶颈：${bottleneck.metricId}，达标比例 ${percent(bottleneck.complianceRatio)}；优先改善该指标。", listOf("metric:${bottleneck.metricId}")))
+        }
+        if (capReason != null) add(AnebConclusionItem("token-stress-score-cap", AnebConclusionSeverity.FAILURE, "评分封顶：$capReason，总分最高 54。", listOf("score:cap_reason")))
     }
+
+    private fun behaviorConclusion(featureIds: List<String>) = AnebConclusionItem(
+        "token-stress-behavior-profile",
+        AnebConclusionSeverity.INFO,
+        AnebBehaviorFeatureCatalogV1.sentence(featureIds, defaultBehaviorFeatureIds),
+        listOf(if (featureIds.isEmpty()) "policy:behavior-feature-catalog-v1" else "profile:business.behavior_feature_ids"),
+    )
+
+    private fun taskCompletionConclusion(evidence: TokenRunEvidence): AnebConclusionItem {
+        val videoTasks = evidence.tasks.filter { it.workloadKind == "video" }
+        val completed = videoTasks.count(TokenTaskEvidence::success)
+        val severity = when {
+            videoTasks.isEmpty() -> AnebConclusionSeverity.WARNING
+            completed == videoTasks.size -> AnebConclusionSeverity.INFO
+            else -> AnebConclusionSeverity.FAILURE
+        }
+        return AnebConclusionItem(
+            "token-stress-task-completion",
+            severity,
+            "100MiB 压力任务完成 $completed/${videoTasks.size}。",
+            listOf("metric:TOK-B01", "evidence:token-raw"),
+        )
+    }
+
+    private fun targetSeverity(metric: TokenMetricEvidence?): AnebConclusionSeverity = when {
+        metric?.complianceRatio == null -> AnebConclusionSeverity.WARNING
+        metric.complianceRatio + 1e-12 < metric.targetComplianceRatio -> AnebConclusionSeverity.RECOMMENDATION
+        else -> AnebConclusionSeverity.INFO
+    }
+
+    private fun percent(value: Double?): String = value?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) } ?: "不可用"
+
+    private val defaultBehaviorFeatureIds = listOf(
+        "very_large_uplink_burst", "large_downlink", "loaded_latency_sensitive", "stream_continuity",
+    )
 
     private fun value(id: String, metrics: Map<String, TokenMetricEvidence>, unit: String): String =
         metrics[id]?.value?.let { String.format(Locale.ROOT, "%.1f%s", it, unit) } ?: "不可用"

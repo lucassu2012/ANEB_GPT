@@ -43,7 +43,7 @@ type syntheticImpairmentPolicy struct {
 var weakRecoveryPolicy = syntheticImpairmentPolicy{
 	ContractVersion:  "aneb-synthetic-impairment-v1",
 	ProfileID:        "network_comprehensive_weak_recovery",
-	Version:          "1.0.0",
+	Version:          "1.1.0",
 	RouteID:          "weak-recovery-v1",
 	DownlinkMbps:     5,
 	UplinkMbps:       2,
@@ -57,7 +57,7 @@ var weakRecoveryPolicy = syntheticImpairmentPolicy{
 var weakCapacityLatencyPolicy = syntheticImpairmentPolicy{
 	ContractVersion: "aneb-synthetic-impairment-v1",
 	ProfileID:       "network_comprehensive_weak_capacity_latency",
-	Version:         "1.0.0",
+	Version:         "1.1.0",
 	RouteID:         "weak-capacity-latency-v1",
 	DownlinkMbps:    3,
 	UplinkMbps:      1,
