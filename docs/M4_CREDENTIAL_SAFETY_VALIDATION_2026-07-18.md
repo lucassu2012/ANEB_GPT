@@ -26,9 +26,9 @@
 - 首次扫描发现既有 `KeyRedactionTest.kt` 含完整形状的合成 Anthropic Key；它不是已知真实凭据，但已改为运行时拼接，未增加白名单。
 - 新文件进入 Git 跟踪范围后，本地扫描 571 个文件，结果 PASS；聊天中披露的真实 GitHub Token 未进入工作区文件。
 - 初版完整门禁后，暂存区反例暴露并修复；修复版完整本地质量门再次通过：551 项 Android JVM 测试、Lint、Release 边界、工作区 + 6 个暂存路径双扫描、候选打包、Schema/catalog、26 项脚本测试、31 项行为模型测试及 Go 服务/网关全部成功。
+- ［KNOWN｜HIGH］source commit `51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2` 的 GitHub Actions run [`29635434193`](https://github.com/lucassu2012/ANEB_GPT/actions/runs/29635434193) 已完成真实云端验证：`Tracked-source credential scan` 成功，Android 候选 job 在其后成功，六个 job 全部成功。
 
 ## 4. 剩余边界
 
 - ［KNOWN｜HIGH］扫描 PASS 不证明 Git 历史、聊天、截图或供应商日志从未含密钥，也不能让已经披露的凭据恢复安全。
 - ［KNOWN｜HIGH］实际披露后的必要动作仍是：撤销旧 Token、创建最小权限替代、检查 GitHub audit/security log；新 Token 不得再次发送到聊天。
-- ［KNOWN｜HIGH］新增云端 security job 尚待下一次真实 GitHub Actions run 验证；本地通过不冒充云端通过。

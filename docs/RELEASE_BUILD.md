@@ -47,11 +47,11 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
 - Debug APK SHA-256: `82A1A3C45A3ECD5C695417F65BFCF67311C94A571467EFB2E79525C8EBE5BB1F` (`0.5.10-codex`; 61,850,452 bytes; Android Debug certificate SHA-256 `6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`; debug artifacts are not release evidence).
 - Quality baseline: 551 JVM tests in 90 suites, 0 failures/0 errors/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); 12 measurement/result tests, 8 candidate-packaging tests, 6 credential-safety tests, behavior model 31 tests and Go server/gateway tests pass. Profile catalog 1.3.1 contains 8 schemas, 2 families, 16 profiles, 6 hash-bound runtime bundles, 6 embedded-network profiles and 4 behavior models.
-- Device validation: the directly preceding 0.5.9 P40 cellular AI realtime Quick candidate, run `019f7377-9a61-7db5-a8c4-1ac57de1a486`, completed 3/3 turns with 99.8/A and `LOW/INCONCLUSIVE`; its downloaded strict-v2 JSONL passed Schema/identity/digest validation with SHA-256 `FE964695E19997796F5FEB84E05F50FB69F61F2C6299FA0C577263E5198F7EA9`. The exact 0.5.10 binary above adds fail-closed MediaStore cleanup and has passed automated lifecycle fault injection, but has not yet been installed on the shared P40 because Experience Lab has not explicitly released the device. This boundary is intentional; 0.5.9 evidence is not presented as 0.5.10 device evidence. Neither artifact is signed release evidence.
+- Device validation: the exact cloud Debug candidate SHA-256 `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85` was installed on the P40 as `0.5.10-codex` / versionCode 42. Because its Debug signer differed from the previous package, validation used a controlled backup-uninstall-install-restore flow rather than an in-place Android upgrade; the Room schema remained v19, integrity check was OK, and 36 `result_envelope` / 10 `test_run` rows were preserved. Secure preferences/API keys were intentionally not restored. The mixed export contained 32 verified documents (v1=27, v2=5; 32 unique run IDs, no duplicates) and transparently rejected four integrity failures; the single v2 export for run `019f7377-9a61-7db5-a8c4-1ac57de1a486` matched the batch row byte-for-byte. Both MediaStore rows had `is_pending=0`. This is controlled Debug evidence, not signed Release or non-ADB installation evidence.
 
 ## Cloud Debug candidate
 
-Pushes to `main` and `codex/**` run the full cloud gate before an installable candidate is exposed. The Android candidate job waits for Profile/result/packaging contracts, Go server, dedicated gateway and behavior-model jobs; it then runs Android tests/Lint/build, verifies the Debug/Release component boundary, and packages the exact APK with:
+Pushes to `main` and `codex/**` run the full cloud gate before an installable candidate is exposed. The Android candidate job waits for the tracked-source credential scan, Profile/result/packaging contracts, Go server, dedicated gateway and behavior-model jobs; it then runs Android tests/Lint/build, verifies the Debug/Release component boundary, and packages the exact APK with:
 
 - `build-manifest.json`: package, version, SDK, signer, file size, SHA-256 and source workflow identity;
 - `checksums.sha256`: APK, manifest and Chinese install instructions;
@@ -61,10 +61,12 @@ Non-PR builds also create a GitHub artifact provenance attestation. The download
 
 Verified cloud example (2026-07-18):
 
-- Workflow run: [`29633753923`](https://github.com/lucassu2012/ANEB_GPT/actions/runs/29633753923), source `2dada77485891e117e448f58fa95020584c9d342`.
-- Artifact ID/name: `8426436270` / `aneb-probe-debug-2dada77485891e117e448f58fa95020584c9d342`; expires `2026-08-17T06:26:44Z`.
-- Cloud APK: 58,053,434 bytes; SHA-256 `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`; package `com.aneb.probe.codex`; `versionCode=42`; `versionName=0.5.10-codex`; Android Debug signer SHA-256 `8909F1E107AE2C74D6BE8711AEB249E8E9A4D8F8D6D7B6A8D941A65BD55A7D6E`.
-- Provenance: GitHub attestation [`35942948`](https://github.com/lucassu2012/ANEB_GPT/attestations/35942948), Rekor index `2193564202`; the public bundle passed offline `gh attestation verify` with repository, workflow, source commit/ref, GitHub-hosted runner, and subject digest pinned.
+- Workflow run: [`29635434193`](https://github.com/lucassu2012/ANEB_GPT/actions/runs/29635434193), source `51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2`; all six jobs passed, including `Tracked-source credential scan`.
+- Artifact ID/name: `8427011992` / `aneb-probe-debug-51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2`; 24,842,612 bytes; expires `2026-08-17T07:24:33Z`.
+- Artifact ZIP digest: `sha256:ffef2b3f0c3177e3ac81794b3d7ced536eee3afae71f5927e6a43fd6db3cccb0`.
+- Cloud APK: SHA-256 `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85`; package `com.aneb.probe.codex`; `versionCode=42`; `versionName=0.5.10-codex`; Android Debug signing identity verified.
+- Provenance: GitHub attestation [`35945988`](https://github.com/lucassu2012/ANEB_GPT/attestations/35945988), Rekor index `2193995642`; the public bundle passed offline `gh attestation verify` with repository, workflow, source commit/ref, GitHub-hosted runner, and subject digest pinned.
 - The external fixed-CA gateway TLS/netem namespace test was not executed because the leaf certificate/key secrets were not configured. Gateway control-plane, race, and Linux-build gates did pass.
 
 The cloud and local Debug APK hashes/signers intentionally differ because clean GitHub runners use a separate ephemeral Debug keystore. Never substitute either Debug fingerprint for the Product Owner's release-key fingerprint.
+The P40 validation used the controlled development/ADB path and therefore does not establish the non-ADB end-user installation journey.

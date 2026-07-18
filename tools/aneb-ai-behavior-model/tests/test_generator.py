@@ -103,6 +103,26 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(plan["task_count"], 3)
         self.assertEqual({task["workload_kind"] for task in plan["tasks"]}, {"text", "document", "image"})
         self.assertEqual(profile["profile_id"], "token_multimodal_quick")
+        self.assertEqual(profile["version"], "1.2.0")
+        requirements = profile["execution_requirements"]
+        self.assertEqual(requirements["contract_id"], "aneb-execution-requirements")
+        self.assertEqual(requirements["contract_version"], "1.0.0")
+        self.assertEqual(
+            requirements["client_engine"],
+            {
+                "contract_id": "aneb-token-simulation-engine",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+        )
+        self.assertEqual(
+            requirements["server_capability_receipt"]["contract_id"],
+            "aneb-server-capability-receipt",
+        )
+        self.assertEqual(
+            {item["primitive_id"]: item["wire_contract_id"] for item in requirements["required_primitives"]},
+            {"echo": "aneb-echo-v1", "token_sim": "aneb-token-task-v1", "download": "aneb-download-v1"},
+        )
         self.assertEqual(profile["evidence_tier"], "quick")
         self.assertEqual(profile["execution_plan"]["variant"], "quick")
         self.assertLess(profile["est_duration_s"], 240)

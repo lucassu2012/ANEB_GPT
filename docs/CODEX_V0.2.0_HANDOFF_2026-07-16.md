@@ -104,7 +104,9 @@ cd app
 - Token 实时遥测：`LiveTelemetry.kt`；Token 结论：`OutcomeConclusions.kt`。
 - UI 视觉组件：`ui/components/AnebVisualKit.kt`、`SpeedTestComponents.kt`。
 - 数据库：`data/AnebDatabase.kt`、`Entities.kt`、`Daos.kt`；每次 schema 变化必须新增 migration 并导出 schema。
-- E-01 部署：`scripts/deploy_server.ps1`；部署后必须验证 `/api/v1/profiles`、`/api/v1/echo` 和 `/api/v1/download`。
+- E-01 部署：先由主编排器用全新 128-bit lease 自动 claim，再执行
+  `scripts/deploy_server.ps1 -LeaseId <本次 lease>`；部署脚本只读断言 lease，不会提前 handoff。
+  部署后必须验证 `/api/v1/profiles`、`/api/v1/echo` 和 `/api/v1/download`，并继续完成 P40 验收和清理。
 - 关键产品与测量决定：`docs/DECISION_LOG.md`。
 
 ## 7. 后续版本而非 0.2.0 缺陷
@@ -114,4 +116,3 @@ cd app
 - E-03 真实 LLM API key，用于供应商 API 对照；主线仿真测试不依赖它。
 - E-04 海外独立节点，用于跨境真实路径对照。
 - VpnService 封闭 App 流量观测仍按 D-24 暂不实施，未经 Product Owner 新裁定不进入开发。
-

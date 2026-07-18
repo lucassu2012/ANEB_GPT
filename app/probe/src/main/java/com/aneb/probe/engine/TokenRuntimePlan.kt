@@ -74,17 +74,21 @@ class TokenRuntimeRepository(private val context: Context) {
         val base = "published/token_multimodal_$variant"
         val profileText = context.assets.open("$base/profile.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val planText = context.assets.open("$base/runtime_plan.json").use { it.readBytes().toString(Charsets.UTF_8) }
+        val manifestText = context.assets.open("$base/manifest.sha256")
+            .use { it.readBytes().toString(Charsets.UTF_8) }
+        val manifest = TokenRuntimeManifestIntegrity.verify(manifestText, profileText, planText)
+
         val profile = ProfileParser.parseSingle(profileText)
         val capability = ProfileCapability.assess(profile)
         require(capability.executable) {
             "token_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}"
         }
         val execution = requireNotNull(profile.executionPlan) { "token_execution_plan_missing" }
-        val profileHash = TokenRuntimeIntegrity.canonicalSha256(profileText)
-        val actualHash = TokenRuntimeIntegrity.canonicalSha256(planText)
+        val profileHash = manifest.profileSha256
+        val actualHash = manifest.runtimePlanSha256
         require(actualHash == execution.artifactHash) { "token_runtime_hash_mismatch" }
         val plan = json.decodeFromString(TokenRuntimePlan.serializer(), planText)
-        validateBinding(profile, plan)
+        TokenRuntimeBinding.validate(profile, plan, variant)
         LoadedTokenRuntime(
             profile = profile,
             plan = plan,
@@ -93,25 +97,6 @@ class TokenRuntimeRepository(private val context: Context) {
             profileAssetUri = "asset:///$base/profile.json",
             runtimeAssetUri = "asset:///$base/runtime_plan.json",
         )
-    }
-
-    private fun validateBinding(profile: ScenarioProfile, plan: TokenRuntimePlan) {
-        val execution = requireNotNull(profile.executionPlan)
-        require(plan.contractVersion == execution.contractVersion) { "token_runtime_contract_mismatch" }
-        require(plan.modelId == profile.business.behaviorModelId) { "token_runtime_model_id_mismatch" }
-        require(plan.modelVersion == profile.business.behaviorModelVersion) { "token_runtime_model_version_mismatch" }
-        require(plan.modelHash == profile.business.behaviorModelHash) { "token_runtime_model_hash_mismatch" }
-        require(plan.calibrationStatus == profile.business.calibrationStatus) { "token_runtime_calibration_mismatch" }
-        require(plan.seed == execution.seed && plan.variant == execution.variant) { "token_runtime_seed_or_variant_mismatch" }
-        require(plan.taskCount == plan.tasks.size && plan.tasks.isNotEmpty()) { "token_runtime_task_count_invalid" }
-        plan.tasks.forEach { task ->
-            require(task.taskId.isNotBlank() && task.workloadKind in setOf("text", "document", "image", "video")) { "token_runtime_task_identity_invalid" }
-            require(task.upload.payloadBytes > 0 && task.upload.chunkBytes > 0) { "token_runtime_upload_invalid" }
-            require(task.tokenStream.intervalsMs.isNotEmpty()) { "token_runtime_stream_empty" }
-            require(task.tokenStream.intervalsMs.size == task.tokenStream.sizesBytes.size) { "token_runtime_stream_length_mismatch" }
-            require(task.tokenStream.intervalsMs.first() == 0.0) { "token_runtime_first_interval_not_zero" }
-            require(task.tokenStream.intervalsMs.all { it >= 0.0 } && task.tokenStream.sizesBytes.all { it > 0 }) { "token_runtime_stream_value_invalid" }
-        }
     }
 
 }

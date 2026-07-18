@@ -34,6 +34,10 @@ type serverInfo struct {
 	//   这里只如实上报读数，是否达标由客户端/离线分析比对基线。
 	TCPSlowStartAfterIdle string `json:"tcp_slow_start_after_idle"`
 	CongestionControl     string `json:"congestion_control"`
+
+	// ExecutionCapabilities binds machine-readable primitives to exact, manifest-
+	// verified published Profiles. Clients must still compare the exact Profile hash.
+	ExecutionCapabilities serverCapabilityReceipt `json:"execution_capabilities"`
 }
 
 // readProcValue 读取单值 /proc 文件并去空白；任何失败返回 "n/a"。
@@ -59,6 +63,10 @@ func (a *app) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := nowMicros()
+	capabilities := a.executionCapabilities
+	if capabilities.ContractID == "" {
+		capabilities = baseServerCapabilityReceipt()
+	}
 	info := serverInfo{
 		Version:               serverVersion,
 		SrvTsUs:               now,
@@ -69,6 +77,7 @@ func (a *app) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		H3Enabled:             a.h3Enabled,
 		TCPSlowStartAfterIdle: readProcValue("/proc/sys/net/ipv4/tcp_slow_start_after_idle"),
 		CongestionControl:     readProcValue("/proc/sys/net/ipv4/tcp_congestion_control"),
+		ExecutionCapabilities: capabilities,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

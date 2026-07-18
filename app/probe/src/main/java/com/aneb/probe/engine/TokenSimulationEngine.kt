@@ -193,6 +193,14 @@ class TokenSimulationEngine(private val context: Context) {
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
             }
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
+            val tokenTraffic = TokenExecutionContractGate.authorize(
+                serverBase = measureBase,
+                profile = profile,
+                profileCanonicalSha256 = loaded.profileHash,
+                transport = AnebTokenExecutionTransport(client),
+            )
+            log("TOKEN_V2_CONTRACT run_id=$runId status=${tokenTraffic.authorization.name.lowercase()}")
+
             if (config.variant == "stress") {
                 loadedMonitorJob = launch {
                     while (isActive) {
@@ -201,7 +209,7 @@ class TokenSimulationEngine(private val context: Context) {
                             continue
                         }
                         val echo = try {
-                            client.echo("$measureBase/api/v1/echo")
+                            tokenTraffic.echo("$measureBase/api/v1/echo")
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
@@ -229,7 +237,7 @@ class TokenSimulationEngine(private val context: Context) {
             )
             val echoResults = mutableListOf<AnebClient.EchoResult>()
             repeat(ECHO_SAMPLES) { index ->
-                val echo = client.echo("$measureBase/api/v1/echo")
+                val echo = tokenTraffic.echo("$measureBase/api/v1/echo")
                 echoResults += echo
                 val validRtt = echoResults.mapNotNull { sample -> sample.rttUs?.takeIf { sample.error == null }?.div(1_000.0) }
                 _telemetry.value = _telemetry.value.copy(
@@ -273,7 +281,7 @@ class TokenSimulationEngine(private val context: Context) {
                     tokenSizesBytes = task.tokenStream.sizesBytes,
                 )
                 loadedMonitorEnabled.set(config.variant == "stress")
-                val taskResult = client.tokenSim(
+                val taskResult = tokenTraffic.tokenSim(
                     url = "$measureBase/api/v1/token-sim",
                     plan = wirePlan,
                     uploadChunkBytes = task.upload.chunkBytes,
@@ -339,7 +347,7 @@ class TokenSimulationEngine(private val context: Context) {
                     val downloadStart = AtomicLong(-1L)
                     val downloadedBytes = AtomicLong(0L)
                     loadedMonitorEnabled.set(config.variant == "stress")
-                    val download = client.downloadThroughput(
+                    val download = tokenTraffic.downloadThroughput(
                         "$measureBase/api/v1/download?bytes=${task.responseArtifactBytes}&chunk_kb=256",
                     ) { bytes, now ->
                         val started = downloadStart.updateAndGet { old -> if (old < 0L) now else old }
@@ -424,6 +432,14 @@ class TokenSimulationEngine(private val context: Context) {
             throw e
         } catch (e: TokenResultPersistenceException) {
             throw e
+        } catch (e: TokenExecutionContractException) {
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant, e.userMessage,
+                envelopeSource, config.transport, guard, bound, radioCollector, log,
+            )
+            log("TOKEN_V2_CONTRACT run_id=$runId status=rejected reason=${e.reasonCode}")
+            log("TOKEN_V2_FAILED run_id=$runId error=${e.userMessage.replace(' ', '_')}")
+            log("TOKEN_V2_END run_id=$runId status=contract_rejected")
         } catch (e: Exception) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant, e.toString(),

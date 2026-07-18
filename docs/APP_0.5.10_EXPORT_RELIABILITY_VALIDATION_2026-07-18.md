@@ -32,9 +32,9 @@
 - 完成更新失败时不得报成功并清理；
 - 清理失败时保留 URI 与明确错误。
 
-全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量/结果测试、8 项候选打包测试、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
+全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量/结果测试、8 项候选打包测试、6 项凭据安全测试、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
 
-## 4. 当前产物与设备边界
+## 4. 本地产物边界
 
 - 包名：`com.aneb.probe.codex`
 - 版本：`0.5.10-codex`，versionCode 42
@@ -42,8 +42,23 @@
 - APK SHA-256：`82A1A3C45A3ECD5C695417F65BFCF67311C94A571467EFB2E79525C8EBE5BB1F`
 - Android Debug 证书 SHA-256：`6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`
 
-［KNOWN｜HIGH］该精确二进制尚未在 P40 安装。Experience Lab Phase 0 仍在使用共享设备且没有明确交还；Codex 继续遵守“不抢手机”的协调规则。0.5.9 的蜂窝 Quick/JSONL 是有效历史证据，但不冒充 0.5.10 真机证据。收到明确释放后，下一步是安装这一 SHA、验证首次启动、保存单条 JSONL、混合 v1+v2 批量导出，并在最后主动退出 ANEB。
+［KNOWN｜HIGH］以上是本机构建，不是本轮 P40 安装对象。GitHub runner 使用另一把临时 Debug key，云端候选与本机 APK 的哈希和签名必然不同；真机验收必须锁定实际安装的云端 SHA，不能用本机近似二进制代替。
 
-## 5. 云端候选边界
+## 5. 云端候选与数据保全
 
-GitHub Actions run `29633753923` 已成功生成独立云端 Debug 候选。云端 APK SHA-256 为 `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`，身份仍为 `com.aneb.probe.codex` / `0.5.10-codex` / versionCode 42；来源证明 `35942948` 已离线验证。云端 runner 的临时 Debug keystore 与本机不同，因此云端 APK 不应与上面的本机 SHA 混用。共享 P40 释放后，真机验收将锁定云端 SHA，而不是以本机近似二进制替代。
+GitHub Actions run `29635434193` 从 commit `51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2` 成功生成工件 `8427011992`。云端 APK SHA-256 为 `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85`，身份为 `com.aneb.probe.codex` / `0.5.10-codex` / versionCode 42；attestation `35945988`、Rekor `2193995642` 已离线核验。
+
+- ［KNOWN｜HIGH］由于旧包与云端候选的 Debug 签名不同，本次按“备份普通数据 → 卸载旧包 → 安装云端候选 → 恢复普通数据”执行；不是 Android 原位升级，也不是 Room schema migration。安全偏好/API key 未恢复。
+- ［KNOWN｜HIGH］恢复后 Room 仍为 v19，integrity check 为 OK；`result_envelope=36`、`test_run=10`。
+
+## 6. P40 导出证据
+
+- ［KNOWN｜HIGH］混合批量文件 `aneb_results_32_of_36_20260718_161911.jsonl` 为 1,554,624 bytes，SHA-256 `F026CC05E057CF4A04035B94BC1EDE11EB909A18224D9677E2C9408F7DAD10C4`。离线 verifier 通过 32 个文档：v1=27、v2=5；Token=10、AI 实时=14、网络综合=8；唯一 run id=32、重复=0。其余 4 条完整性异常被透明拒绝，没有重算、修补或混入。
+- ［KNOWN｜HIGH］单条 v2 文件 `aneb_result_ai_realtime_simulation_019f7377_20260718_162513.jsonl` 为 44,377 bytes，SHA-256 `FE964695E19997796F5FEB84E05F50FB69F61F2C6299FA0C577263E5198F7EA9`。run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 通过 v2 verifier，且正文与批次对应行逐字节一致。
+- ［KNOWN｜HIGH］批量与单条两条 MediaStore 记录均为 `is_pending=0`，证明两个成功路径已完成，不是半成品。
+
+## 7. 剩余边界
+
+- ［KNOWN｜HIGH］真机成功导出不证明创建、打开、写入、完成或清理失败分支都在 Android 系统上发生过；这些失败路径由 6 项自动化故障注入覆盖。
+- ［KNOWN｜HIGH］云端产物是 `debug_non_release`，不具备正式发布签名、商店发布或无缝升级资格。
+- ［KNOWN｜HIGH］本轮使用受控开发/ADB 路径；普通用户不依赖 ADB 的下载、系统安装、首次启动、测试、导出/分享整链仍未证明。

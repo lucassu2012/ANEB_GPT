@@ -3,6 +3,8 @@ package com.aneb.probe.engine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 
 /*
  * 场景 profile 数据模型（与 server/profiles.go 的 Go 结构一一对应，两端共享合同）。
@@ -115,6 +117,30 @@ data class ProfileExecutionPlan(
     @SerialName("artifact_hash") val artifactHash: String = "",
     val seed: Long = 0,
     val variant: String = "",
+)
+
+@Serializable
+data class ProfileExecutionContractRange(
+    @SerialName("contract_id") val contractId: String = "",
+    @SerialName("min_version") val minVersion: String = "",
+    @SerialName("max_version_exclusive") val maxVersionExclusive: String = "",
+)
+
+@Serializable
+data class ProfileExecutionPrimitive(
+    @SerialName("primitive_id") val primitiveId: String = "",
+    @SerialName("wire_contract_id") val wireContractId: String = "",
+)
+
+@Serializable
+data class ProfileExecutionRequirements(
+    @SerialName("contract_id") val contractId: String = "",
+    @SerialName("contract_version") val contractVersion: String = "",
+    @SerialName("client_engine") val clientEngine: ProfileExecutionContractRange = ProfileExecutionContractRange(),
+    @SerialName("server_capability_receipt")
+    val serverCapabilityReceipt: ProfileExecutionContractRange = ProfileExecutionContractRange(),
+    @SerialName("required_primitives")
+    val requiredPrimitives: List<ProfileExecutionPrimitive> = emptyList(),
 )
 
 /** phase 联合体：字段按 [type] 选用（同 Go 侧 Phase）。 */
@@ -239,6 +265,7 @@ data class ScenarioProfile(
     val trace: ProfileTrace? = null,
     @SerialName("evidence_tier") val evidenceTier: String = "",
     @SerialName("execution_plan") val executionPlan: ProfileExecutionPlan? = null,
+    @SerialName("execution_requirements") val executionRequirements: ProfileExecutionRequirements? = null,
     @SerialName("synthetic_impairment") val syntheticImpairment: ProfileSyntheticImpairment? = null,
     @SerialName("gateway_impairment") val gatewayImpairment: ProfileGatewayImpairment? = null,
     /** v1 兼容字段；v2 只能用于显示旧 Profile，不能替代 live_presentation/evaluation。 */
@@ -286,16 +313,69 @@ object ProfileParser {
     )
 
     private val json = Json { ignoreUnknownKeys = true }
+    private val executionRequirementKeys = setOf(
+        "contract_id",
+        "contract_version",
+        "client_engine",
+        "server_capability_receipt",
+        "required_primitives",
+    )
+    private val contractRangeKeys = setOf("contract_id", "min_version", "max_version_exclusive")
+    private val primitiveKeys = setOf("primitive_id", "wire_contract_id")
+
 
     /** 解析 /api/v1/profiles 响应。缺任一必需场景即抛（profile 是两端共享合同，禁静默缺省）。 */
     fun parseServerResponse(body: String): Map<String, ScenarioProfile> {
+        val root = json.parseToJsonElement(body) as? JsonObject
+            ?: invalidExecutionRequirements("server_response_not_object")
+        (root["profiles"] as? JsonArray)?.forEachIndexed { index, element ->
+            val profile = element as? JsonObject
+                ?: invalidExecutionRequirements("profiles[$index]_not_object")
+            validateExecutionRequirementsKeys(profile)
+        }
         val resp = json.decodeFromString(ProfilesResponse.serializer(), body)
         return index(resp.profiles)
     }
 
     /** 解析单个 profile JSON（打包内置 assets 副本路径）。 */
-    fun parseSingle(body: String): ScenarioProfile =
-        json.decodeFromString(ScenarioProfile.serializer(), body)
+    fun parseSingle(body: String): ScenarioProfile {
+        val root = json.parseToJsonElement(body) as? JsonObject
+            ?: invalidExecutionRequirements("profile_not_object")
+        validateExecutionRequirementsKeys(root)
+        return json.decodeFromString(ScenarioProfile.serializer(), body)
+    }
+
+    private fun validateExecutionRequirementsKeys(profile: JsonObject) {
+        val rawRequirements = profile["execution_requirements"] ?: return
+        val requirements = rawRequirements as? JsonObject
+            ?: invalidExecutionRequirements("execution_requirements_not_object")
+        requireExactKeys(requirements, executionRequirementKeys, "execution_requirements")
+
+        val clientEngine = requirements["client_engine"] as? JsonObject
+            ?: invalidExecutionRequirements("client_engine_not_object")
+        requireExactKeys(clientEngine, contractRangeKeys, "client_engine")
+
+        val receipt = requirements["server_capability_receipt"] as? JsonObject
+            ?: invalidExecutionRequirements("server_capability_receipt_not_object")
+        requireExactKeys(receipt, contractRangeKeys, "server_capability_receipt")
+
+        val primitives = requirements["required_primitives"] as? JsonArray
+            ?: invalidExecutionRequirements("required_primitives_not_array")
+        primitives.forEachIndexed { index, element ->
+            val primitive = element as? JsonObject
+                ?: invalidExecutionRequirements("required_primitives[$index]_not_object")
+            requireExactKeys(primitive, primitiveKeys, "required_primitives[$index]")
+        }
+    }
+
+    private fun requireExactKeys(value: JsonObject, expected: Set<String>, path: String) {
+        if (value.keys != expected) {
+            invalidExecutionRequirements("$path expected=${expected.sorted()} actual=${value.keys.sorted()}")
+        }
+    }
+
+    private fun invalidExecutionRequirements(detail: String): Nothing =
+        throw IllegalArgumentException("execution_requirements_keys_invalid:$detail")
 
     fun index(profiles: List<ScenarioProfile>): Map<String, ScenarioProfile> {
         val map = profiles.associateBy { it.profileId }

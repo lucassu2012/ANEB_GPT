@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "deploy_server.ps1"
+
+
+class DeployServerSafetyContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = SCRIPT.read_text(encoding="utf-8")
+        cls.remote = cls.source.split("$remoteScript = @'", 1)[1].split("\n'@", 1)[0]
+
+    def test_local_gates_precede_the_first_remote_connection(self) -> None:
+        main = self.source.split("# No ssh/scp call is made before this function returns successfully.", 1)[1]
+        gate = main.index("Invoke-LocalSafetyGates")
+        first_connection = main.index("& ssh @SshOpts")
+        self.assertLess(gate, first_connection)
+        self.assertIn("verify_spec_catalog.py", self.source)
+        self.assertIn("test -count=1 ./...", self.source)
+        for artifact in ("profile.json", "runtime_plan.json", "manifest.sha256"):
+            self.assertIn(artifact, self.source)
+
+    def test_runtime_plan_is_uploaded_with_the_manifest_bound_bundle(self) -> None:
+        self.assertRegex(
+            self.source,
+            r"Copy-ToRemote -LocalPath \$TokenQuickRuntimePlan .*runtime_plan\.json",
+        )
+        self.assertNotIn("sha256sum", self.remote)
+        self.assertIn("{'profile.json', 'runtime_plan.json'}", self.remote)
+
+    def test_candidate_receipt_is_verified_before_live_mutation(self) -> None:
+        staged_receipt = self.remote.index("validate_receipt \\")
+        stage_ok = self.remote.index('echo "STAGING_OK')
+        live_boundary = self.remote.index("LIVE_TOUCHED=1")
+        self.assertLess(staged_receipt, stage_ok)
+        self.assertLess(stage_ok, live_boundary)
+        self.assertIn('-addr "127.0.0.1:$STAGE_PORT"', self.remote)
+        self.assertIn("-udp-echo-addr ''", self.remote)
+        self.assertIn("setsid runuser -u aneb", self.remote)
+        self.assertIn('kill -TERM -- "-$STAGE_PID"', self.remote)
+
+    def test_pre_switch_requires_exact_070_identity_and_freezes_shared_host(self) -> None:
+        freeze_call = self.remote.index("freeze_live_baseline\n")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1", freeze_call)
+        self.assertLess(freeze_call, live_boundary)
+        freeze_function = self.remote.index("freeze_live_baseline()")
+        self.assertLess(freeze_function, freeze_call)
+        self.assertIn("validate_server_identity 'aneb-server/0.7.0' pre-switch", self.remote)
+        freeze_body = self.remote.split("freeze_live_baseline() {", 1)[1].split("\n}", 1)[0]
+        identity = freeze_body.index("validate_server_identity 'aneb-server/0.7.0' pre-switch")
+        legacy = freeze_body.index("validate_legacy_surface pre-switch-0.7")
+        binary = freeze_body.index("BASE_BINARY_SHA=")
+        self.assertLess(identity, legacy)
+        self.assertLess(legacy, binary)
+        self.assertIn("body.get('version') != expected", self.remote)
+        self.assertIn("body.get('h3_enabled') is not True", self.remote)
+        self.assertIn("x-aneb-server", self.remote)
+        self.assertIn("BASE_BINARY_SHA=", self.remote)
+        self.assertIn("docker_firewall_fingerprint", self.remote)
+        self.assertIn("eth0_qdisc_fingerprint", self.remote)
+        self.assertIn("firewall_fingerprint", self.remote)
+        self.assertIn("iptables-save", self.remote)
+        self.assertIn("ip6tables-save", self.remote)
+        self.assertIn("nft --stateless list ruleset", self.remote)
+        self.assertIn("tc qdisc show dev eth0", self.remote)
+
+    def test_restart_or_smoke_failure_has_complete_rollback_surface(self) -> None:
+        self.assertIn("if [[ $rc -ne 0 && $LIVE_TOUCHED -eq 1 ]]", self.remote)
+        expected = {
+            "live-binary": "/opt/aneb/bin/aneb-server",
+            "root-profiles": "/opt/aneb/profiles",
+            "quick-bundle": "/opt/aneb/execution-profiles/token_multimodal_quick",
+            "service-unit": "/etc/systemd/system/aneb-server.service",
+        }
+        for label, path in expected.items():
+            self.assertIn(f"snapshot_item {label} {path}", self.remote)
+            self.assertIn(f"restore_item {label} {path}", self.remote)
+        self.assertIn("systemctl restart aneb-server", self.remote)
+        self.assertIn("ROLLBACK_OK", self.remote)
+        self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", self.remote)
+        self.assertIn("validate_server_identity 'aneb-server/0.7.0' rollback", self.remote)
+        self.assertIn("validate_legacy_surface rollback-0.7", self.remote)
+        self.assertIn("assert_restored_aneb_baseline", self.remote)
+        self.assertIn("assert_shared_host_baseline rollback", self.remote)
+        self.assertIn("ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97", self.remote)
+        self.assertIn("exit 97", self.remote)
+
+    def test_partial_ip_certificate_pair_is_rejected_locally(self) -> None:
+        self.assertIn("$ipCertPresent -xor $ipKeyPresent", self.source)
+        local_gate = self.source.index("Invoke-LocalSafetyGates")
+        first_connection = self.source.index("& ssh @SshOpts", local_gate)
+        self.assertLess(local_gate, first_connection)
+
+    def test_ip_certificate_replacement_is_explicit_and_sha_pinned(self) -> None:
+        self.assertIn("EnableIpCertificateReplacement", self.source)
+        self.assertIn("ExpectedIpCertificateSha256", self.source)
+        self.assertIn("ExpectedIpPrivateKeySha256", self.source)
+        self.assertIn("replacement was not explicitly enabled", self.source)
+        self.assertIn("Get-FileHash -LiteralPath $IpCert -Algorithm SHA256", self.source)
+        self.assertIn("Get-FileHash -LiteralPath $IpKey -Algorithm SHA256", self.source)
+        self.assertIn('file_sha256 "$STAGE/tls/ip-cert.pem"', self.remote)
+        self.assertIn('file_sha256 "$STAGE/tls/ip-key.pem"', self.remote)
+        self.assertIn("validate_ip_certificate_bundle", self.remote)
+        self.assertIn("openssl x509 -in \"$cert\" -noout -checkip 120.79.148.0", self.remote)
+        self.assertIn("not values['notBefore'] <= now <= values['notAfter']", self.remote)
+        self.assertIn("openssl x509 -in \"$cert\" -pubkey -noout", self.remote)
+        self.assertIn("openssl pkey -in \"$key\" -passin pass: -pubout -outform DER", self.remote)
+        self.assertIn('"$cert_public_sha" == "$key_public_sha"', self.remote)
+        certificate_validation = self.remote.index("validate_ip_certificate_bundle\n")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1", certificate_validation)
+        self.assertLess(certificate_validation, live_boundary)
+
+    def test_real_deployment_requires_codex_e01_shared_lease(self) -> None:
+        local_only = self.source.index("if ($LocalValidationOnly)")
+        lease = self.source.index("Assert-SharedDeploymentLease", local_only)
+        first_connection = self.source.index("& ssh @SshOpts", lease)
+        self.assertLess(local_only, lease)
+        self.assertLess(lease, first_connection)
+        self.assertIn("E-01", self.source)
+        self.assertRegex(self.source, r"\[Parameter\(Mandatory = \$true\)\]\s+\[ValidatePattern\('\^\[0-9a-fA-F\]\{32\}\$'\)\]\s+\[string\]\$LeaseId")
+        self.assertIn("update_shared_test_status.py", self.source)
+        self.assertIn("assert-lease", self.source)
+        self.assertIn("--executor Codex", self.source)
+        self.assertIn("--lease-id $LeaseId.ToLowerInvariant()", self.source)
+        self.assertIn("--resource E-01", self.source)
+        lease_function = self.source.split("function Assert-SharedDeploymentLease", 1)[1].split("function Copy-ToRemote", 1)[0]
+        self.assertNotIn("claim", lease_function)
+        self.assertNotIn("handoff", lease_function)
+        self.assertNotIn("lock", lease_function)
+
+    def test_live_smoke_preserves_weak_network_route_isolation(self) -> None:
+        self.assertIn("/api/v1/impairments", self.remote)
+        self.assertIn("weak-capacity-latency-v1", self.remote)
+        self.assertIn("weak-recovery-v1", self.remote)
+        self.assertIn("recovery_code\" -eq 503", self.remote)
+        self.assertIn("other_code\" -eq 200", self.remote)
+        self.assertIn("normal_code\" -eq 200", self.remote)
+        self.assertIn("recovered_code\" -eq 200", self.remote)
+        live_receipt = self.remote.rindex("validate_receipt \\")
+        weak_smoke = self.remote.index("weak_network_smoke=")
+        live_complete = self.remote.rindex("LIVE_TOUCHED=0")
+        self.assertLess(live_receipt, weak_smoke)
+        self.assertLess(weak_smoke, live_complete)
+        fingerprint_check = self.remote.rindex("assert_shared_host_baseline live")
+        self.assertLess(weak_smoke, fingerprint_check)
+        self.assertLess(fingerprint_check, live_complete)
+
+    def test_live_smoke_preserves_s3_multimodal_download_contract(self) -> None:
+        self.assertIn("expected_phase_types", self.remote)
+        self.assertIn("for index in (4, 8)", self.remote)
+        self.assertIn("phase.get('bytes') != 12582912", self.remote)
+        self.assertIn("phase.get('chunk_kb') != 256", self.remote)
+        self.assertIn("validate_legacy_surface live-0.8", self.remote)
+        self.assertIn("download?bytes=1048576", self.remote)
+
+    def test_cleanup_is_strict_and_backups_are_bounded(self) -> None:
+        self.assertIn("set -Eeuo pipefail", self.remote)
+        self.assertIn("trap cleanup EXIT", self.remote)
+        self.assertIn("trap 'exit 129' HUP", self.remote)
+        self.assertIn("items[3:]", self.remote)
+        self.assertIn('rm -rf -- "$STAGE"', self.remote)
+        self.assertIn("retained_backups=3", self.remote)
+        self.assertIn("WARNING backup_prune_failed maintenance_required=1", self.remote)
+        success_tail = self.remote[self.remote.rindex("assert_shared_host_baseline live") :]
+        self.assertLess(success_tail.index("LIVE_TOUCHED=0"), success_tail.index("if ! prune_backups"))
+        self.assertIn("backup_prune=$PRUNE_RESULT", success_tail)
+        cleanup = self.remote.split("cleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
+        self.assertNotIn("prune_backups || ROLLBACK_FAILED=1", cleanup)
+
+    def test_script_has_no_host_network_or_co_tenant_mutation_commands(self) -> None:
+        command_patterns = (
+            r"(?m)^\s*(?:sudo\s+)?iptables(?:\s|$)",
+            r"\bnft\s+(?:add|delete|insert|flush|replace|reset)\b",
+            r"\bufw\b",
+            r"\btc\s+qdisc\s+(?:add|change|replace|del)\b",
+            r"\bdocker\s+(?:run|stop|restart|rm|network|compose)\b",
+            r"/etc/sysctl",
+        )
+        for pattern in command_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, self.remote, flags=re.IGNORECASE))
+
+
+if __name__ == "__main__":
+    unittest.main()

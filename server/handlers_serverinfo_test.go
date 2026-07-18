@@ -33,6 +33,11 @@ func TestServerInfo(t *testing.T) {
 	if info.Version != serverVersion {
 		t.Fatalf("version = %q, want %q", info.Version, serverVersion)
 	}
+	if info.ExecutionCapabilities.ContractID != serverCapabilityReceiptContractID ||
+		info.ExecutionCapabilities.ContractVersion != serverCapabilityReceiptVersion ||
+		len(info.ExecutionCapabilities.Primitives) != 3 {
+		t.Fatalf("execution capability receipt missing or invalid: %+v", info.ExecutionCapabilities)
+	}
 	// 单调锚点映射：anchor 必须与进程全局一致，srv_ts_us 为正且随请求前进。
 	if info.AnchorWallUnixNs != anchorWallUnixNs {
 		t.Fatalf("anchor_wall_unix_ns = %d, want %d", info.AnchorWallUnixNs, anchorWallUnixNs)

@@ -5,18 +5,19 @@
 原目录，避免打断 Android、Go 和 Python 的构建；`catalog.json` 只提供机器可校验的索引、
 版本边界和消费者关系。
 
-## 当前边界
+## 当前仓库候选边界
 
-| 单元 | 当前版本 | 对目录资产的职责 |
+| 单元 | 仓库候选版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.10 | 消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；三类新 run 同事务发出 `aneb-result-v2`、1Hz 公开 Android 无线环境证据并支持 v1/v2 JSONL 原样导出；下载目录导出采用创建—写入—完成的失败清理合同，禁止残留半成品或误报成功；结论项冻结稳定 ID、严重级别、依据及 Profile 业务行为；Token 结果冻结任务对齐的完整 TTFT 证据；手动开测前统一执行节点/网络校验和无线证据知情选择 |
-| P2 / aneb-server | 0.7.0 | 解析并下发 4 个服务端根 Profile；为 v2 Profile 提供白名单测量原语，但当前不解析整份 v2 Profile |
-| P3 / aneb-ai-behavior-model | 0.2.0 | 维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划的 v2 发布包，并只允许通过绑定留出报告的候选升为 validated |
-| Profile 横切机制 | 1.3.1 | 索引全部正式资产，约束兼容范围、消费者、完整性和发布方式；结论策略升级时同步提升 Profile 版本与哈希绑定；结果合同以共享核心、兼容 v1 和严格 v2 独立演进 |
+| P1 / ANEB Probe Android | 0.5.11（code 43，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；对声明执行要求的 Token Quick 在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份；Room 版本、指标、门限和评分均不变 |
+| P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；此版本仍是仓库候选，E-01 当前部署保持 0.7.0 |
+| P3 / aneb-ai-behavior-model | 0.3.0 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划和受限执行要求的 v2 发布包，并保留绑定留出报告的 validated 门禁 |
+| Profile 横切机制 | 1.4.0 | ［KNOWN｜HIGH］索引全部正式资产，治理执行要求、兼容范围、消费者、完整性和发布方式；结果合同继续按共享核心、兼容 v1 和严格 v2 独立演进 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
-这是一项治理声明，不代表现有 P1/P2 已实现远端版本协商；任何不兼容字段或语义变化都必须
-先升级 catalog/contract 主版本，再升级消费者。
+［KNOWN｜HIGH］M0-EC1 只为 `token_multimodal_quick@1.2.0` 接通执行能力握手；其余 11 个
+Published Profile 没有 `execution_requirements`，继续走原有兼容路径。任何不兼容字段或语义变化
+仍必须先升级 catalog/contract 主版本，再升级消费者。
 
 ## 两族 Profile 与两条 v2 校验路径
 
@@ -31,7 +32,7 @@
 ### 2. Published Profile v2
 
 - 资产：`profiles/published/*/profile.json`，当前 12 个。
-- 消费者：P1、P3、Profile。
+- 消费者：P1、P2、P3、Profile；P2 当前只消费声明了执行要求的 Quick 子集。
 - 合同：`aneb-profile-v2`，引用现有 JSON Schema。
 - 该族内部必须按执行语义分成两组，不能用同一个“文件存在即可”的校验代替：
 
@@ -43,6 +44,24 @@
 网络综合 Profile 没有外部行为模型运行计划，因此给它补一个空 manifest 会制造错误的完整性
 语义。反过来，Token/AI realtime 如果缺 manifest，P1 就无法证明 Profile 与运行计划绑定，必须
 fail closed。
+
+## Token Quick 执行能力握手（M0-EC1）
+
+- ［KNOWN｜HIGH］`token_multimodal_quick@1.2.0` 是当前唯一必须携带
+  `aneb-execution-requirements@1.0.0` 的 Profile；规范化 Profile SHA-256 固定为
+  `38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4`。
+- ［KNOWN｜HIGH］P1 引擎身份固定为 `aneb-token-simulation-engine@1.0.0`；P2 回执合同固定为
+  `aneb-server-capability-receipt@1.0.0`。双方均按 Profile 声明的半开 SemVer 范围校验。
+- ［KNOWN｜HIGH］Quick 精确要求三项白名单原语：`echo/aneb-echo-v1`、
+  `token_sim/aneb-token-task-v1`、`download/aneb-download-v1`。Profile 不能携带任意 URL、
+  命令或脚本。
+- ［KNOWN｜HIGH］P1 可先请求 `/api/v1/serverinfo` 获取能力回执，但必须在第一个 echo、
+  token-sim 或 download 业务请求前完成校验。合同版本、Profile ID/版本/哈希、必需原语或线路
+  合同任一缺失/冲突时 fail closed。
+- ［KNOWN｜HIGH］P1 可以忽略服务器声明的未知额外 capability；同一回执中的重复原语 ID 必须
+  拒绝，避免顺序或覆盖规则产生歧义。
+- ［KNOWN｜HIGH］该切片不修改业务指标、质量目标、门限、AQS 权重、结论算法、Room schema
+  或结果合同。
 
 ## 哈希合同
 
@@ -114,7 +133,7 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 
 ## P3 校准发布闸门
 
-- ［KNOWN｜HIGH］P3 v0.2.0 只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠。
+- ［KNOWN｜HIGH］P3 v0.3.0 保留 v0.2.0 的校准门禁：只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠；本次版本提升只增加执行要求的生成与治理。
 - ［KNOWN｜HIGH］calibrated 候选只由 training 拟合，holdout 报告按 `token-holdout-validation-v1` 独立生成；任一 P50/P95、pause 或转移矩阵门限失败即禁止 promote。
 - ［KNOWN｜HIGH］validated 模型 build/runtime 发布必须携带原报告和 dataset manifest，并现场重算报告与 promoted 模型；单独篡改 `status=pass` 无效。
 - ［KNOWN｜HIGH］当前 4 个 catalog 模型仍全部为 hypothesis；Schema 和流水线存在不等于真实业务校准已经完成。

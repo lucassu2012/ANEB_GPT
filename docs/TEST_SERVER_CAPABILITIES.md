@@ -17,6 +17,83 @@
 
 所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
+### 1.1 `aneb-server/0.8.0` 执行能力候选（**尚未部署**）
+
+> ［KNOWN｜HIGH］E-01 当前仍是 `aneb-server/0.7.0`。本小节只说明仓库中的 0.8.0
+> 候选和未来切换门禁，不能作为已部署、已公网验证或已完成 P40 验收的证据。
+
+- ［KNOWN｜HIGH］0.8.0 候选在启动时读取受控的已发布 Profile 目录，只为
+  `token_multimodal_quick@1.2.0` 验证 `profile.json`、`runtime_plan.json` 与
+  `manifest.sha256` 的完整性；Profile 规范化 SHA-256 必须为
+  `38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4`。
+- ［KNOWN｜HIGH］任一 Profile 身份、执行要求、manifest 或白名单原语校验失败时，0.8.0
+  拒绝启动，不能发出“支持 Quick”的回执。
+- ［KNOWN｜HIGH］成功启动后，`GET /api/v1/serverinfo` 新增
+  `execution_capabilities`，合同为 `aneb-server-capability-receipt@1.0.0`，应包含以下精确
+  Quick 能力；原有 serverinfo 字段和 0.7.0 业务端点语义不因此改变。
+
+```json
+{
+  "execution_capabilities": {
+    "contract_id": "aneb-server-capability-receipt",
+    "contract_version": "1.0.0",
+    "primitives": [
+      {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+      {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+      {"primitive_id": "token_sim", "wire_contract_id": "aneb-token-task-v1"}
+    ],
+    "validated_profiles": [
+      {
+        "profile_id": "token_multimodal_quick",
+        "profile_version": "1.2.0",
+        "profile_sha256": "sha256:38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4"
+      }
+    ]
+  }
+}
+```
+
+- ［KNOWN｜HIGH］P1 0.5.11 可忽略回执中未知的额外 capability，但必须拒绝重复原语 ID、
+  缺失的必需原语、线路合同冲突、合同版本不兼容或 Quick Profile 身份/哈希不一致；拒绝必须
+  发生在首个 echo、token-sim 或 download 业务请求之前。`/serverinfo` 本身是预检请求，不计作
+  Quick 业务流量。
+- ［KNOWN｜HIGH］其余 11 个 Published Profile 没有 `execution_requirements`，继续走 0.5.10
+  既有兼容路径；本候选不修改任何指标、质量目标、门限或评分。
+
+#### 切换门禁
+
+1. ［KNOWN｜HIGH］操作 E-01 前必须先读取共享状态文件；只有状态为“空闲”时，Codex 才能用
+   `scripts/update_shared_test_status.py claim` 自动写为“进行中”。每次 claim 必须生成新的 128-bit
+   `lease-id`；状态机只接受精确的 `Codex`/`Claude` 两种执行者，旧 lease 不得复用。P40、
+   Claude/Codex App、VPN、抓包和其他 E-01 测试均须处于清理态。所有非空闲 snapshot 必须在
+   当前任务/交接说明中恰有一个合法 lease marker；手工或旧版无 lease 的“待交接”不得被释放。
+2. ［KNOWN｜HIGH］候选已经通过 P2 Go 全量测试、P3/catalog 校验、部署脚本离线安全测试、
+   Android 97 suites / 577 JVM tests（0 failure / 0 error / 0 skipped）、assembleDebug、Lint、
+   60 项脚本测试（59 通过、1 项按设计跳过）、P3 38 项测试和 2026-07-18 全仓质量门；提交前还须在
+   新增文件全部进入暂存区后重跑凭据扫描，任何一项失败都不得切换。
+3. ［KNOWN｜HIGH］部署脚本必须接收本次 `-LeaseId`，并通过状态机 `assert-lease` 精确核对
+   “进行中 + Codex + 同一 lease-id + E-01”；资源按约定分隔符拆成 token 后全等匹配，禁止用
+   `NO-E-01`、`E-01-disabled`、`not E-01` 等子串伪装。脚本本身不执行 claim/handoff/lock。切换前必须同时
+   验证 0.7.0 的 `serverinfo.version` 与 `X-Aneb-Server`，并跑通与回滚相同的 Profile/echo/1MiB
+   download/impairment/recovery/UDP smoke；只有健康的 0.7.0 才能作为回滚基线。随后冻结二进制
+   SHA、Profile/service 以及 Docker iptables-save、`eth0` qdisc、全防火墙规则指纹；PID 因
+   升级/回滚重启可变化，不作为不变量。
+4. ［KNOWN｜HIGH］切换后必须同时核对 `X-Aneb-Server: aneb-server/0.8.0`、上述完整回执、
+   manifest 精确哈希、既有 TCP/UDP 8443 与合成弱网 smoke；全部通过前不能宣布部署完成。
+
+#### 回滚门禁
+
+1. ［KNOWN｜HIGH］启动失败、回执不精确、既有端点回归或共享主机基线变化任一发生时，部署
+   脚本必须恢复冻结的 0.7.0 二进制和 service 配置，不得让 0.8.0 以降级能力继续运行。
+2. ［KNOWN｜HIGH］回滚后必须重新确认 0.7.0 的 header/body 身份、4 个根 Profile、echo、
+   1MiB download、impairment 目录/容量路由、恢复同 run 503/隔离/恢复、UDP 回显均通过，并精确
+   匹配冻结的 ANEB 文件及 Docker、`eth0`、全防火墙指纹；任一失败必须明确非零退出。
+3. ［KNOWN｜HIGH］备份裁剪发生在成功验收并解除回滚保险丝之后；裁剪失败只报告维护 warning，
+   不得回滚已验收部署，也不得把部署结果伪报为失败。
+4. ［KNOWN｜HIGH］部署脚本返回后仍保留“进行中”，因为同一 lease 还要完成 P40 联调。只有主
+   编排器完成真机测试和清理后，才用同 actor + 同 lease-id 自动改为“待交接”；只有 Claude 独立
+   复核后才能改回“空闲”。清理失败则由当前执行者用同 lease 置为“异常锁定”。
+
 ## 2. 已部署端点
 
 | 方法与路径 | 用途 | 主要合同/限额 |
@@ -66,7 +143,11 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 
 ## 4. 部署与共享主机纪律
 
-唯一部署入口：`scripts/deploy_server.ps1`。部署前后必须检查 P40 Pro 上 `com.aneb.probe` 与 `com.aneb.probe.codex` 均未在测试；重启窗口通常少于 2 秒，但仍不得在任何客户端 run 期间操作。
+唯一部署入口：`scripts/deploy_server.ps1 -LeaseId <本次新 lease>`。部署前后必须检查 P40 Pro 上
+`com.aneb.probe` 与 `com.aneb.probe.codex` 均未在测试；重启窗口通常少于 2 秒，但仍不得在任何
+客户端 run 期间操作。仓库中若出现 IP-SAN 证书/私钥，默认拒绝部署；只有额外显式启用证书替换，
+并同时提供证书与私钥各自的 SHA-256 pin，且本地和远端暂存文件均匹配时才进入证书门禁。远端还
+必须确认二者公钥匹配、证书当前处于有效期内，且 SAN 精确包含 `IP:120.79.148.0`，才允许替换。
 
 禁止事项：
 
@@ -129,6 +210,7 @@ E-01 已启用两个**用户态、逐 run 隔离**弱网合同；仍未、也不
 
 | 日期 | 变更 |
 |---|---|
+| 2026-07-18 | ［KNOWN｜HIGH］登记 `aneb-server/0.8.0` 执行能力候选及切换/回滚门禁；该候选尚未部署到 E-01，当前部署基线继续为 0.7.0。 |
 | 2026-07-18 | 保持 `aneb-server/0.7.0` 二进制能力，部署弱网 Profile 1.1.0：仅升级可审计语义结论策略；根 Profile、`download_burst`、逐 run 弱网回执、恢复隔离、本机及公网 TCP/UDP 8443 smoke 通过。 |
 | 2026-07-17 | 部署 `aneb-server/0.7.0`：新增逐 run 一次性 `weak-recovery-v1` 2 秒请求中断、同 run/其他 run/正常路由隔离 smoke；App 0.4.8/Room v17 增加独立 Recovery Profile、动态恢复仪表、独立评分与 P40 四次真机证据。 |
 | 2026-07-17 | 部署 `aneb-server/0.6.0`：新增逐 run 聚合限速的 `weak-capacity-latency-v1` 用户态适配器、目录与回执头；正常路由不整形。App 0.4.7/Room v16 完成 P40 正常/弱网相邻对照，上行改为服务器确认字节口径。 |

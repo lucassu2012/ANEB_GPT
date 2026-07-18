@@ -791,7 +791,11 @@ class AnebClient(bound: BoundNetwork? = null) {
     /** 控制面简单响应（profiles 拉取 / results 上报共用）。 */
     data class HttpTextResult(val httpCode: Int?, val body: String?, val error: String?)
 
+    /** GET /api/v1/serverinfo for the machine-readable execution capability receipt. */
+    suspend fun fetchServerInfo(url: String): HttpTextResult =
+        simpleCall(client.newCall(Request.Builder().url(url).get().build()))
     /** GET /api/v1/profiles（P1 范围 1：拉不到用打包内置 assets 副本并告警） */
+
     suspend fun fetchProfiles(url: String): HttpTextResult =
         simpleCall(client.newCall(Request.Builder().url(url).get().build()))
 

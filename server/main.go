@@ -13,12 +13,13 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.7.0"
+const serverVersion = "aneb-server/0.8.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
-	profiles map[string]*Profile
-	dataDir  string
+	profiles              map[string]*Profile
+	dataDir               string
+	executionCapabilities serverCapabilityReceipt
 	// allowInject 放行 /stream 的 &inject= 故障注入钩子（P0-C13 前置：
 	// 客户端 seq join/截断/畸形 event 健壮性验收需要服务端可控注入）。
 	// 默认 false；生产/取证部署绝不开启——注入流不是测量数据。
@@ -69,6 +70,7 @@ func main() {
 	// 默认路径用正斜杠：Go 在 Windows 同样接受，目标部署环境（Linux VM）
 	// 反斜杠不是路径分隔符，`..\profiles` 会被当成字面文件名导致启动失败。
 	profilesDir := flag.String("profiles", "../profiles", "profiles directory (versioned scenario JSON)")
+	executionProfilesDir := flag.String("execution-profiles", "../profiles/published", "published Profile bundles used for execution capability preflight")
 	dataDir := flag.String("data", "./data", "data directory (results JSONL)")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file (optional; default/LE cert for named SNI)")
 	tlsKey := flag.String("tls-key", "", "TLS key file (optional)")
@@ -118,8 +120,15 @@ func main() {
 	for id, p := range profiles {
 		log.Printf("profile loaded: %s v%s (%d phases)", id, p.Version, len(p.Phases))
 	}
+	executionCapabilities, err := loadExecutionCapabilityReceipt(*executionProfilesDir)
+	if err != nil {
+		log.Fatalf("load execution profiles: %v", err)
+	}
+	for _, profile := range executionCapabilities.ValidatedProfiles {
+		log.Printf("execution profile validated: %s v%s (%s)", profile.ProfileID, profile.ProfileVersion, profile.ProfileSHA256)
+	}
 
-	a := &app{profiles: profiles, dataDir: *dataDir, allowInject: *allowInject, h3Enabled: *h3Enabled}
+	a := &app{profiles: profiles, dataDir: *dataDir, executionCapabilities: executionCapabilities, allowInject: *allowInject, h3Enabled: *h3Enabled}
 	if *allowInject {
 		log.Printf("WARNING: -allow-inject enabled — /stream accepts fault injection, runs are NOT evidential")
 	}
@@ -152,8 +161,8 @@ func main() {
 		ConnContext: connContext,
 	}
 
-	log.Printf("%s listening on %s (profiles=%s data=%s, mono-anchor wall=%d)",
-		serverVersion, *addr, *profilesDir, *dataDir, anchorWallUnixNs)
+	log.Printf("%s listening on %s (profiles=%s execution-profiles=%s data=%s, mono-anchor wall=%d)",
+		serverVersion, *addr, *profilesDir, *executionProfilesDir, *dataDir, anchorWallUnixNs)
 
 	// -h3：同端口 UDP 上并行起 http3.Server，复用同一路由树与中间件；
 	// TCP 侧照旧（仅多 Alt-Svc/X-Aneb-Proto 头）。任一侧监听失败都整体

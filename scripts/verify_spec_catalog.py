@@ -21,6 +21,15 @@ SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$")
 EXPECTED_CONSUMERS = {"P1", "P2", "P3", "Profile"}
+EXECUTION_REQUIREMENTS_CONTRACT = ("aneb-execution-requirements", "1.0.0")
+CLIENT_ENGINE_CONTRACT = ("aneb-token-simulation-engine", "1.0.0")
+SERVER_CAPABILITY_RECEIPT_CONTRACT = ("aneb-server-capability-receipt", "1.0.0")
+EXECUTION_REQUIREMENTS_PRIMITIVES = {
+    "echo": "aneb-echo-v1",
+    "token_sim": "aneb-token-task-v1",
+    "download": "aneb-download-v1",
+}
+MIGRATED_EXECUTION_PROFILES = {"token_multimodal_quick"}
 
 
 class DuplicateJsonKey(ValueError):
@@ -105,6 +114,116 @@ def _validate_range(
     if current is not None and minimum is not None and maximum is not None:
         if not minimum <= current < maximum:
             errors.append(f"{label}: {member} is outside [{value['min_inclusive']}, {value['max_exclusive']})")
+
+
+def _validate_execution_requirements(
+    profile: dict[str, Any],
+    *,
+    required: bool,
+    label: str,
+    errors: list[str],
+) -> None:
+    value = profile.get("execution_requirements")
+    if value is None:
+        if required:
+            errors.append(f"{label}.execution_requirements: required by catalog policy")
+        return
+    if not required:
+        errors.append(f"{label}.execution_requirements: profile is not in the migration allowlist")
+    required_keys = {
+        "contract_id",
+        "contract_version",
+        "client_engine",
+        "server_capability_receipt",
+        "required_primitives",
+    }
+    if not isinstance(value, dict):
+        _strict_keys(value, required_keys, set(), f"{label}.execution_requirements", errors)
+        return
+    _strict_keys(value, required_keys, set(), f"{label}.execution_requirements", errors)
+    actual_contract = (value.get("contract_id"), value.get("contract_version"))
+    if actual_contract != EXECUTION_REQUIREMENTS_CONTRACT:
+        errors.append(f"{label}.execution_requirements: unsupported contract id/version {actual_contract!r}")
+    if profile.get("mode_id") != "token_simulation":
+        errors.append(f"{label}.execution_requirements: only token_simulation is supported")
+
+    client = value.get("client_engine")
+    client_keys = {"contract_id", "min_version", "max_version_exclusive"}
+    client_valid = _strict_keys(
+        client,
+        client_keys,
+        set(),
+        f"{label}.execution_requirements.client_engine",
+        errors,
+    )
+    if isinstance(client, dict):
+        if client.get("contract_id") != CLIENT_ENGINE_CONTRACT[0]:
+            errors.append(f"{label}.execution_requirements.client_engine: unsupported contract_id")
+        if client_valid:
+            _validate_range(
+                {
+                    "min_inclusive": client.get("min_version"),
+                    "max_exclusive": client.get("max_version_exclusive"),
+                },
+                CLIENT_ENGINE_CONTRACT[1],
+                f"{label}.execution_requirements.client_engine.version_range",
+                errors,
+            )
+
+    receipt = value.get("server_capability_receipt")
+    receipt_keys = {"contract_id", "min_version", "max_version_exclusive"}
+    receipt_valid = _strict_keys(
+        receipt,
+        receipt_keys,
+        set(),
+        f"{label}.execution_requirements.server_capability_receipt",
+        errors,
+    )
+    if isinstance(receipt, dict):
+        if receipt.get("contract_id") != SERVER_CAPABILITY_RECEIPT_CONTRACT[0]:
+            errors.append(f"{label}.execution_requirements.server_capability_receipt: unsupported contract_id")
+        if receipt_valid:
+            _validate_range(
+                {
+                    "min_inclusive": receipt.get("min_version"),
+                    "max_exclusive": receipt.get("max_version_exclusive"),
+                },
+                SERVER_CAPABILITY_RECEIPT_CONTRACT[1],
+                f"{label}.execution_requirements.server_capability_receipt.version_range",
+                errors,
+            )
+
+    primitives = value.get("required_primitives")
+    primitive_label = f"{label}.execution_requirements.required_primitives"
+    if not isinstance(primitives, list) or not primitives:
+        errors.append(f"{primitive_label}: expected non-empty array")
+        return
+    seen: set[str] = set()
+    for index, primitive in enumerate(primitives):
+        item_label = f"{primitive_label}[{index}]"
+        item_valid = _strict_keys(
+            primitive,
+            {"primitive_id", "wire_contract_id"},
+            set(),
+            item_label,
+            errors,
+        )
+        if not isinstance(primitive, dict):
+            continue
+        primitive_id = primitive.get("primitive_id")
+        if isinstance(primitive_id, str):
+            if primitive_id in seen:
+                errors.append(f"{item_label}.primitive_id: duplicate {primitive_id!r}")
+            seen.add(primitive_id)
+        expected_wire = EXECUTION_REQUIREMENTS_PRIMITIVES.get(primitive_id)
+        if expected_wire is None:
+            errors.append(f"{item_label}.primitive_id: unknown primitive {primitive_id!r}")
+        elif item_valid and primitive.get("wire_contract_id") != expected_wire:
+            errors.append(
+                f"{item_label}.wire_contract_id: unsupported wire contract for {primitive_id!r}"
+            )
+    if seen != set(EXECUTION_REQUIREMENTS_PRIMITIVES):
+        errors.append(f"{primitive_label}: must declare exactly the supported primitive set")
 
 
 def _string_list(value: Any, label: str, errors: list[str], *, nonempty: bool = True) -> list[str]:
@@ -254,6 +373,8 @@ def _validate_schemas(root: Path, catalog: dict[str, Any], errors: list[str]) ->
         consumers = set(_string_list(entry.get("consumers"), f"{label}.consumers", errors))
         if not consumers <= EXPECTED_CONSUMERS:
             errors.append(f"{label}.consumers: unknown consumers {sorted(consumers - EXPECTED_CONSUMERS)}")
+        if schema_id == "aneb-profile-v2" and consumers != EXPECTED_CONSUMERS:
+            errors.append(f"{label}.consumers: aneb-profile-v2 must be consumed by every component")
         ref = entry.get("path")
         if isinstance(ref, str):
             declared_paths.add(ref)
@@ -562,6 +683,8 @@ def _validate_profiles(
     declared_manifest_paths: set[str] = set()
     group_counts: Counter[tuple[str, str]] = Counter()
     runtime_mode_counts: Counter[str] = Counter()
+    execution_requirement_profiles: set[str] = set()
+    execution_requirement_policies: set[str] = set()
 
     for family_index, family in enumerate(families):
         family_label = f"catalog.profile_families[{family_index}]"
@@ -598,7 +721,7 @@ def _validate_profiles(
             "published-profile-v2": {
                 "contract_version": "aneb-profile-v2",
                 "schema_ref": "aneb-profile-v2",
-                "consumers": {"P1", "P3", "Profile"},
+                "consumers": {"P1", "P2", "P3", "Profile"},
             },
         }.get(family_id)
         if expected_family is not None:
@@ -684,8 +807,8 @@ def _validate_profiles(
         for profile_index, entry in enumerate(profiles):
             label = f"{family_label}.profiles[{profile_index}]"
             base_keys = {"profile_id", "version", "path", "validation_group_id"}
-            runtime_keys = {"runtime_plan_path", "manifest_path"}
-            if not _strict_keys(entry, base_keys, runtime_keys, label, errors):
+            optional_keys = {"runtime_plan_path", "manifest_path", "execution_requirements_policy"}
+            if not _strict_keys(entry, base_keys, optional_keys, label, errors):
                 continue
             profile_id = entry.get("profile_id")
             if not isinstance(profile_id, str) or not profile_id:
@@ -710,6 +833,20 @@ def _validate_profiles(
             profile = load_json(profile_path, profile_ref, errors)
             if not isinstance(profile, dict):
                 continue
+            execution_policy = entry.get("execution_requirements_policy")
+            if execution_policy not in (None, "required"):
+                errors.append(f"{label}.execution_requirements_policy: unsupported policy")
+            execution_required = execution_policy == "required"
+            if execution_required and isinstance(profile_id, str):
+                execution_requirement_policies.add(profile_id)
+            if "execution_requirements" in profile and isinstance(profile_id, str):
+                execution_requirement_profiles.add(profile_id)
+            _validate_execution_requirements(
+                profile,
+                required=execution_required,
+                label=profile_ref,
+                errors=errors,
+            )
             _validate_profile_shape(profile, entry, family, group, profile_ref, errors)
             policy = group.get("runtime_manifest_policy")
             if policy == "required":
@@ -736,6 +873,11 @@ def _validate_profiles(
                     isinstance(phase, dict) and phase.get("type") == "behavior_trace" for phase in phases
                 ):
                     errors.append(f"{label}: embedded-phase profile must not use behavior_trace")
+
+    if execution_requirement_profiles != MIGRATED_EXECUTION_PROFILES:
+        errors.append("execution requirements: profile migration set is not recognized")
+    if execution_requirement_policies != MIGRATED_EXECUTION_PROFILES:
+        errors.append("execution requirements: catalog policy set is not recognized")
 
     expected_families = {"server-root-inline-profile-v1", "published-profile-v2"}
     if family_ids != expected_families:

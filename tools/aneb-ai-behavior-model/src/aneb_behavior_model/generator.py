@@ -78,6 +78,35 @@ def derive_token_runtime_variant(
         plan["tasks"] = selected
         plan["task_count"] = len(selected)
         profile["profile_id"] = "token_multimodal_quick"
+        profile["version"] = "1.2.0"
+        profile["execution_requirements"] = {
+            "contract_id": "aneb-execution-requirements",
+            "contract_version": "1.0.0",
+            "client_engine": {
+                "contract_id": "aneb-token-simulation-engine",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "server_capability_receipt": {
+                "contract_id": "aneb-server-capability-receipt",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "required_primitives": [
+                {
+                    "primitive_id": "echo",
+                    "wire_contract_id": "aneb-echo-v1",
+                },
+                {
+                    "primitive_id": "token_sim",
+                    "wire_contract_id": "aneb-token-task-v1",
+                },
+                {
+                    "primitive_id": "download",
+                    "wire_contract_id": "aneb-download-v1",
+                },
+            ],
+        }
         profile.setdefault("business", {})["label"] = "多模态 Token 快测"
     elif variant == "stress":
         video_tasks = [
