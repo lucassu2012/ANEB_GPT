@@ -32,7 +32,7 @@
 - 完成更新失败时不得报成功并清理；
 - 清理失败时保留 URI 与明确错误。
 
-全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量/结果测试、6 项候选打包测试、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
+全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量/结果测试、8 项候选打包测试、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
 
 ## 4. 当前产物与设备边界
 
@@ -42,4 +42,8 @@
 - APK SHA-256：`82A1A3C45A3ECD5C695417F65BFCF67311C94A571467EFB2E79525C8EBE5BB1F`
 - Android Debug 证书 SHA-256：`6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`
 
-［KNOWN｜HIGH］该精确二进制尚未在 P40 安装。Experience Lab 已退出 WireGuard，但没有明确交还共享手机；Codex 继续遵守“不抢手机”的协调规则。0.5.9 的蜂窝 Quick/JSONL 是有效历史证据，但不冒充 0.5.10 真机证据。收到明确释放后，下一步是安装这一 SHA、验证首次启动、保存单条 JSONL、混合 v1+v2 批量导出，并在最后主动退出 ANEB。
+［KNOWN｜HIGH］该精确二进制尚未在 P40 安装。Experience Lab Phase 0 仍在使用共享设备且没有明确交还；Codex 继续遵守“不抢手机”的协调规则。0.5.9 的蜂窝 Quick/JSONL 是有效历史证据，但不冒充 0.5.10 真机证据。收到明确释放后，下一步是安装这一 SHA、验证首次启动、保存单条 JSONL、混合 v1+v2 批量导出，并在最后主动退出 ANEB。
+
+## 5. 云端候选边界
+
+GitHub Actions run `29633753923` 已成功生成独立云端 Debug 候选。云端 APK SHA-256 为 `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`，身份仍为 `com.aneb.probe.codex` / `0.5.10-codex` / versionCode 42；来源证明 `35942948` 已离线验证。云端 runner 的临时 Debug keystore 与本机不同，因此云端 APK 不应与上面的本机 SHA 混用。共享 P40 释放后，真机验收将锁定云端 SHA，而不是以本机近似二进制替代。
