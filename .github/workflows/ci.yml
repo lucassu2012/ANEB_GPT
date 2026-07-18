@@ -78,6 +78,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install contract validator dependencies
+        run: python -m pip install -e "tools/aneb-ai-behavior-model[test]"
       - name: Verify catalog and result schemas
         run: |
           python scripts/verify_spec_catalog.py
@@ -103,6 +105,9 @@ jobs:
     name: Dedicated gateway tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ANEB_GATEWAY_TEST_CERT_PEM: ${{ secrets.ANEB_GATEWAY_TEST_CERT_PEM }}
+      ANEB_GATEWAY_TEST_KEY_PEM: ${{ secrets.ANEB_GATEWAY_TEST_KEY_PEM }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -114,11 +119,31 @@ jobs:
       - name: Test gateway control plane
         working-directory: gateway
         run: go test -count=1 -race ./...
-      - name: Build and test isolated network namespace
+      - name: Build dedicated gateway binary
         working-directory: gateway
+        run: CGO_ENABLED=0 go build -o aneb-gateway-linux ./cmd/aneb-gateway
+      - name: Record external namespace-test boundary
+        if: env.ANEB_GATEWAY_TEST_CERT_PEM == '' || env.ANEB_GATEWAY_TEST_KEY_PEM == ''
         run: |
-          CGO_ENABLED=0 go build -o aneb-gateway-linux ./cmd/aneb-gateway
-          sudo ANEB_GATEWAY_BINARY="$PWD/aneb-gateway-linux" ./scripts/namespace_integration_test.sh
+          echo "::notice::CA-signed gateway leaf is not configured; external TLS/netem namespace test was not executed."
+          echo "### Dedicated gateway external boundary" >> "$GITHUB_STEP_SUMMARY"
+          echo "Control-plane tests and the Linux binary build passed. The isolated TLS/netem namespace test requires the repository secrets \`ANEB_GATEWAY_TEST_CERT_PEM\` and \`ANEB_GATEWAY_TEST_KEY_PEM\`; it was **not executed** for this run." >> "$GITHUB_STEP_SUMMARY"
+      - name: Test isolated TLS and netem network namespace
+        if: env.ANEB_GATEWAY_TEST_CERT_PEM != '' && env.ANEB_GATEWAY_TEST_KEY_PEM != ''
+        working-directory: gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          TLS_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TLS_DIR"' EXIT
+          printf '%s' "$ANEB_GATEWAY_TEST_CERT_PEM" > "$TLS_DIR/leaf.pem"
+          printf '%s' "$ANEB_GATEWAY_TEST_KEY_PEM" > "$TLS_DIR/leaf-key.pem"
+          chmod 0600 "$TLS_DIR/leaf.pem" "$TLS_DIR/leaf-key.pem"
+          sudo \
+            ANEB_GATEWAY_BINARY="$PWD/aneb-gateway-linux" \
+            ANEB_GATEWAY_TEST_CERT="$TLS_DIR/leaf.pem" \
+            ANEB_GATEWAY_TEST_KEY="$TLS_DIR/leaf-key.pem" \
+            ./scripts/namespace_integration_test.sh
 
   behavior-model:
     name: AI behavior model tests
