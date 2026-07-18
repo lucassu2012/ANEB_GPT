@@ -65,6 +65,11 @@ if (-not $pythonCommand) {
     throw 'Python 3.11+ is required for the behavior-model quality gate.'
 }
 
+& $pythonCommand.Source (Join-Path $PSScriptRoot 'scan_repository_secrets.py')
+if ($LASTEXITCODE -ne 0) {
+    throw "Repository secret scan failed with exit code $LASTEXITCODE."
+}
+
 $candidateTmp = Join-Path $env:TEMP ("aneb-debug-candidate-gate-" + [guid]::NewGuid().ToString('N'))
 try {
     & $pythonCommand.Source `

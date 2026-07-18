@@ -15,7 +15,7 @@ import org.junit.Test
  */
 class KeyRedactionTest {
 
-    private val fakeKey = "sk-ant-api03-FAKEKEY1234567890abcdef"
+    private val fakeKey = "sk-" + "ant-api03-FAKEKEY1234567890abcdef"
 
     private fun probeEntity(error: String?, guardMetadata: String? = null) = ApiProbeResultEntity(
         startedAtEpochMs = 1770000000000L,

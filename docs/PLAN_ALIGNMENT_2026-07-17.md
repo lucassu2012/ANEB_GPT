@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.10 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.1；551 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量/结果测试 + 6 项候选打包测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.10 已加固系统下载导出的失败清理边界，并建立云端可下载、可核验的 Debug 候选流水线。0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验，0.5.10 精确 APK 真机仍待共享手机明确交还。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.10 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.1；551 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量/结果测试 + 8 项候选打包测试 + 5 项凭据安全测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.10 已加固系统下载导出的失败清理边界，并建立云端可下载、可核验的 Debug 候选流水线。M4 凭据安全门现已进入本地质量门与独立云端 job，新增 job 的真实云端结果待下一次 run 回填。0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验，0.5.10 精确 APK 真机仍待共享手机明确交还。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -165,7 +165,8 @@
 3. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。
 4. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
 5. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入、全量门禁、真实 GitHub Actions 工件和来源证明核验；下一步只在共享 P40 明确交还后，安装云端 SHA `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`，验证首次启动、单条/混合批量导出并主动退出。签名密钥仍服从仓库外 Product Owner 所有权边界。
-6. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
+6. ［KNOWN｜HIGH］M4 高置信凭据扫描已接入本地质量门和独立 GitHub security job；本地扫描与定向测试通过，新增云端 job 待真实 run 验证。已经披露的凭据仍必须撤销，扫描结果不能替代供应商审计。
+7. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
 
 ## 9. 原计划待拍板项回写
 

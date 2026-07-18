@@ -86,6 +86,8 @@
 | D-68 | 2026-07-18 | **系统下载导出必须服从“创建 pending → 完整写入 → 明确完成”事务边界；创建后的任何失败都尽力删除半成品，完成更新失败不得报成功。** 旧实现对 `openOutputStream=null` 直接返回且不删 pending 行，也忽略 `ContentResolver.update` 的返回值，可能留下不可用文件或误报成功。0.5.10 把生命周期提取为可故障注入的 sink，分别覆盖创建、打开、写入、完成和清理失败；清理失败时保留 URI 与明确错误供诊断，不伪装成已清理。该变化不改结果内容、摘要、Schema 或评分。 | `Exporter.exportWithSink`；`ExporterTest`；App 0.5.10；Profile catalog 1.3.1 |
 | D-69 | 2026-07-18 | **云端 Debug 候选只能在全仓前置门禁全部通过后交付，且必须同时交付精确 APK、机器清单、SHA-256 和中文安装说明；Debug 永不冒充正式 Release。** 原 CI 只监听 main 且 Android job 只编译不上传，Codex 云分支不会执行、非开发者也拿不到产物。新 CI 监听 `main`/`codex/**`，Android 候选等待 contracts/server/gateway/behavior-model 全绿，再验证 Release 边界、APK ZIP、Gradle↔APK 身份、`com.aneb.probe.codex`、`-codex` 版本与 Android Debug 签名；非 PR 构建用 GitHub attestation 绑定来源，上传工件保留 30 天。任何身份不符、输出目录非空或文件缺失均 fail-closed。真实 run `29633753923` 的五个 job 成功，工件 `8426436270` 内外校验和与 APK 身份通过，云端 APK SHA-256 为 `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`，attestation `35942948` 已离线验真；外部固定 CA 网关命名空间步骤因无叶证书 secrets 明确未执行。 | `.github/workflows/ci.yml`；`scripts/package_debug_candidate.py`；20 scripts tests；GitHub 官方 upload-artifact/attestation 文档；`docs/CLOUD_DEBUG_CANDIDATE_DELIVERY_2026-07-18.md` |
 
+| D-70 | 2026-07-18 | **公开仓不得依赖人工记忆防止凭据提交；本地和云端必须用同一高置信扫描器 fail-closed，日志不得回显匹配值。** 扫描范围固定为 Git 跟踪源码，覆盖 GitHub/模型供应商/云访问密钥、Slack Token 与 PEM 私钥头；路径越界、符号链接或跟踪文件缺失拒绝通过，二进制不作文本猜测。Android 云端候选依赖独立 security job。为避免白名单被滥用，不提供通用行级绕过；已有合成 Key 测试改为运行时拼接。扫描通过不代表已披露凭据安全，撤销与供应商审计仍是硬要求。 | `SECURITY.md`；`scripts/scan_repository_secrets.py`；`scripts/tests/test_scan_repository_secrets.py`；`docs/M4_CREDENTIAL_SAFETY_VALIDATION_2026-07-18.md` |
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

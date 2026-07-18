@@ -40,6 +40,7 @@
 - App 0.5.7 开始 M4 非开发者路径收口：所有正式测试首次开测先解释无线证据权限并允许低置信继续；无网络或非法节点地址在启动 Service 前给出自救提示。P40 已验证非法地址零服务启动、无线用途说明和完整 Network Quick 正常落库/18 个无线样本，详见 `docs/P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - App 0.5.9 将三类结论统一为评分器冻结的稳定 ID、严重级别、文本和依据，Profile catalog 升至 1.3.0；0.5.10 进一步把系统下载导出改成失败可清理的事务生命周期，避免半成品文件或完成失败误报成功。当前 90 个 JVM suites / 551 tests 零失败，Lint 0 error / 11 notices，全仓质量门通过；0.5.10 精确 APK 待 Experience Lab 明确交还共享 P40 后再做同二进制安装验收。
 - 云端 CI 不再只“编译但不交付”：`main` 与 `codex/**` 分支通过 Profile/结果合同、20 项脚本测试、服务器、网关、行为模型、Android、Release 边界后，才生成带 APK 身份、签名、SHA-256、中文安装说明的 Debug 候选。run [`29633753923`](https://github.com/lucassu2012/ANEB_GPT/actions/runs/29633753923) 的五个 job 已成功，工件 `8426436270` 与来源证明 [`35942948`](https://github.com/lucassu2012/ANEB_GPT/attestations/35942948) 已独立核验；外部固定 CA 的网关隔离命名空间步骤因未配置叶证书密钥而明确未执行。工件保留至 2026-08-17，Debug 候选不冒充正式签名 Release。
+- M4 公开仓凭据安全门已加入本地质量门和独立云端 job：只扫描 Git 跟踪源码中的高置信 Token/云访问密钥/私钥头，命中日志只报规则、文件和行号；Android 候选必须等待扫描通过。披露过的凭据仍必须撤销，扫描通过不能恢复其安全性，见 `SECURITY.md` 与 `docs/M4_CREDENTIAL_SAFETY_VALIDATION_2026-07-18.md`。
 - “3 个子项目 + 1 个横切机制”的事实进度与 M0～M4 验收差距见 `docs/PLAN_ALIGNMENT_2026-07-17.md`；当前续开发状态、真机 run 与维护入口见 `docs/CLOUD_CONTINUATION_2026-07-16.md`；版本化测量与产品可靠性裁定见 `docs/DECISION_LOG.md` D-36～D-69。
 
 后续扩展项包括三类 Standard 长时回归、Stress 的取消/断网/切后台恢复、`agent_control` / `background_continuity` / `realtime_visual` Profile、海外节点和 CAMARA QoD。发布签名密钥由 Product Owner 在仓库外创建和保管，见 `docs/RELEASE_BUILD.md`。
