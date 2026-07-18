@@ -1,6 +1,6 @@
 # ANEB 云端续开发 Checkpoint
 
-> 时间：2026-07-17（Asia/Shanghai）
+> 截至：2026-07-19（Asia/Shanghai）
 > GitHub：`lucassu2012/ANEB_GPT`
 > 发布策略：公开仓只包含源码、设计文档和可复现测试；本机 `evidence/`、设备数据库、日志、密钥、APK、构建缓存不发布。
 
@@ -11,8 +11,10 @@
 - AI 真实业务行为模型独立开发，通过冻结的 Profile v2、模型哈希和确定性轨迹与 App 对接。
 - Token、AI 实时交互、网络综合性能三类测试独立评分，禁止混入原有 AQS。
 - 缺失测量值必须为 `null`/“—”，不得填 0；95% 达标结论必须带有效样本数和置信度。
+- 2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 已退役，不再作为任何操作授权。P40 开测前只读确认设备在线、Huawei Launcher 前台、无冲突 ANEB/业务 App/服务/VPN/tun/抓包；现场干净即可直接测试，无法安全归属的既有会话不得擅自停止或覆盖。结束时停止本轮全部相关进程与网络工具、移除本轮临时规则、恢复临时设置、回到 Launcher 并立即复核。
+- E-01 与阿里云变更仍走独立保护链：变更前核对实际基线，远端 `flock` 覆盖完整生命周期，只做受限变更，失败时原子回滚，结束后复核服务身份、共享主机与网络基线。退役状态文件不能替代这些检查。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-73；完整指标、目标、评分与结论合同见
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-80；完整指标、目标、评分与结论合同见
 `docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
 
 ## 2. 已完成
@@ -48,12 +50,12 @@
 - 专用 IP 层网关已生产化到 `aneb-gateway/0.2.0`：固定 Debug CA 与逐启动证书链核验、真实转发/回程和全部 main-table 路由预检、严格 IFB/filter/ingress 所有权、可重试失败清理、状态目录防 symlink/mount、严格 Token/TLS key 来源、同步审计，以及带回滚的一键安装/预检/安全卸载均已实现。App 0.5.0 仅对“提交结果未知”执行同 run 对账和一次幂等 POST；明确 409/4xx 拒绝立即失败且绝不重试。一次性 Token 只经随机句柄交接，失败/取消先做有界清理再冻结证据。发布复审关闭 9 项 P1；Go 定向测试重复 20 轮及 E-01 隔离安装安全回归通过。`0.067ms → 97.753ms → 0.051ms` 是固定 CA 加固前的数据面集成证据，不冒充最终发布证据；最终 TLS 正向生命周期缺离线 CA 签发的现场叶证书，P40 网络层真机还缺独占双网口 Linux/AP，二者均为 `BLOCKED_EXTERNAL`。
 - App 0.5.9 已统一三类结论语义：每条结论由类别评分器冻结稳定 ID、严重级别、文本和指标/证据 basis，统一覆盖任务完成性、Profile 业务行为、逐项门限和主要瓶颈；导出器不再按顺序推断语义，Compose 不再维护另一套行为文案。结论策略变化同步升级 12 个 Profile 与 catalog 1.3.0，并重新生成 6 个哈希绑定运行包。545 项 JVM 测试、Lint 0 error、Schema/catalog、12 项分析、31 项行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条语义结论与下载目录 strict-v2 JSONL 已复验。实测后重构的精确 0.5.9 APK 没有另行安装，随后由 0.5.10 云端候选取代；不能把 0.5.10 验收倒写成该 0.5.9 二进制证据。酒店 Wi-Fi 前序失败只因门户未认证，不作为网络质量 A/B。
 - App 0.5.10 已加固系统下载导出：只有 pending 行创建、完整写入和完成更新全部成功才返回成功；任何中途失败都尝试删除半成品，清理失败会保留 URI 与明确错误供诊断。6 个故障注入测试覆盖全部生命周期，当前 90 suites / 551 JVM tests、Lint 0 error / 11 notices 与全仓门禁通过；catalog 1.3.1 只同步 P1 消费者版本。云端 SHA `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85` 已在 P40 安装为 code 42；跨 Debug 签名的数据保全后 Room v19 integrity OK，保留 36 条信封/10 条 `test_run`，安全偏好/API key 未恢复。批量导出 `aneb_results_32_of_36_20260718_161911.jsonl` 通过 32 条 v1/v2 离线验证并透明拒绝 4 条完整性异常；单条 v2 与批次对应行逐字节一致，两条 MediaStore 记录均为 `is_pending=0`。
-- M0-EC1 离线候选把 App 0.5.11、server 0.8.0、behavior model 0.3.0、catalog 1.4.0 与 `token_multimodal_quick@1.2.0` 接到同一执行合同。Quick 必须在业务流量前完成 APK manifest、精确 Profile 摘要和节点能力回执核对，任何缺失、未知字段或冲突均 fail closed；旧 11 个 Profile 继续兼容。该切片不改指标、门限、评分、Room 或结果合同。当前 E-01 仍运行 0.7.0，P40 仍安装已验收的 0.5.10；公网部署和真机结果尚未产生，详见 `docs/M0_TOKEN_QUICK_EXECUTION_CONTRACT_VALIDATION_2026-07-18.md`。
+- M0-EC1 离线候选把 App 0.5.12、server 0.8.0、behavior model 0.3.1、catalog 1.4.1 与 `token_multimodal_quick@1.2.1` 接到同一执行合同。Quick 必须在业务流量前完成 APK manifest、精确 Profile 摘要和节点能力回执核对，任何缺失、未知字段或冲突均 fail closed；模型生成器还必须选择至少一个有界返回附件，当前为 1MiB，使声明的 download 原语在真实 Quick 中发生。同一 run 使用规范 UUID，reachability/capability 由固定角色区分；服务端判定要求唯一 start/end 双 barrier、同一进程实例、连续序号、能力门先于业务且窗口内无 drop/未归因业务。该日志只证明 request-entry coverage，正向成功或负向零业务结论还必须与同 run 客户端冻结结果和节点身份结合。旧 11 个 Profile 继续兼容。该切片不改指标、门限、评分、Room 或结果合同。当前 E-01 仍运行 0.7.0；0.5.11 只保留历史负向证据，0.5.12 云端 APK 和正向真机结果尚未产生，详见 `docs/M0_TOKEN_QUICK_EXECUTION_CONTRACT_VALIDATION_2026-07-18.md`。
 - GitHub CI 已从“只监听 main、只编译”升级为 Debug 候选交付流水线：`codex/**` 也会触发，Android 候选等待凭据扫描、合同、服务器、网关和行为模型全绿，随后验证 Release 边界、APK 身份与 Debug 签名，生成 APK、机器清单、checksums 与中文安装说明；非 PR 构建追加 GitHub provenance attestation，工件保留 30 天。actionlint、26 项脚本测试、真实本地 APK 打包和全量门禁已通过。source `51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2` 的 GitHub run `29635434193` 六个 job 成功；工件 `8427011992`、ZIP 摘要 `ffef2b3f0c3177e3ac81794b3d7ced536eee3afae71f5927e6a43fd6db3cccb0`、云端 APK 身份/SHA 与 attestation `35945988` / Rekor `2193995642` 均复核通过。外部固定 CA 的网关隔离 TLS/netem 步骤因无叶证书 secrets 明确跳过，不折算为 PASS。
 
 ## 3. 下一阶段（按顺序）
 
-1. M0-EC1 Token Quick 跨端执行合同的离线实现与门禁收口后，先按唯一共享状态文件自动领取 E-01/P40，以受保护切换验证 server 0.8.0，再完成 0.5.11 Quick 正向和不兼容回执零业务请求验收；清理后自动转待交接，由另一方独立释放。未完成这些步骤前不写“已部署/已真机验证”。
+1. M0-EC1 Token Quick 跨端执行合同的离线实现与门禁收口后，先只读确认 P40 实时现场干净；若存在无法安全归属的会话则停止并协调，不擅自清理。随后以远端内核互斥锁保护 server 0.8.0 切换，完成 0.5.12 Quick 正向和不兼容回执零业务请求验收；结束时停止本任务相关 App/VPN/抓包、清除临时网络条件、恢复临时设置、返回 Huawei Launcher 并立即复核。未完成这些步骤前不写“已部署/已真机验证”。
 2. 版本化结果合同（compatible v1 + strict v2）、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector、TTFT 同条件重复性复测、0.5.10 精确云端二进制安装、单条 v2 和混合 v1+v2 批量导出均已完成；下载失败清理已有自动化故障注入。下一步补普通用户不依赖 ADB 的完整安装/首次启动/测试/导出链，以及 Android 系统真实失败路径的产品提示回归。
 3. P3 v0.2.0 的授权观测、训练/留出隔离、校准验证和 validated 发布复算流水线已完成；真实授权数据仍是外部输入，到位前保持 hypothesis。
 4. M4 的开测前自救、历史批量导出、失败清理、凭据扫描和云端 Debug 候选打包已通过本地与真实 GitHub 云端门禁；云端工件、APK 身份/校验和、来源证明及 P40 精确候选导出均已核验。下一项是不依赖 ADB 的终端用户路径与正式签名 Release；签名密钥仍由 Product Owner 在仓库外保管，缺密钥不能冒充正式 Release。

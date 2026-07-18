@@ -67,7 +67,7 @@ class TokenExecutionContractGateTest {
 
     private fun requiredProfile(): ScenarioProfile = ScenarioProfile(
         profileId = "token_multimodal_quick",
-        version = "1.2.0",
+        version = "1.2.1",
         executionTarget = "aneb_probe_simulator",
         claimScope = "application_end_to_end_to_probe_node",
         contractVersion = ScenarioProfile.CONTRACT_V2,
@@ -105,7 +105,7 @@ class TokenExecutionContractGateTest {
               {"primitive_id":"token_sim","wire_contract_id":"aneb-token-task-v1"}
             ],
             "validated_profiles":[
-              {"profile_id":"token_multimodal_quick","profile_version":"1.2.0","profile_sha256":"$profileSha"}
+              {"profile_id":"token_multimodal_quick","profile_version":"1.2.1","profile_sha256":"$profileSha"}
             ]
           }
         }

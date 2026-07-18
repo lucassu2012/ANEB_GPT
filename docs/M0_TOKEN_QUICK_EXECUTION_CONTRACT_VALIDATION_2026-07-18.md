@@ -1,16 +1,22 @@
 # M0-EC1 Token Quick 跨端执行合同与验证记录
 
+> ［KNOWN｜HIGH］D-80 已于 2026-07-19 取代本文中的共享状态、lease、待交接和受限 Verifier
+> 操作规则；这些词在事故叙述中仅表示历史事实，不能再作为当前门禁。
+
 > ［KNOWN｜HIGH］反方结论：M0-EC1 目前仍不能标记为“0.8.0 已部署”或“跨端正向验收完成”。
-> commit `708ced3` 的 GitHub CI 工件 0.5.11 已安装到 P40，并已在 E-01 0.7.0 上证明缺少能力回执时
-> fail closed；首次 0.8.0 切换的候选回执和全量旧端点 smoke 通过，但旧防火墙 raw 指纹误报随后
-> 触发自动回滚。E-01 当前继续运行 0.7.0；须完成独立交接、用新 lease 重试部署并取得 Quick
+> commit `708ced3` 的 GitHub CI 工件 0.5.11 已安装到 P40；在现场观察为 E-01 0.7.0/无能力回执的
+> 联调语境中，客户端产生两条 fail-closed 记录，但 retained result 本身不证明 endpoint 版本；首次
+> 0.8.0 切换的候选回执和全量旧端点 smoke 通过，但旧防火墙 raw 指纹误报随后
+> 触发自动回滚。新 0.5.12/code 44 候选加入同-run脱敏请求审计，但尚无云端 APK；E-01 当前
+> 继续运行 0.7.0。仍须先让新增构建、部署与审计门禁全绿，再在 P40 实时干净桌面前提下重试部署并取得 Quick
 > 正向 run，才能改变这个结论。
 
 ## 1. 目标与非目标
 
 - ［KNOWN｜HIGH］本切片只解决一个问题：P1 在执行 Token Quick 前，能否证明本地执行引擎、
   P2 节点能力和本次精确 Profile 是互相兼容的。
-- ［KNOWN｜HIGH］目标 Profile 只有 `token_multimodal_quick@1.2.0`；其余 11 个 Published
+- ［KNOWN｜HIGH］目标 Profile 只有 `token_multimodal_quick@1.2.1`；历史 1.2.0 只声明了
+  download 能力却未在 Quick 计划中选择返回附件，不能作为本轮正向验收对象；其余 11 个 Published
   Profile 保持既有兼容行为。
 - ［KNOWN｜HIGH］本切片不修改业务指标、网络指标、质量目标、门限、AQS 权重、T4 否决、
   结论算法、Room schema 或结果合同。
@@ -20,11 +26,11 @@
 
 | 单元 | 候选版本 | 当前状态 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.11-codex，code 43，Room v19 | ［KNOWN｜HIGH］commit `708ced3` 的 GitHub CI 工件已安装到 P40；APK SHA-256 为 `7586B874EE53DFDB75C0E56EE0B50F43CCA2D1480ECA01E39256CDCCC3AAA0CC`。97 suites / 577 JVM tests、assembleDebug 与 Lint 通过；已完成 0.7.0 缺回执负向真机验证，尚未完成 0.8.0 正向 run |
+| P1 / ANEB Probe Android | 0.5.12-codex，code 44，Room v19 | ［KNOWN｜HIGH］0.5.11（commit `708ced3`）云端工件及其负向真机证据保留为历史；0.5.12 在该门禁上增加同一 run 的控制/业务请求审计 ID。最终暂存快照已通过本地全仓质量门，但尚未形成新 commit/GitHub CI APK、安装到 P40 或完成 0.8.0 正向 run |
 | P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］离线测试、首次切换中的候选回执及全量旧端点 smoke 通过；随后因旧 raw 防火墙指纹误报而自动回滚，当前未部署到 E-01 |
-| P3 / aneb-ai-behavior-model | 0.3.0 | ［KNOWN｜HIGH］离线测试通过 |
-| catalog / Profile 治理 | 1.4.0 | ［KNOWN｜HIGH］离线 catalog 校验通过 |
-| Token Quick Profile | 1.2.0 | ［KNOWN｜HIGH］manifest 已绑定精确 Profile 与 runtime plan |
+| P3 / aneb-ai-behavior-model | 0.3.1 | ［KNOWN｜HIGH］生成器按模型与 seed 可复现选择一个 1MiB 返回附件；本地全仓门禁中的 38 项行为模型测试通过 |
+| catalog / Profile 治理 | 1.4.1 | ［KNOWN｜HIGH］索引 Quick 1.2.1；本地 catalog 门禁通过 |
+| Token Quick Profile | 1.2.1 | ［KNOWN｜HIGH］manifest 绑定精确 Profile 与 runtime plan；task-0006 真实触发 1MiB download |
 | 执行要求合同 | `aneb-execution-requirements@1.0.0` | ［KNOWN｜HIGH］P1/P2/P3 共用 |
 | 服务端能力回执 | `aneb-server-capability-receipt@1.0.0` | ［KNOWN｜HIGH］P1/P2 共用 |
 
@@ -59,9 +65,9 @@
 - ［KNOWN｜HIGH］P1 引擎身份为 `aneb-token-simulation-engine@1.0.0`，必须落在 Profile 声明
   的半开版本区间内。
 - ［KNOWN｜HIGH］P2 回执必须携带同一三项 `primitive_id/wire_contract_id` 映射，并在
-  `validated_profiles` 中精确声明 `token_multimodal_quick@1.2.0`。
+  `validated_profiles` 中精确声明 `token_multimodal_quick@1.2.1`。
 - ［KNOWN｜HIGH］Profile 的 `canonical-json-sha256-v1` 摘要为
-  `38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4`；回执中使用
+  `caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773`；回执中使用
   `sha256:` 前缀形式。该摘要不是把自身写入 Profile 后再计算的自引用字段，而是由 manifest
   与服务端/P1 运行时独立核对。
 
@@ -77,6 +83,9 @@
    请求。任一核对失败都必须 fail closed，并给出明确中文错误，不能退回“尽力执行”。
 5. ［KNOWN｜HIGH］未知的额外 server capability 可以忽略；重复原语 ID 必须拒绝，即使重复项
    的线路合同相同也不能依赖数组顺序决定结果。
+6. ［KNOWN｜HIGH］0.5.12 为同一 Token run 的 reachability、能力回执及三项业务原语附加同一个
+   `X-Aneb-Run-Id`；0.8.0 只记录固定 class/method/path 和净化后的 run ID，不记录 query、body、
+   远端地址或非法原值。审计不得同步阻塞响应路径，丢弃必须可观测。
 
 ## 5. 兼容性与安全边界
 
@@ -92,25 +101,27 @@
 
 | 验证层 | 结果 | 可支持的结论 | 不能支持的结论 |
 |---|---|---|---|
-| P3 schema、生成器、catalog 与 manifest | ［KNOWN｜HIGH］离线测试通过 | Quick 1.2.0 执行要求可生成、可校验，旧 Profile 兼容，精确哈希已冻结 | 不能证明 Android 已正确阻断业务请求 |
+| P3 schema、生成器、catalog 与 manifest | ［KNOWN｜HIGH］定向生成器测试与最终全仓门禁均通过；行为模型 38/38 通过，catalog 报告 8 个 schema、2 个 Profile family、16 个 Profile、6 个运行包、6 个内嵌网络 Profile 与 4 个行为模型全部一致 | Quick 1.2.1 执行要求可生成、可校验，并从模型派生计划真实选择 1MiB 返回附件；旧 Profile 兼容，精确哈希已冻结 | 不能证明 Android 已正确阻断业务请求或 E-01 已执行 download |
 | P2 能力加载、规范化哈希、回执与三项真实 handler | ［KNOWN｜HIGH］Go 离线测试通过 | 0.8.0 候选能 fail closed，并能为精确 Quick 生成能力回执 | 不能证明 E-01 已运行 0.8.0 |
 | 部署脚本安全与候选回执 smoke | ［KNOWN｜HIGH］离线测试通过；首次公网切换实际执行后自动回滚 | 0.8.0 候选回执、旧端点 smoke 和 0.7.0 回滚路径均在 E-01 实际运行；最终修复提交 `4030179` 已保留防火墙语义、消除仅由 iptables-save 运行时间造成的漂移，并拒绝空/畸形/错误工具族快照 | 不能据此声称 0.8.0 已部署，也不能把事故后稳定性追溯成切换窗口绝无并发语义变化 |
-| P1 解析、能力门禁与零业务请求路径 | ［KNOWN｜HIGH］26 项执行合同定向测试通过，覆盖严格解析、精确旧版白名单、运行包路径绑定与 fail-closed；全量 97 suites / 577 tests，0 failure / 0 error / 0 skipped；assembleDebug、Lint 0 error | 缺失/冲突回执在控制面后、首个业务请求前拒绝；Quick 运行包不能被其他 variant 的自洽文件替换；合成 transport 的业务请求数为 0 | 不能证明 E-01 公网或 P40 真机路径 |
-| GitHub CI 与云端 APK | ［KNOWN｜HIGH］commit `708ced3` 的 6 个 CI jobs 全部成功；工件 manifest/checksum 已核对并安装到 P40 | 当前真机所装 0.5.11 与云端构建工件身份精确一致 | 不能证明 E-01 0.8.0 或正向 Quick 已验收 |
-| P40 Pro / E-01 负向真机联调 | ［KNOWN｜HIGH］E-01 0.7.0 上两次 Quick 均以 `receipt_missing` fail closed | P1 会在 serverinfo 控制面预检后、echo/token-sim/download 业务阶段前拒绝不兼容节点，并持久化 INVALID/未评分结果 | 不能声称 0.8.0 正向业务路径、蜂窝/Wi-Fi 体验质量或评分正确性已验收 |
-| 全仓质量门 | ［KNOWN｜HIGH］2026-07-18 本地执行 PASS | Android 97 suites / 577 tests（0 failure / 0 error / 0 skipped）、Release 边界、Debug 候选身份、8 Schema/catalog、结果合同、Go server/gateway、87 项脚本测试（86 通过、1 项按设计跳过）和 P3 38 项测试通过；部署修复另经 PowerShell/Bash 语法、catalog、Go 全量和部署安全 15/15 复核；自动 Verifier 的状态/探针/并发失败路径及 AI 实时打断 300ms 合同均纳入回归 | 不能证明修复后的 0.8.0 公网重试或正向真机路径已完成 |
+| P1 解析、能力门禁与零业务请求路径 | ［KNOWN｜HIGH］0.5.11 历史门禁曾通过；0.5.12 的同-run传递定向测试及最终 Android 单测/构建/Lint/发布边界门禁均通过；本地 Debug 候选 SHA-256 为 `8CCBD5402352639B5E6F32A165D69888ABAFD6655F39E235410C3A2D624E7687`，但它不是云端工件 | 缺失/冲突回执在控制面后、首个业务请求前拒绝；Quick 运行包不能被其他 variant 的自洽文件替换；合成 transport 的业务请求数为 0；同一 Token run 可绑定服务端控制/业务日志 | 不能证明 E-01 公网或 P40 真机路径 |
+| GitHub CI 与云端 APK | ［KNOWN｜HIGH］commit `708ced3` 的 0.5.11 六个 CI jobs 全部成功；工件 manifest/checksum 已核对并安装到 P40。0.5.12 尚未 push 或生成云端工件 | 历史 0.5.11 真机身份精确一致；未来 0.5.12 必须重新走 CI 身份与摘要门禁 | 不能把 0.5.11 的身份外推给 0.5.12，也不能证明 E-01 0.8.0 或正向 Quick 已验收 |
+| P40 Pro / E-01 负向真机联调 | ［KNOWN｜HIGH］两次 Quick 客户端结果均 fail closed，持久化 INVALID/未评分且任务/KPI 字段为 0；界面原因指向能力回执缺失，但 retained result 未持久化机器 `reason_code` | P1 的客户端门禁会拒绝不兼容节点并且不产生客户端业务产物 | 现有包缺原始 `/serverinfo`、同 run 服务端访问计数/日志和 PCAP，不能单靠它证明目标必为 0.7 或服务端绝对零业务 HTTP 请求；也不能声称 0.8.0 正向路径已验收 |
+| 全仓质量门 | ［KNOWN｜HIGH］2026-07-19 最终暂存快照门禁 PASS：Android 单测/构建/Lint/发布边界、Profile/结果合同、server、gateway、129 项脚本测试（3 项因当前 Windows 不具备对应 Linux 原语而按设计跳过）、38 项行为模型测试全部通过；请求审计判定器另有 40/40 定向回归，Go server 94 项顶层测试与 `go vet` 通过；599 个跟踪文件及 44 个暂存路径的高置信凭据扫描 PASS | 旧共享状态 Verifier 只保留固定非零拒绝且不执行探针/写状态的兼容薄壳；部署侧覆盖 clean commit 绑定构建、`GOFIPS140=off` 污染覆盖、严格 staged/live 回执、远端互斥、原子回滚和证据门禁 | 本地门禁不能证明 GitHub CI、0.8.0 公网重试或正向真机路径已完成 |
 
-### 6.1 云端工件与 0.7.0 负向真机证据
+### 6.1 云端工件与现场 0.7.0 语境下的客户端负向证据
 
 - ［KNOWN｜HIGH］GitHub commit `708ced3bb4939148c3cc9817849ab10cd4ea3317` 产出的
   `ANEB-Probe-0.5.11-codex-debug.apk` 已按 manifest/checksum 核对后安装到 P40；包名为
   `com.aneb.probe.codex`，SHA-256 为
   `7586B874EE53DFDB75C0E56EE0B50F43CCA2D1480ECA01E39256CDCCC3AAA0CC`。
-- ［KNOWN｜HIGH］E-01 仍为 0.7.0、`/serverinfo` 不含 `execution_capabilities` 时，真机 run
+- ［KNOWN｜HIGH］联调现场观察到 E-01 为 0.7.0、`/serverinfo` 不含 `execution_capabilities` 时，真机 run
   `019f74f6-7e49-7623-938e-37044826b06e` 与
-  `019f74f8-ac46-78f6-9a55-25c9d3511dc1` 均以 `receipt_missing` 拒绝；两条记录的
-  score/grade 为 null、verdict/confidence 为 `INVALID`，且日志未进入 echo、token-sim 或 download
-  业务阶段。这证明的是“不兼容节点零业务 fail closed”，不是 Quick 业务性能。
+  `019f74f8-ac46-78f6-9a55-25c9d3511dc1` 均被客户端拒绝；两条记录的 score/grade 为 null、
+  verdict/confidence 为 `INVALID`，任务/KPI 字段为 0，且没有客户端业务产物。retained result 没有
+  `endpoint.server_version` 或机器 `reason_code`，证据包也没有原始 `/serverinfo`、服务端 access
+  log/计数或 PCAP。因此它证明客户端 fail closed，但不能单靠现有包独立证明目标必为 0.7，或服务端
+  绝对没有收到业务 HTTP 请求；这也不是 Quick 业务性能证据。
 
 ### 6.2 首次 0.8.0 切换、回滚与证据边界
 
@@ -120,12 +131,19 @@
   回滚”，不是“0.8.0 已部署”。
 - ［COMPUTED｜HIGH］E-01 上间隔约两秒连续采集时，raw iptables v4/v6 SHA 会变化；仅移除
   `iptables-save`/`ip6tables-save` 自动生成的 `Generated/Completed` 运行时间后，v4/v6 指纹稳定。
-  当前 0.7.0 为 `active`，PID `3775079`，二进制 SHA-256 前缀 `9208aba2…`；三次连续规范化
-  `full/v4/v6/nft/Docker` 与 `eth0` qdisc 指纹逐项相同，且没有 `wg-aneb-lab`、`ifb-aneb-lab`、
-  `ANEB_LAB` 规则或 UDP 51820 监听。
-- ［INFERRED｜MED］旧脚本的 mismatch 与每次采集写入墙钟时间完全一致，因此时间噪声是本次误报
+  2026-07-18 22:01 的 T+0/T+10秒 最终复核确认当前 0.7.0 为 `active`；六项完整 SHA-256 为：
+  binary=`9208aba26f18ea00d18d1bbcf3f1c6f7042e66b341675a58048894b168ba6b5b`，
+  qdisc=`e9455ff1a3a44f3b5979ee068f8c4e3fe90aa0ebdd30e89add8299403958cbac`，
+  firewall full=`08e3d3dfeb9f3e4ddc69ba440c5af7697536b0d45c3016068b33cb9d36ab75dd`，
+  v4=`66b46a501b972e9b8d3d7fa0ab38e9e2b0fb24f5e521f4c5ca11ef60a53a0100`，
+  v6=`192a359dda179d478c0e99eb3b0817894794ce62495afd489ed12a5e433c395e`，
+  nft=`dd5369267b8eb08ddfdfde3a0e1c57f034951d608c45ac1409ccdafc77024657`。
+  当时没有 `wg-aneb-lab`、`ifb-aneb-lab`、`ANEB_LAB` 规则或 UDP 51820 监听；这组检查只能证明
+  运行态无 Phase 0 残留，不能替代持久路径和 systemd enabled 状态复核。完整证据边界见
+  `SHARED_RELEASE_VERIFIER_VALIDATION_2026-07-18.md`。
+- ［INFERRED,post-hoc｜MED］旧脚本的 mismatch 与每次采集写入墙钟时间完全一致，因此时间噪声是本次误报
   的直接解释；但旧部署器没有保留可用于事后语义差异比较的切换前 raw 快照，所以不能仅凭当前
-  稳定性追溯证明切换窗口绝无并发防火墙语义变化。保守处理是先独立交接，再重试完整门禁。
+  稳定性追溯证明切换窗口绝无并发防火墙语义变化。保守处理是先确认实时现场干净，再重试完整门禁。
 - ［KNOWN｜HIGH］最终修复提交 `403017928824cf730f944d8606431a8108290808` 在初始修复
   `1fbdb1f058010fb4df0a1e1267a4ba65ce0ac185` 上继续 fail closed；它只规范化上述运行时间，并且
   工具版本、backend、warning、链、policy、规则、规则注释与 nft 内容均参与比较。脚本现在在切换
@@ -135,19 +153,77 @@
 
 ## 7. 发布与部署门禁
 
-- ［KNOWN｜HIGH］共享资源联调只使用 commit `708ced3` 的 GitHub CI 工件；已安装 APK 的 SHA-256
-  必须为 `7586B874EE53DFDB75C0E56EE0B50F43CCA2D1480ECA01E39256CDCCC3AAA0CC`。先前本地候选
-  `B4CC8A69…` 不是本次真机工件，不得把两者混写或用本地摘要替代云端身份。
-- ［KNOWN｜HIGH］首次质量门中的凭据扫描覆盖 571 个 Git 跟踪文件和 0 个暂存路径，因此不能作为
-  新增文件的发布证据。全部 48 个预期变更进入暂存区后已单独重跑：覆盖 587 个跟踪文件并重扫
-  48 个暂存路径，结果 PASS；`git diff --cached --check` 同时通过。
-- ［KNOWN｜HIGH］本次事故 lease 已结束操作并处于“待交接”；不得复用。必须由另一固定角色或
-  受限自动 `Verifier` 独立只读复核并释放为“空闲”，随后 Codex 生成全新 128-bit lease 自动接管，再把同一 lease 传给修复后的
-  部署脚本。脚本只读断言“进行中/Codex/E-01/同一 lease”，冻结健康 0.7.0 与同组双快照共享主机
-  基线，并按 `TEST_SERVER_CAPABILITIES.md` 的切换/强回滚门禁从头执行。
-- ［KNOWN｜HIGH］0.8.0 公网回执和既有端点 smoke 全部通过后，才允许在 P40 上做一次 Quick
-  正向验收和至少一次不兼容回执的零业务请求验收。
-- ［KNOWN｜HIGH］任何清理或回滚状态不明时必须置为“异常锁定”，不得继续测试或宣称完成。
+- ［KNOWN｜HIGH］commit `708ced3` 的 0.5.11 GitHub CI 工件和 SHA-256
+  `7586B874EE53DFDB75C0E56EE0B50F43CCA2D1480ECA01E39256CDCCC3AAA0CC` 只用于解释历史负向
+  真机证据。下一次 P40/E-01 联调必须使用完成本轮改动后新 commit 的 0.5.12 GitHub CI 工件；在 CI
+  manifest、APK 身份和 SHA-256 回填前，不得把本地构建或旧摘要当成新候选。
+- ［KNOWN｜HIGH］全部 44 个预期变更进入暂存区后，最终质量门中的凭据扫描覆盖 599 个 Git 跟踪文件并重扫
+  44 个暂存路径，结果 PASS；`git diff --cached --check` 同时通过。扫描前发现的一个假私钥负向夹具字面量已改为
+  运行时拼接并重新验证，未发现真实 GitHub Token、API key 或私钥。
+- ［KNOWN｜HIGH］本次事故 lease 在 22:01 完成 T+0/T+10秒 独立只读复核属于历史证据；共享状态、
+  lease 与 Verifier 流程已于 2026-07-19 退役。只有离线门禁全绿、P40 实时为干净桌面且准备实际切换时，
+  才运行修复后的部署脚本。脚本必须在任何 live 变更前取得 E-01 远端内核互斥锁，冻结健康 0.7.0
+  与同组双快照共享主机基线，并按 `TEST_SERVER_CAPABILITIES.md` 的切换/强回滚门禁从头执行。
+- ［KNOWN｜HIGH］0.8.0 公网回执和既有端点 smoke 全部通过后，才允许在 P40 实时现场干净的前提下做一次 Quick
+  正向验收和至少一次不兼容回执的零业务请求验收；若既有会话无法安全归属，不得擅自停止或覆盖。
+- ［KNOWN｜HIGH］0.8.0 staging 必须来自精确 clean commit 的隔离 Git 快照；本地 provenance、
+  `go version -m`、上传 manifest、staged/live receipt、安装后全量工件 manifest 与持久证据目录必须
+  互相一致。远端部署必须持有全生命周期互斥锁；证据未原子完成、私钥清理不确定或回滚未恢复时均失败。
+- ［KNOWN｜HIGH］正向/负向 run 必须同时保存原始 `/serverinfo`、机器 reason code、客户端冻结结果与
+  D-81 服务端 request-entry 审计。审计使用与目标 run 两两不同的 start/end UUID；两个 `/serverinfo`
+  barrier 分别携带 `X-Aneb-Audit-Role: window_start/window_end`。判定必须确认唯一双边界、同一
+  `instance_id`、严格连续 `seq`、恰好一个且先于业务的 `capability`，并拒绝 drop、重启、缺号、乱序、
+  并发窗口、合同外或未归因业务。判定器 PASS 只证明请求进入审计边界，不证明 handler、响应体或客户端
+  接收成功；必须与同 run 客户端结果结合。没有完整双边证据时，不得把“客户端无业务产物”扩大为
+  “服务端零请求”。
+- ［KNOWN｜HIGH］任何清理或回滚状态不明时必须停止后续测试、报告实际残留，不得宣称完成；不得再写
+  已退役的共享状态文件来代替现场清理。
+- ［KNOWN｜HIGH］P40 run 结束后必须停止本轮全部相关 App、VPN、抓包与临时网络规则，恢复临时设置，
+  返回 Huawei Launcher 并立即只读复核；E-01/阿里云仍须独立完成受保护预检、远端 `flock`、原子
+  回滚保险丝与验后基线检查。
+
+### 7.1 同-run审计操作顺序（D-81）
+
+［KNOWN｜HIGH］以下三个 ID 必须是规范小写 UUID 且两两不同；`RUN_ID` 由本次 App 冻结结果读取，
+不得复用旧 run。控制器必须自行生成本次 start/end ID，不能从旧证据复制。开始前冻结 journal cursor、
+boot ID、systemd invocation ID、MainPID、节点身份和本地时间，并在整个窗口持有与部署互斥的 E-01
+审计锁；同时保存两次 barrier 的原始响应头和 body：
+
+```powershell
+$StartBarrierId = [guid]::NewGuid().ToString().ToLowerInvariant()
+$EndBarrierId = [guid]::NewGuid().ToString().ToLowerInvariant()
+
+# 1. 在启动 App run 之前请求同一 E-01 节点：
+curl.exe -fsS -D start-barrier.headers -o start-barrier.json `
+  -H "X-Aneb-Run-Id: $StartBarrierId" `
+  -H "X-Aneb-Audit-Role: window_start" `
+  "$ServerBase/api/v1/serverinfo"
+
+# 2. 完成且冻结一次 App run，随后从客户端结果读取其 RUN_ID。
+
+# 3. App run 结束后立即关闭窗口：
+curl.exe -fsS -D end-barrier.headers -o end-barrier.json `
+  -H "X-Aneb-Run-Id: $EndBarrierId" `
+  -H "X-Aneb-Audit-Role: window_end" `
+  "$ServerBase/api/v1/serverinfo"
+
+# 4. 从开始前 cursor 导出原始 `journalctl -o cat` 文本后判定：
+python scripts/verify_token_run_audit.py token-run-audit.log `
+  --run-id $RunId `
+  --start-barrier-id $StartBarrierId `
+  --barrier-id $EndBarrierId `
+  --mode positive
+```
+
+［KNOWN｜HIGH］负向 run 将 `--mode` 改为 `negative`。任一 barrier HTTP/节点身份异常、日志导出不完整、
+判定器非零退出、报告 schema/version 或 `evidence_scope=request_entry_coverage_only` 不匹配，或客户端结果缺失，
+都不得写 PASS。`token-run-audit.log` 必须从 pre-start cursor 导出的原始 journald JSON 逐条提取 `MESSAGE`，
+不能从终端复制粘贴；最终 manifest 同时哈希 pre-start receipt、raw JSON、派生日志、判定报告、原始
+serverinfo/barrier 响应和客户端冻结结果。判定器本身不证明记录“新鲜”，缺上述 D-82 来源绑定时只能写
+“给定日志内容通过”，不能写“本次现场验收通过”。
+
+［KNOWN｜HIGH］候选构建和部署前 Go 测试还必须显式固定 `GOFIPS140=off`。宿主为 `latest` 时可生成不同
+二进制；未记录或未覆盖该污染的 candidate/provenance 不可部署。
 
 ## 8. 离线复核入口
 
@@ -160,7 +236,7 @@ Push-Location app; .\gradlew.bat ':probe:testDebugUnitTest'; Pop-Location
 powershell -ExecutionPolicy Bypass -File scripts/quality_gate.ps1
 ```
 
-［KNOWN｜HIGH］上述全量质量门、87 项脚本测试与暂存后凭据扫描已按本记录执行并通过；commit
-`708ced3` 的 GitHub CI 和精确云端 APK 负向真机证据也已另行核对。当前缺口仍是：独立交接释放、
-用 `4030179` 最终修复后的部署器在新 lease 下重新完成 0.8.0 公网切换，以及同一云端 APK 的 P40
-Quick 正向 run。缺口完成前不得把本记录改写成已部署或完整验收。
+［KNOWN｜HIGH］当前 44 文件暂存快照已完成全仓质量门、暂存后凭据扫描和定向红队回归；尚未完成的是新 commit、
+GitHub CI 与云端 APK 身份核对。commit `708ced3` 的 0.5.11 云端 APK 不能替代 0.5.12。
+当前缺口仍是：提交并生成新云端 APK、在实时干净桌面与远端互斥锁保护下完成 0.8.0 公网切换及 P40
+0.5.12 正/负向 run。缺口完成前不得把本记录改写成已部署或完整验收。

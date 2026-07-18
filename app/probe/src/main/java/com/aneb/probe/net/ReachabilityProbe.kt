@@ -29,7 +29,14 @@ import javax.net.ssl.SSLHandshakeException
  * 用短超时（connect/read 各 6s）避免拖慢 run 前置。绑定网络（bound）非 null 时复用
  * 同一 socketFactory/DNS，保证探测与承载路径同网（R-01）。
  */
-class ReachabilityProbe(bound: BoundNetwork? = null) {
+class ReachabilityProbe private constructor(
+    bound: BoundNetwork?,
+    private val monotonicNanos: () -> Long,
+) {
+
+    constructor(bound: BoundNetwork? = null) : this(bound, { SystemClock.elapsedRealtimeNanos() })
+
+    internal constructor(monotonicNanos: () -> Long) : this(null, monotonicNanos)
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
@@ -55,20 +62,26 @@ class ReachabilityProbe(bound: BoundNetwork? = null) {
      * sniBase 期望带 SNI 主机名（sslip.io），ipBase 期望 bare-IP。两次串行，
      * 顺序 sni→ip（先探被劫持的路径，与真机首测口径一致）。
      */
-    suspend fun probeDual(sniBase: String, ipBase: String): DualReach {
-        val sni = probeOne(sniBase)
-        val ip = probeOne(ipBase)
+    suspend fun probeDual(sniBase: String, ipBase: String, runId: String? = null): DualReach {
+        val sni = probeOne(sniBase, runId)
+        val ip = probeOne(ipBase, runId)
         return DualReach(sni, ip)
     }
 
     /** 对单个基址发 GET /api/v1/serverinfo，分类 TLS/连接层结果。 */
-    suspend fun probeOne(base: String): Reach = withContext(Dispatchers.IO) {
+    suspend fun probeOne(base: String, runId: String? = null): Reach = withContext(Dispatchers.IO) {
         val url = base.trimEnd('/') + "/api/v1/serverinfo"
-        val startNs = SystemClock.elapsedRealtimeNanos()
+        val startNs = monotonicNanos()
         try {
-            client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+            client.newCall(
+                Request.Builder()
+                    .url(url)
+                    .withAnebRunId(runId, AnebAuditRole.REACHABILITY)
+                    .get()
+                    .build(),
+            ).execute().use { resp ->
                 resp.body?.close()
-                val ms = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000L
+                val ms = (monotonicNanos() - startNs) / 1_000_000L
                 // 拿到任意 HTTP 响应＝TLS 握手完成、路径可达（不看 2xx/4xx 语义）。
                 Reach("ok", ms)
             }

@@ -158,7 +158,7 @@ class TokenExecutionContractGateFailClosedTest {
         val (publishedStandard, _) = publishedProfile("token_multimodal_standard")
         val rejectedProfiles = listOf(
             requiredProfile().copy(profileId = "token_multimodal_quik", executionRequirements = null),
-            requiredProfile().copy(version = "1.2.1", executionRequirements = null),
+            requiredProfile().copy(version = "1.2.0", executionRequirements = null),
             publishedStandard.copy(version = "1.1.1"),
             publishedStandard.copy(claimScope = "other_scope"),
         )
@@ -262,7 +262,7 @@ class TokenExecutionContractGateFailClosedTest {
     fun `validated profile version mismatch rejects before every business request`() = runBlocking {
         assertRemoteRejection(
             serverInfoBody = validReceipt().replace(
-                "\"profile_version\":\"1.2.0\"",
+                "\"profile_version\":\"1.2.1\"",
                 "\"profile_version\":\"1.3.0\"",
             ),
             expectedReason = "receipt_profile_version_mismatch",
@@ -392,7 +392,7 @@ class TokenExecutionContractGateFailClosedTest {
 
     private fun requiredProfile(engineMinVersion: String = "1.0.0"): ScenarioProfile = ScenarioProfile(
         profileId = "token_multimodal_quick",
-        version = "1.2.0",
+        version = "1.2.1",
         executionTarget = "aneb_probe_simulator",
         claimScope = "application_end_to_end_to_probe_node",
         contractVersion = ScenarioProfile.CONTRACT_V2,
@@ -431,7 +431,7 @@ class TokenExecutionContractGateFailClosedTest {
                 "contract_version":"$contractVersion",
                 "primitives":[$encodedPrimitives],
                 "validated_profiles":[
-                  {"profile_id":"token_multimodal_quick","profile_version":"1.2.0","profile_sha256":"$profileSha"}
+                  {"profile_id":"token_multimodal_quick","profile_version":"1.2.1","profile_sha256":"$profileSha"}
                 ]
               }
             }

@@ -26,6 +26,24 @@ import java.util.concurrent.locks.LockSupport
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+internal const val ANEB_RUN_ID_HEADER = "X-Aneb-Run-Id"
+internal const val ANEB_AUDIT_ROLE_HEADER = "X-Aneb-Audit-Role"
+
+internal enum class AnebAuditRole(val headerValue: String) {
+    REACHABILITY("reachability"),
+    CAPABILITY("capability"),
+}
+
+internal fun Request.Builder.withAnebRunId(
+    runId: String?,
+    auditRole: AnebAuditRole? = null,
+): Request.Builder = apply {
+    if (runId != null) {
+        header(ANEB_RUN_ID_HEADER, runId)
+        auditRole?.let { header(ANEB_AUDIT_ROLE_HEADER, it.headerValue) }
+    }
+}
+
 /**
  * ANEB 仿真服务器客户端（阶段 1 接线）。
  *
@@ -38,7 +56,22 @@ import kotlin.coroutines.resumeWithException
  *  - [bound] 非 null 时同时绑定 socketFactory 与 Dns（R-01：否则域名解析仍走默认
  *    网络 DNS，解析与承载路径分裂）。AUTO 模式传 null＝不绑定仅监控。
  */
-class AnebClient(bound: BoundNetwork? = null) {
+class AnebClient private constructor(
+    bound: BoundNetwork?,
+    providedClient: OkHttpClient?,
+    private val monotonicNanos: () -> Long,
+) {
+
+    constructor(bound: BoundNetwork? = null) : this(
+        bound,
+        null,
+        { SystemClock.elapsedRealtimeNanos() },
+    )
+
+    internal constructor(
+        client: OkHttpClient,
+        monotonicNanos: () -> Long,
+    ) : this(null, client, monotonicNanos)
 
     private val timingFactory = TimingEventListener.Factory()
     // Wire contracts must include version/default fields; omitting contract_version
@@ -46,7 +79,7 @@ class AnebClient(bound: BoundNetwork? = null) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val sseReader = SseReader(json)
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    private val client: OkHttpClient = providedClient ?: OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -105,10 +138,10 @@ class AnebClient(bound: BoundNetwork? = null) {
         val syntheticOutageActive: Boolean = false,
     )
 
-    suspend fun echo(url: String, callTimeoutMs: Long? = null): EchoResult {
+    suspend fun echo(url: String, callTimeoutMs: Long? = null, runId: String? = null): EchoResult {
         val body = "{\"probe\":\"aneb\"}"
             .toRequestBody("application/json".toMediaType())
-        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val call = client.newCall(Request.Builder().url(url).withAnebRunId(runId).post(body).build())
         callTimeoutMs?.let { call.timeout().timeout(it.coerceAtLeast(100L), TimeUnit.MILLISECONDS) }
         val t0Us = nowUs()
         return try {
@@ -213,7 +246,7 @@ class AnebClient(bound: BoundNetwork? = null) {
         val call = client.newCall(
             Request.Builder().url(url).header("Accept", "text/event-stream").get().build()
         )
-        val requestStartNanos = SystemClock.elapsedRealtimeNanos()
+        val requestStartNanos = monotonicNanos()
         return try {
             // SSE body 的流式读取整体放在 executeCancellable 的 onResponse 回调内完成
             // （resume 前不关闭 body）：invokeOnCancellation 覆盖从建连到读完的全程，
@@ -288,6 +321,7 @@ class AnebClient(bound: BoundNetwork? = null) {
      */
     suspend fun downloadThroughput(
         url: String,
+        runId: String? = null,
         onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
     ): TransferResult {
         val call = client.newCall(
@@ -295,10 +329,11 @@ class AnebClient(bound: BoundNetwork? = null) {
                 .url(url)
                 .header("Accept", "application/octet-stream")
                 .header("Accept-Encoding", "identity")
+                .withAnebRunId(runId)
                 .get()
                 .build(),
         )
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->
                 val timing = timingFactory.recordFor(call)
@@ -317,11 +352,11 @@ class AnebClient(bound: BoundNetwork? = null) {
                         if (n == -1L) break
                         sink.skip(n)
                         total += n
-                        onBytes(n.toInt(), SystemClock.elapsedRealtimeNanos())
+                        onBytes(n.toInt(), monotonicNanos())
                     }
                     TransferResult(
                         startNanos = startNanos,
-                        endNanos = SystemClock.elapsedRealtimeNanos(),
+                        endNanos = monotonicNanos(),
                         totalBytes = total,
                         httpCode = resp.code,
                         error = null,
@@ -346,6 +381,7 @@ class AnebClient(bound: BoundNetwork? = null) {
      */
     suspend fun tokenSim(
         url: String,
+        runId: String? = null,
         plan: TokenSimTaskPlan,
         uploadChunkBytes: Int,
         uploadChunkCadenceMs: Double,
@@ -368,7 +404,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                 sink.writeInt(encodedPlan.size)
                 sink.write(encodedPlan)
                 val chunk = ByteArray(uploadChunkBytes) { index -> ((index * 31 + 17) and 0xff).toByte() }
-                val started = SystemClock.elapsedRealtimeNanos()
+                val started = monotonicNanos()
                 uploadStart.set(started)
                 var remaining = plan.uploadPayloadBytes
                 var total = 0L
@@ -379,27 +415,28 @@ class AnebClient(bound: BoundNetwork? = null) {
                     sink.write(chunk, 0, count)
                     total += count
                     remaining -= count
-                    val now = SystemClock.elapsedRealtimeNanos()
+                    val now = monotonicNanos()
                     onUploadBytes(total, now)
                     chunkIndex++
                     if (remaining > 0L && cadenceNanos > 0L) {
                         val target = started + chunkIndex * cadenceNanos
-                        val waitNanos = target - SystemClock.elapsedRealtimeNanos()
+                        val waitNanos = target - monotonicNanos()
                         if (waitNanos > 0L) LockSupport.parkNanos(waitNanos)
                     }
                 }
                 sink.flush()
-                uploadEnd.set(SystemClock.elapsedRealtimeNanos())
+                uploadEnd.set(monotonicNanos())
             }
         }
         val call = client.newCall(
             Request.Builder()
                 .url(url)
                 .header("Accept", "text/event-stream")
+                .withAnebRunId(runId)
                 .post(body)
                 .build(),
         )
-        val requestStart = SystemClock.elapsedRealtimeNanos()
+        val requestStart = monotonicNanos()
         var prelude: TokenSimPrelude? = null
         var preludeArrival: Long? = null
         val arrivals = mutableListOf<TokenSimArrival>()
@@ -423,7 +460,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                     while (true) {
                         val line = source.readUtf8Line() ?: break
                         if (line.isEmpty()) {
-                            val arrivalNanos = SystemClock.elapsedRealtimeNanos()
+                            val arrivalNanos = monotonicNanos()
                             val eventData = data
                             when (eventName) {
                                 "prelude" -> if (eventData != null) {
@@ -497,14 +534,14 @@ class AnebClient(bound: BoundNetwork? = null) {
                 while (remaining > 0L) {
                     val n = minOf(chunk.size.toLong(), remaining).toInt()
                     sink.write(chunk, 0, n)
-                    onBytes(n, SystemClock.elapsedRealtimeNanos())
+                    onBytes(n, monotonicNanos())
                     remaining -= n
                 }
                 sink.flush()
             }
         }
         val call = client.newCall(Request.Builder().url(url).post(body).build())
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->
                 val timing = timingFactory.recordFor(call)
@@ -524,7 +561,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                 }
                 TransferResult(
                     startNanos = startNanos,
-                    endNanos = SystemClock.elapsedRealtimeNanos(),
+                    endNanos = monotonicNanos(),
                     totalBytes = if (error == null) confirmedBytes ?: 0L else 0L,
                     httpCode = resp.code,
                     error = error,
@@ -580,14 +617,14 @@ class AnebClient(bound: BoundNetwork? = null) {
         val call = client.newCall(
             Request.Builder().url(url).header("Accept", "text/event-stream").get().build()
         )
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->
                 if (!resp.isSuccessful) {
                     ContinuityStreamResult(
                         startNanos, null, null, 0, null, sawSummary = false,
                         httpCode = resp.code, error = "http ${resp.code}",
-                        errorNanos = SystemClock.elapsedRealtimeNanos(),
+                        errorNanos = monotonicNanos(),
                         timing = timingFactory.recordFor(call),
                     )
                 } else {
@@ -605,7 +642,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                         while (true) {
                             val n = source.read(readBuf, 8192L)
                             if (n == -1L) break
-                            val arrival = SystemClock.elapsedRealtimeNanos()
+                            val arrival = monotonicNanos()
                             acc.writeAll(readBuf)
                             while (true) {
                                 val boundary = acc.indexOf(SSE_EVENT_DELIMITER)
@@ -631,7 +668,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                     } catch (e: IOException) {
                         // 中断容忍：部分数据保留 + 中断时刻就地打戳（C2 恢复计时起点）
                         error = e.toString()
-                        errorNanos = SystemClock.elapsedRealtimeNanos()
+                        errorNanos = monotonicNanos()
                     }
                     ContinuityStreamResult(
                         startNanos, firstTokenNanos, lastEventNanos, tokenCount, maxSeq,
@@ -646,7 +683,7 @@ class AnebClient(bound: BoundNetwork? = null) {
             ContinuityStreamResult(
                 startNanos, null, null, 0, null, sawSummary = false,
                 httpCode = null, error = e.toString(),
-                errorNanos = SystemClock.elapsedRealtimeNanos(),
+                errorNanos = monotonicNanos(),
                 timing = timingFactory.recordFor(call),
             )
         }
@@ -699,18 +736,18 @@ class AnebClient(bound: BoundNetwork? = null) {
                     sink.write(payload, offset, len)
                     sink.flush()
                     // 注意：这测的是写入本地 socket buffer 的时刻，不是线上发出时刻（R-07）
-                    stamps.add(ChunkStamp(index, len, SystemClock.elapsedRealtimeNanos()))
+                    stamps.add(ChunkStamp(index, len, monotonicNanos()))
                     offset += len
                     index++
                 }
             }
         }
         val call = client.newCall(Request.Builder().url(url).post(body).build())
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->
                 // 打戳点＝收到响应头回调（与原 execute() 返回点同语义）
-                val responseNanos = SystemClock.elapsedRealtimeNanos()
+                val responseNanos = monotonicNanos()
                 val timing = timingFactory.recordFor(call)
                 val bodyText = resp.body?.string() // 排空 + 解析服务端视角逐块到达序列（R-07 权威序列）
                 val serverView = if (resp.isSuccessful && bodyText != null) {
@@ -761,7 +798,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                 .post(payload.toRequestBody("application/octet-stream".toMediaType()))
                 .build()
         )
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->
                 val timing = timingFactory.recordFor(call)
@@ -770,7 +807,7 @@ class AnebClient(bound: BoundNetwork? = null) {
                     ToolLoopResult(startNanos, null, null, null, null, resp.code, "http ${resp.code}", timing)
                 } else {
                     val body = checkNotNull(resp.body) { "empty body for 2xx" }.bytes()
-                    val bodyEndNanos = SystemClock.elapsedRealtimeNanos() // 端到端终点＝body 读完
+                    val bodyEndNanos = monotonicNanos() // 端到端终点＝body 读完
                     val trecv = resp.header("X-Aneb-Trecv-Us")?.toLongOrNull()
                     val tsend = resp.header("X-Aneb-Tsend-Us")?.toLongOrNull()
                     ToolLoopResult(
@@ -792,8 +829,23 @@ class AnebClient(bound: BoundNetwork? = null) {
     data class HttpTextResult(val httpCode: Int?, val body: String?, val error: String?)
 
     /** GET /api/v1/serverinfo for the machine-readable execution capability receipt. */
-    suspend fun fetchServerInfo(url: String): HttpTextResult =
-        simpleCall(client.newCall(Request.Builder().url(url).get().build()))
+    suspend fun fetchServerInfo(url: String, runId: String? = null): HttpTextResult =
+        simpleCall(client.newCall(Request.Builder().url(url).withAnebRunId(runId).get().build()))
+
+    internal suspend fun fetchServerInfo(
+        url: String,
+        runId: String,
+        auditRole: AnebAuditRole,
+    ): HttpTextResult = simpleCall(
+        client.newCall(
+            Request.Builder()
+                .url(url)
+                .withAnebRunId(runId, auditRole)
+                .get()
+                .build(),
+        ),
+    )
+
     /** GET /api/v1/profiles（P1 范围 1：拉不到用打包内置 assets 副本并告警） */
 
     suspend fun fetchProfiles(url: String): HttpTextResult =
@@ -860,7 +912,7 @@ class AnebClient(bound: BoundNetwork? = null) {
             })
         }
 
-    private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
+    private fun nowUs(): Long = monotonicNanos() / 1_000L
 
     private companion object {
         const val THROUGHPUT_READ_BYTES: Long = 64L * 1024L

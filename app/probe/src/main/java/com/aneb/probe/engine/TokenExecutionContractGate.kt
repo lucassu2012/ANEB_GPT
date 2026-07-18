@@ -1,6 +1,7 @@
 package com.aneb.probe.engine
 
 import com.aneb.probe.net.AnebClient
+import com.aneb.probe.net.AnebAuditRole
 import com.aneb.probe.net.TokenSimArrival
 import com.aneb.probe.net.TokenSimPrelude
 import com.aneb.probe.net.TokenSimTaskPlan
@@ -43,11 +44,12 @@ internal interface TokenExecutionTransport {
 
 internal class AnebTokenExecutionTransport(
     private val client: AnebClient,
+    private val runId: String,
 ) : TokenExecutionTransport {
     override suspend fun fetchServerInfo(url: String): AnebClient.HttpTextResult =
-        client.fetchServerInfo(url)
+        client.fetchServerInfo(url, runId, AnebAuditRole.CAPABILITY)
 
-    override suspend fun echo(url: String): AnebClient.EchoResult = client.echo(url)
+    override suspend fun echo(url: String): AnebClient.EchoResult = client.echo(url, runId = runId)
 
     override suspend fun tokenSim(
         url: String,
@@ -59,6 +61,7 @@ internal class AnebTokenExecutionTransport(
         onToken: (TokenSimArrival) -> Unit,
     ): TokenSimTaskResult = client.tokenSim(
         url = url,
+        runId = runId,
         plan = plan,
         uploadChunkBytes = uploadChunkBytes,
         uploadChunkCadenceMs = uploadChunkCadenceMs,
@@ -70,7 +73,7 @@ internal class AnebTokenExecutionTransport(
     override suspend fun downloadThroughput(
         url: String,
         onBytes: (Int, Long) -> Unit,
-    ): AnebClient.TransferResult = client.downloadThroughput(url, onBytes)
+    ): AnebClient.TransferResult = client.downloadThroughput(url, runId, onBytes)
 }
 
 /**
@@ -149,7 +152,7 @@ internal object TokenExecutionContractGate {
     private const val CLIENT_ENGINE_VERSION = "1.0.0"
     private const val RECEIPT_CONTRACT_ID = "aneb-server-capability-receipt"
     private const val QUICK_PROFILE_ID = "token_multimodal_quick"
-    private const val QUICK_PROFILE_VERSION = "1.2.0"
+    private const val QUICK_PROFILE_VERSION = "1.2.1"
     private const val QUICK_EXECUTION_TARGET = "aneb_probe_simulator"
     private const val QUICK_CLAIM_SCOPE = "application_end_to_end_to_probe_node"
     private val legacyProfileVersions = mapOf(

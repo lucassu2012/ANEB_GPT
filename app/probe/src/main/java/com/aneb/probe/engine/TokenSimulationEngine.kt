@@ -190,14 +190,14 @@ class TokenSimulationEngine(private val context: Context) {
             val client = AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
-                reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
+                reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase, runId) }.getOrNull()
             }
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
             val tokenTraffic = TokenExecutionContractGate.authorize(
                 serverBase = measureBase,
                 profile = profile,
                 profileCanonicalSha256 = loaded.profileHash,
-                transport = AnebTokenExecutionTransport(client),
+                transport = AnebTokenExecutionTransport(client, runId),
             )
             log("TOKEN_V2_CONTRACT run_id=$runId status=${tokenTraffic.authorization.name.lowercase()}")
 

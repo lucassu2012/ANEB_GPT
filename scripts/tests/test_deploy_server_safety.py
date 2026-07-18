@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -66,6 +68,63 @@ class DeployServerSafetyContractTest(unittest.TestCase):
             raise AssertionError(f"invalid firewall fingerprints: {fields!r}")
         return dict(zip(("full", "v4", "v6", "nft", "docker"), fields, strict=True))
 
+    @classmethod
+    def run_receipt_validator(
+        cls,
+        body: dict[str, object],
+        *,
+        expected_h3: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        function = cls.remote.split("validate_receipt() {", 1)[1].split("\n}\n\n", 1)[0]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            body_path = root / "serverinfo.json"
+            manifest_path = root / "manifest.sha256"
+            receipt_sha_path = root / "receipt.sha256"
+            body_path.write_text(json.dumps(body), encoding="utf-8")
+            manifest_path.write_text(
+                "1" * 64 + "  profile.json\n" + "2" * 64 + "  runtime_plan.json\n",
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    str(body_path),
+                    str(manifest_path),
+                    "true" if expected_h3 else "false",
+                    str(receipt_sha_path),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+    @staticmethod
+    def valid_receipt_body(*, h3_enabled: bool = False) -> dict[str, object]:
+        return {
+            "version": "aneb-server/0.8.0",
+            "h3_enabled": h3_enabled,
+            "execution_capabilities": {
+                "contract_id": "aneb-server-capability-receipt",
+                "contract_version": "1.0.0",
+                "primitives": [
+                    {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+                    {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+                    {"primitive_id": "token_sim", "wire_contract_id": "aneb-token-task-v1"},
+                ],
+                "validated_profiles": [
+                    {
+                        "profile_id": "token_multimodal_quick",
+                        "profile_version": "1.2.1",
+                        "profile_sha256": "sha256:" + "1" * 64,
+                    }
+                ],
+            },
+        }
+
     def test_local_gates_precede_the_first_remote_connection(self) -> None:
         main = self.source.split("# No ssh/scp call is made before this function returns successfully.", 1)[1]
         gate = main.index("Invoke-LocalSafetyGates")
@@ -76,11 +135,55 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         for artifact in ("profile.json", "runtime_plan.json", "manifest.sha256"):
             self.assertIn(artifact, self.source)
 
+    def test_local_gates_are_environment_clean_and_commit_bound(self) -> None:
+        gate = self.source.split("function Invoke-LocalSafetyGates", 1)[1].split(
+            "function Copy-ToRemote", 1
+        )[0]
+        self.assertIn("$script:ExpectedSourceCommit = Get-RepositoryHead", gate)
+        self.assertIn("before local safety gates", gate)
+        self.assertIn("after local safety gates", gate)
+        self.assertIn("$env:GOENV = 'off'", gate)
+        self.assertIn("$env:GOFLAGS = ''", gate)
+        self.assertIn("$env:GOWORK = 'off'", gate)
+        self.assertIn("$env:GOTOOLCHAIN = 'local'", gate)
+        self.assertIn("$env:GOEXPERIMENT = ''", gate)
+        self.assertIn("$env:GOFIPS140 = 'off'", gate)
+        self.assertIn("'GOFIPS140': 'off'", self.remote)
+        self.assertIn("settings.get('GOFIPS140', 'off') != 'off'", self.remote)
+        self.assertIn("$previousGoEnvironment", gate)
+        self.assertIn("--expected-commit', $script:ExpectedSourceCommit", self.source)
+        post_gate = self.source.index("after local safety gates")
+        helper = self.source.index("& $pythonCommand.Source @candidateArguments")
+        self.assertLess(post_gate, helper)
+
+    def test_helper_snapshot_is_the_only_uploaded_artifact_source(self) -> None:
+        self.assertIn("--artifact-snapshot-root", self.source)
+        helper = self.source.index("& $pythonCommand.Source @candidateArguments")
+        local_success = self.source.index("LOCAL_VALIDATION_ONLY_OK")
+        first_connection = self.source.index("& ssh @SshOpts", helper)
+        self.assertLess(helper, local_success)
+        self.assertLess(local_success, first_connection)
+        upload = self.source.split("Write-Host '== [4/5] upload candidate into staging =='", 1)[1]
+        upload = upload.split("$remoteScript = @'", 1)[0]
+        self.assertIn("$CandidateUploadArtifacts", upload)
+        for original in (
+            "$RootProfileFiles",
+            "$TokenQuickProfile",
+            "$TokenQuickRuntimePlan",
+            "$TokenQuickManifest",
+            "$Unit",
+            "$IpCert",
+        ):
+            self.assertNotIn(f"-LocalPath {original}", upload)
+        self.assertIn("$CandidateUploadArtifacts.GetEnumerator()", self.source)
+
     def test_runtime_plan_is_uploaded_with_the_manifest_bound_bundle(self) -> None:
-        self.assertRegex(
+        self.assertIn(
+            "'execution-profiles/token_multimodal_quick/runtime_plan.json' = $TokenQuickRuntimePlan",
             self.source,
-            r"Copy-ToRemote -LocalPath \$TokenQuickRuntimePlan .*runtime_plan\.json",
         )
+        self.assertIn("$CandidateUploadArtifacts.GetEnumerator() | Sort-Object Key", self.source)
+        self.assertIn('RemotePath "$RemoteStage/$logicalPath"', self.source)
         self.assertNotIn("sha256sum", self.remote)
         self.assertIn("{'profile.json', 'runtime_plan.json'}", self.remote)
 
@@ -152,15 +255,21 @@ class DeployServerSafetyContractTest(unittest.TestCase):
 COMMIT
 # Completed on Sat Jul 18 18:00:00 2026
 """
+        nat_first = first.replace("*filter", "*nat").replace(
+            "--dport 8443", "--dport 9443"
+        )
+        first += nat_first
         second = first.replace("18:00:00", "18:03:17")
 
         canonical_first = self.canonicalize_iptables_save(first, "iptables-save")
         canonical_second = self.canonicalize_iptables_save(second, "iptables-save")
 
         self.assertEqual(canonical_first, canonical_second)
-        self.assertIn(
-            "# Generated by iptables-save v1.8.7 (nf_tables)\n",
-            canonical_first,
+        self.assertEqual(
+            2,
+            canonical_first.count(
+                "# Generated by iptables-save v1.8.7 (nf_tables)\n"
+            ),
         )
         self.assertNotIn(" on Sat Jul 18", canonical_first)
         self.assertNotIn("# Completed on", canonical_first)
@@ -187,6 +296,14 @@ COMMIT
             ":INPUT ACCEPT [0:0]\n"
             "COMMIT\n"
             f"# Completed on {timestamp}\n"
+        )
+        valid_multi = valid + valid.replace("*filter", "*nat")
+        self.assertEqual(
+            2,
+            self.canonicalize_iptables_save(
+                valid_multi,
+                "iptables-save",
+            ).count("# Generated by iptables-save v1.8.7 (nf_tables)\n"),
         )
         invalid = {
             "empty": "",
@@ -216,6 +333,11 @@ COMMIT
                 "COMMIT\n", "COMMIT\n# Completed onBROKEN\n"
             ),
             "completed-not-tail": valid + "# Warning: trailing diagnostic\n",
+            "gap-between-blocks": (
+                valid
+                + "# unexpected gap\n"
+                + valid.replace("*filter", "*nat")
+            ),
         }
         for label, snapshot in invalid.items():
             with self.subTest(label=label):
@@ -262,13 +384,18 @@ COMMIT
         canonicalizer = "canonicalize_iptables_save() {" + self.remote.split(
             "canonicalize_iptables_save() {", 1
         )[1].split("\n}", 1)[0] + "\n}"
+        clean_capture = "capture_clean_firewall_command() {" + self.remote.split(
+            "capture_clean_firewall_command() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
         snapshot = "firewall_snapshot() {" + self.remote.split(
             "firewall_snapshot() {", 1
         )[1].split("\n}", 1)[0] + "\n}"
         script = f"""set -Eeuo pipefail
 export LC_ALL=C
 {canonicalizer}
+{clean_capture}
 {snapshot}
+STAGE="$(mktemp -d)"
 iptables-save() {{
     printf '%s\\n' \\
         '# Generated by iptables-save v1.8.7 (nf_tables) on Sat Jul 18 18:00:00 2026' \\
@@ -283,6 +410,54 @@ if output="$(firewall_snapshot 2>&1)"; then
     exit 90
 fi
 [[ "$output" == *'iptables-save snapshot failed'* ]]
+"""
+        completed = subprocess.run(
+            [bash, "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            completed.returncode,
+            msg=f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}",
+        )
+
+    def test_firewall_snapshot_rejects_successful_command_stderr(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        canonicalizer = "canonicalize_iptables_save() {" + self.remote.split(
+            "canonicalize_iptables_save() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
+        clean_capture = "capture_clean_firewall_command() {" + self.remote.split(
+            "capture_clean_firewall_command() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
+        snapshot = "firewall_snapshot() {" + self.remote.split(
+            "firewall_snapshot() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+export LC_ALL=C
+{canonicalizer}
+{clean_capture}
+{snapshot}
+STAGE="$(mktemp -d)"
+iptables-save() {{
+    printf '%s\\n' \\
+        '# Generated by iptables-save v1.8.7 (nf_tables) on Sat Jul 18 18:00:00 2026' \\
+        '*filter' ':INPUT ACCEPT [0:0]' 'COMMIT' \\
+        '# Completed on Sat Jul 18 18:00:00 2026'
+    printf '%s\\n' 'warning despite rc=0' >&2
+    return 0
+}}
+ip6tables-save() {{ return 0; }}
+nft() {{ return 0; }}
+if output="$(firewall_snapshot 2>&1)"; then
+    echo 'firewall_snapshot unexpectedly accepted stderr' >&2
+    exit 90
+fi
+[[ "$output" == *'iptables-save snapshot emitted stderr'* ]]
+[[ "$output" != *'warning despite rc=0'* ]]
 """
         completed = subprocess.run(
             [bash, "-c", script],
@@ -390,26 +565,43 @@ COMMIT
                 self.assertNotEqual(baseline[component], changed[component])
 
         snapshot = self.remote.split("firewall_snapshot() {", 1)[1].split("\n}", 1)[0]
+        compact_snapshot = " ".join(snapshot.replace("\\", "").split())
         self.assertIn(
-            "iptables-save | canonicalize_iptables_save iptables-save", snapshot
+            "capture_clean_firewall_command iptables-save iptables-save | "
+            "canonicalize_iptables_save iptables-save",
+            compact_snapshot,
         )
         self.assertIn(
-            "ip6tables-save | canonicalize_iptables_save ip6tables-save", snapshot
+            "capture_clean_firewall_command ip6tables-save ip6tables-save | "
+            "canonicalize_iptables_save ip6tables-save",
+            compact_snapshot,
         )
         self.assertIn("iptables-save snapshot failed", snapshot)
         self.assertIn("ip6tables-save snapshot failed", snapshot)
         self.assertNotIn("iptables-save -c", snapshot)
         self.assertNotIn("ip6tables-save -c", snapshot)
         self.assertNotIn("--counters", snapshot)
-        self.assertIn("nft --stateless list ruleset", snapshot)
+        self.assertIn(
+            "capture_clean_firewall_command nft-list-ruleset nft --stateless list ruleset",
+            compact_snapshot,
+        )
         self.assertIn("nft ruleset snapshot failed", snapshot)
 
     def test_docker_firewall_filter_does_not_mask_capture_failure(self) -> None:
         snapshot = self.remote.split("docker_firewall_snapshot() {", 1)[1].split(
             "\n}", 1
         )[0]
-        self.assertIn("iptables-save | awk '/(^:DOCKER|DOCKER)/ { print }'", snapshot)
-        self.assertIn("ip6tables-save | awk '/(^:DOCKER|DOCKER)/ { print }'", snapshot)
+        compact_snapshot = " ".join(snapshot.replace("\\", "").split())
+        self.assertIn(
+            "capture_clean_firewall_command docker-iptables-save iptables-save | "
+            "awk '/(^:DOCKER|DOCKER)/ { print }'",
+            compact_snapshot,
+        )
+        self.assertIn(
+            "capture_clean_firewall_command docker-ip6tables-save ip6tables-save | "
+            "awk '/(^:DOCKER|DOCKER)/ { print }'",
+            compact_snapshot,
+        )
         self.assertNotIn("grep", snapshot)
         self.assertNotIn("|| true", snapshot)
         self.assertIn("iptables-save Docker snapshot failed", snapshot)
@@ -449,7 +641,11 @@ COMMIT
         self.assertIn("ExpectedIpCertificateSha256", self.source)
         self.assertIn("ExpectedIpPrivateKeySha256", self.source)
         self.assertIn("replacement was not explicitly enabled", self.source)
-        self.assertIn("Get-FileHash -LiteralPath $IpCert -Algorithm SHA256", self.source)
+        self.assertNotIn("Get-FileHash -LiteralPath $IpCert -Algorithm SHA256", self.source)
+        self.assertIn(
+            "Get-FileHash -LiteralPath $CandidateUploadArtifacts['tls/ip-cert.pem'] -Algorithm SHA256",
+            self.source,
+        )
         self.assertIn("Get-FileHash -LiteralPath $IpKey -Algorithm SHA256", self.source)
         self.assertIn('file_sha256 "$STAGE/tls/ip-cert.pem"', self.remote)
         self.assertIn('file_sha256 "$STAGE/tls/ip-key.pem"', self.remote)
@@ -463,23 +659,18 @@ COMMIT
         live_boundary = self.remote.index("LIVE_TOUCHED=1", certificate_validation)
         self.assertLess(certificate_validation, live_boundary)
 
-    def test_real_deployment_requires_codex_e01_shared_lease(self) -> None:
-        local_only = self.source.index("if ($LocalValidationOnly)")
-        lease = self.source.index("Assert-SharedDeploymentLease", local_only)
-        first_connection = self.source.index("& ssh @SshOpts", lease)
-        self.assertLess(local_only, lease)
-        self.assertLess(lease, first_connection)
-        self.assertIn("E-01", self.source)
-        self.assertRegex(self.source, r"\[Parameter\(Mandatory = \$true\)\]\s+\[ValidatePattern\('\^\[0-9a-fA-F\]\{32\}\$'\)\]\s+\[string\]\$LeaseId")
-        self.assertIn("update_shared_test_status.py", self.source)
-        self.assertIn("assert-lease", self.source)
-        self.assertIn("--executor Codex", self.source)
-        self.assertIn("--lease-id $LeaseId.ToLowerInvariant()", self.source)
-        self.assertIn("--resource E-01", self.source)
-        lease_function = self.source.split("function Assert-SharedDeploymentLease", 1)[1].split("function Copy-ToRemote", 1)[0]
-        self.assertNotIn("claim", lease_function)
-        self.assertNotIn("handoff", lease_function)
-        self.assertNotIn("lock", lease_function)
+    def test_real_deployment_has_no_retired_shared_status_dependency(self) -> None:
+        self.assertNotIn("LeaseId", self.source)
+        self.assertNotIn("SHARED_TEST_STATUS", self.source)
+        self.assertNotIn("update_shared_test_status.py", self.source)
+        self.assertNotIn("Assert-SharedDeploymentLease", self.source)
+        self.assertNotIn("assert-lease", self.source)
+
+        acquire = self.remote.index("acquire_deploy_lock\n")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1")
+        self.assertLess(acquire, live_boundary)
+        self.assertIn('DEPLOY_LOCK_PATH="/run/lock/aneb-deploy.lock"', self.remote)
+        self.assertIn("flock -n 9", self.remote)
 
     def test_live_smoke_preserves_weak_network_route_isolation(self) -> None:
         self.assertIn("/api/v1/impairments", self.remote)
@@ -506,6 +697,626 @@ COMMIT
         self.assertIn("validate_legacy_surface live-0.8", self.remote)
         self.assertIn("download?bytes=1048576", self.remote)
 
+    def test_staged_uploads_are_digest_bound_and_build_identity_is_reverified(self) -> None:
+        for name in (
+            "build-provenance.json",
+            "go-buildinfo.json",
+            "artifact-manifest.sha256",
+        ):
+            self.assertIn(name, self.source)
+            self.assertIn(name, self.remote)
+        self.assertIn("validate_uploaded_artifacts", self.remote)
+        self.assertIn("validate_build_evidence", self.remote)
+        validation = self.remote.index("validate_uploaded_artifacts\n")
+        identity = self.remote.index("validate_build_evidence\n", validation)
+        candidate = self.remote.index("setsid runuser -u aneb", identity)
+        self.assertLess(validation, identity)
+        self.assertLess(identity, candidate)
+        self.assertIn("linux", self.remote)
+        self.assertIn("amd64", self.remote)
+        self.assertNotRegex(
+            self.source,
+            r"(?m)^\s*Add-ArtifactDigestEntry .*IpKey",
+        )
+        self.assertIn('file_sha256 "$STAGE/tls/ip-key.pem"', self.remote)
+
+    def test_receipt_rejects_duplicate_primitives_extra_structure_and_wrong_h3(self) -> None:
+        valid = self.valid_receipt_body()
+        accepted = self.run_receipt_validator(valid)
+        self.assertEqual(
+            0,
+            accepted.returncode,
+            msg=f"stdout={accepted.stdout!r}\nstderr={accepted.stderr!r}",
+        )
+
+        mutations: dict[str, dict[str, object]] = {}
+        duplicate = json.loads(json.dumps(valid))
+        duplicate["execution_capabilities"]["primitives"].append(  # type: ignore[index]
+            dict(duplicate["execution_capabilities"]["primitives"][0])  # type: ignore[index]
+        )
+        mutations["duplicate primitive"] = duplicate
+
+        extra_receipt = json.loads(json.dumps(valid))
+        extra_receipt["execution_capabilities"]["unexpected"] = {}  # type: ignore[index]
+        mutations["extra receipt member"] = extra_receipt
+
+        extra_primitive = json.loads(json.dumps(valid))
+        extra_primitive["execution_capabilities"]["primitives"][0]["unexpected"] = 1  # type: ignore[index]
+        mutations["extra primitive member"] = extra_primitive
+
+        extra_profile = json.loads(json.dumps(valid))
+        extra_profile["execution_capabilities"]["validated_profiles"][0]["unexpected"] = 1  # type: ignore[index]
+        mutations["extra profile member"] = extra_profile
+
+        wrong_h3 = self.valid_receipt_body(h3_enabled=True)
+        mutations["staged h3 enabled"] = wrong_h3
+
+        for label, body in mutations.items():
+            with self.subTest(label=label):
+                rejected = self.run_receipt_validator(body)
+                self.assertNotEqual(
+                    0,
+                    rejected.returncode,
+                    msg=f"mutation accepted: {label}",
+                )
+
+    def test_receipt_canonical_sha_is_stable_and_live_must_match_stage(self) -> None:
+        body = self.valid_receipt_body()
+        receipt = body["execution_capabilities"]
+        expected = hashlib.sha256(
+            json.dumps(
+                receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("ascii")
+        ).hexdigest()
+        function = self.remote.split("validate_receipt() {", 1)[1].split("\n}\n\n", 1)[0]
+        self.assertIn("sort_keys=True", function)
+        self.assertIn("separators=(',', ':')", function)
+        self.assertIn("receipt_sha_path", function)
+        self.assertRegex(expected, r"^[0-9a-f]{64}$")
+        self.assertIn('STAGED_RECEIPT_SHA="$(cat "$STAGE/staged-receipt.sha256")"', self.remote)
+        self.assertIn('LIVE_RECEIPT_SHA="$(cat "$STAGE/live-receipt.sha256")"', self.remote)
+        self.assertIn('[[ "$LIVE_RECEIPT_SHA" == "$STAGED_RECEIPT_SHA" ]]', self.remote)
+
+    def test_evidence_is_atomic_root_only_bounded_and_precedes_live_mutation(self) -> None:
+        self.assertIn("/var/lib/aneb-deploy-evidence", self.remote)
+        self.assertIn("persist_stage_evidence()", self.remote)
+        function = self.remote.split("persist_stage_evidence() {", 1)[1].split("\n}\n\n", 1)[0]
+        for evidence in (
+            "build-provenance.json",
+            "go-buildinfo.json",
+            "staged-serverinfo.json",
+            "staged-serverinfo.headers",
+            "candidate.log",
+            "summary.json",
+            "artifact-manifest.sha256",
+            "COMPLETE",
+        ):
+            self.assertIn(evidence, function)
+        self.assertIn("root.mkdir(mode=0o700", function)
+        self.assertIn("os.chmod(root, 0o700)", function)
+        self.assertIn("os.chmod(path, 0o600)", function)
+        self.assertIn("os.replace", function)
+        self.assertIn("items[10:]", function)
+        self.assertNotIn("def atomic_update", function)
+        self.assertIn("record_pattern", function)
+        self.assertIn("orphan_pattern", function)
+        complete = function.index("COMPLETE")
+        publish = function.rindex("os.replace(temporary, evidence)")
+        self.assertLess(complete, publish)
+        stage_validation = self.remote.index("persist_stage_evidence staged_validated")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1", stage_validation)
+        self.assertLess(stage_validation, live_boundary)
+        self.assertNotIn("ip-key.pem", function)
+        self.assertNotIn("PRIVATE KEY", function)
+
+    def test_terminal_evidence_is_a_success_hard_gate_with_raw_identity_evidence(self) -> None:
+        function = self.remote.split("persist_stage_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        for evidence in (
+            "pre-switch-serverinfo.json",
+            "pre-switch-serverinfo.headers",
+            "staged-serverinfo.json",
+            "staged-serverinfo.headers",
+            "live-serverinfo.json",
+            "live-serverinfo.headers",
+            "pre-switch-fingerprints.txt",
+            "live-fingerprints.txt",
+            "live-artifact-manifest.sha256",
+        ):
+            self.assertIn(evidence, function)
+
+        self.assertIn("commit_terminal_evidence() {", self.remote)
+        success = self.remote.rindex("DEPLOY_RESULT='success'")
+        commit = self.remote.index("commit_terminal_evidence success", success)
+        disarm = self.remote.index("LIVE_TOUCHED=0", commit)
+        deploy_ok = self.remote.index('DEPLOY_SUCCESS_MESSAGE="DEPLOY_OK', disarm)
+        self.assertLess(commit, disarm)
+        self.assertLess(disarm, deploy_ok)
+        failure = self.remote[commit:disarm]
+        self.assertIn("FINAL_EVIDENCE_COMMIT_FAILED", failure)
+        self.assertIn("exit 98", failure)
+
+        cleanup = self.remote.split("\ncleanup() {", 1)[1].split(
+            "trap cleanup EXIT", 1
+        )[0]
+        self.assertIn("FINAL_EVIDENCE_COMMITTED", cleanup)
+        self.assertNotIn("WARNING deploy_evidence_persist_failed", cleanup)
+        self.assertIn('echo "$DEPLOY_SUCCESS_MESSAGE"', cleanup)
+        self.assertNotIn('echo "DEPLOY_OK', self.remote)
+
+    def test_terminal_evidence_failure_keeps_rollback_armed_and_suppresses_ok(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        function = "commit_terminal_evidence() {" + self.remote.split(
+            "commit_terminal_evidence() {", 1
+        )[1].split("\n}\n\n", 1)[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{function}
+FINAL_EVIDENCE_COMMITTED=0
+LIVE_TOUCHED=1
+persist_stage_evidence() {{ return 73; }}
+verify_terminal_evidence() {{ return 0; }}
+DEPLOY_RESULT=success
+if ! commit_terminal_evidence success; then
+    printf 'FINAL_EVIDENCE_COMMIT_FAILED rollback_armed=%s\n' "$LIVE_TOUCHED" >&2
+    exit 98
+fi
+LIVE_TOUCHED=0
+printf 'DEPLOY_OK\n'
+"""
+        completed = subprocess.run(
+            [bash, "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(98, completed.returncode)
+        self.assertIn("rollback_armed=1", completed.stderr)
+        self.assertNotIn("DEPLOY_OK", completed.stdout)
+
+    @unittest.skipIf(os.name == "nt", "directory fsync evidence test requires Linux")
+    def test_evidence_retention_removes_only_stale_owned_orphans(self) -> None:
+        function = self.remote.split("persist_stage_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        program = program.replace(
+            "expected_stage = Path('/tmp') / f'aneb-deploy-{deploy_id}'",
+            "expected_stage = Path(stage_arg)",
+        ).replace(
+            "expected_root = Path('/var/lib/aneb-deploy-evidence')",
+            "expected_root = Path(root_arg)",
+        )
+        deploy_id = "20260718123456-" + "a" * 32
+        other_id = "20260718123457-" + "b" * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            stage = base / f"aneb-deploy-{deploy_id}"
+            root = base / "evidence"
+            evidence = root / f"aneb-deploy-{deploy_id}"
+            stage.mkdir()
+            root.mkdir()
+            for name, value in {
+                "build-provenance.json": "{}\n",
+                "go-buildinfo.json": "{}\n",
+                "staged-serverinfo.json": '{"version":"aneb-server/0.8.0"}\n',
+                "staged-serverinfo.headers": "HTTP/1.1 200 OK\r\n\r\n",
+                "candidate.log": "candidate ready\n",
+                "artifact-manifest.sha256": "0" * 64 + "  aneb-server-linux\n",
+            }.items():
+                (stage / name).write_text(value, encoding="utf-8")
+
+            common = [
+                str(stage),
+                str(root),
+                str(evidence),
+                deploy_id,
+            ]
+            staged = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    *common,
+                    "staged_validated",
+                    "1" * 64,
+                    "2" * 64,
+                    "",
+                    "",
+                    "0",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, staged.returncode, staged.stderr)
+
+            stale = root / f".aneb-deploy-{other_id}.tmp-stale"
+            fresh = root / f".aneb-deploy-{other_id}.tmp-fresh"
+            unrelated = root / ".unowned.tmp-stale"
+            stale.mkdir()
+            fresh.mkdir()
+            unrelated.mkdir()
+            records = evidence / "records"
+            records.mkdir()
+            stale_record = records / ".record-000001-failed.tmp-stale"
+            stale_record.mkdir()
+            old = 0
+            os.utime(stale, (old, old))
+            os.utime(stale_record, (old, old))
+            symlink = root / f".aneb-deploy-{other_id}.tmp-link"
+            symlink.symlink_to(unrelated, target_is_directory=True)
+
+            terminal = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    *common,
+                    "failed",
+                    "1" * 64,
+                    "2" * 64,
+                    "",
+                    "",
+                    "0",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, terminal.returncode, terminal.stderr)
+            self.assertFalse(stale.exists())
+            self.assertFalse(stale_record.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(unrelated.exists())
+            self.assertTrue(symlink.is_symlink())
+
+    def test_forward_and_rollback_replacement_never_delete_live_before_candidate(self) -> None:
+        self.assertIn("atomic_replace_candidate() {", self.remote)
+        atomic = self.remote.split("atomic_replace_candidate() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("RENAME_EXCHANGE", atomic)
+        self.assertIn("os.replace(candidate, target)", atomic)
+
+        restore = self.remote.split("restore_item() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertNotIn('rm -rf -- "$target"', restore)
+        copy = restore.index('cp -a -- "$BACKUP/$label" "$candidate"')
+        replace = restore.index('atomic_replace_candidate "$candidate" "$target"')
+        self.assertLess(copy, replace)
+
+        live = self.remote[self.remote.index("LIVE_TOUCHED=1") :]
+        self.assertNotIn("rm -rf -- /opt/aneb/profiles", live)
+        self.assertNotIn(
+            "rm -rf -- /opt/aneb/execution-profiles/token_multimodal_quick",
+            live,
+        )
+
+    def test_atomic_exchange_failure_keeps_existing_target_unchanged(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        platform = subprocess.run(
+            [bash, "-lc", "uname -s"], text=True, capture_output=True, check=False
+        )
+        if platform.returncode != 0 or platform.stdout.strip() != "Linux":
+            self.skipTest("renameat2 executable counterexample requires Linux")
+        function = "atomic_replace_candidate() {" + self.remote.split(
+            "atomic_replace_candidate() {", 1
+        )[1].split("\n}\n\n", 1)[0] + "\n}"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.write_bytes(b"known-live")
+            missing = root / "missing-candidate"
+            completed = subprocess.run(
+                [
+                    bash,
+                    "-c",
+                    function
+                    + '\nif atomic_replace_candidate "$1" "$2"; then exit 90; fi',
+                    "--",
+                    str(missing),
+                    str(target),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertEqual(b"known-live", target.read_bytes())
+
+    def test_restore_copy_failure_never_deletes_or_exchanges_live_target(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        function = "restore_item() {" + self.remote.split(
+            "restore_item() {", 1
+        )[1].split("\n}\n\n", 1)[0] + "\n}"
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            backup = base / "backup"
+            backup.mkdir()
+            (backup / "live-binary.present").write_text("", encoding="ascii")
+            (backup / "live-binary").write_text("rollback bytes", encoding="ascii")
+            trace = base / "trace.txt"
+            script = f"""set -Eeuo pipefail
+{function}
+BACKUP="$1"
+TRACE="$2"
+DEPLOY_ID=20260718123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+rm() {{ printf 'rm %s\n' "$*" >> "$TRACE"; return 0; }}
+mkdir() {{ return 0; }}
+cp() {{ printf 'copy_failed\n' >> "$TRACE"; return 74; }}
+normalized_path_fingerprint() {{ printf '%064d\n' 0; }}
+atomic_replace_candidate() {{ printf 'atomic_called\n' >> "$TRACE"; return 0; }}
+if restore_item live-binary /opt/aneb/bin/aneb-server; then
+    exit 90
+fi
+"""
+            completed = subprocess.run(
+                [bash, "-c", script, "--", str(backup), str(trace)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            events = trace.read_text(encoding="utf-8")
+            self.assertIn("copy_failed", events)
+            self.assertNotIn("atomic_called", events)
+            self.assertNotIn("rm -rf -- /opt/aneb/bin/aneb-server\n", events)
+
+    def test_evidence_failure_removes_staged_key_without_touching_live(self) -> None:
+        persist = self.remote.index("if ! persist_stage_evidence staged_validated")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1", persist)
+        failure_block = self.remote[persist:live_boundary]
+        self.assertIn('rm -f -- "$STAGE/tls/ip-key.pem"', failure_block)
+        self.assertIn("exit 96", failure_block)
+        cleanup = self.remote.split("\ncleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
+        remove_key = cleanup.index('rm -f -- "$STAGE/tls/ip-key.pem"')
+        failure_evidence = cleanup.index("commit_terminal_evidence", remove_key)
+        remove_stage = cleanup.index('rm -rf -- "$STAGE"', failure_evidence)
+        self.assertLess(remove_key, failure_evidence)
+        self.assertLess(failure_evidence, remove_stage)
+
+    def test_live_binary_and_receipt_must_match_staged_candidate(self) -> None:
+        self.assertIn('STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"', self.remote)
+        live_boundary = self.remote.index("LIVE_TOUCHED=1")
+        live_binary = self.remote.index('file_sha256 /opt/aneb/bin/aneb-server', live_boundary)
+        live_receipt = self.remote.index('LIVE_RECEIPT_SHA="$(cat', live_binary)
+        self.assertIn('[[ "$LIVE_BINARY_SHA" == "$STAGED_BINARY_SHA" ]]', self.remote[live_binary:])
+        self.assertIn('[[ "$LIVE_RECEIPT_SHA" == "$STAGED_RECEIPT_SHA" ]]', self.remote[live_receipt:])
+
+    def test_every_installed_artifact_is_digest_bound_to_the_staged_manifest(self) -> None:
+        self.assertIn("validate_live_artifacts() {", self.remote)
+        function = self.remote.split("validate_live_artifacts() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        for logical in (
+            "aneb-server-linux",
+            "aneb-server.service",
+            "root-profiles/basic_network.json",
+            "root-profiles/s1_chat.json",
+            "root-profiles/s2_coding_agent.json",
+            "root-profiles/s3_multimodal.json",
+            "execution-profiles/token_multimodal_quick/profile.json",
+            "execution-profiles/token_multimodal_quick/runtime_plan.json",
+            "execution-profiles/token_multimodal_quick/manifest.sha256",
+            "tls/ip-cert.pem",
+            "tls/ip-key.pem",
+        ):
+            self.assertIn(logical, function)
+        self.assertIn("artifact digest mismatch after install", function)
+        self.assertIn("live-artifact-manifest.sha256", function)
+        call = self.remote.index("validate_live_artifacts\n")
+        restart = self.remote.index("systemctl restart aneb-server", call)
+        self.assertLess(call, restart)
+
+    def test_live_artifact_comparison_rejects_one_byte_unit_mutation(self) -> None:
+        function = self.remote.split("validate_live_artifacts() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        logical_to_live = {
+            "aneb-server-linux": "/opt/aneb/bin/aneb-server",
+            "aneb-server.service": "/etc/systemd/system/aneb-server.service",
+            "root-profiles/basic_network.json": "/opt/aneb/profiles/basic_network.json",
+            "root-profiles/s1_chat.json": "/opt/aneb/profiles/s1_chat.json",
+            "root-profiles/s2_coding_agent.json": "/opt/aneb/profiles/s2_coding_agent.json",
+            "root-profiles/s3_multimodal.json": "/opt/aneb/profiles/s3_multimodal.json",
+            "execution-profiles/token_multimodal_quick/profile.json": (
+                "/opt/aneb/execution-profiles/token_multimodal_quick/profile.json"
+            ),
+            "execution-profiles/token_multimodal_quick/runtime_plan.json": (
+                "/opt/aneb/execution-profiles/token_multimodal_quick/runtime_plan.json"
+            ),
+            "execution-profiles/token_multimodal_quick/manifest.sha256": (
+                "/opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            stage = base / "stage"
+            live = base / "live"
+            stage.mkdir()
+            live.mkdir()
+            entries: dict[str, str] = {}
+            for index, logical in enumerate(
+                [
+                    *logical_to_live,
+                    "build-provenance.json",
+                    "go-buildinfo.json",
+                ]
+            ):
+                data = f"artifact-{index}-{logical}\n".encode()
+                staged_path = stage.joinpath(*logical.split("/"))
+                staged_path.parent.mkdir(parents=True, exist_ok=True)
+                staged_path.write_bytes(data)
+                entries[logical] = hashlib.sha256(data).hexdigest()
+                if logical in logical_to_live:
+                    live_path = live.joinpath(*logical.split("/"))
+                    live_path.parent.mkdir(parents=True, exist_ok=True)
+                    live_path.write_bytes(data)
+                    program = program.replace(
+                        repr(logical_to_live[logical]), repr(str(live_path))
+                    )
+            (stage / "artifact-manifest.sha256").write_text(
+                "".join(f"{entries[name]}  {name}\n" for name in sorted(entries)),
+                encoding="ascii",
+            )
+            output = stage / "live-artifact-manifest.sha256"
+
+            accepted = subprocess.run(
+                [sys.executable, "-c", program, str(stage), "0", "none", str(output)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            unit = live / "aneb-server.service"
+            unit.write_bytes(unit.read_bytes() + b"x")
+            rejected = subprocess.run(
+                [sys.executable, "-c", program, str(stage), "0", "none", str(output)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertIn("artifact digest mismatch after install", rejected.stderr)
+
+    def test_remote_deploy_lock_is_nonblocking_and_precedes_shared_mutation(self) -> None:
+        self.assertIn('DEPLOY_LOCK_PATH="/run/lock/aneb-deploy.lock"', self.remote)
+        self.assertIn("acquire_deploy_lock() {", self.remote)
+        function = "acquire_deploy_lock() {" + self.remote.split(
+            "acquire_deploy_lock() {", 1
+        )[1].split("\n}", 1)[0] + "\n}"
+        self.assertIn('exec 9>"$DEPLOY_LOCK_PATH"', function)
+        self.assertIn("flock -n 9", function)
+        self.assertIn("DEPLOY_LOCK_BUSY", function)
+
+        acquire = self.remote.index("acquire_deploy_lock\n")
+        rejected = self.remote[acquire : self.remote.index("early_cleanup() {", acquire)]
+        self.assertIn("DEPLOY_LOCK_RC", rejected)
+        self.assertIn('rm -f -- "$STAGE/tls/ip-key.pem"', rejected)
+        self.assertIn('rm -rf -- "$STAGE"', rejected)
+        self.assertIn('systemctl stop "$WATCHDOG_TIMER"', rejected)
+        for mutation in (
+            "persist_stage_evidence staged_validated",
+            "freeze_live_baseline\n",
+            'install -d -m 0700 "$BACKUP_ROOT"',
+            "LIVE_TOUCHED=1",
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertLess(acquire, self.remote.index(mutation, acquire))
+
+        bash = self.find_gnu_bash()
+        if bash is None:
+            return
+        has_flock = subprocess.run(
+            [bash, "-lc", "command -v flock >/dev/null 2>&1"],
+            capture_output=True,
+            check=False,
+        )
+        if has_flock.returncode != 0:
+            return
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_path = Path(temporary) / "deploy.lock"
+            first = subprocess.Popen(
+                [
+                    bash,
+                    "-c",
+                    function
+                    + '\nDEPLOY_LOCK_PATH="$1"\nacquire_deploy_lock\nprintf held\nsleep 5',
+                    "--",
+                    str(lock_path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertEqual("held", first.stdout.read(4))
+                second = subprocess.run(
+                    [
+                        bash,
+                        "-c",
+                        function
+                        + '\nDEPLOY_LOCK_PATH="$1"\nacquire_deploy_lock\nprintf mutated',
+                        "--",
+                        str(lock_path),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+                self.assertEqual(75, second.returncode)
+                self.assertNotIn("mutated", second.stdout)
+                self.assertIn("DEPLOY_LOCK_BUSY", second.stderr)
+            finally:
+                first.terminate()
+                first.communicate(timeout=5)
+
+    def test_remote_cleanup_watchdog_owns_stage_before_private_key_lands(self) -> None:
+        self.assertNotIn("$RemoteExecutionStarted", self.source)
+        self.assertIn("$RemoteCleanupWatchdogArmed = $false", self.source)
+        self.assertIn("systemd-run", self.source)
+        self.assertIn("--on-active=30m", self.source)
+        self.assertIn(".cleanup-watchdog-armed", self.source)
+        self.assertIn(".key-transfer-authorized", self.source)
+
+        watchdog = self.source.index("systemd-run")
+        handshake = self.source.index(".key-transfer-authorized", watchdog)
+        private_key = self.source.index("-Label 'IP-SAN private key'", handshake)
+        invoke = self.source.index("& ssh @SshOpts $Remote", private_key)
+        self.assertLess(watchdog, handshake)
+        self.assertLess(handshake, private_key)
+        self.assertLess(private_key, invoke)
+
+        finally_body = self.source.rsplit("finally {", 1)[1]
+        self.assertIn(
+            "$RemoteStageCreated -and -not $RemoteCleanupWatchdogArmed",
+            finally_body,
+        )
+        self.assertIn("early_cleanup() {", self.remote)
+        early_cleanup = self.remote.split("early_cleanup() {", 1)[1].split(
+            "\n}\n", 1
+        )[0]
+        self.assertIn("trap '' HUP INT TERM", early_cleanup)
+        early_trap = self.remote.index("trap early_cleanup EXIT INT TERM HUP")
+        validation = self.remote.index("validate_uploaded_artifacts", early_trap)
+        self.assertLess(early_trap, validation)
+        self.assertIn('rm -f -- "$STAGE/tls/ip-key.pem"', self.remote)
+        self.assertIn('rm -rf -- "$STAGE"', self.remote)
+
+    def test_remote_script_and_embedded_python_parse(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is not None:
+            completed = subprocess.run(
+                [bash, "-n", "-s"],
+                input=self.remote,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                0,
+                completed.returncode,
+                msg=f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}",
+            )
+        blocks = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", self.remote, flags=re.DOTALL)
+        self.assertGreaterEqual(len(blocks), 10)
+        for index, block in enumerate(blocks):
+            with self.subTest(index=index):
+                compile(block, f"deploy_server.remote.heredoc.{index}.py", "exec")
+
     def test_cleanup_is_strict_and_backups_are_bounded(self) -> None:
         self.assertIn("set -Eeuo pipefail", self.remote)
         self.assertIn("trap cleanup EXIT", self.remote)
@@ -517,8 +1328,110 @@ COMMIT
         success_tail = self.remote[self.remote.rindex("assert_shared_host_baseline live") :]
         self.assertLess(success_tail.index("LIVE_TOUCHED=0"), success_tail.index("if ! prune_backups"))
         self.assertIn("backup_prune=$PRUNE_RESULT", success_tail)
-        cleanup = self.remote.split("cleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
+        cleanup = self.remote.split("\ncleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
         self.assertNotIn("prune_backups || ROLLBACK_FAILED=1", cleanup)
+        self.assertIn("trap '' HUP INT TERM", cleanup)
+        self.assertIn("( rollback_live ) || ROLLBACK_FAILED=1", cleanup)
+        self.assertGreaterEqual(cleanup.count("set +e"), 2)
+        rollback = self.remote.split("rollback_live() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertNotIn("set -e", rollback)
+
+    def test_cleanup_ignores_second_hup_and_reaches_terminal_cleanup(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        cleanup = "cleanup() {" + self.remote.split("\ncleanup() {", 1)[1].split(
+            "\n}\ntrap cleanup EXIT", 1
+        )[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{cleanup}
+TRACE="$1"
+STAGE=/tmp/aneb-cleanup-test
+DEPLOY_ID=20260718123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+BACKUP_ROOT=/path/that/does/not/exist
+LIVE_TOUCHED=0
+ROLLBACK_FAILED=0
+DEPLOY_RESULT=failed
+FINAL_EVIDENCE_COMMITTED=0
+DEPLOY_SUCCESS_MESSAGE=''
+stop_staged_server() {{
+    kill -HUP "$BASHPID"
+    printf 'after_hup\n' >> "$TRACE"
+}}
+rollback_live() {{ return 0; }}
+commit_terminal_evidence() {{
+    printf 'terminal_evidence\n' >> "$TRACE"
+    FINAL_EVIDENCE_COMMITTED=1
+}}
+cancel_cleanup_watchdog() {{ printf 'watchdog_cancel\n' >> "$TRACE"; }}
+prune_backups() {{ return 0; }}
+rm() {{ printf 'rm %s\n' "$*" >> "$TRACE"; return 0; }}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+trap 'exit 129' HUP
+false
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.txt"
+            completed = subprocess.run(
+                [bash, "-c", script, "--", str(trace)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(1, completed.returncode, completed.stderr)
+            events = trace.read_text(encoding="utf-8")
+            self.assertIn("after_hup", events)
+            self.assertIn("terminal_evidence", events)
+            self.assertIn("watchdog_cancel", events)
+
+    def test_cleanup_keeps_watchdog_armed_if_stage_removal_fails(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        cleanup = "cleanup() {" + self.remote.split("\ncleanup() {", 1)[1].split(
+            "\n}\ntrap cleanup EXIT", 1
+        )[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{cleanup}
+TRACE="$1"
+STAGE=/tmp/aneb-cleanup-test
+DEPLOY_ID=20260718123456-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+BACKUP_ROOT=/path/that/does/not/exist
+LIVE_TOUCHED=0
+ROLLBACK_FAILED=0
+DEPLOY_RESULT=failed
+FINAL_EVIDENCE_COMMITTED=0
+DEPLOY_SUCCESS_MESSAGE=''
+stop_staged_server() {{ :; }}
+rollback_live() {{ return 0; }}
+commit_terminal_evidence() {{ FINAL_EVIDENCE_COMMITTED=1; }}
+cancel_cleanup_watchdog() {{ printf 'watchdog_cancel\n' >> "$TRACE"; }}
+prune_backups() {{ return 0; }}
+rm() {{
+    if [[ "$*" == "-rf -- $STAGE" ]]; then
+        printf 'stage_remove_failed\n' >> "$TRACE"
+        return 73
+    fi
+    return 0
+}}
+trap cleanup EXIT
+false
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.txt"
+            completed = subprocess.run(
+                [bash, "-c", script, "--", str(trace)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(1, completed.returncode, completed.stderr)
+            events = trace.read_text(encoding="utf-8")
+            self.assertIn("stage_remove_failed", events)
+            self.assertNotIn("watchdog_cancel", events)
 
     def test_script_has_no_host_network_or_co_tenant_mutation_commands(self) -> None:
         command_patterns = (

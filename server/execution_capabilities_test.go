@@ -38,8 +38,8 @@ func TestPublishedTokenQuickProducesExactCapabilityReceipt(t *testing.T) {
 	}
 	profile := receipt.ValidatedProfiles[0]
 	if profile.ProfileID != "token_multimodal_quick" ||
-		profile.ProfileVersion != "1.2.0" ||
-		profile.ProfileSHA256 != "sha256:38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4" {
+		profile.ProfileVersion != "1.2.1" ||
+		profile.ProfileSHA256 != "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773" {
 		t.Fatalf("unexpected validated profile: %+v", profile)
 	}
 }

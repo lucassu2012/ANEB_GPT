@@ -29,7 +29,7 @@ const (
 	echoWireContractID                   = "aneb-echo-v1"
 	downloadWireContractID               = "aneb-download-v1"
 	tokenQuickExecutionProfileID         = "token_multimodal_quick"
-	tokenQuickExecutionProfileVersion    = "1.2.0"
+	tokenQuickExecutionProfileVersion    = "1.2.1"
 	tokenQuickExecutionModeID            = "token_simulation"
 	probeSimulatorExecutionTarget        = "aneb_probe_simulator"
 	probeNodeClaimScope                  = "application_end_to_end_to_probe_node"

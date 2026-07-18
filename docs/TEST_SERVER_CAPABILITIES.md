@@ -13,9 +13,12 @@
 | 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | 2026-07-18 19:52 CST；E-01 已自动回滚并确认为 0.7.0/`active`，PID `3775079`，二进制 SHA-256 前缀 `9208aba2…`；根 Profile 与全量旧端点 smoke 通过。三次连续规范化 `full/v4/v6/nft/Docker` 防火墙组件和 `eth0` qdisc 指纹逐项稳定；`wg-aneb-lab`、`ifb-aneb-lab`、`ANEB_LAB` 规则及 UDP 51820 监听均不存在。当前处于“待交接”，须经另一固定角色或受限自动 `Verifier` 独立只读复核后才能重新接手部署 |
+| 最近验证 | ［KNOWN｜HIGH］2026-07-18 23:12 CST；受限 v2 `Verifier` 的 T+0/T+10秒 两轮只读复核通过并自动释放为“空闲”。E-01 为 0.7.0/`active`；binary=`9208aba26f18ea00d18d1bbcf3f1c6f7042e66b341675a58048894b168ba6b5b`，qdisc=`e9455ff1a3a44f3b5979ee068f8c4e3fe90aa0ebdd30e89add8299403958cbac`，firewall full=`08e3d3dfeb9f3e4ddc69ba440c5af7697536b0d45c3016068b33cb9d36ab75dd`，v4=`66b46a501b972e9b8d3d7fa0ab38e9e2b0fb24f5e521f4c5ca11ef60a53a0100`，v6=`192a359dda179d478c0e99eb3b0817894794ce62495afd489ed12a5e433c395e`，nft=`dd5369267b8eb08ddfdfde3a0e1c57f034951d608c45ac1409ccdafc77024657`。`wg/ifb/ANEB_LAB/UDP51820`、`wg-quick@wg-aneb-lab` enabled 状态及 Phase 0 的精确 `/etc`、`/opt`、`/run`、`/var/lib` 路径均无残留；证据边界见 `SHARED_RELEASE_VERIFIER_VALIDATION_2026-07-18.md` |
 
-所有 HTTP 响应应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
+> ［KNOWN｜HIGH］上表最近验证行保留的是 2026-07-18 历史证据；其中自动状态释放流程现已退役，
+> 不构成当前操作授权。当前规则见 D-80 和下述切换门禁。
+
+［KNOWN｜HIGH］当前 0.7 合同要求所有 HTTP 响应带 `X-Aneb-Server: aneb-server/0.7.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
 ### 1.1 `aneb-server/0.8.0` 执行能力候选（**尚未部署**）
 
@@ -25,15 +28,18 @@
 > ［KNOWN｜HIGH］2026-07-18 首次 0.8.0 切换尝试中，候选能力回执和全量旧端点 smoke
 > 均通过；旧部署器随后因把 `iptables-save`/`ip6tables-save` 每次运行产生的
 > `Generated/Completed` 时间写入全量哈希而误报共享防火墙变化，并自动回滚到 0.7.0。
-> 该尝试不能写成“0.8.0 已部署”。两秒配对复核证明 raw v4/v6 SHA 会仅因时间变化，而裁掉
-> 这两类运行时间后的 v4/v6 指纹稳定；三次事故后规范化组件复核也稳定。由于旧部署器未保留
+> 该尝试不能写成“0.8.0 已部署”。［COMPUTED｜HIGH］事故后两秒配对样本的逐行差异仅出现在
+> `Generated/Completed` 时间字段，移除这些字段后该样本的 v4/v6 指纹一致；三次事故后规范化组件
+> 复核也稳定。由于旧部署器未保留
 > 可用于事后语义对比的切换前 raw 快照，这些证据仍不能追溯证明切换窗口绝无并发语义变更；
-> 因此先完成独立交接复核，再用新 lease 重试，而不是直接解除门禁。
+> 因此当时选择先完成独立交接复核，而不是直接解除门禁；该历史复核已于 22:01 完成。当前重试
+> 不再使用共享状态或 lease，而须遵循 D-80 的实时干净桌面和远端内核互斥锁规则。
 
 - ［KNOWN｜HIGH］0.8.0 候选在启动时读取受控的已发布 Profile 目录，只为
-  `token_multimodal_quick@1.2.0` 验证 `profile.json`、`runtime_plan.json` 与
+  `token_multimodal_quick@1.2.1` 验证 `profile.json`、`runtime_plan.json` 与
   `manifest.sha256` 的完整性；Profile 规范化 SHA-256 必须为
-  `38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4`。
+  `caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773`。该计划从模型与
+  seed 可复现派生，并以 task-0006 的 1MiB 返回附件真实覆盖 download 原语。
 - ［KNOWN｜HIGH］任一 Profile 身份、执行要求、manifest 或白名单原语校验失败时，0.8.0
   拒绝启动，不能发出“支持 Quick”的回执。
 - ［KNOWN｜HIGH］成功启动后，`GET /api/v1/serverinfo` 新增
@@ -53,36 +59,46 @@
     "validated_profiles": [
       {
         "profile_id": "token_multimodal_quick",
-        "profile_version": "1.2.0",
-        "profile_sha256": "sha256:38b85843a4216312836bf7f0509bb005356262fa917e235879b3ffeb9ca525e4"
+        "profile_version": "1.2.1",
+        "profile_sha256": "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773"
       }
     ]
   }
 }
 ```
 
-- ［KNOWN｜HIGH］P1 0.5.11 可忽略回执中未知的额外 capability，但必须拒绝重复原语 ID、
+- ［KNOWN｜HIGH］P1 0.5.12 可忽略回执中未知的额外 capability，但必须拒绝重复原语 ID、
   缺失的必需原语、线路合同冲突、合同版本不兼容或 Quick Profile 身份/哈希不一致；拒绝必须
   发生在首个 echo、token-sim 或 download 业务请求之前。`/serverinfo` 本身是预检请求，不计作
   Quick 业务流量。
+- ［KNOWN｜HIGH］0.8.0 候选在最外层入口异步记录隐私有界的 request-entry 审计。run ID 只接受规范
+  小写 UUID；`X-Aneb-Audit-Role` 只归一为 `reachability/capability/window_start/window_end/none/other`。
+  每个进程有独立 `instance_id`，唯一 worker 为 AUDIT/DROP 写连续 `seq`；Token Quick 只保留 direct
+  serverinfo/echo/token-sim/download 路径，其余 `/api/v1/*` 和全部 `/synthetic/*` 统一记为
+  `/api/v1/other`，query/body/原始未知 header 不入日志。该审计在 handler 前发生，只证明请求进入，
+  不证明响应或客户端下载成功；D-81/D-82 双 barrier、新鲜度 receipt 和客户端结果缺一不可。
 - ［KNOWN｜HIGH］其余 11 个 Published Profile 没有 `execution_requirements`，继续走 0.5.10
   既有兼容路径；本候选不修改任何指标、质量目标、门限或评分。
 
 #### 切换门禁
 
-1. ［KNOWN｜HIGH］操作 E-01 前必须先读取共享状态文件；只有状态为“空闲”时，Codex 才能用
-   `scripts/update_shared_test_status.py claim` 自动写为“进行中”。每次 claim 必须生成新的 128-bit
-   `lease-id`；状态机只接受精确的 `Codex`/`Claude` 两种执行者，旧 lease 不得复用。P40、
-   Claude/Codex App、VPN、抓包和其他 E-01 测试均须处于清理态。所有非空闲 snapshot 必须在
-   当前任务/交接说明中恰有一个合法 lease marker；手工或旧版无 lease 的“待交接”不得被释放。
-2. ［KNOWN｜HIGH］候选已经通过 P2 Go 全量测试、P3/catalog 校验、部署脚本离线安全测试、
+1. ［KNOWN｜HIGH］`SHARED_TEST_STATUS.md`、lease、待交接与自动 `Verifier` 已于 2026-07-19 退役，
+   不再构成 P40、E-01 或阿里云的操作授权，也不得被更新为当前流程的一部分。
+2. ［KNOWN｜HIGH］P40 开测前只读确认设备在线、Huawei Launcher 前台，且 Claude/Codex ANEB、
+   本轮目标业务 App、VPN/tun 与抓包进程/服务均未活动；现场干净即可直接开始。若存在无法安全归属的
+   会话，不得停止、覆盖或清理，必须先协调。
+3. ［KNOWN｜HIGH］历史候选提交已经通过 P2 Go 全量测试、P3/catalog 校验、部署脚本离线安全测试、
    Android 97 suites / 577 JVM tests（0 failure / 0 error / 0 skipped）、assembleDebug、Lint、
    87 项脚本测试（86 通过、1 项按设计跳过）、P3 38 项测试和 2026-07-18 全仓质量门；提交前还须在
-   新增文件全部进入暂存区后重跑凭据扫描，任何一项失败都不得切换。
-3. ［KNOWN｜HIGH］部署脚本必须接收本次 `-LeaseId`，并通过状态机 `assert-lease` 精确核对
-   “进行中 + Codex + 同一 lease-id + E-01”；资源按约定分隔符拆成 token 后全等匹配，禁止用
-   `NO-E-01`、`E-01-disabled`、`not E-01` 等子串伪装。脚本本身不执行 claim/handoff/lock。切换前必须同时
-   验证 0.7.0 的 `serverinfo.version` 与 `X-Aneb-Server`，并跑通与回滚相同的 Profile/echo/1MiB
+   新增文件全部进入暂存区后重跑凭据扫描；当前退役改动必须再完成一轮最终全仓门禁并回填
+   新 commit/实际测试数，任何一项失败都不得切换。
+   候选构建与部署前 Go 测试必须额外固定并记录 `GOFIPS140=off`；宿主 `latest` 污染未被覆盖时即使
+   其余 flags 相同也不得构建、上传或写来源证明。
+4. ［KNOWN｜HIGH］E-01/阿里云使用独立保护链，不从 P40 现场或退役状态文件取得授权。部署脚本不再
+   接收 `-LeaseId`，也不读取共享状态文件。远端必须在任何 live 变更前
+   非阻塞取得 `/run/lock/aneb-deploy.lock` 的内核 `flock`，锁忙或锁能力不可用即失败；该锁覆盖预检
+   证据、备份、替换、回滚、最终证据和清理。切换前必须同时验证 0.7.0 的 `serverinfo.version` 与
+   `X-Aneb-Server`，并跑通与回滚相同的 Profile/echo/1MiB
    download/impairment/recovery/UDP smoke；只有健康的 0.7.0 才能作为回滚基线。随后冻结二进制
    SHA、Profile/service 以及 Docker iptables-save、`eth0` qdisc、全防火墙规则指纹；PID 因
    升级/回滚重启可变化，不作为不变量。最终修复提交 `4030179` 只删除 iptables-save 每次运行生成的
@@ -90,8 +106,12 @@
    语义全部保留；冻结时须在同一组连续采集两份规范化快照并要求完全相同，同时记录
    v4/v6/nft/Docker/full 分项指纹。采集失败、字段异常、两次快照不稳定或任一语义分项变化都须
    fail closed，不得用宽松过滤绕过共享主机门禁。
-4. ［KNOWN｜HIGH］切换后必须同时核对 `X-Aneb-Server: aneb-server/0.8.0`、上述完整回执、
-   manifest 精确哈希、既有 TCP/UDP 8443 与合成弱网 smoke；全部通过前不能宣布部署完成。
+5. ［KNOWN｜HIGH］切换后必须同时核对 `X-Aneb-Server: aneb-server/0.8.0`、上述完整回执、
+   manifest 精确哈希、既有 TCP/UDP 8443 与合成弱网 smoke；全部通过只代表“E-01 服务端切换
+   子阶段通过（`DEPLOY_OK`）”。完整 M0-EC1 验收仍须随后完成 P40 正/负向 run、同-run审计证据、
+   清理并恢复实时干净桌面；现场审计还须保存 pre-start cursor/boot/invocation/MainPID、原始 journald
+   JSON、双 barrier 响应、v2 判定报告及全证据 manifest，并在窗口内持有与部署互斥的审计锁。在此之前
+   不得写“跨端部署验收完成”。
 
 #### 回滚门禁
 
@@ -102,16 +122,15 @@
    匹配冻结的 ANEB 文件及 Docker、`eth0`、全防火墙指纹；任一失败必须明确非零退出。
 3. ［KNOWN｜HIGH］备份裁剪发生在成功验收并解除回滚保险丝之后；裁剪失败只报告维护 warning，
    不得回滚已验收部署，也不得把部署结果伪报为失败。
-4. ［KNOWN｜HIGH］部署脚本返回后仍保留“进行中”，因为同一 lease 还要完成 P40 联调。只有主
-   编排器完成真机测试和清理后，才用同 actor + 同 lease-id 自动改为“待交接”；只有另一固定角色
-   或受限自动 `Verifier` 独立复核后才能改回“空闲”。`Verifier` 不能领取/操作/清理资源，必须做
-   T+0/T+10 两轮只读检查并绑定状态文件原始 SHA；确定失败只能转“异常锁定”。清理失败则由当前
-   执行者用同 lease 置为“异常锁定”。
+4. ［KNOWN｜HIGH］真机任务结束时，执行者必须停止本任务启动的 ANEB、业务、VPN 和抓包 App，清除
+   本任务创建的临时网络条件，恢复 `stayon` 等临时设置，返回 Huawei Launcher，并立即确认无活动
+   VPN/tun/相关进程。任一清理
+   项无法确认时必须停止后续测试并报告实际残留；不得仅因屏幕显示桌面就声称现场干净。
 
-［KNOWN｜HIGH］当前事故收口与下次重试顺序固定为：另一固定角色或受限自动 `Verifier` 独立复核并将“待交接”释放为“空闲” → Codex
-生成全新 128-bit lease 并重新 claim → 用修复后的唯一入口从 0.7.0 重新执行完整切换门禁 → 0.8.0
-公网正向验收通过后才进行 P40 Token Quick 正向 run。不得复用事故 lease，也不得把本次候选 smoke
-或负向真机结果替代正向部署验收。
+［KNOWN｜HIGH］22:01 的受限 `Verifier` 放行属于历史证据；该机制现已退役。下次重试顺序固定为：
+全部离线门禁通过 → 实时确认 P40 干净桌面 → 用修复后的唯一入口从 0.7.0 重新执行完整切换门禁 →
+0.8.0 公网正向验收通过后才进行 P40 Token Quick 正向 run。不得把本次候选 smoke 或负向真机结果
+替代正向部署验收。
 
 ## 2. 已部署端点
 
@@ -162,7 +181,7 @@ D1 的终点是响应体最后一字节排空；非 2xx、截断或字节数不�
 
 ## 4. 部署与共享主机纪律
 
-唯一部署入口：`scripts/deploy_server.ps1 -LeaseId <本次新 lease>`。部署前后必须检查 P40 Pro 上
+唯一部署入口：`scripts/deploy_server.ps1`。部署前后必须检查 P40 Pro 上
 `com.aneb.probe` 与 `com.aneb.probe.codex` 均未在测试；重启窗口通常少于 2 秒，但仍不得在任何
 客户端 run 期间操作。仓库中若出现 IP-SAN 证书/私钥，默认拒绝部署；只有额外显式启用证书替换，
 并同时提供证书与私钥各自的 SHA-256 pin，且本地和远端暂存文件均匹配时才进入证书门禁。远端还
@@ -229,7 +248,10 @@ E-01 已启用两个**用户态、逐 run 隔离**弱网合同；仍未、也不
 
 | 日期 | 变更 |
 |---|---|
-| 2026-07-18 | ［KNOWN｜HIGH］首次 0.8.0 切换的候选回执和旧端点 smoke 通过，但旧脚本把 iptables-save/ip6tables-save 运行时间纳入 raw 防火墙哈希，触发误报并自动回滚至 0.7.0；不得记为已部署。两秒 raw/规范化配对和三次事故后分项复核支持“时间噪声已识别、当前 0.7.0/共享主机稳定”，但不能事后证明切换窗口绝无并发语义变化。最终提交 `4030179` 仅规范化运行时间，新增同组双快照、v4/v6/nft/Docker/full 分项指纹、严格 wrapper/tool 校验及采集失败闭锁；GitHub CI 6/6、本地全仓质量门和 87 项脚本测试通过，当前等待独立交接后以新 lease 重试。 |
+| 2026-07-19 | ［KNOWN｜HIGH］仅更新尚未部署的 0.8.0 候选：加入规范 UUID/固定 role、进程实例与连续序号、全 API/synthetic 外层归一审计；D-81/D-82 将其限定为带新鲜度来源绑定的 request-entry 证据，不冒充请求完成。构建/部署来源证明新增 `GOFIPS140=off` 冻结。E-01 当前部署版本仍为 0.7.0。 |
+| 2026-07-19 | ［KNOWN｜HIGH］按 D-80 退役共享状态、lease、待交接和受限 Verifier 流程；部署入口移除 `-LeaseId`，保留 E-01 远端内核互斥锁、预检、快照、强回滚和证据门禁。P40 改为开测前实时干净桌面检查与结束后现场清理复核。 |
+| 2026-07-18 | ［KNOWN｜HIGH］22:01 受限 `Verifier` 完成 T+0/T+10秒 两轮只读复核并自动释放共享状态为“空闲”；完整记录 0.7 binary/qdisc/firewall full/v4/v6/nft 六项 SHA-256。该复核不等于 0.8 已部署；同时纠正证据边界：当时探针只能证明 Phase 0 运行态无残留，旧 Quick 负向包只能独立证明客户端 fail closed 与无客户端业务产物。 |
+| 2026-07-18 | ［KNOWN｜HIGH］首次 0.8.0 切换的候选回执和旧端点 smoke 通过，但旧脚本把 iptables-save/ip6tables-save 运行时间纳入 raw 防火墙哈希，触发误报并自动回滚至 0.7.0；不得记为已部署。［INFERRED,post-hoc｜MED］事故后两秒 raw/规范化配对和三次分项复核支持“采集时间字段解释了已观察漂移、当前 0.7.0/共享主机稳定”，但不能预测或事后证明切换窗口绝无并发语义变化。提交 `4030179` 仅规范化运行时间，新增同组双快照、v4/v6/nft/Docker/full 分项指纹、严格 wrapper/tool 校验及采集失败闭锁；当时 GitHub CI 6/6、本地全仓质量门和 87 项脚本测试通过。独立交接已于 22:01 完成；这些都是历史事实，当前重试改按 D-80 执行。 |
 | 2026-07-18 | ［KNOWN｜HIGH］登记 `aneb-server/0.8.0` 执行能力候选及切换/回滚门禁；该候选尚未部署到 E-01，当前部署基线继续为 0.7.0。 |
 | 2026-07-18 | 保持 `aneb-server/0.7.0` 二进制能力，部署弱网 Profile 1.1.0：仅升级可审计语义结论策略；根 Profile、`download_burst`、逐 run 弱网回执、恢复隔离、本机及公网 TCP/UDP 8443 smoke 通过。 |
 | 2026-07-17 | 部署 `aneb-server/0.7.0`：新增逐 run 一次性 `weak-recovery-v1` 2 秒请求中断、同 run/其他 run/正常路由隔离 smoke；App 0.4.8/Room v17 增加独立 Recovery Profile、动态恢复仪表、独立评分与 P40 四次真机证据。 |

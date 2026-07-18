@@ -30,8 +30,8 @@ android {
         applicationId = "com.aneb.probe"
         minSdk = 29 // CellInfoNr / 5G API 需要（设计文档 §5）
         targetSdk = 35
-        versionCode = 43
-        versionName = "0.5.11"
+        versionCode = 44
+        versionName = "0.5.12"
     }
 
     signingConfigs {
@@ -140,4 +140,5 @@ dependencies {
     ksp(libs.room.compiler)
 
     testImplementation(libs.junit)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

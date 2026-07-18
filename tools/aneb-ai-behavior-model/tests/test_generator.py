@@ -103,7 +103,12 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(plan["task_count"], 3)
         self.assertEqual({task["workload_kind"] for task in plan["tasks"]}, {"text", "document", "image"})
         self.assertEqual(profile["profile_id"], "token_multimodal_quick")
-        self.assertEqual(profile["version"], "1.2.0")
+        self.assertEqual(profile["version"], "1.2.1")
+        artifact_tasks = [task for task in plan["tasks"] if task["response_artifact_bytes"] > 0]
+        self.assertEqual(
+            [(task["task_id"], task["workload_kind"], task["response_artifact_bytes"]) for task in artifact_tasks],
+            [("task-0006", "text", 1024 * 1024)],
+        )
         requirements = profile["execution_requirements"]
         self.assertEqual(requirements["contract_id"], "aneb-execution-requirements")
         self.assertEqual(requirements["contract_version"], "1.0.0")
@@ -126,6 +131,9 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(profile["evidence_tier"], "quick")
         self.assertEqual(profile["execution_plan"]["variant"], "quick")
         self.assertLess(profile["est_duration_s"], 240)
+        repeated_profile, repeated_plan = derive_token_runtime_variant(artifacts, "quick")
+        self.assertEqual(profile, repeated_profile)
+        self.assertEqual(plan, repeated_plan)
 
     def test_standard_variant_has_minimum_task_sample_count(self) -> None:
         model = load_model(ROOT / "models/token_multimodal_hypothesis_v0.1.json")

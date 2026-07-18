@@ -20,6 +20,7 @@ type app struct {
 	profiles              map[string]*Profile
 	dataDir               string
 	executionCapabilities serverCapabilityReceipt
+	requestAudit          requestAuditEmitter
 	// allowInject 放行 /stream 的 &inject= 故障注入钩子（P0-C13 前置：
 	// 客户端 seq join/截断/畸形 event 健壮性验收需要服务端可控注入）。
 	// 默认 false；生产/取证部署绝不开启——注入流不是测量数据。
@@ -49,11 +50,17 @@ func (a *app) routes() http.Handler {
 	api.HandleFunc("/api/v1/results", a.handleResults)
 	api.HandleFunc("/api/v1/serverinfo", a.handleServerInfo)
 	api.HandleFunc("/api/v1/impairments", a.handleSyntheticImpairments)
+	auditSink := a.requestAudit
+	if auditSink == nil {
+		auditSink = defaultRequestAuditSink()
+	}
 
 	root := http.NewServeMux()
 	root.Handle("/synthetic/", a.syntheticImpairmentHandler(api))
 	root.Handle("/", api)
-	return withServerHeader(root)
+	// Audit outside the synthetic impairment layer so malformed, unsupported,
+	// and active-outage early returns remain visible exactly once.
+	return withServerHeader(withRequestAuditSink(root, auditSink))
 }
 
 // withServerHeader 为所有响应附加 X-Aneb-Server 版本头——服务端指纹，
@@ -128,7 +135,17 @@ func main() {
 		log.Printf("execution profile validated: %s v%s (%s)", profile.ProfileID, profile.ProfileVersion, profile.ProfileSHA256)
 	}
 
-	a := &app{profiles: profiles, dataDir: *dataDir, executionCapabilities: executionCapabilities, allowInject: *allowInject, h3Enabled: *h3Enabled}
+	// Use the process singleton so one instance identity, one worker, and one
+	// contiguous sequence cover the entire server lifetime.
+	auditSink := defaultRequestAuditSink()
+	a := &app{
+		profiles:              profiles,
+		dataDir:               *dataDir,
+		executionCapabilities: executionCapabilities,
+		requestAudit:          auditSink,
+		allowInject:           *allowInject,
+		h3Enabled:             *h3Enabled,
+	}
 	if *allowInject {
 		log.Printf("WARNING: -allow-inject enabled — /stream accepts fault injection, runs are NOT evidential")
 	}
@@ -192,11 +209,14 @@ func main() {
 		log.Printf("udp echo: sequenced application datagram probe enabled on udp%s", *udpEchoAddr)
 	}
 
+	var serveErr error
 	if *tlsCert != "" && *tlsKey != "" {
 		// TLSConfig 已含 GetCertificate（SNI 分流），证书文件参数留空。
-		log.Fatal(srv.ListenAndServeTLS("", ""))
+		serveErr = srv.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("WARNING: no -tls-cert/-tls-key given, serving PLAINTEXT HTTP — dev only, do not use for evidential runs")
-		log.Fatal(srv.ListenAndServe())
+		serveErr = srv.ListenAndServe()
 	}
+	auditSink.Close()
+	log.Fatal(serveErr)
 }

@@ -1,12 +1,29 @@
-# ANEB Probe 0.2.0 Codex 交接（2026-07-16）
+# ANEB Probe 0.2.0 Codex 交接（2026-07-16，历史快照，已 superseded）
 
-## 1. 交付结论
+> [!CAUTION]
+> **SUPERSEDED / HISTORY ONLY — 本文已被后续状态取代，不是现行安装或验收说明。**
+>
+> ［KNOWN｜HIGH］本文只冻结 2026-07-16 的 App 0.2.0 交付证据。现行状态以仓库根
+> `README.md`、`docs/PLAN_ALIGNMENT_2026-07-17.md`、
+> `docs/M0_TOKEN_QUICK_EXECUTION_CONTRACT_VALIDATION_2026-07-18.md`、
+> `docs/TEST_SERVER_CAPABILITIES.md` 和 `docs/DECISION_LOG.md` 为准。
+>
+> ［KNOWN｜HIGH］截至 2026-07-19，现行离线候选为 App `0.5.12-codex` / code 44 与
+> `token_multimodal_quick@1.2.1`；**0.5.12 尚无 GitHub 云端 APK、尚未安装到 P40、尚无
+> P40 PASS**。E-01 仍运行 `aneb-server/0.7.0`，**`aneb-server/0.8.0` 尚未部署**。下文的
+> 0.2.0 真机 PASS 不得外推为 0.5.12 或 0.8.0 的现行证据。
+>
+> ［KNOWN｜HIGH］第 5 节的 ADB 命令只允许用于 SHA-256 精确等于
+> `43B5F31F381B8F6663CDD5B731F430B812C5B0A95DBDEABF610A6862001064E4` 的历史 0.2.0
+> APK；可变的本地输出路径本身不是 artifact 身份。该命令**不可用于现行 0.5.12 安装**。
 
-［KNOWN｜HIGH］Codex 路线的 A→B→C 产品代码、E-01 服务端、Debug APK、自动化质量门和 P40 Pro 真机回归均已完成。应用已经不是演示稿：两种测试模式使用真实请求与真实到达事件驱动动态界面，结果、历史、GPS 轨迹和 Profile 合同均来自实际数据源。
+## 1. 2026-07-16 历史交付结论
 
-［KNOWN｜HIGH］唯一尚未生成的发布物是 **Product Owner 签名的 Release APK/AAB**。仓库已具备 fail-closed 签名门禁，但不会生成、保存或代管发布私钥；签名资产的创建与备份属于 Product Owner 边界。
+［KNOWN｜HIGH］在本文冻结的 2026-07-16 / App 0.2.0 快照中，Codex 路线的 A→B→C 产品代码、当时的 E-01 服务端、Debug APK、自动化质量门和 P40 Pro 真机回归均已完成。应用已经不是演示稿：两种测试模式使用真实请求与真实到达事件驱动动态界面，结果、历史、GPS 轨迹和 Profile 合同均来自实际数据源。
 
-## 2. Version 0.2.0 已交付范围
+［KNOWN｜HIGH］在该历史快照中，唯一尚未生成的发布物是 **Product Owner 签名的 Release APK/AAB**。仓库已具备 fail-closed 签名门禁，但不会生成、保存或代管发布私钥；签名资产的创建与备份属于 Product Owner 边界。该表述不覆盖页首列出的 0.5.12 / server 0.8.0 现行缺口。
+
+## 2. Version 0.2.0 历史已交付范围
 
 ### 测试与动态视觉
 
@@ -44,7 +61,7 @@
 - Release 签名缺失时 `assembleRelease`、`bundleRelease`、`installRelease` fail-closed。
 - AGP 8.13.0、Gradle 8.13，wrapper SHA-256 钉死；`compileSdk/targetSdk=35`。
 
-## 3. 最终真机证据
+## 3. 2026-07-16 的 0.2.0 真机证据
 
 设备：HUAWEI P40 Pro / ELS-AN00；Codex 包名 `com.aneb.probe.codex`，与 Claude/正式包 `com.aneb.probe` 隔离。
 
@@ -62,7 +79,7 @@
 
 ［KNOWN｜HIGH］上述数值是该时刻“P40 Pro 到 E-01 探针节点的应用层路径”测量结果，不代表运营商全网、无线空口峰值或行业 SLA。
 
-## 4. 最终质量门
+## 4. 2026-07-16 的 0.2.0 质量门
 
 - `scripts/quality_gate.ps1`：PASS。
 - JVM：53 suites，387 tests，0 failures，0 errors，0 skipped。
@@ -73,22 +90,34 @@
 - Debug 与 Release Kotlin 编译：PASS。
 - Release 无签名凭据时门禁拒绝构建：符合预期。
 
-最终 Debug APK：
+该历史快照的 Debug APK：
 
 - 路径：`app/probe/build/outputs/apk/debug/probe-debug.apk`
 - 包名：`com.aneb.probe.codex`
 - 大小：58,414,380 bytes
 - SHA-256：`43B5F31F381B8F6663CDD5B731F430B812C5B0A95DBDEABF610A6862001064E4`
 
-## 5. 构建、安装与复验
+## 5. 历史 0.2.0 构建、安装与复验（不可用于现行候选）
+
+［KNOWN｜HIGH］当时执行过 `scripts/quality_gate.ps1`，但在已经前进的工作树中重跑同一路径不会
+重建 2026-07-16 的 0.2.0 artifact。下列安装块只用于核验并安装上节冻结的精确历史 APK；摘要不符
+必须停止。现行 0.5.12 必须由其自身 clean commit 的 GitHub CI 重新生成，并以该次
+`build-manifest.json`、APK 身份和 SHA-256 为安装门禁；在这些证据产生前没有可执行的 0.5.12
+安装命令。
 
 ```powershell
 cd "E:\G Project\ANEB\DevSpace\aneb-probe-codex-v0.2.0"
-powershell -ExecutionPolicy Bypass -File scripts/quality_gate.ps1
-adb -s 8MY0221126002537 install -r app/probe/build/outputs/apk/debug/probe-debug.apk
+$apk = Resolve-Path "app/probe/build/outputs/apk/debug/probe-debug.apk"
+$expectedSha256 = "43B5F31F381B8F6663CDD5B731F430B812C5B0A95DBDEABF610A6862001064E4"
+$actualSha256 = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash
+if ($actualSha256 -ne $expectedSha256) {
+    throw "Not the frozen 0.2.0 historical artifact; do not install."
+}
+adb -s 8MY0221126002537 install -r $apk
 ```
 
-Release 构建前先按 `docs/RELEASE_BUILD.md` 提供四项 `ANEB_RELEASE_*` 凭据，然后：
+下列 Release 命令同样只是 0.2.0 时代的历史入口。现行发布必须先按最新
+`docs/RELEASE_BUILD.md` 复核版本与证据，再提供四项 `ANEB_RELEASE_*` 凭据：
 
 ```powershell
 cd app
@@ -104,9 +133,10 @@ cd app
 - Token 实时遥测：`LiveTelemetry.kt`；Token 结论：`OutcomeConclusions.kt`。
 - UI 视觉组件：`ui/components/AnebVisualKit.kt`、`SpeedTestComponents.kt`。
 - 数据库：`data/AnebDatabase.kt`、`Entities.kt`、`Daos.kt`；每次 schema 变化必须新增 migration 并导出 schema。
-- E-01 部署：先由主编排器用全新 128-bit lease 自动 claim，再执行
-  `scripts/deploy_server.ps1 -LeaseId <本次 lease>`；部署脚本只读断言 lease，不会提前 handoff。
-  部署后必须验证 `/api/v1/profiles`、`/api/v1/echo` 和 `/api/v1/download`，并继续完成 P40 验收和清理。
+- E-01 部署：旧共享状态 claim/lease 已于 2026-07-19 退役。执行
+  `scripts/deploy_server.ps1` 时依靠服务器端独占锁、受保护切换、自动回滚与验后检查，不从
+  `SHARED_TEST_STATUS.md` 取得授权。部署后必须验证 `/api/v1/profiles`、`/api/v1/echo` 和
+  `/api/v1/download`，并继续完成 P40 验收和清理；P40 按实时现场规则使用并在结束后回到干净桌面。
 - 关键产品与测量决定：`docs/DECISION_LOG.md`。
 
 ## 7. 后续版本而非 0.2.0 缺陷

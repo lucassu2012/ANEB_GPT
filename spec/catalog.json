@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.4.0",
+  "catalog_version": "1.4.1",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.11",
+      "current_version": "0.5.12",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -40,7 +40,7 @@
     },
     "P3": {
       "component": "aneb-ai-behavior-model",
-      "current_version": "0.3.0",
+      "current_version": "0.3.1",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -55,7 +55,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.4.0",
+      "current_version": "1.4.1",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -405,7 +405,7 @@
         },
         {
           "profile_id": "token_multimodal_quick",
-          "version": "1.2.0",
+          "version": "1.2.1",
           "path": "profiles/published/token_multimodal_quick/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
