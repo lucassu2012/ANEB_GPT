@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -71,6 +72,24 @@ class RepositorySecretScanTest(unittest.TestCase):
                 self.skipTest("symlinks are not available in this environment")
             findings = scanner.scan_paths(root, [link])
             self.assertEqual("tracked_symlink_not_scanned", findings[0].rule_id)
+
+    def test_staged_secret_is_detected_after_worktree_is_cleaned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            fixture = root / "settings.txt"
+            secret = "gh" + "p_" + "D" * 36
+            fixture.write_text(secret, encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "settings.txt"], check=True)
+            fixture.write_text("clean working tree", encoding="utf-8")
+
+            self.assertEqual([], scanner.scan_paths(root, [fixture]))
+            staged = scanner.staged_relative_paths(root)
+            findings = scanner.scan_staged(root, staged)
+
+            self.assertEqual(["settings.txt"], staged)
+            self.assertEqual("github_classic_token", findings[0].rule_id)
+            self.assertNotIn(secret, scanner.format_finding(findings[0]))
 
 
 if __name__ == "__main__":

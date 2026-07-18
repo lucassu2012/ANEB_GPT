@@ -68,6 +68,28 @@ def tracked_paths(root: Path) -> list[Path]:
     return [root / name for name in names if name]
 
 
+def staged_relative_paths(root: Path) -> list[str]:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git diff --cached failed: {detail or completed.returncode}")
+    return [
+        name
+        for name in completed.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+        if name
+    ]
+
+
+def scan_bytes(relative_path: str, data: bytes) -> list[Finding]:
+    if b"\0" in data:
+        return []
+    return scan_text(relative_path, data.decode("utf-8", errors="replace"))
+
+
 def scan_paths(root: Path, paths: Iterable[Path]) -> list[Finding]:
     root = root.resolve()
     findings: list[Finding] = []
@@ -84,12 +106,30 @@ def scan_paths(root: Path, paths: Iterable[Path]) -> list[Finding]:
         if not candidate.is_file():
             findings.append(Finding("tracked_file_missing", relative_path, 0))
             continue
-        data = candidate.read_bytes()
-        if b"\0" in data:
-            continue
-        text = data.decode("utf-8", errors="replace")
-        findings.extend(scan_text(relative_path, text))
+        findings.extend(scan_bytes(relative_path, candidate.read_bytes()))
     return findings
+
+
+def scan_staged(root: Path, relative_paths: Iterable[str]) -> list[Finding]:
+    findings: list[Finding] = []
+    for relative_path in relative_paths:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "show", f":./{relative_path}"],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode != 0:
+            findings.append(Finding("staged_blob_unreadable", relative_path, 0))
+            continue
+        findings.extend(scan_bytes(relative_path, completed.stdout))
+    return findings
+
+
+def unique_findings(findings: Iterable[Finding]) -> list[Finding]:
+    return sorted(
+        set(findings),
+        key=lambda finding: (finding.relative_path, finding.line_number, finding.rule_id),
+    )
 
 
 def format_finding(finding: Finding) -> str:
@@ -115,7 +155,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.root.resolve()
     try:
         paths = tracked_paths(root)
-        findings = scan_paths(root, paths)
+        staged_paths = staged_relative_paths(root)
+        findings = unique_findings(
+            [*scan_paths(root, paths), *scan_staged(root, staged_paths)]
+        )
     except (OSError, RuntimeError) as exc:
         print(f"secret-scan error: {exc}", file=sys.stderr)
         return 2
@@ -128,7 +171,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"ANEB repository secret scan: PASS ({len(paths)} tracked files)")
+    print(
+        "ANEB repository secret scan: PASS "
+        f"({len(paths)} tracked files, {len(staged_paths)} staged paths rechecked)"
+    )
     return 0
 
 

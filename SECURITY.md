@@ -13,6 +13,6 @@ Do not open a public issue containing credentials, private keys, user data, devi
 
 ## Automated gate
 
-`python scripts/scan_repository_secrets.py` scans Git-tracked text files for high-confidence provider tokens, cloud access keys and private-key headers. It reports only rule/file/line and never the matched value. Symlinks and missing tracked files fail closed; binary files are skipped because this repository already rejects tracked keystores/APKs through source policy.
+`python scripts/scan_repository_secrets.py` scans Git-tracked text files and separately rechecks staged index blobs for high-confidence provider tokens, cloud access keys and private-key headers. The staged pass closes the case where a secret is staged and then removed only from the working tree. It reports only rule/file/line and never the matched value. Symlinks and missing tracked files fail closed; binary files are skipped because this repository already rejects tracked keystores/APKs through source policy.
 
 The scanner is a guardrail, not a credential inventory. A clean result does not make a shared credential safe or prove that Git history never contained one. After any disclosure, revoke the credential and inspect provider audit logs.
