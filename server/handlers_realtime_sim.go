@@ -432,6 +432,24 @@ func realtimeWaitQuiet(r *http.Request, conn *websocket.Conn, incoming <-chan re
 
 func realtimeWaitForFrameOrBarge(r *http.Request, conn *websocket.Conn, incoming <-chan realtimeInbound, readErrors <-chan error, deadline time.Time, turn realtimeTurnPlan) (*realtimeControl, error) {
 	for {
+		// A delayed scheduler can leave several absolute frame deadlines in the
+		// past. Always consume an already-queued control before deciding that an
+		// overdue frame may be emitted; otherwise a queued barge-in is skipped
+		// while the server sends a burst of catch-up frames.
+		select {
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		case err := <-readErrors:
+			return nil, err
+		case message := <-incoming:
+			control, err := realtimeHandleDownlinkInbound(conn, message, turn)
+			if err != nil || control != nil {
+				return control, err
+			}
+			continue
+		default:
+		}
+
 		delay := time.Until(deadline)
 		if delay <= 0 {
 			return nil, nil
@@ -446,27 +464,37 @@ func realtimeWaitForFrameOrBarge(r *http.Request, conn *websocket.Conn, incoming
 			return nil, err
 		case message := <-incoming:
 			timer.Stop()
-			if message.messageType != websocket.TextMessage {
-				return nil, fmt.Errorf("unexpected binary frame during downlink")
+			control, err := realtimeHandleDownlinkInbound(conn, message, turn)
+			if err != nil || control != nil {
+				return control, err
 			}
-			control, err := decodeRealtimeControl(message.data)
-			if err != nil {
-				return nil, err
-			}
-			if control.Type == "ping" {
-				if _, err := realtimeHandleAuxControl(conn, message.data); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if control.Type != "barge_in" || !turn.Interrupted || control.TurnID != turn.TurnID {
-				return nil, fmt.Errorf("unexpected control during downlink")
-			}
-			return &control, nil
+			continue
 		case <-timer.C:
-			return nil, nil
+			// Loop once more so an inbound control that became ready with the
+			// timer wins before the overdue-frame decision above.
+			continue
 		}
 	}
+}
+
+func realtimeHandleDownlinkInbound(conn *websocket.Conn, message realtimeInbound, turn realtimeTurnPlan) (*realtimeControl, error) {
+	if message.messageType != websocket.TextMessage {
+		return nil, fmt.Errorf("unexpected binary frame during downlink")
+	}
+	control, err := decodeRealtimeControl(message.data)
+	if err != nil {
+		return nil, err
+	}
+	if control.Type == "ping" {
+		if _, err := realtimeHandleAuxControl(conn, message.data); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if control.Type != "barge_in" || !turn.Interrupted || control.TurnID != turn.TurnID {
+		return nil, fmt.Errorf("unexpected control during downlink")
+	}
+	return &control, nil
 }
 
 func decodeRealtimeUplink(frame []byte) (turn int, seq int, payloadBytes int, err error) {
