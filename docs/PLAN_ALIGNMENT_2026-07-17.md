@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.7 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；534 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、TTFT 重复性、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.7 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0；539 项 JVM 测试、Lint 零 error、6 Schema/catalog、重复性分析器、31 项行为模型与 Go 全量质量门通过。三类统一结果、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -58,7 +58,7 @@
 | 上传/下载 | ✅ | ［KNOWN｜HIGH］KB/MB/100MiB 档位、服务端确认字节、并发负载 echo 和精确下载排空均有执行路径。 |
 | Agent 步进 | ✅ | ［KNOWN｜HIGH］`/toolloop` 串行工具调用往返已接入传统场景。 |
 | AI 实时双工 | ✅，可靠性加固中 | ［KNOWN｜HIGH］20ms 双向帧、等待、播放、打断、受控断连与恢复均已实现；本阶段修复取消/持久化/网络重绑 P1。 |
-| 无线上下文 | ✅ 采集完成，归因分轨 | ［KNOWN｜HIGH］Token/AI 实时/网络综合三个正式新引擎已按设备公开能力采集 1Hz RSRP、RSRQ/SINR 与环境事件，并同事务冻结；权限拒绝、不可用、未采集保持显式状态，共享信封移除位置。活动承载与蜂窝无线协变量分开记录，App 不声称能人为设置射频指标。 |
+| 无线上下文 | ✅ 采集完成，归因分轨 | ［KNOWN｜HIGH］Token/AI 实时/网络综合三个正式新引擎已按设备公开能力采集 1Hz RSRP、RSRQ/SINR 与环境事件，并同事务冻结；默认网络丢失、切换、恢复、验证与暂停状态使用 run 内匿名路径别名冻结为 PATH_CHANGE。权限拒绝、不可用、未采集保持显式状态，共享信封移除位置。活动承载、默认网络事件与蜂窝无线协变量分开记录，App 不声称能人为设置射频指标或把时间窗共现写成单因因果。 |
 | 会话记录 | ✅ 三类统一信封 | ［KNOWN｜HIGH］Room v19 为 Token、AI 实时和网络综合新 run 在同一事务冻结类型化结果与 `aneb-result-v1` JSON、身份字段及规范化 SHA-256；三类结果页的确定性 JSONL 保存/分享已真机验收。 |
 | Profile 3 真实 App 适配器宿主 | 不适用（独立模块未启动） | ［KNOWN｜HIGH］后续产品裁定已覆盖原计划中的 P1b 适配器宿主设计；真实第三方 App 适配器若重启，应作为独立易耗模块建设，当前未启动，不计为主 App M1 缺口。 |
 
@@ -78,6 +78,7 @@
 - ［KNOWN｜HIGH］App 0.5.7 已在 P40 验证无效节点启动前拦截、所有正式模式的无线权限用途说明、完整 Network Quick、切后台通知/回到结果和主动取消。正常 runs `019f7209-e89c-7adc-8238-83f9847acdc5` / `019f7211-0c5d-723d-a84f-49115ddd48da` 均完成落库并各采 18 个无线样本；取消 run `019f7212-0268-7280-9fa6-385b32a8fed1` 保留 cancelled/invalid 信封、分数与等级为 null。见 `P40_APP_0.5.7_NON_DEVELOPER_FLOW_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］同一 0.5.7 P40 基线的历史批量导出从 22 条信封中独立验真 18 条，并隔离 4 条 0.5.3/0.5.4 digest mismatch；输出 18 行/18 唯一 run、时间有序、canonical digest 18/18 匹配，拒绝 id 混入 0 次。旧记录没有被重算或改写。
 - ［KNOWN｜HIGH］AI 实时后台正常 Quick run `019f7238-d040-71a0-b874-6c211f051e0d` 完成 3/3 轮；后台真实 Wi-Fi 中断 run `019f7240-bf42-7a48-b23b-3235286da018` 观察到 1/1 会话中断、2/3 轮失败和 51.8% 帧返回率，分数/等级为 null。结果首屏先报告业务任务受损，再给出 ≤1% 会话中断率与 ≥99% 帧返回率目标，同时禁止缺少 PATH_CHANGE 证据时单因归因。两条信封摘要均匹配。
+- ［KNOWN｜HIGH］最终 PATH_CHANGE run `019f72f5-557c-71b0-a7d9-b462055f0545` 在真实 Wi-Fi 关闭窗口冻结 `default_network_lost path=path-1 transport=wifi`、5 个无线样本、1/1 会话中断与 3/3 轮失败；结果页以“默认 Wi-Fi 网络丢失”展示同窗关联，并明确不能单独证明因果。该信封当前 Schema 错误 0、摘要匹配。最终批量 JSONL 导出 27/31 条，27/27 摘要匹配且 4 个旧摘要异常 id 未混入。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧
@@ -112,6 +113,7 @@
 - ［KNOWN｜HIGH］四个行为模型均为 `hypothesis`；没有授权观测数据集、留出集或跨版本校准报告。当前只能称“产品假设驱动的可重复仿真”，不能称“真实 Kimi/DeepSeek/千问模型”。
 - ［KNOWN｜HIGH］真实数据到位后的技术路径已闭环：calibrated 只能使用获授权 training 拟合，validated 必须在 subject-disjoint holdout 达标，并在每次构建/runtime 发布前重新复算报告。当前缺口是合法数据输入，而不是再写一条无约束拟合命令。
 - ［KNOWN｜HIGH］统一 `aneb-result-v1` JSON Schema 已冻结并通过 Draft 2020-12 正/反例校验；跨 Profile 共用的指标定义/质量目标仍嵌在各 Profile 中，尚未抽成独立版本包。
+- ［KNOWN｜HIGH］历史离线审计发现同名 `aneb-result-v1` 曾被不兼容收紧：3 条 0.5.2/0.5.5 Token 历史的摘要与身份仍完整，但缺少当前 Schema 后加的 `task_id/server_processing_ms/ttft_ms`。下一次 Schema 结构演进必须升版本并保留旧版本验证器；不得继续用同一版本号追溯改变旧记录含义。
 - ［KNOWN｜HIGH］Profile 3 的业务画像采集、包时序拟合、PoP/IP 清单和真实 App 适配器均未开始。
 - ［INFERRED｜HIGH］P3 是下一轮最能提升商业可信度的部分；继续增加假设 Profile 的边际价值低于获得首批合法、可追溯的业务画像数据。
 

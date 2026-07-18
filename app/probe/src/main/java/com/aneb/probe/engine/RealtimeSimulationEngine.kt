@@ -386,7 +386,12 @@ class RealtimeSimulationEngine(private val context: Context) {
             }
             _telemetry.value = _telemetry.value.copy(phase = RealtimeSimulationPhase.FINALIZING, progress = 0.98)
             val runEvidence = RealtimeRunEvidence(config.variant, evidence, invalidReason)
-            val score = RealtimeSimulationScorer.score(runEvidence, profile.evaluation.scorePolicyId)
+            val radio = radioCollector.freeze()
+            val score = RealtimeSimulationScorer.score(
+                runEvidence,
+                profile.evaluation.scorePolicyId,
+                radio.events,
+            )
             val result = RealtimeSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
                 plan.modelId, plan.modelVersion, plan.modelHash, plan.calibrationStatus,
@@ -401,7 +406,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                 bound = initialBound,
                 endedAtEpochMs = System.currentTimeMillis(),
                 status = if (score.verdict == TokenVerdict.INVALID) "failed" else "completed",
-                radioCollector = radioCollector,
+                radio = radio,
                 log = log,
             )
             _telemetry.value = _telemetry.value.copy(
@@ -586,6 +591,7 @@ class RealtimeSimulationEngine(private val context: Context) {
         log: suspend (String) -> Unit,
     ) {
         val evidence = RealtimeRunEvidence(variant, emptyList(), reason)
+        val radio = radioCollector.freeze()
         val profile = source.profile
         val scorePolicy = profile?.evaluation?.scorePolicyId?.takeIf(String::isNotBlank)
             ?: if (variant == "recovery") "realtime-recovery-score-v2" else "realtime-interaction-score-v1"
@@ -600,7 +606,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             profile?.evaluation?.scoreAnchorPolicyId?.takeIf(String::isNotBlank) ?: "compliance-anchors-v1",
             profile?.evaluation?.conclusionPolicyId?.takeIf(String::isNotBlank)
                 ?: if (variant == "recovery") "realtime-recovery-conclusions-v2" else "realtime-interaction-conclusions-v1",
-            RealtimeSimulationScorer.score(evidence, scorePolicy),
+            RealtimeSimulationScorer.score(evidence, scorePolicy, radio.events),
             evidence,
         )
         publishResult(
@@ -611,7 +617,7 @@ class RealtimeSimulationEngine(private val context: Context) {
             bound = bound,
             endedAtEpochMs = System.currentTimeMillis(),
             status = "failed",
-            radioCollector = radioCollector,
+            radio = radio,
             log = log,
         )
         _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.FAILED)
@@ -625,10 +631,9 @@ class RealtimeSimulationEngine(private val context: Context) {
         bound: BoundNetwork?,
         endedAtEpochMs: Long,
         status: String,
-        radioCollector: FormalRadioEvidenceCollector,
+        radio: FormalRadioEvidence,
         log: suspend (String) -> Unit,
     ) {
-        val radio = radioCollector.freeze()
         val envelope = RealtimeResultEnvelopeV1.build(
             RealtimeResultEnvelopeInput(
                 result = result,

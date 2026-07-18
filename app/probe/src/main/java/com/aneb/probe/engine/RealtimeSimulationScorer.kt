@@ -1,5 +1,7 @@
 package com.aneb.probe.engine
 
+import com.aneb.probe.data.EnvEvent
+import com.aneb.probe.data.EnvEventType
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -128,6 +130,12 @@ object RealtimeSimulationScorer {
     fun score(
         evidence: RealtimeRunEvidence,
         scorePolicyId: String = "realtime-interaction-score-v1",
+    ): RealtimeScoreResult = score(evidence, scorePolicyId, emptyList())
+
+    fun score(
+        evidence: RealtimeRunEvidence,
+        scorePolicyId: String,
+        environmentEvents: List<EnvEvent>,
     ): RealtimeScoreResult {
         if (evidence.invalidReason != null) {
             return RealtimeScoreResult(
@@ -299,7 +307,7 @@ object RealtimeSimulationScorer {
                 null, null, TokenVerdict.INCONCLUSIVE, confidence, emptyMap(), metrics, null,
                 buildList {
                     taskFailureSummary(evidence)?.let(::add)
-                    connectionStabilityRecommendation(evidence, metrics)?.let(::add)
+                    connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let(::add)
                     add("必需指标缺失：${missing.joinToString()}；本次总分不可计算。")
                     if (evidence.variant == "quick") {
                         add("快测只覆盖 1 个会话和最多 3 轮，不能用于 95% 稳定性强结论。")
@@ -363,7 +371,7 @@ object RealtimeSimulationScorer {
             groupScores = groups.mapValues { (_, value) -> (value * 10.0).roundToInt() / 10.0 },
             metrics = metrics,
             capReason = capReason,
-            conclusions = conclusions(evidence, metrics, verdict, confidence, capReason),
+            conclusions = conclusions(evidence, metrics, verdict, confidence, capReason, environmentEvents),
             coverageRatio = coverageRatio,
             minimumSampleSatisfied = minimumSampleSatisfied,
         )
@@ -499,10 +507,11 @@ object RealtimeSimulationScorer {
         verdict: TokenVerdict,
         confidence: TokenConfidence,
         capReason: String?,
+        environmentEvents: List<EnvEvent>,
     ): List<String> = buildList {
         add("结论：${verdict.name}；证据置信度 ${confidence.name}。")
         taskFailureSummary(evidence)?.let(::add)
-        connectionStabilityRecommendation(evidence, metrics)?.let(::add)
+        connectionStabilityRecommendation(evidence, metrics, environmentEvents)?.let(::add)
         fun percent(id: String) = metrics[id]?.complianceRatio
             ?.let { String.format(Locale.ROOT, "%.1f%%", it * 100) }
             ?: "不可用"
@@ -583,14 +592,75 @@ object RealtimeSimulationScorer {
     private fun connectionStabilityRecommendation(
         evidence: RealtimeRunEvidence,
         metrics: Map<String, RealtimeMetricEvidence>,
+        environmentEvents: List<EnvEvent>,
     ): String? {
         if (evidence.sessions.none { it.unexpectedDisconnect }) return null
         val disconnectRate = metrics["LIVE-B10"]?.value
         val returnedFrameRate = metrics["LIVE-N04"]?.value?.let { 1.0 - it }
+        val pathChanges = environmentEvents
+            .asSequence()
+            .filter { it.type == EnvEventType.PATH_CHANGE }
+            .map(EnvEvent::detail)
+            .filter(::isDefaultNetworkChangeEvidence)
+            .distinct()
+            .toList()
+        val attribution = if (pathChanges.isEmpty()) {
+            "连接异常可能来自活动网络切换、链路中断或节点关闭；本次没有冻结到系统默认网络变化证据，不能据此单因归因。"
+        } else {
+            val examples = pathChanges.take(3).joinToString("；", transform = ::describeDefaultNetworkChange)
+            "同一测试窗口记录到 ${pathChanges.size} 条系统默认网络变化证据（$examples），与连接异常共现；" +
+                "这支持关联定位，但不能单独证明因果。"
+        }
         return "长连接建议：会话中断率应 ≤1%，应用音频帧返回率应 ≥99%；" +
             "本次分别为 ${formatPercent(disconnectRate)} 和 ${formatPercent(returnedFrameRate)}。" +
-            "连接异常可能来自活动网络切换、链路中断或节点关闭，需结合环境事件定位，不能据此单因归因。"
+            attribution
     }
+
+    private fun isDefaultNetworkChangeEvidence(detail: String): Boolean =
+        defaultNetworkChangePrefixes.any(detail::startsWith)
+
+    private fun describeDefaultNetworkChange(detail: String): String {
+        val transport = Regex("(?:^| )transport=([^ ]+)")
+            .find(detail)
+            ?.groupValues
+            ?.get(1)
+            ?.split('+')
+            ?.joinToString("+") { value ->
+                when (value) {
+                    "wifi" -> "Wi-Fi"
+                    "cellular" -> "蜂窝"
+                    "ethernet" -> "以太网"
+                    "vpn" -> "VPN"
+                    "bluetooth" -> "蓝牙"
+                    else -> "其他"
+                }
+            }
+            ?: "未知承载"
+        return when {
+            detail.startsWith("default_network_lost ") -> "默认 $transport 网络丢失"
+            detail.startsWith("default_network_available ") -> "默认网络出现新路径"
+            detail.startsWith("default_network_changed ") -> "默认网络发生切换"
+            detail.startsWith("default_network_ready ") -> "默认 $transport 网络恢复可用"
+            detail.startsWith("default_network_validation_lost ") -> "默认 $transport 网络失去互联网验证"
+            detail.startsWith("default_network_validation_restored ") -> "默认 $transport 网络恢复互联网验证"
+            detail.startsWith("default_network_suspended ") -> "默认 $transport 网络暂停"
+            detail.startsWith("default_network_resumed ") -> "默认 $transport 网络恢复"
+            detail.startsWith("default_network_transport_changed ") -> "默认网络承载发生变化"
+            else -> "默认网络状态变化"
+        }
+    }
+
+    private val defaultNetworkChangePrefixes = listOf(
+        "default_network_lost ",
+        "default_network_available ",
+        "default_network_changed ",
+        "default_network_ready ",
+        "default_network_validation_lost ",
+        "default_network_validation_restored ",
+        "default_network_suspended ",
+        "default_network_resumed ",
+        "default_network_transport_changed ",
+    )
 
     private fun formatPercent(value: Double?): String = value
         ?.takeIf { it.isFinite() }

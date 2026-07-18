@@ -3,7 +3,7 @@
 > 日期：2026-07-18（Asia/Shanghai）
 > 设备：Huawei P40 Pro（Android 公开 API，1200×2640）
 > 包：`com.aneb.probe.codex`，`0.5.7-codex`，versionCode 39
-> APK SHA-256：`2BE93847A7C5074B958C887E3191060BCA70390CBB3806C78B87170258E4F366`
+> APK SHA-256：`0940BA48682FE00D7E464E61BA154532D4BACEF39BB98AACC667D6CEEDFC642A`
 
 ## 1. 反方观点与本轮边界
 
@@ -21,7 +21,7 @@
 
 ## 3. 自动化验证
 
-- ［COMPUTED｜HIGH］Android JVM：534 tests，0 failures，0 errors，0 skipped。
+- ［COMPUTED｜HIGH］Android JVM：539 tests，0 failures，0 errors，0 skipped。
 - ［COMPUTED｜HIGH］Android Lint：0 errors，11 warnings。
 - ［KNOWN｜HIGH］Debug APK 构建成功；版本、包名与 SHA-256 如本文开头。
 - ［KNOWN｜HIGH］新增反例覆盖：无 scheme、无 host、HTTP 正式包、账号密码、query、fragment、API path、非法端口及离线优先提示。
@@ -86,6 +86,8 @@ Network Quick run `019f7212-0268-7280-9fa6-385b32a8fed1` 在下载阶段点击�
 - ［COMPUTED｜HIGH］18 条 canonical JSON 摘要与 Room `canonicalSha256` 全部一致；4 个拒绝 run id 在文件中出现 0 次。
 - ［KNOWN｜HIGH］真机界面在同一导出卡片内显示“已导出 18/22 条；4 条完整性异常已跳过”，没有被底部导航遮挡，也没有静默丢弃异常记录。
 - ［COMPUTED｜HIGH］最终 APK 加入后续 3 条 AI 实时 run 后再次导出 25 条历史：生成 `aneb_results_21_of_25_20260718_065342.jsonl`，1,081,397 bytes，SHA-256 `25B4BE43C5AABF688C71966E2AD104F2ABEEA9255F87CCFEE24FF51469B8F649`；21 行/21 唯一 run、时间有序、21/21 canonical digest 匹配，4 个旧拒绝 id 混入 0 次，并包含本轮真实断网结果。
+- ［COMPUTED｜HIGH］默认网络事件终验后导出 `aneb_results_27_of_31_20260718_100304.jsonl`：1,319,277 bytes，SHA-256 `86B7C1CBDD125120C2D1926828B9C121D17DAEA48B206A7C77DA0712DB4603E6`；27 行/27 唯一 run、时间有序、27/27 Room canonical digest 匹配，4 个旧摘要异常 id 混入 0 次，最终断网 run 出现 1 次。
+- ［KNOWN｜HIGH］“可验证结果”当前在设备侧严格指受支持的 `schema_version` 身份、test type、run identity 与 canonical digest 完整性，不等同于用当前仓库 Schema 重新解释全部历史。独立离线审计发现 27 条完整性合格记录中有 3 条 0.5.2/0.5.5 Token 历史缺少后来加入当前 v1 Schema 的 `task_id/server_processing_ms/ttft_ms`；最终断网 run 自身 Schema 错误为 0。旧记录保持原样，未回填或重算。
 
 ### 4.7 AI 实时后台与真实网络中断
 
@@ -96,7 +98,17 @@ Network Quick run `019f7212-0268-7280-9fa6-385b32a8fed1` 在下载阶段点击�
 - ［COMPUTED｜HIGH］断网 run 观察到 1/1 个会话意外中断、2/3 轮未完成，应用音频帧未返回率 48.2%（返回率 51.8%）、会话中断率 100%；totalScore/grade 均为 null，verdict `INCONCLUSIVE`、confidence `LOW`，canonical digest 匹配，15 个无线样本保留。
 - ［KNOWN｜HIGH］结果页首屏现在先写“业务任务受损”，随后给出长连接目标“会话中断率 ≤1%、应用音频帧返回率 ≥99%”及本次差距；不再只显示“必需指标缺失”。
 - ［KNOWN｜HIGH］run 生命周期仍为 `completed + valid`，表示测量流程已完成且证据可用；业务任务失败、分数不可计算由评估层单独表达。两者不得混为 App 崩溃或伪造 `failed` 生命周期。
-- ［INFERRED｜MED］本次测试夹具明确执行了 Wi-Fi 关闭，但 App 内证据只能证明连接异常与任务失败共现；结论因此列出活动网络切换、链路中断或节点关闭，并明确“不能据此单因归因”。要在产品内直接归因到默认网络切换，仍需冻结系统默认网络 PATH_CHANGE 事件。
+- ［KNOWN｜HIGH］该旧 run 当时尚未冻结系统默认网络事件，只能列候选原因；下一节用最终 APK 补齐同设备 PATH_CHANGE 纵向证据，旧结论不追溯改写。
+
+### 4.8 默认网络 PATH_CHANGE 冻结与关联结论
+
+最终 APK 为三类正式测试共用的 run 级证据收集器接入 Android 默认网络 callback；平台 `Network` 句柄不进入结果，只保存每次 run 内的 `path-1/path-2` 别名、承载类型和变化语义。稳定回放不制造变化事件；丢失、切换、恢复、验证丢失/恢复、暂停/恢复均去重记录。
+
+- 最终 run：`019f72f5-557c-71b0-a7d9-b462055f0545`。
+- ［COMPUTED｜HIGH］进入 AI 实时会话 4 秒后关闭 Wi-Fi 6 秒再恢复；结果冻结 1 条 `PATH_CHANGE`：`default_network_lost path=path-1 transport=wifi`，并保留 5 个无线样本。
+- ［KNOWN｜HIGH］业务侧冻结 1/1 会话意外中断、3/3 轮未完成、会话中断率 100%、应用音频帧返回率 0%；缺少 LIVE-B04/B08/N03 时 totalScore/grade 保持 null，verdict `INCONCLUSIVE`、confidence `LOW`。
+- ［KNOWN｜HIGH］结果页把原始技术事件翻译为“默认 Wi-Fi 网络丢失”，写成“同一测试窗口内共现，支持关联定位，但不能单独证明因果”；没有把共现升级为网络单因归因。
+- ［COMPUTED｜HIGH］Room 的类型化结论、`env_event` 与统一信封三者同 run 一致；统一信封 Draft 2020-12 Schema 错误 0，独立 canonical digest 为 `sha256:17a5c5e2b8dc29e269827380fbbe78e2bba3a943cba93dfd7d44b2c0f320e9d6`，JSONL 中该 run 出现 1 次。
 
 ## 5. 资源释放
 

@@ -110,12 +110,14 @@ internal class FormalRadioEvidenceCollector(context: Context) {
     private val source = RadioCollector(context)
     private val samples = ConcurrentLinkedQueue<RadioSample>()
     private val events = ConcurrentLinkedQueue<EnvEvent>()
+    private val defaultNetwork = DefaultNetworkEvidenceCollector(context, events::add)
     private val freezeMutex = Mutex()
     private var lifecycleJob: Job? = null
     private var frozen: FormalRadioEvidence? = null
 
     fun start(parentScope: CoroutineScope) {
         check(lifecycleJob == null && frozen == null) { "formal_radio_collector_already_started" }
+        defaultNetwork.start()
         val job = SupervisorJob(parentScope.coroutineContext[Job])
         lifecycleJob = job
         val scope = CoroutineScope(parentScope.coroutineContext + job)
@@ -129,6 +131,7 @@ internal class FormalRadioEvidenceCollector(context: Context) {
 
     suspend fun freeze(): FormalRadioEvidence = freezeMutex.withLock {
         frozen?.let { return@withLock it }
+        defaultNetwork.stop()
         lifecycleJob?.cancelAndJoin()
         lifecycleJob = null
         FormalRadioEvidence.from(samples.toList(), events.toList()).also { frozen = it }

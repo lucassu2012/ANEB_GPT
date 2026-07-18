@@ -1,5 +1,7 @@
 package com.aneb.probe.engine
 
+import com.aneb.probe.data.EnvEvent
+import com.aneb.probe.data.EnvEventType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -113,7 +115,42 @@ class RealtimeSimulationScorerTest {
         assertTrue(result.conclusions.any { it.contains("会话中断率应 ≤1%") })
         assertTrue(result.conclusions.any { it.contains("本次分别为 100.0% 和 0.0%") })
         assertTrue(result.conclusions.any { it.contains("不能据此单因归因") })
+        assertTrue(result.conclusions.any { it.contains("没有冻结到系统默认网络变化证据") })
         assertTrue(result.conclusions.any { it.contains("必需指标缺失") })
+    }
+
+    @Test
+    fun `unexpected disconnect reports co-occurring default network evidence without causal claim`() {
+        val base = goodEvidence("quick", 1, 3)
+        val disconnected = base.copy(
+            sessions = base.sessions.map { session ->
+                session.copy(
+                    unexpectedDisconnect = true,
+                    turns = session.turns.map { it.copy(success = false) },
+                )
+            },
+        )
+        val pathEvents = listOf(
+            EnvEvent(10, EnvEventType.PATH_CHANGE, "default_network_lost path=path-1 transport=wifi"),
+            EnvEvent(20, EnvEventType.PATH_CHANGE, "default_network_available path=path-2"),
+            EnvEvent(30, EnvEventType.PATH_CHANGE, "default_network_ready path=path-2 transport=cellular validated=true not_suspended=true"),
+            EnvEvent(40, EnvEventType.PATH_CHANGE, "default_network_monitor_unavailable reason=SecurityException"),
+            EnvEvent(50, EnvEventType.RAT_CHANGE, "lte -> nr"),
+        )
+
+        val result = RealtimeSimulationScorer.score(
+            disconnected,
+            "realtime-interaction-score-v1",
+            environmentEvents = pathEvents,
+        )
+
+        val attribution = result.conclusions.first { it.contains("系统默认网络变化证据") }
+        assertTrue(attribution.contains("3 条"))
+        assertTrue(attribution.contains("默认 Wi-Fi 网络丢失"))
+        assertTrue(attribution.contains("与连接异常共现"))
+        assertTrue(attribution.contains("不能单独证明因果"))
+        assertTrue(!attribution.contains("monitor_unavailable"))
+        assertTrue(!attribution.contains("path=path-1"))
     }
 
     @Test
