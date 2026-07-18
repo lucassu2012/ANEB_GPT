@@ -3,7 +3,7 @@
 > 更新日期：2026-07-18。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.10 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.1；551 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量分析测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.10 已加固系统下载导出的失败清理边界。0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验，0.5.10 精确 APK 真机仍待共享手机明确交还。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.10 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.1；551 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量/结果测试 + 6 项候选打包测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.10 已加固系统下载导出的失败清理边界，并建立云端可下载、可核验的 Debug 候选流水线。0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验，0.5.10 精确 APK 真机仍待共享手机明确交还。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
 
 ## 0. 先讲偏差与裁定
 
@@ -82,6 +82,7 @@
 - ［KNOWN｜HIGH］App 0.5.8 已落实结果版本边界：27 条不可变历史在兼容 v1 下 27/27 结构通过；三类新生产者改发严格 v2。P40 Token Quick run `019f730f-a0d5-7417-9e01-0866bacdfc57` 为 v2、3/3 任务对齐字段完整、120 条无线样本、Schema 零错误且独立摘要匹配，97.0/A 仍保持 LOW/INCONCLUSIVE。见 `P40_APP_0.5.8_RESULT_VERSIONING_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.9 把三类字符串结论升级为评分器冻结的语义项：稳定 `conclusion_id`、准确 `info/recommendation/warning/failure`、原始文本和指标/证据 basis；导出器不再按条目位置猜级别，结果页不再另写行为特征。正常、必需指标缺失、无效证据及默认网络变化共现均有回归；计划受控中断单独按恢复任务完成性评价，Token 缺指标时也不再吞掉已观察到的任务完成事实。12 个 Profile 与对应结论策略已升小版本，6 个 Token/AI 实时运行包重新哈希绑定。545 项 JVM 测试、Lint 零 error、Schema/catalog、测量分析、行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条冻结结论和系统下载目录 strict-v2 JSONL 均复验通过。当前精确 APK 只在其后调整失败门限 basis 与 Token 缺指标结论，已自动化验证但尚待共享手机释放后做同二进制安装确认。酒店 Wi-Fi 的前序失败发生在门户未认证时，不作为网络质量 A/B。见 `APP_0.5.9_SEMANTIC_CONCLUSION_VALIDATION_2026-07-18.md`。
 - ［KNOWN｜HIGH］App 0.5.10 将所有系统下载导出收紧为“创建 pending → 写入全部 UTF-8 字节 → 完成标记成功”后才返回成功；打开、写入或完成失败均尝试删除半成品，清理失败则保留 URI 并显式报告。6 个故障注入测试覆盖成功、创建失败、打开失败、磁盘写入失败、完成失败和清理失败；全量现为 90 suites / 551 tests，Lint 0 error / 11 notices，其他门禁均通过。该变化不改结果正文、摘要、Schema、Profile 或评分。精确 APK 真机导出验收待 Experience Lab 明确释放共享 P40。见 `APP_0.5.10_EXPORT_RELIABILITY_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］云端 Debug 交付流水线已补齐本地实现和门禁：Codex 分支会触发 CI；候选构建必须等待合同、服务器、网关和行为模型任务通过；APK 经过 ZIP、包名、版本、Gradle 元数据与 Debug 签名交叉校验后，连同机器清单、三份 SHA-256 和中文安装说明上传。非 PR 构建追加 GitHub provenance attestation。工作流由 actionlint 1.7.12 验证，真实本地 0.5.10 APK 打包验证通过；云端 run 结果在提交触发后回填。见 `CLOUD_DEBUG_CANDIDATE_DELIVERY_2026-07-18.md`。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧
@@ -163,7 +164,7 @@
 2. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
 3. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。
 4. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
-5. ［KNOWN｜HIGH］M4 下载导出失败清理已在 0.5.10 完成本地故障注入与全量门禁；下一项在共享 P40 明确交还后执行同二进制安装、首次启动、单条/混合批量导出和主动退出。签名密钥仍服从仓库外 Product Owner 所有权边界。
+5. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入与全量门禁；先观察本次真实 GitHub Actions 产物与 attestation，再在共享 P40 明确交还后执行同二进制安装、首次启动、单条/混合批量导出和主动退出。签名密钥仍服从仓库外 Product Owner 所有权边界。
 6. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
 
 ## 9. 原计划待拍板项回写

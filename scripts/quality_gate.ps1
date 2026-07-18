@@ -65,6 +65,29 @@ if (-not $pythonCommand) {
     throw 'Python 3.11+ is required for the behavior-model quality gate.'
 }
 
+$candidateTmp = Join-Path $env:TEMP ("aneb-debug-candidate-gate-" + [guid]::NewGuid().ToString('N'))
+try {
+    & $pythonCommand.Source `
+        (Join-Path $PSScriptRoot 'package_debug_candidate.py') `
+        '--apk' (Join-Path $repo 'app\probe\build\outputs\apk\debug\probe-debug.apk') `
+        '--metadata' (Join-Path $repo 'app\probe\build\outputs\apk\debug\output-metadata.json') `
+        '--output' $candidateTmp `
+        '--source-ref' 'local-quality-gate'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Debug-candidate packaging failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    if (Test-Path -LiteralPath $candidateTmp) {
+        $tempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+        $candidateFull = [IO.Path]::GetFullPath($candidateTmp)
+        if (-not $candidateFull.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean candidate path outside TEMP: $candidateFull"
+        }
+        Remove-Item -LiteralPath $candidateFull -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 & $pythonCommand.Source (Join-Path $PSScriptRoot 'verify_spec_catalog.py')
 if ($LASTEXITCODE -ne 0) {
     throw "Spec-catalog verification failed with exit code $LASTEXITCODE."

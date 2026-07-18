@@ -32,7 +32,7 @@
 - 完成更新失败时不得报成功并清理；
 - 清理失败时保留 URI 与明确错误。
 
-全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量分析、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
+全量门禁：90 suites / 551 JVM tests / 0 failures / 0 errors / 0 skipped；Android Lint 0 errors / 11 dependency-SDK notices；release boundary、8 Schema/catalog、12 项测量/结果测试、6 项候选打包测试、31 项行为模型、Go server 与 gateway 全部 PASS。Profile catalog 1.3.1 只同步 P1 0.5.10 消费者版本，不改任何 Profile。
 
 ## 4. 当前产物与设备边界
 

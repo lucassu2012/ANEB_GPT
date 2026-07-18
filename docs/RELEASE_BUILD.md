@@ -46,3 +46,13 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 - Debug APK SHA-256: `82A1A3C45A3ECD5C695417F65BFCF67311C94A571467EFB2E79525C8EBE5BB1F` (`0.5.10-codex`; 61,850,452 bytes; Android Debug certificate SHA-256 `6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`; debug artifacts are not release evidence).
 - Quality baseline: 551 JVM tests in 90 suites, 0 failures/0 errors/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); 12 measurement-analysis tests, behavior model 31 tests and Go server/gateway tests pass. Profile catalog 1.3.1 contains 8 schemas, 2 families, 16 profiles, 6 hash-bound runtime bundles, 6 embedded-network profiles and 4 behavior models.
 - Device validation: the directly preceding 0.5.9 P40 cellular AI realtime Quick candidate, run `019f7377-9a61-7db5-a8c4-1ac57de1a486`, completed 3/3 turns with 99.8/A and `LOW/INCONCLUSIVE`; its downloaded strict-v2 JSONL passed Schema/identity/digest validation with SHA-256 `FE964695E19997796F5FEB84E05F50FB69F61F2C6299FA0C577263E5198F7EA9`. The exact 0.5.10 binary above adds fail-closed MediaStore cleanup and has passed automated lifecycle fault injection, but has not yet been installed on the shared P40 because Experience Lab has not explicitly released the device. This boundary is intentional; 0.5.9 evidence is not presented as 0.5.10 device evidence. Neither artifact is signed release evidence.
+
+## Cloud Debug candidate
+
+Pushes to `main` and `codex/**` run the full cloud gate before an installable candidate is exposed. The Android candidate job waits for Profile/result/packaging contracts, Go server, dedicated gateway and behavior-model jobs; it then runs Android tests/Lint/build, verifies the Debug/Release component boundary, and packages the exact APK with:
+
+- `build-manifest.json`: package, version, SDK, signer, file size, SHA-256 and source workflow identity;
+- `checksums.sha256`: APK, manifest and Chinese install instructions;
+- `ANEB-安装说明.txt`: non-ADB file-manager installation and mismatch stop rules.
+
+Non-PR builds also create a GitHub artifact provenance attestation. The downloadable workflow artifact is retained for 30 days. It is explicitly `debug_non_release`; it may be used for controlled P40 validation but is not a signed public Release.

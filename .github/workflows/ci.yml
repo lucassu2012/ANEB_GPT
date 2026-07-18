@@ -2,7 +2,9 @@ name: ANEB CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "codex/**"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -13,10 +15,13 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   android:
-    name: Android unit tests
+    name: Verified Android candidate
+    needs: [contracts, server, gateway, behavior-model]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -39,6 +44,46 @@ jobs:
           --max-workers=1
           -Pkotlin.compiler.execution.strategy=in-process
           -Pksp.incremental=false
+      - name: Verify Debug and Release component boundary
+        shell: pwsh
+        run: ./scripts/verify_release_boundary.ps1
+      - name: Package auditable Debug candidate
+        run: >-
+          python scripts/package_debug_candidate.py
+          --apk app/probe/build/outputs/apk/debug/probe-debug.apk
+          --metadata app/probe/build/outputs/apk/debug/output-metadata.json
+          --output dist/aneb-probe-debug
+          --source-sha "${{ github.sha }}"
+          --source-ref "${{ github.ref }}"
+          --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: Attest exact Debug APK provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/aneb-probe-debug/*.apk
+      - name: Upload verified Debug candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: aneb-probe-debug-${{ github.sha }}
+          path: dist/aneb-probe-debug/
+          if-no-files-found: error
+          retention-days: 30
+
+  contracts:
+    name: Profile, result, and packaging contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify catalog and result schemas
+        run: |
+          python scripts/verify_spec_catalog.py
+          python scripts/verify_result_schema.py
+      - name: Test analysis and candidate packaging tools
+        run: python -m unittest discover -s scripts/tests -v
 
   server:
     name: Go server tests
