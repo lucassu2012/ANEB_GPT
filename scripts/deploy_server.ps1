@@ -491,15 +491,40 @@ if [[ $DEPLOY_LOCK_RC -ne 0 ]]; then
     exit "$DEPLOY_LOCK_RC"
 fi
 
-cancel_cleanup_watchdog() {
-    local watchdog_rc=0
-    systemctl stop "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || watchdog_rc=1
-    systemctl reset-failed "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || true
-    if systemctl is-active --quiet "$WATCHDOG_TIMER" || \
-        systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
-        watchdog_rc=1
+watchdog_unit_is_cleared() {
+    local unit="${1:?watchdog unit required}"
+    local state load_state active_state job
+    if ! state="$(systemctl show \
+        --property=LoadState --property=ActiveState --property=Job \
+        "$unit" 2>/dev/null)"; then
+        echo "WATCHDOG_STATE_QUERY_FAILED unit=$unit" >&2
+        return 1
     fi
-    return "$watchdog_rc"
+    load_state="$(printf '%s\n' "$state" | sed -n 's/^LoadState=//p')"
+    active_state="$(printf '%s\n' "$state" | sed -n 's/^ActiveState=//p')"
+    job="$(printf '%s\n' "$state" | sed -n 's/^Job=//p')"
+    if [[ -z "$load_state" || -z "$active_state" || -n "$job" ]]; then
+        echo "WATCHDOG_STATE_INVALID unit=$unit load=$load_state active=$active_state job=${job:-none}" >&2
+        return 1
+    fi
+    if [[ "$active_state" == 'inactive' && \
+        ( "$load_state" == 'loaded' || "$load_state" == 'not-found' ) ]]; then
+        return 0
+    fi
+    echo "WATCHDOG_STATE_NOT_CLEARED unit=$unit load=$load_state active=$active_state job=${job:-none}" >&2
+    return 1
+}
+
+cancel_cleanup_watchdog() {
+    # A --collect transient unit can disappear between rm and stop.  systemctl
+    # then returns non-zero even though the desired postcondition is already
+    # true.  Treat the final state, not the stop request's return code, as the
+    # safety boundary; query failures and active/pending units still fail closed.
+    systemctl stop "$WATCHDOG_TIMER" >/dev/null 2>&1 || true
+    systemctl stop "$WATCHDOG_SERVICE" >/dev/null 2>&1 || true
+    systemctl reset-failed "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE" >/dev/null 2>&1 || true
+    watchdog_unit_is_cleared "$WATCHDOG_TIMER" && \
+        watchdog_unit_is_cleared "$WATCHDOG_SERVICE"
 }
 
 early_cleanup() {
@@ -2348,6 +2373,28 @@ cleanup() {
     local staged_process_status='not_needed'
     local watchdog_status='not_run'
     local backup_prune_status='not_run'
+    local owned_path_cleanup_status='ok'
+    local owned_path
+    local -a owned_cleanup_paths=(
+        "/opt/aneb/bin/aneb-server.new-$DEPLOY_ID"
+        "/opt/aneb/profiles.new-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_quick.new-$DEPLOY_ID"
+        "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/cert.pem.new-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/key.pem.new-$DEPLOY_ID"
+        "/opt/aneb/bin/aneb-server.restore-$DEPLOY_ID"
+        "/opt/aneb/bin/aneb-server.absent-$DEPLOY_ID"
+        "/opt/aneb/profiles.restore-$DEPLOY_ID"
+        "/opt/aneb/profiles.absent-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_quick.restore-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_quick.absent-$DEPLOY_ID"
+        "/etc/systemd/system/aneb-server.service.restore-$DEPLOY_ID"
+        "/etc/systemd/system/aneb-server.service.absent-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/cert.pem.restore-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/cert.pem.absent-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/key.pem.restore-$DEPLOY_ID"
+        "/opt/aneb/tls/ip/key.pem.absent-$DEPLOY_ID"
+    )
     trap - EXIT
     trap '' HUP INT TERM
     CURRENT_STAGE='cleanup'
@@ -2382,7 +2429,7 @@ cleanup() {
         fi
     fi
     set +e
-    rm -f -- "$STAGE/tls/ip-key.pem" || cleanup_failed=1
+    rm -f -- "$STAGE/tls/ip-key.pem" || true
     if [[ $ROLLBACK_FAILED -ne 0 ]]; then
         DEPLOY_RESULT='rollback_failed'
     elif [[ $rc -ne 0 && $LIVE_TOUCHED -eq 1 ]]; then
@@ -2402,25 +2449,7 @@ cleanup() {
             TERMINAL_EVIDENCE_RC=0
         fi
     fi
-    rm -rf -- \
-        "/opt/aneb/bin/aneb-server.new-$DEPLOY_ID" \
-        "/opt/aneb/profiles.new-$DEPLOY_ID" \
-        "/opt/aneb/execution-profiles/token_multimodal_quick.new-$DEPLOY_ID" \
-        "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/cert.pem.new-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/key.pem.new-$DEPLOY_ID" \
-        "/opt/aneb/bin/aneb-server.restore-$DEPLOY_ID" \
-        "/opt/aneb/bin/aneb-server.absent-$DEPLOY_ID" \
-        "/opt/aneb/profiles.restore-$DEPLOY_ID" \
-        "/opt/aneb/profiles.absent-$DEPLOY_ID" \
-        "/opt/aneb/execution-profiles/token_multimodal_quick.restore-$DEPLOY_ID" \
-        "/opt/aneb/execution-profiles/token_multimodal_quick.absent-$DEPLOY_ID" \
-        "/etc/systemd/system/aneb-server.service.restore-$DEPLOY_ID" \
-        "/etc/systemd/system/aneb-server.service.absent-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/cert.pem.restore-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/cert.pem.absent-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/key.pem.restore-$DEPLOY_ID" \
-        "/opt/aneb/tls/ip/key.pem.absent-$DEPLOY_ID" || cleanup_failed=1
+    rm -rf -- "${owned_cleanup_paths[@]}" || true
     if [[ -d "$BACKUP_ROOT" ]]; then
         if prune_backups; then
             backup_prune_status='ok'
@@ -2439,9 +2468,17 @@ cleanup() {
         fi
     else
         cleanup_failed=1
+        owned_path_cleanup_status='failed'
         watchdog_status='retained'
         echo 'STAGE_CLEANUP_FAILED watchdog_retained=1' >&2
     fi
+    for owned_path in "${owned_cleanup_paths[@]}" "$STAGE"; do
+        if [[ -e "$owned_path" || -L "$owned_path" ]]; then
+            cleanup_failed=1
+            owned_path_cleanup_status='failed'
+            echo "OWNED_PATH_CLEANUP_FAILED path=$owned_path maintenance_required=1" >&2
+        fi
+    done
     if [[ $ROLLBACK_FAILED -ne 0 ]]; then
         final_rc=97
         result_status='rollback_failed'
@@ -2478,7 +2515,7 @@ cleanup() {
             echo "$DEPLOY_SUCCESS_MESSAGE"
         fi
     fi
-    echo "ANEB_DEPLOY_RESULT schema=aneb-deploy-result-v1 status=$result_status exit_code=$final_rc primary_reason=$PRIMARY_REASON primary_stage=$PRIMARY_STAGE primary_rc=$PRIMARY_RC staged_evidence=$STAGED_EVIDENCE_COMMITTED terminal_evidence=$TERMINAL_EVIDENCE_STATUS terminal_stage=$TERMINAL_EVIDENCE_STAGE terminal_rc=$TERMINAL_EVIDENCE_RC rollback=$rollback_status staged_process=$staged_process_status watchdog=$watchdog_status backup_prune=$backup_prune_status owned_path_cleanup=$([[ $cleanup_failed -eq 0 ]] && echo ok || echo failed)" >&2
+    echo "ANEB_DEPLOY_RESULT schema=aneb-deploy-result-v1 status=$result_status exit_code=$final_rc primary_reason=$PRIMARY_REASON primary_stage=$PRIMARY_STAGE primary_rc=$PRIMARY_RC staged_evidence=$STAGED_EVIDENCE_COMMITTED terminal_evidence=$TERMINAL_EVIDENCE_STATUS terminal_stage=$TERMINAL_EVIDENCE_STAGE terminal_rc=$TERMINAL_EVIDENCE_RC rollback=$rollback_status staged_process=$staged_process_status watchdog=$watchdog_status backup_prune=$backup_prune_status owned_path_cleanup=$owned_path_cleanup_status" >&2
     exit "$final_rc"
 }
 trap cleanup EXIT

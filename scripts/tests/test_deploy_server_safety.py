@@ -1690,6 +1690,14 @@ exit 42
         ):
             self.assertIn(field, result_line)
         self.assertNotRegex(result_line, r"(?:^|\s)cleanup=")
+        self.assertIn(
+            "owned_path_cleanup=$owned_path_cleanup_status",
+            result_line,
+        )
+        self.assertNotIn(
+            "owned_path_cleanup=$([[ $cleanup_failed",
+            result_line,
+        )
 
         stop_failure = cleanup.split("if ! stop_staged_server; then", 1)[1].split(
             "fi", 1
@@ -1702,6 +1710,129 @@ exit 42
         )[0]
         self.assertIn("watchdog_status='failed'", watchdog_failure)
         self.assertIn("cleanup_failed=1", watchdog_failure)
+
+    def test_watchdog_cleanup_accepts_collected_transient_units(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        helper = "watchdog_unit_is_cleared() {" + self.remote.split(
+            "watchdog_unit_is_cleared() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        function = "cancel_cleanup_watchdog() {" + self.remote.split(
+            "cancel_cleanup_watchdog() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{helper}
+{function}
+WATCHDOG_TIMER=aneb-deploy-expire-test.timer
+WATCHDOG_SERVICE=aneb-deploy-expire-test.service
+systemctl() {{
+    case "$1" in
+        stop) return 5 ;;
+        reset-failed) return 5 ;;
+        show)
+            printf '%s\n' \
+                'LoadState=not-found' \
+                'ActiveState=inactive' \
+                'Job='
+            return 0
+            ;;
+        *) return 64 ;;
+    esac
+}}
+cancel_cleanup_watchdog
+"""
+        completed = subprocess.run(
+            [bash, "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_watchdog_cleanup_accepts_loaded_inactive_units(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        helper = "watchdog_unit_is_cleared() {" + self.remote.split(
+            "watchdog_unit_is_cleared() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        function = "cancel_cleanup_watchdog() {" + self.remote.split(
+            "cancel_cleanup_watchdog() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        script = f"""set -Eeuo pipefail
+{helper}
+{function}
+WATCHDOG_TIMER=aneb-deploy-expire-test.timer
+WATCHDOG_SERVICE=aneb-deploy-expire-test.service
+systemctl() {{
+    case "$1" in
+        stop|reset-failed) return 0 ;;
+        show)
+            printf '%s\n' \
+                'LoadState=loaded' \
+                'ActiveState=inactive' \
+                'Job='
+            return 0
+            ;;
+        *) return 64 ;;
+    esac
+}}
+cancel_cleanup_watchdog
+"""
+        completed = subprocess.run(
+            [bash, "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_watchdog_cleanup_fails_closed_without_a_cleared_final_state(self) -> None:
+        bash = self.find_gnu_bash()
+        if bash is None:
+            self.skipTest("GNU bash is unavailable")
+        helper = "watchdog_unit_is_cleared() {" + self.remote.split(
+            "watchdog_unit_is_cleared() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        function = "cancel_cleanup_watchdog() {" + self.remote.split(
+            "cancel_cleanup_watchdog() {", 1
+        )[1].split("\n}\n", 1)[0] + "\n}"
+        cases = {
+            "query-failed": "return 69",
+            "active": (
+                "printf '%s\\n' 'LoadState=loaded' "
+                "'ActiveState=active' 'Job='; return 0"
+            ),
+            "pending-job": (
+                "printf '%s\\n' 'LoadState=loaded' "
+                "'ActiveState=inactive' 'Job=42'; return 0"
+            ),
+        }
+        for label, show_behavior in cases.items():
+            with self.subTest(label=label):
+                script = f"""set -Eeuo pipefail
+{helper}
+{function}
+WATCHDOG_TIMER=aneb-deploy-expire-test.timer
+WATCHDOG_SERVICE=aneb-deploy-expire-test.service
+systemctl() {{
+    case "$1" in
+        stop|reset-failed) return 0 ;;
+        show) {show_behavior} ;;
+        *) return 64 ;;
+    esac
+}}
+cancel_cleanup_watchdog
+"""
+                completed = subprocess.run(
+                    [bash, "-c", script],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIn("WATCHDOG_STATE_", completed.stderr)
 
     def test_cleanup_ignores_second_hup_and_reaches_terminal_cleanup(self) -> None:
         bash = self.find_gnu_bash()
