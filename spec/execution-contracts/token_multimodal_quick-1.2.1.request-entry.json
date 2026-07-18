@@ -1,0 +1,27 @@
+{
+  "schema": "aneb-request-entry-exact-count-contract",
+  "contract_id": "aneb-token-quick-request-entry-counts",
+  "version": "1.0.0",
+  "profile": {
+    "id": "token_multimodal_quick",
+    "version": "1.2.1",
+    "canonical_sha256": "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773"
+  },
+  "client_engine": {
+    "contract_id": "aneb-token-simulation-engine",
+    "version": "1.0.0"
+  },
+  "runtime": {
+    "canonical_sha256": "sha256:83e5c828784e1df89939f1c42fbdd296e3bb02c362676e82603a34575f17e926",
+    "task_count": 3,
+    "positive_response_artifact_task_count": 1
+  },
+  "applies_to": [
+    "positive_completed"
+  ],
+  "exact_business_counts": {
+    "echo": 20,
+    "token_sim": 3,
+    "download": 1
+  }
+}

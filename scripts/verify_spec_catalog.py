@@ -483,6 +483,217 @@ def _validate_runtime_contracts(
     return contracts
 
 
+def _validate_execution_evidence_document(
+    document: Any,
+    *,
+    profile: Any,
+    runtime: Any,
+    label: str,
+    errors: list[str],
+) -> None:
+    root_keys = {
+        "schema",
+        "contract_id",
+        "version",
+        "profile",
+        "client_engine",
+        "runtime",
+        "applies_to",
+        "exact_business_counts",
+    }
+    if not _strict_keys(document, root_keys, set(), label, errors):
+        return
+    if document.get("schema") != "aneb-request-entry-exact-count-contract":
+        errors.append(f"{label}.schema: unsupported evidence contract schema")
+    if document.get("contract_id") != "aneb-token-quick-request-entry-counts":
+        errors.append(f"{label}.contract_id: unsupported evidence contract")
+    _semver(document.get("version"), f"{label}.version", errors)
+    if document.get("version") != "1.0.0":
+        errors.append(f"{label}.version: unsupported evidence contract version")
+    if document.get("applies_to") != ["positive_completed"]:
+        errors.append(f"{label}.applies_to: expected only positive_completed")
+
+    profile_ref = document.get("profile")
+    if _strict_keys(
+        profile_ref,
+        {"id", "version", "canonical_sha256"},
+        set(),
+        f"{label}.profile",
+        errors,
+    ) and isinstance(profile, dict):
+        if profile_ref.get("id") != "token_multimodal_quick" or profile_ref.get("version") != "1.2.1":
+            errors.append(f"{label}.profile: contract must bind Token Quick 1.2.1")
+        if profile_ref.get("id") != profile.get("profile_id"):
+            errors.append(f"{label}.profile.id: does not match bound profile")
+        if profile_ref.get("version") != profile.get("version"):
+            errors.append(f"{label}.profile.version: does not match bound profile")
+        expected_sha = f"sha256:{canonical_json_sha256(profile)}"
+        if profile_ref.get("canonical_sha256") != expected_sha:
+            errors.append(f"{label}.profile.canonical_sha256: does not match bound profile")
+
+    client_engine = document.get("client_engine")
+    if _strict_keys(
+        client_engine,
+        {"contract_id", "version"},
+        set(),
+        f"{label}.client_engine",
+        errors,
+    ):
+        actual = (client_engine.get("contract_id"), client_engine.get("version"))
+        if actual != CLIENT_ENGINE_CONTRACT:
+            errors.append(f"{label}.client_engine: unsupported contract id/version {actual!r}")
+
+    runtime_ref = document.get("runtime")
+    tasks: list[Any] = []
+    if isinstance(runtime, dict) and isinstance(runtime.get("tasks"), list):
+        tasks = runtime["tasks"]
+    elif isinstance(runtime, dict):
+        errors.append(f"{label}: bound runtime tasks must be an array")
+    if _strict_keys(
+        runtime_ref,
+        {"canonical_sha256", "task_count", "positive_response_artifact_task_count"},
+        set(),
+        f"{label}.runtime",
+        errors,
+    ) and isinstance(runtime, dict):
+        expected_sha = f"sha256:{canonical_json_sha256(runtime)}"
+        if runtime_ref.get("canonical_sha256") != expected_sha:
+            errors.append(f"{label}.runtime.canonical_sha256: does not match bound runtime")
+        if type(runtime_ref.get("task_count")) is not int or runtime_ref.get("task_count") != len(tasks):
+            errors.append(f"{label}.runtime.task_count: does not match bound runtime")
+        artifact_count = sum(
+            1
+            for task in tasks
+            if isinstance(task, dict)
+            and type(task.get("response_artifact_bytes")) is int
+            and task["response_artifact_bytes"] > 0
+        )
+        if (
+            type(runtime_ref.get("positive_response_artifact_task_count")) is not int
+            or runtime_ref.get("positive_response_artifact_task_count") != artifact_count
+        ):
+            errors.append(
+                f"{label}.runtime.positive_response_artifact_task_count: does not match bound runtime"
+            )
+
+    counts = document.get("exact_business_counts")
+    if not _strict_keys(
+        counts,
+        {"echo", "token_sim", "download"},
+        set(),
+        f"{label}.exact_business_counts",
+        errors,
+    ):
+        return
+    for key in ("echo", "token_sim", "download"):
+        if type(counts.get(key)) is not int or not 0 < counts[key] <= 10_000:
+            errors.append(f"{label}.exact_business_counts.{key}: expected positive bounded integer")
+    if type(counts.get("token_sim")) is int and counts["token_sim"] != len(tasks):
+        errors.append(f"{label}.exact_business_counts.token_sim count does not match bound runtime")
+    artifact_count = sum(
+        1
+        for task in tasks
+        if isinstance(task, dict)
+        and type(task.get("response_artifact_bytes")) is int
+        and task["response_artifact_bytes"] > 0
+    )
+    if type(counts.get("download")) is int and counts["download"] != artifact_count:
+        errors.append(f"{label}.exact_business_counts.download count does not match bound runtime")
+
+
+def _validate_execution_evidence_contracts(
+    root: Path,
+    catalog: dict[str, Any],
+    hash_strategy_ids: set[str],
+    errors: list[str],
+) -> None:
+    entries = catalog.get("execution_evidence_contracts")
+    if not isinstance(entries, list) or not entries:
+        errors.append("catalog.execution_evidence_contracts: expected non-empty array")
+        entries = []
+    identities: set[tuple[str, str]] = set()
+    declared_paths: set[str] = set()
+    required = {
+        "contract_id",
+        "version",
+        "path",
+        "canonical_sha256",
+        "profile_path",
+        "runtime_plan_path",
+        "hash_strategy_id",
+        "consumers",
+    }
+    for index, entry in enumerate(entries):
+        label = f"catalog.execution_evidence_contracts[{index}]"
+        if not _strict_keys(entry, required, set(), label, errors):
+            continue
+        contract_id = entry.get("contract_id")
+        version = entry.get("version")
+        if not isinstance(contract_id, str) or not contract_id:
+            errors.append(f"{label}.contract_id: expected non-empty string")
+        _semver(version, f"{label}.version", errors)
+        identity = (
+            contract_id if isinstance(contract_id, str) else "",
+            version if isinstance(version, str) else "",
+        )
+        if identity in identities:
+            errors.append(f"{label}: duplicate contract id/version {identity}")
+        identities.add(identity)
+        if identity == ("aneb-token-quick-request-entry-counts", "1.0.0"):
+            expected_paths = {
+                "path": "spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json",
+                "profile_path": "profiles/published/token_multimodal_quick/profile.json",
+                "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
+            }
+            if any(entry.get(key) != value for key, value in expected_paths.items()):
+                errors.append(f"{label}: contract must bind Token Quick 1.2.1 paths")
+        if entry.get("hash_strategy_id") not in hash_strategy_ids:
+            errors.append(f"{label}.hash_strategy_id: unknown hash strategy")
+        if not isinstance(entry.get("canonical_sha256"), str) or not SHA256_RE.fullmatch(
+            entry["canonical_sha256"]
+        ):
+            errors.append(f"{label}.canonical_sha256: expected lowercase SHA-256")
+        consumers = set(_string_list(entry.get("consumers"), f"{label}.consumers", errors))
+        if consumers != {"P1", "P2", "Profile"}:
+            errors.append(f"{label}.consumers: expected P1, P2 and Profile")
+
+        ref = entry.get("path")
+        if isinstance(ref, str):
+            declared_paths.add(ref)
+        document_path = _resolve_file(root, ref, f"{label}.path", errors)
+        profile_path = _resolve_file(root, entry.get("profile_path"), f"{label}.profile_path", errors)
+        runtime_path = _resolve_file(
+            root, entry.get("runtime_plan_path"), f"{label}.runtime_plan_path", errors
+        )
+        if document_path is None or profile_path is None or runtime_path is None:
+            continue
+        document = load_json(document_path, str(ref), errors)
+        profile = load_json(profile_path, str(entry.get("profile_path")), errors)
+        runtime = load_json(runtime_path, str(entry.get("runtime_plan_path")), errors)
+        for name, value in (
+            ("document", document),
+            ("profile", profile),
+            ("runtime", runtime),
+        ):
+            if value is not None and not isinstance(value, dict):
+                errors.append(f"{label}.{name}: expected object")
+        if not all(isinstance(value, dict) for value in (document, profile, runtime)):
+            continue
+        if document.get("contract_id") != contract_id or document.get("version") != version:
+            errors.append(f"{label}: document identity does not match catalog")
+        if entry.get("canonical_sha256") != canonical_json_sha256(document):
+            errors.append(f"{label}.canonical_sha256 does not match evidence contract")
+        _validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label=str(ref),
+            errors=errors,
+        )
+    actual = _relative_set(root, (root / "spec/execution-contracts").glob("*.json"))
+    _check_inventory("execution evidence contract inventory", declared_paths, actual, errors)
+
+
 def _validate_models(
     root: Path,
     catalog: dict[str, Any],
@@ -911,7 +1122,8 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
         return errors
     required = {
         "catalog_id", "catalog_version", "compatibility", "consumers", "hash_strategies",
-        "schemas", "runtime_contracts", "model_assets", "profile_families",
+        "schemas", "runtime_contracts", "execution_evidence_contracts", "model_assets",
+        "profile_families",
     }
     if not _strict_keys(catalog, required, set(), "catalog", errors):
         return errors
@@ -928,6 +1140,7 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
     hash_strategy_ids = _validate_hash_strategies(catalog, errors)
     schema_ids = _validate_schemas(root, catalog, errors)
     runtime_contracts = _validate_runtime_contracts(root, catalog, hash_strategy_ids, errors)
+    _validate_execution_evidence_contracts(root, catalog, hash_strategy_ids, errors)
     model_hashes = _validate_models(root, catalog, hash_strategy_ids, errors)
     _validate_profiles(root, catalog, schema_ids, hash_strategy_ids, runtime_contracts, model_hashes, errors)
     return errors
@@ -965,7 +1178,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(catalog['schemas'])} schemas, {len(families)} families, "
             f"{len(profiles)} profiles, {len(runtime_bound)} runtime bundles, "
             f"{len(embedded_network)} embedded-network profiles, "
-            f"{len(catalog['model_assets'])} behavior models"
+            f"{len(catalog['model_assets'])} behavior models, "
+            f"{len(catalog['execution_evidence_contracts'])} execution evidence contracts"
         )
     return 0
 

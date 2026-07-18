@@ -727,11 +727,11 @@ class TokenSimulationEngine(private val context: Context) {
         Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v2")
     }
 
-    private companion object {
+    internal companion object {
         const val ECHO_SAMPLES = 20
-        const val ECHO_GAP_MS = 80L
-        const val LOADED_ECHO_GAP_MS = 250L
-        const val LOADED_ECHO_IDLE_GAP_MS = 50L
-        const val LIVE_WINDOW_NANOS = 1_000_000_000L
+        private const val ECHO_GAP_MS = 80L
+        private const val LOADED_ECHO_GAP_MS = 250L
+        private const val LOADED_ECHO_IDLE_GAP_MS = 50L
+        private const val LIVE_WINDOW_NANOS = 1_000_000_000L
     }
 }

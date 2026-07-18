@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import verify_token_run_audit as audit_verifier
 
@@ -126,6 +127,27 @@ class TokenRunAuditCliTest(unittest.TestCase):
             self.business("/api/v1/download", "GET"),
         ]
 
+    def token_quick_events(
+        self,
+        *,
+        echo: int = 20,
+        token_sim: int = 3,
+        download: int = 1,
+    ) -> list[dict[str, str]]:
+        return [
+            self.reachability(),
+            self.capability(),
+            *[self.business("/api/v1/echo", "POST") for _ in range(echo)],
+            *[
+                self.business("/api/v1/token-sim", "POST")
+                for _ in range(token_sim)
+            ],
+            *[
+                self.business("/api/v1/download", "GET")
+                for _ in range(download)
+            ],
+        ]
+
     def run_audit(
         self,
         journal: str | bytes,
@@ -134,6 +156,7 @@ class TokenRunAuditCliTest(unittest.TestCase):
         start_barrier_id: str = START,
         barrier_id: str = END,
         mode: str = "negative",
+        profile_contract: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.log"
@@ -141,8 +164,7 @@ class TokenRunAuditCliTest(unittest.TestCase):
                 path.write_bytes(journal)
             else:
                 path.write_bytes(journal.encode("utf-8"))
-            return subprocess.run(
-                [
+            command = [
                     sys.executable,
                     str(SCRIPT),
                     str(path),
@@ -154,7 +176,11 @@ class TokenRunAuditCliTest(unittest.TestCase):
                     barrier_id,
                     "--mode",
                     mode,
-                ],
+                ]
+            if profile_contract is not None:
+                command.extend(("--profile-contract", profile_contract))
+            return subprocess.run(
+                command,
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
@@ -178,7 +204,10 @@ class TokenRunAuditCliTest(unittest.TestCase):
         self.assertEqual("ok", report["reason_code"])
         self.assertEqual("request_entry_coverage_only", report["evidence_scope"])
         self.assertEqual("aneb-token-request-entry-audit-report", report["schema"])
-        self.assertEqual("2.0.0", report["schema_version"])
+        self.assertEqual("2.1.0", report["schema_version"])
+        self.assertIsNone(report["profile_contract"])
+        self.assertIsNone(report["expected_business_counts"])
+        self.assertEqual("none", report["profile_contract_enforcement"])
         self.assertEqual(INSTANCE, report["audit_instance_id"])
         self.assertEqual(100, report["start_barrier_seq"])
         self.assertEqual(103, report["barrier_seq"])
@@ -199,6 +228,143 @@ class TokenRunAuditCliTest(unittest.TestCase):
         self.assertEqual(1, report["counts"]["business"]["token_sim"])
         self.assertEqual(1, report["counts"]["business"]["download"])
         self.assertEqual(3, report["counts"]["business_total"])
+        self.assertIsNone(report["profile_contract"])
+        self.assertEqual("none", report["profile_contract_enforcement"])
+
+    def test_token_quick_contract_rejects_non_exact_business_counts(self) -> None:
+        result = self.run_audit(
+            self.window(self.positive_events()),
+            mode="positive",
+            profile_contract="token_multimodal_quick@1.2.1",
+        )
+        report = self.assert_reason(result, "positive_echo_count_mismatch")
+        self.assertEqual(1, report["counts"]["business"]["echo"])
+
+    def test_token_quick_contract_accepts_only_20_3_1_business_counts(self) -> None:
+        result = self.run_audit(
+            self.window(self.token_quick_events()),
+            mode="positive",
+            profile_contract="token_multimodal_quick@1.2.1",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(
+            {"download": 1, "echo": 20, "token_sim": 3, "unexpected": 0},
+            report["counts"]["business"],
+        )
+        self.assertEqual(24, report["counts"]["business_total"])
+        self.assertEqual(
+            "token_multimodal_quick@1.2.1", report["profile_contract"]
+        )
+        self.assertEqual(
+            {"download": 1, "echo": 20, "token_sim": 3},
+            report["expected_business_counts"],
+        )
+        self.assertEqual(
+            "positive_exact_business_counts",
+            report["profile_contract_enforcement"],
+        )
+        catalog = json.loads((ROOT / "spec/catalog.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            catalog["execution_evidence_contracts"][0]["canonical_sha256"],
+            report["profile_contract_definition_sha256"],
+        )
+
+    def test_token_quick_contract_identifies_each_count_mismatch(self) -> None:
+        cases = (
+            ({"echo": 0}, "positive_echo_count_mismatch"),
+            ({"echo": 19}, "positive_echo_count_mismatch"),
+            ({"echo": 21}, "positive_echo_count_mismatch"),
+            ({"token_sim": 2}, "positive_token_sim_count_mismatch"),
+            ({"token_sim": 4}, "positive_token_sim_count_mismatch"),
+            ({"download": 0}, "positive_download_count_mismatch"),
+            ({"download": 2}, "positive_download_count_mismatch"),
+        )
+        for overrides, reason in cases:
+            with self.subTest(reason=reason):
+                result = self.run_audit(
+                    self.window(self.token_quick_events(**overrides)),
+                    mode="positive",
+                    profile_contract="token_multimodal_quick@1.2.1",
+                )
+                self.assert_reason(result, reason)
+
+    def test_negative_token_quick_contract_binds_zero_business_semantics(self) -> None:
+        result = self.run_audit(
+            self.window([self.reachability(), self.capability()]),
+            mode="negative",
+            profile_contract="token_multimodal_quick@1.2.1",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual("token_multimodal_quick@1.2.1", report["profile_contract"])
+        self.assertEqual(
+            "negative_zero_business", report["profile_contract_enforcement"]
+        )
+        self.assertEqual(0, report["counts"]["business_total"])
+
+    def test_invalid_profile_contract_is_redacted_from_report(self) -> None:
+        secret = "sk_live_profile_contract_must_not_echo"
+        result = self.run_audit(
+            "",
+            mode="positive",
+            profile_contract=secret,
+        )
+        report = self.assert_reason(result, "profile_contract_invalid")
+        self.assertIsNone(report["profile_contract"])
+        self.assertIsNone(report["expected_business_counts"])
+        self.assertEqual("invalid", report["profile_contract_enforcement"])
+        self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_library_api_rejects_non_string_profile_contract_without_traceback(self) -> None:
+        for value in ([], {}, 7):
+            with self.subTest(value=value):
+                report = audit_verifier.verify_journal(
+                    "",
+                    run_id=RUN,
+                    start_barrier_id=START,
+                    barrier_id=END,
+                    mode="positive",
+                    profile_contract=value,
+                )
+                self.assertEqual("fail", report["status"])
+                self.assertEqual("profile_contract_invalid", report["reason_code"])
+                self.assertIsNone(report["profile_contract"])
+                self.assertEqual("invalid", report["profile_contract_enforcement"])
+
+    def test_profile_contract_definition_failure_is_canonical_and_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidates = (
+                Path(directory) / "missing.json",
+                Path(directory) / "malformed.json",
+            )
+            candidates[1].write_text("{}", encoding="utf-8")
+            for path in candidates:
+                with self.subTest(path=path.name), mock.patch.object(
+                    audit_verifier, "TOKEN_QUICK_CONTRACT_PATH", path
+                ):
+                    report = audit_verifier.verify_journal(
+                        "",
+                        run_id=RUN,
+                        start_barrier_id=START,
+                        barrier_id=END,
+                        mode="positive",
+                        profile_contract="token_multimodal_quick@1.2.1",
+                    )
+                    self.assertEqual("fail", report["status"])
+                    self.assertEqual(
+                        "profile_contract_definition_invalid", report["reason_code"]
+                    )
+                    self.assertEqual(
+                        "token_multimodal_quick@1.2.1", report["profile_contract"]
+                    )
+                    self.assertIsNone(report["expected_business_counts"])
+                    self.assertIsNone(
+                        report["profile_contract_definition_sha256"]
+                    )
+                    self.assertEqual(
+                        "not_evaluated", report["profile_contract_enforcement"]
+                    )
 
     def test_output_is_one_line_canonical_json(self) -> None:
         result = self.run_audit(self.window([self.capability()]))

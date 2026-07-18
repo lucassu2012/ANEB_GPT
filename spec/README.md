@@ -10,9 +10,9 @@
 | 单元 | 仓库候选版本 | 对目录资产的职责 |
 |---|---:|---|
 | P1 / ANEB Probe Android | 0.5.12（code 44，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；对声明执行要求的 Token Quick 在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏审计 ID；Room 版本、指标、门限和评分均不变 |
-| P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；此版本仍是仓库候选，E-01 当前部署保持 0.7.0 |
+| P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；E-01 当前已部署 0.8.0，P40 跨端验收仍独立进行 |
 | P3 / aneb-ai-behavior-model | 0.3.1 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划和受限执行要求的 v2 发布包，并保证 Token Quick 实际覆盖声明的下载原语；保留绑定留出报告的 validated 门禁 |
-| Profile 横切机制 | 1.4.1 | ［KNOWN｜HIGH］索引全部正式资产，治理执行要求、兼容范围、消费者、完整性和发布方式；结果合同继续按共享核心、兼容 v1 和严格 v2 独立演进 |
+| Profile 横切机制 | 1.5.0 | ［KNOWN｜HIGH］索引全部正式资产，新增 Token Quick request-entry 精确计数证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式；结果合同仍按共享核心、兼容 v1 和严格 v2 独立演进 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 ［KNOWN｜HIGH］M0-EC1 只为 `token_multimodal_quick@1.2.1` 接通执行能力握手；其余 11 个
@@ -64,6 +64,18 @@ fail closed。
 - ［KNOWN｜HIGH］该切片不修改业务指标、质量目标、门限、AQS 权重、结论算法、Room schema
   或结果合同。
 
+## Token Quick request-entry 精确计数证据合同
+
+- ［KNOWN｜HIGH］`spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json`
+  是 `aneb-token-quick-request-entry-counts@1.0.0` 的唯一机器定义；仅适用于客户端已完成的正向 run。
+- ［KNOWN｜HIGH］20 次 echo 来自 `aneb-token-simulation-engine@1.0.0` 的生产常量，3 次
+  token-sim 和 1 次 download 来自 Quick 1.2.1 冻结运行计划。合同同时绑定 Engine 身份、Profile/runtime
+  规范化摘要和精确计数；Kotlin 回归交叉核对生产常量、任务数和附件任务数。
+- ［KNOWN｜HIGH］catalog 1.5.0 登记该合同并冻结其规范化 SHA-256；目录清单拒绝未索引、缺失、重复或
+  身份/摘要漂移。服务端审计判定器只从该合同读取计数，缺失或畸形时 fail closed。
+- ［KNOWN｜HIGH］request-entry 计数只证明请求进入服务端审计边界，不证明响应成功、客户端接收或评分；
+  正式结论仍须和同 run 客户端冻结结果及 D-82 原始来源/新鲜度证据组合。
+
 ## 哈希合同
 
 `canonical-json-sha256-v1` 的输入不是 JSON 文件原始字节，而是：
@@ -90,6 +102,8 @@ fail closed。
 - `aneb-token-runtime-plan-v1` 与 `aneb-realtime-runtime-plan-v1` 已有合同 ID、Kotlin/Python
   实现和本目录的结构校验，但还没有独立 JSON Schema；catalog 明确将
   `standalone_schema_path` 设为 `null`，不把实现类冒充 Schema。
+- `aneb-token-quick-request-entry-counts@1.0.0` 是 catalog 登记的执行证据合同，不是运行计划或结果
+  Schema；它的规范化摘要、Profile/runtime 绑定与 Engine 身份由独立门禁校验。
 - 服务端根 Profile 仍是 legacy 合同。这一入口先把分叉和消费者写清楚，不在 M0 第一刀移动
   文件或假装两族已经统一。
 - `app/probe/schemas/` 是 Room 数据库迁移快照，Android `AndroidManifest.xml` 是组件清单；
@@ -110,6 +124,7 @@ python -m unittest tools/aneb-ai-behavior-model/tests/test_result_schema.py -v
 catalog 校验器只使用 Python 标准库；结果 Schema/JSONL 校验器使用 `jsonschema` 与 `referencing`。所有路径都采取 fail-closed 策略：
 
 - catalog 或任何 JSON 不能解析、存在重复 key 或非有限数时失败；
+- execution evidence contract 缺失、未索引、重复、身份/规范化摘要或 Profile/runtime/Engine 绑定漂移时失败；
 - 引用缺失、越出仓库、ID/版本不一致、重复 Profile ID 时失败；
 - Schema、模型、根 Profile、published Profile、runtime plan 或 manifest 有未索引文件时失败；
 - Token/AI realtime 的 runtime contract、模型、seed、variant、条目计数或语义哈希不一致时失败；

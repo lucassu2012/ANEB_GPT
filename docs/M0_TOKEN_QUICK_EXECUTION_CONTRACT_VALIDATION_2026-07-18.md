@@ -27,7 +27,7 @@
 | P1 / ANEB Probe Android | 0.5.12-codex，code 44，Room v19 | ［KNOWN｜HIGH］commit `49095c0314ac3900b6ed0c306d2eeaafc2edd87f` 的 GitHub Actions run `29659812753` 六个 job 成功；云端 APK SHA-256=`04853208A59E35906366A61A92251CDED8BEDEA307753A37CD14844926FAD7EA`，包名/版本/签名/zipalign 已核对。尚未安装到 P40，也未完成 0.8.0 正向 run；0.5.11 负向证据只保留为历史。 |
 | P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］E-01 当前 active；live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`，来源 commit=`49095c0314ac3900b6ed0c306d2eeaafc2edd87f`。能力回执、旧端点、合成弱网与 UDP smoke 通过；部署终态 success 证据闭合，锁内验后共享主机指纹一致且临时残留为 0。原部署进程 rc=99 是 success 证据提交后的 watchdog collect/stop 误报，不能写成 rc=0。 |
 | P3 / aneb-ai-behavior-model | 0.3.1 | ［KNOWN｜HIGH］生成器按模型与 seed 可复现选择一个 1MiB 返回附件；本地全仓门禁中的 38 项行为模型测试通过 |
-| catalog / Profile 治理 | 1.4.1 | ［KNOWN｜HIGH］索引 Quick 1.2.1；本地 catalog 门禁通过 |
+| catalog / Profile 治理 | 1.5.0 | ［KNOWN｜HIGH］索引 Quick 1.2.1，并登记/冻结 request-entry 精确计数证据合同；本地 catalog 门禁通过 |
 | Token Quick Profile | 1.2.1 | ［KNOWN｜HIGH］manifest 绑定精确 Profile 与 runtime plan；task-0006 真实触发 1MiB download |
 | 执行要求合同 | `aneb-execution-requirements@1.0.0` | ［KNOWN｜HIGH］P1/P2/P3 共用 |
 | 服务端能力回执 | `aneb-server-capability-receipt@1.0.0` | ［KNOWN｜HIGH］P1/P2 共用 |
@@ -105,7 +105,7 @@
 | P1 解析、能力门禁与零业务请求路径 | ［KNOWN｜HIGH］0.5.11 历史门禁曾通过；0.5.12 的同-run传递定向测试及最终 Android 单测/构建/Lint/发布边界门禁均通过；本地 Debug 候选 SHA-256 为 `8CCBD5402352639B5E6F32A165D69888ABAFD6655F39E235410C3A2D624E7687`，但它不是云端工件 | 缺失/冲突回执在控制面后、首个业务请求前拒绝；Quick 运行包不能被其他 variant 的自洽文件替换；合成 transport 的业务请求数为 0；同一 Token run 可绑定服务端控制/业务日志 | 不能证明 E-01 公网或 P40 真机路径 |
 | GitHub CI 与云端 APK | ［KNOWN｜HIGH］commit `49095c0` 的 run `29659812753` 六个 CI jobs 全部成功；0.5.12 APK 的 manifest/package/version/SHA/signature/zipalign 已独立核对 | 0.5.12 有精确可追溯云端候选，可进入签名兼容检查和受控真机安装 | 不能证明 APK 已安装到 P40、能原位升级现有包或正向 Quick 已验收 |
 | P40 Pro / E-01 负向真机联调 | ［KNOWN｜HIGH］两次 Quick 客户端结果均 fail closed，持久化 INVALID/未评分且任务/KPI 字段为 0；界面原因指向能力回执缺失，但 retained result 未持久化机器 `reason_code` | P1 的客户端门禁会拒绝不兼容节点并且不产生客户端业务产物 | 现有包缺原始 `/serverinfo`、同 run 服务端访问计数/日志和 PCAP，不能单靠它证明目标必为 0.7 或服务端绝对零业务 HTTP 请求；也不能声称 0.8.0 正向路径已验收 |
-| 全仓质量门 | ［KNOWN｜HIGH］2026-07-19 当前门禁 PASS：Android 单测/构建/Lint/发布边界、Profile/结果合同、server、gateway、137 项脚本测试（4 项因当前 Windows 不具备对应 Linux 原语而按设计跳过）及 38 项行为模型测试全部通过；599 个跟踪文件凭据扫描 PASS | 部署侧覆盖 clean commit 绑定构建、`GOFIPS140=off` 污染覆盖、严格 staged/live 回执、远端互斥、原子回滚、终态证据和 watchdog 最终状态判定 | 本地门禁不能替代 P40 正/负向跨端证据；部署工具修复提交仍须由 CI 独立复现 |
+| 全仓质量门 | ［KNOWN｜HIGH］2026-07-19 当前门禁 PASS：Android 单测/构建/Lint/发布边界、Profile/结果合同、server、gateway、137 项脚本测试（4 项因当前 Windows 不具备对应 Linux 原语而按设计跳过）及 38 项行为模型测试全部通过；599 个跟踪文件凭据扫描 PASS；watchdog 修复 commit `d0a904d` 的 GitHub run `29661388755` 六个 job 全绿 | 部署侧覆盖 clean commit 绑定构建、`GOFIPS140=off` 污染覆盖、严格 staged/live 回执、远端互斥、原子回滚、终态证据和 watchdog 最终状态判定 | 本地/CI 门禁不能替代 P40 正/负向跨端证据；新一键取证工具仍须完成故障注入与真机验收 |
 
 ### 6.1 云端工件与现场 0.7.0 语境下的客户端负向证据
 
@@ -216,7 +216,8 @@ python scripts/verify_token_run_audit.py token-run-audit.log `
   --run-id $RunId `
   --start-barrier-id $StartBarrierId `
   --barrier-id $EndBarrierId `
-  --mode positive
+  --mode positive `
+  --profile-contract token_multimodal_quick@1.2.1
 ```
 
 ［KNOWN｜HIGH］负向 run 将 `--mode` 改为 `negative`。任一 barrier HTTP/节点身份异常、日志导出不完整、
@@ -225,6 +226,15 @@ python scripts/verify_token_run_audit.py token-run-audit.log `
 不能从终端复制粘贴；最终 manifest 同时哈希 pre-start receipt、raw JSON、派生日志、判定报告、原始
 serverinfo/barrier 响应和客户端冻结结果。判定器本身不证明记录“新鲜”，缺上述 D-82 来源绑定时只能写
 “给定日志内容通过”，不能写“本次现场验收通过”。
+
+［KNOWN｜HIGH］正式 Token Quick 正向验收必须使用上述 `--profile-contract`；v2.1.0 报告须同时声明
+`profile_contract=token_multimodal_quick@1.2.1`、`profile_contract_enforcement=positive_exact_business_counts`
+和 `expected_business_counts={echo:20,token_sim:3,download:1}`，且
+`profile_contract_definition_sha256` 必须等于本次 catalog 为
+`spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json` 冻结的
+`canonical-json-sha256-v1` 摘要；原始文件字节摘要由 D-82 manifest 另行保存。未带参数的通用正向模式只证明三类入口均至少一次，
+不能替代 Token Quick 的精确执行合同。负向模式携带同一参数时仍要求业务入口总数为 0，并在报告中声明
+`profile_contract_enforcement=negative_zero_business`。
 
 ［KNOWN｜HIGH］候选构建和部署前 Go 测试还必须显式固定 `GOFIPS140=off`。宿主为 `latest` 时可生成不同
 二进制；未记录或未覆盖该污染的 candidate/provenance 不可部署。

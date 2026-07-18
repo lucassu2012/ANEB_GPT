@@ -88,8 +88,8 @@
    本轮目标业务 App、VPN/tun 与抓包进程/服务均未活动；现场干净即可直接开始。若存在无法安全归属的
    会话，不得停止、覆盖或清理，必须先协调。
 3. ［KNOWN｜HIGH］实际部署来源 commit `49095c0` 已通过 P2 Go、P3/catalog、Android/Release、
-   部署安全与 GitHub CI 六个 job；当前 watchdog 误报修复工作树又通过 137 项脚本测试（4 项平台能力
-   跳过）、P3 38 项测试和全仓质量门。未来任何 live 变更仍须先形成新的 clean commit，由本地门禁、
+   部署安全与 GitHub CI 六个 job；watchdog 误报修复 commit `d0a904d` 又通过 GitHub run
+   `29661388755` 的六个 job。未来任何 live 变更仍须先形成新的 clean commit，由本地门禁、
    凭据扫描和 CI 独立复现；任何一项失败都不得部署。
    候选构建与部署前 Go 测试必须额外固定并记录 `GOFIPS140=off`；宿主 `latest` 污染未被覆盖时即使
    其余 flags 相同也不得构建、上传或写来源证明。

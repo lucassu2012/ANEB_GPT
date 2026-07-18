@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.4.1",
+  "catalog_version": "1.5.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -55,7 +55,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.4.1",
+      "current_version": "1.5.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -199,6 +199,22 @@
       "consumers": [
         "P1",
         "P3",
+        "Profile"
+      ]
+    }
+  ],
+  "execution_evidence_contracts": [
+    {
+      "contract_id": "aneb-token-quick-request-entry-counts",
+      "version": "1.0.0",
+      "path": "spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json",
+      "canonical_sha256": "b8c956c6b323b849a603a17fa7b83504d01e1c6cb7ea67e4740dcc4a136467a0",
+      "profile_path": "profiles/published/token_multimodal_quick/profile.json",
+      "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P2",
         "Profile"
       ]
     }

@@ -39,7 +39,14 @@ AUDIT_DROP_RE = re.compile(
 MAX_JOURNAL_BYTES = 8 * 1024 * 1024
 MAX_UINT64 = (1 << 64) - 1
 REPORT_SCHEMA = "aneb-token-request-entry-audit-report"
-REPORT_SCHEMA_VERSION = "2.0.0"
+REPORT_SCHEMA_VERSION = "2.1.0"
+TOKEN_QUICK_PROFILE_CONTRACT = "token_multimodal_quick@1.2.1"
+TOKEN_QUICK_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json"
+)
+MAX_CONTRACT_BYTES = 16 * 1024
+SHA256_ID_RE = re.compile(r"sha256:[0-9a-f]{64}")
 CONTROL_PATH = "/api/v1/serverinfo"
 BUSINESS_PATHS = frozenset(
     {
@@ -66,6 +73,129 @@ def _safe_report_uuid(value: str) -> str:
 
 def _safe_report_mode(value: str) -> str:
     return value if value in {"positive", "negative"} else "invalid"
+
+
+def _safe_report_profile_contract(value: object) -> str | None:
+    return (
+        value
+        if isinstance(value, str) and value == TOKEN_QUICK_PROFILE_CONTRACT
+        else None
+    )
+
+
+def _profile_contract_enforcement(value: object, mode: str) -> str:
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or value != TOKEN_QUICK_PROFILE_CONTRACT:
+        return "invalid"
+    if mode == "positive":
+        return "positive_exact_business_counts"
+    if mode == "negative":
+        return "negative_zero_business"
+    return "not_evaluated"
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_contract_key")
+        result[key] = value
+    return result
+
+
+def _require_exact_keys(
+    value: object,
+    expected: set[str],
+) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError("contract_shape_invalid")
+    return value
+
+
+def _load_token_quick_contract() -> tuple[dict[str, int], str]:
+    payload = TOKEN_QUICK_CONTRACT_PATH.read_bytes()
+    if not payload or len(payload) > MAX_CONTRACT_BYTES:
+        raise ValueError("contract_size_invalid")
+    document = json.loads(
+        payload.decode("utf-8"),
+        object_pairs_hook=_reject_duplicate_json_keys,
+    )
+    root = _require_exact_keys(
+        document,
+        {
+            "schema",
+            "contract_id",
+            "version",
+            "profile",
+            "client_engine",
+            "runtime",
+            "applies_to",
+            "exact_business_counts",
+        },
+    )
+    if root["schema"] != "aneb-request-entry-exact-count-contract":
+        raise ValueError("contract_schema_invalid")
+    if root["contract_id"] != "aneb-token-quick-request-entry-counts":
+        raise ValueError("contract_id_invalid")
+    if root["version"] != "1.0.0":
+        raise ValueError("contract_version_invalid")
+    if root["applies_to"] != ["positive_completed"]:
+        raise ValueError("contract_scope_invalid")
+
+    profile = _require_exact_keys(
+        root["profile"], {"id", "version", "canonical_sha256"}
+    )
+    if profile["id"] != "token_multimodal_quick" or profile["version"] != "1.2.1":
+        raise ValueError("contract_profile_invalid")
+    if not isinstance(profile["canonical_sha256"], str) or not SHA256_ID_RE.fullmatch(
+        profile["canonical_sha256"]
+    ):
+        raise ValueError("contract_profile_sha_invalid")
+
+    client_engine = _require_exact_keys(
+        root["client_engine"], {"contract_id", "version"}
+    )
+    if (
+        client_engine["contract_id"] != "aneb-token-simulation-engine"
+        or client_engine["version"] != "1.0.0"
+    ):
+        raise ValueError("contract_client_engine_invalid")
+
+    runtime = _require_exact_keys(
+        root["runtime"],
+        {"canonical_sha256", "task_count", "positive_response_artifact_task_count"},
+    )
+    if not isinstance(runtime["canonical_sha256"], str) or not SHA256_ID_RE.fullmatch(
+        runtime["canonical_sha256"]
+    ):
+        raise ValueError("contract_runtime_sha_invalid")
+    for key in ("task_count", "positive_response_artifact_task_count"):
+        value = runtime[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("contract_runtime_count_invalid")
+
+    raw_counts = _require_exact_keys(
+        root["exact_business_counts"], {"echo", "token_sim", "download"}
+    )
+    counts: dict[str, int] = {}
+    for key in ("echo", "token_sim", "download"):
+        count = raw_counts[key]
+        if isinstance(count, bool) or not isinstance(count, int) or not 0 < count <= 10_000:
+            raise ValueError("contract_count_invalid")
+        counts[key] = count
+    if runtime["task_count"] != counts["token_sim"]:
+        raise ValueError("contract_task_count_mismatch")
+    if runtime["positive_response_artifact_task_count"] != counts["download"]:
+        raise ValueError("contract_artifact_count_mismatch")
+    canonical_payload = json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return counts, hashlib.sha256(canonical_payload).hexdigest()
 
 
 def _valid_audit_identity(scope: str, run_id: str) -> bool:
@@ -103,6 +233,10 @@ def _report(
     start_barrier_id: str,
     barrier_id: str,
     mode: str,
+    profile_contract: str | None,
+    profile_contract_enforcement: str,
+    expected_business_counts: dict[str, int] | None = None,
+    profile_contract_definition_sha256: str | None = None,
     audit_instance_id: str | None = None,
     start_barrier_line: int | None = None,
     start_barrier_seq: int | None = None,
@@ -139,6 +273,14 @@ def _report(
         "journal_bytes": journal_bytes,
         "journal_sha256": journal_sha256,
         "mode": mode,
+        "expected_business_counts": (
+            dict(expected_business_counts)
+            if expected_business_counts is not None
+            else None
+        ),
+        "profile_contract": profile_contract,
+        "profile_contract_definition_sha256": profile_contract_definition_sha256,
+        "profile_contract_enforcement": profile_contract_enforcement,
         "reason_code": reason_code,
         "run_id": run_id,
         "start_barrier_id": start_barrier_id,
@@ -157,12 +299,19 @@ def verify_journal(
     start_barrier_id: str,
     barrier_id: str,
     mode: str,
+    profile_contract: object = None,
 ) -> dict[str, object]:
     report_arguments = {
         "run_id": _safe_report_uuid(run_id),
         "start_barrier_id": _safe_report_uuid(start_barrier_id),
         "barrier_id": _safe_report_uuid(barrier_id),
         "mode": _safe_report_mode(mode),
+        "profile_contract": _safe_report_profile_contract(profile_contract),
+        "profile_contract_enforcement": _profile_contract_enforcement(
+            profile_contract, mode
+        ),
+        "expected_business_counts": None,
+        "profile_contract_definition_sha256": None,
     }
 
     if mode not in {"positive", "negative"}:
@@ -170,6 +319,30 @@ def verify_journal(
             status="fail",
             reason_code="mode_invalid",
             **report_arguments,
+        )
+    if profile_contract is not None and (
+        not isinstance(profile_contract, str)
+        or profile_contract != TOKEN_QUICK_PROFILE_CONTRACT
+    ):
+        return _report(
+            status="fail",
+            reason_code="profile_contract_invalid",
+            **report_arguments,
+        )
+    expected_business_counts: dict[str, int] | None = None
+    if profile_contract == TOKEN_QUICK_PROFILE_CONTRACT:
+        try:
+            expected_business_counts, definition_sha256 = _load_token_quick_contract()
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            report_arguments["profile_contract_enforcement"] = "not_evaluated"
+            return _report(
+                status="fail",
+                reason_code="profile_contract_definition_invalid",
+                **report_arguments,
+            )
+        report_arguments.update(
+            expected_business_counts=expected_business_counts,
+            profile_contract_definition_sha256=definition_sha256,
         )
     try:
         journal_payload = text.encode("utf-8")
@@ -448,6 +621,21 @@ def verify_journal(
         status, reason = "pass", "ok"
     elif unexpected:
         status, reason = "fail", "unexpected_target_business"
+    elif (
+        profile_contract == TOKEN_QUICK_PROFILE_CONTRACT
+        and echo != expected_business_counts["echo"]
+    ):
+        status, reason = "fail", "positive_echo_count_mismatch"
+    elif (
+        profile_contract == TOKEN_QUICK_PROFILE_CONTRACT
+        and token_sim != expected_business_counts["token_sim"]
+    ):
+        status, reason = "fail", "positive_token_sim_count_mismatch"
+    elif (
+        profile_contract == TOKEN_QUICK_PROFILE_CONTRACT
+        and download != expected_business_counts["download"]
+    ):
+        status, reason = "fail", "positive_download_count_mismatch"
     elif echo == 0:
         status, reason = "fail", "positive_echo_missing"
     elif token_sim == 0:
@@ -468,6 +656,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-barrier-id", required=True)
     parser.add_argument("--barrier-id", required=True, help="end-barrier UUID")
     parser.add_argument("--mode", choices=("positive", "negative"), required=True)
+    parser.add_argument(
+        "--profile-contract",
+        help=(
+            "optional exact business-count contract; currently supports "
+            f"{TOKEN_QUICK_PROFILE_CONTRACT}"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -490,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
                     start_barrier_id=args.start_barrier_id,
                     barrier_id=args.barrier_id,
                     mode=args.mode,
+                    profile_contract=args.profile_contract,
                 )
                 reason = None
 
@@ -506,6 +702,10 @@ def main(argv: list[str] | None = None) -> int:
             start_barrier_id=_safe_report_uuid(args.start_barrier_id),
             barrier_id=_safe_report_uuid(args.barrier_id),
             mode=_safe_report_mode(args.mode),
+            profile_contract=_safe_report_profile_contract(args.profile_contract),
+            profile_contract_enforcement=_profile_contract_enforcement(
+                args.profile_contract, args.mode
+            ),
             journal_sha256=journal_sha256,
             journal_bytes=journal_size,
         )

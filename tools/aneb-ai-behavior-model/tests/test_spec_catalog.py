@@ -54,6 +54,97 @@ class SpecCatalogTest(unittest.TestCase):
     def test_repository_catalog_and_all_references_validate(self):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
+    def test_request_entry_evidence_contract_is_cataloged_and_source_bound(self):
+        self.assertEqual("1.5.0", self.catalog["catalog_version"])
+        self.assertEqual(1, len(self.catalog["execution_evidence_contracts"]))
+        entry = self.catalog["execution_evidence_contracts"][0]
+        self.assertEqual(
+            "aneb-token-quick-request-entry-counts", entry["contract_id"]
+        )
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                "contract_id": "aneb-token-simulation-engine",
+                "version": "1.0.0",
+            },
+            document["client_engine"],
+        )
+        profile = json.loads(
+            (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        runtime = json.loads(
+            (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="request-entry-contract",
+            errors=errors,
+        )
+        self.assertEqual([], errors)
+
+    def test_execution_evidence_contract_inventory_and_catalog_shape_fail_closed(self):
+        def remove_contract(catalog):
+            catalog["execution_evidence_contracts"] = []
+
+        errors = self._validate_mutation(remove_contract)
+        self.assertTrue(any("unindexed assets" in error for error in errors), errors)
+
+        def duplicate_contract(catalog):
+            catalog["execution_evidence_contracts"].append(
+                copy.deepcopy(catalog["execution_evidence_contracts"][0])
+            )
+
+        errors = self._validate_mutation(duplicate_contract)
+        self.assertTrue(any("duplicate contract id/version" in error for error in errors), errors)
+
+        def add_unknown_field(catalog):
+            catalog["execution_evidence_contracts"][0]["script"] = "arbitrary"
+
+        errors = self._validate_mutation(add_unknown_field)
+        self.assertTrue(any("unverified keys ['script']" in error for error in errors), errors)
+
+        def break_contract_digest(catalog):
+            catalog["execution_evidence_contracts"][0]["canonical_sha256"] = "0" * 64
+
+        errors = self._validate_mutation(break_contract_digest)
+        self.assertTrue(
+            any("canonical_sha256 does not match evidence contract" in error for error in errors),
+            errors,
+        )
+
+        def redirect_contract(catalog):
+            entry = catalog["execution_evidence_contracts"][0]
+            entry["profile_path"] = "profiles/published/token_multimodal_standard/profile.json"
+            entry["runtime_plan_path"] = (
+                "profiles/published/token_multimodal_standard/runtime_plan.json"
+            )
+
+        errors = self._validate_mutation(redirect_contract)
+        self.assertTrue(any("must bind Token Quick 1.2.1" in error for error in errors), errors)
+
+    def test_execution_evidence_document_rejects_runtime_count_drift(self):
+        entry = self.catalog["execution_evidence_contracts"][0]
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        profile = json.loads(
+            (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        runtime = json.loads(
+            (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        document["exact_business_counts"]["token_sim"] += 1
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="request-entry-contract",
+            errors=errors,
+        )
+        self.assertTrue(any("token_sim count" in error for error in errors), errors)
+
     def test_runtime_bound_and_embedded_network_profiles_use_distinct_policies(self):
         published = next(
             family for family in self.catalog["profile_families"]
