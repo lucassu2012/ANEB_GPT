@@ -490,6 +490,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         public_report = self._function_source("Invoke-PublishedBundleVerification")
         self.assertNotIn("$AdbSerial", public_report)
 
+    @unittest.skipUnless(os.name == "nt", "Windows ACL contract")
     def test_private_evidence_root_requires_current_owner_and_write_allowlist(self) -> None:
         function_source = self._function_source("Assert-PrivateEvidenceRoot")
         cases = (
@@ -1130,8 +1131,9 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "\n"
                 + bounded
                 + "\n$started = [DateTime]::UtcNow\n"
+                + "$shellPath = (Get-Process -Id $PID).Path\n"
                 + "$caught = $false\n"
-                + "try { $null = Invoke-BoundedNativeTextOnce -Command (Join-Path $PSHOME 'powershell.exe') "
+                + "try { $null = Invoke-BoundedNativeTextOnce -Command $shellPath "
                 + "-Arguments @('-NoProfile','-Command','Start-Sleep -Seconds 20') "
                 + "-TimeoutSeconds 1 -TimeoutReason 'adb_timeout stage=synthetic_hang' "
                 + "-LaunchReason 'adb_launch_failed stage=synthetic_hang' } "
@@ -1158,6 +1160,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertNotIn("Split-Path -Parent $PSScriptRoot) 'ValidationEvidence'", parameter_block)
         self.assertIn("evidence_root_inside_git_worktree_forbidden", source)
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction contract")
     def test_evidence_root_chain_rejects_an_ancestor_junction_before_writes(self) -> None:
         function_source = self._function_source("Assert-NonReparseDirectoryChain")
         source = SCRIPT.read_text(encoding="utf-8")
@@ -2804,6 +2807,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             report_verifier.index("Write-NewTextNoBom -Path $reportTempPath"),
         )
 
+    @unittest.skipUnless(os.name == "nt", "Windows evidence publication contract")
     def test_ready_marker_is_digest_bound_and_is_the_last_release_commit(self) -> None:
         publish_ready = self._function_source("Publish-EvidenceReleaseReady")
         collection_id = "d82-token-quick-20260719T010203Z-" + "a" * 32

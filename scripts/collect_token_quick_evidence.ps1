@@ -1786,7 +1786,9 @@ function Assert-DeviceIdentityReport {
         $Report.verified_boot_observed_complete -isnot [bool] -or
         $Report.verified_boot_secure -isnot [bool] -or
         ([bool]$Report.verified_boot_secure -and -not [bool]$Report.verified_boot_observed_complete) -or
-        $Report.raw_files_verified -isnot [int] -or [int]$Report.raw_files_verified -ne 6) {
+        ($Report.raw_files_verified -isnot [int] -and
+            $Report.raw_files_verified -isnot [long]) -or
+        [long]$Report.raw_files_verified -ne 6) {
         throw 'device_identity_report_invalid'
     }
     return $Report

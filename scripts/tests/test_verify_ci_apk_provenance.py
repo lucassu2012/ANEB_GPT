@@ -183,7 +183,7 @@ raise SystemExit({return_code!r})
 
     @property
     def gh_command(self) -> tuple[str, ...]:
-        return (sys.executable, str(self.gh))
+        return (str(Path(sys.executable).resolve(strict=True)), str(self.gh))
 
 
 class CiApkProvenanceVerifierTests(unittest.TestCase):
@@ -224,7 +224,10 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
             "https://token.actions.githubusercontent.com",
             report["gh"]["oidc_issuer"],
         )
-        self.assertEqual(sha256(Path(sys.executable)), report["gh"]["executable_sha256"])
+        self.assertEqual(
+            sha256(Path(sys.executable).resolve(strict=True)),
+            report["gh"]["executable_sha256"],
+        )
         self.assertEqual(
             [
                 "attestation",
@@ -627,7 +630,7 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                     "--source-commit",
                     "not-a-commit",
                     "--gh-path",
-                    sys.executable,
+                    str(Path(sys.executable).resolve(strict=True)),
                 ],
                 capture_output=True,
                 check=False,

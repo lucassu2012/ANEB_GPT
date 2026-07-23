@@ -31,7 +31,7 @@ jobs:
 
   android:
     name: Android candidate build
-    needs: [security, contracts, server, gateway, behavior-model]
+    needs: [security, contracts, collector-windows, server, gateway, behavior-model]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -150,6 +150,24 @@ jobs:
           python scripts/verify_result_schema.py
       - name: Test analysis and candidate packaging tools
         run: python -m unittest discover -s scripts/tests -v
+
+  collector-windows:
+    name: Windows evidence collector contracts
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test Windows-only evidence security and publication
+        run: >-
+          python -m unittest -v
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_private_evidence_root_requires_current_owner_and_write_allowlist
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_bounded_native_process_kills_hung_child_with_machine_reason
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_collector_empty_verified_boot_is_observed_but_not_claimed_secure
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_evidence_root_chain_rejects_an_ancestor_junction_before_writes
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_marker_is_digest_bound_and_is_the_last_release_commit
 
   server:
     name: Go server tests
