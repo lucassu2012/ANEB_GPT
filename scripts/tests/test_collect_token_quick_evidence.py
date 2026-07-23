@@ -33,7 +33,7 @@ DEVICE_PROPERTIES = {
 
 
 def find_powershell() -> str | None:
-    return shutil.which("powershell") or shutil.which("pwsh")
+    return shutil.which("pwsh") or shutil.which("powershell")
 
 
 class TokenQuickEvidenceCollectorTests(unittest.TestCase):
