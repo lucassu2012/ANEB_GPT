@@ -1,6 +1,6 @@
 # ANEB 云端续开发 Checkpoint
 
-> 截至：2026-07-19（Asia/Shanghai）
+> 截至：2026-07-23（Asia/Shanghai）
 > GitHub：`lucassu2012/ANEB_GPT`
 > 发布策略：公开仓只包含源码、设计文档和可复现测试；本机 `evidence/`、设备数据库、日志、密钥、APK、构建缓存不发布。
 
@@ -14,8 +14,9 @@
 - 2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 已退役，不再作为任何操作授权。P40 开测前只读确认设备在线、Huawei Launcher 前台、无冲突 ANEB/业务 App/服务/VPN/tun/抓包；现场干净即可直接测试，无法安全归属的既有会话不得擅自停止或覆盖。结束时停止本轮全部相关进程与网络工具、移除本轮临时规则、恢复临时设置、回到 Launcher 并立即复核。
 - E-01 与阿里云变更仍走独立保护链：变更前核对实际基线，远端 `flock` 覆盖完整生命周期，只做受限变更，失败时原子回滚，结束后复核服务身份、共享主机与网络基线。退役状态文件不能替代这些检查。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-84；完整指标、目标、评分与结论合同见
-`docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-89；完整指标、目标、评分与结论合同见
+`docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`；逐门状态、权威证据与下一动作见
+`docs/MILESTONE_LEDGER_2026-07-23.md`。
 
 ## 2. 已完成
 
@@ -51,7 +52,8 @@
 - App 0.5.9 已统一三类结论语义：每条结论由类别评分器冻结稳定 ID、严重级别、文本和指标/证据 basis，统一覆盖任务完成性、Profile 业务行为、逐项门限和主要瓶颈；导出器不再按顺序推断语义，Compose 不再维护另一套行为文案。结论策略变化同步升级 12 个 Profile 与 catalog 1.3.0，并重新生成 6 个哈希绑定运行包。545 项 JVM 测试、Lint 0 error、Schema/catalog、12 项分析、31 项行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条语义结论与下载目录 strict-v2 JSONL 已复验。实测后重构的精确 0.5.9 APK 没有另行安装，随后由 0.5.10 云端候选取代；不能把 0.5.10 验收倒写成该 0.5.9 二进制证据。酒店 Wi-Fi 前序失败只因门户未认证，不作为网络质量 A/B。
 - App 0.5.10 已加固系统下载导出：只有 pending 行创建、完整写入和完成更新全部成功才返回成功；任何中途失败都尝试删除半成品，清理失败会保留 URI 与明确错误供诊断。6 个故障注入测试覆盖全部生命周期，当前 90 suites / 551 JVM tests、Lint 0 error / 11 notices 与全仓门禁通过；catalog 1.3.1 只同步 P1 消费者版本。云端 SHA `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85` 已在 P40 安装为 code 42；跨 Debug 签名的数据保全后 Room v19 integrity OK，保留 36 条信封/10 条 `test_run`，安全偏好/API key 未恢复。批量导出 `aneb_results_32_of_36_20260718_161911.jsonl` 通过 32 条 v1/v2 离线验证并透明拒绝 4 条完整性异常；单条 v2 与批次对应行逐字节一致，两条 MediaStore 记录均为 `is_pending=0`。
 - M0-EC1 把 App 0.5.12、server 0.8.0、behavior model 0.3.1、catalog 1.5.0 与 `token_multimodal_quick@1.2.1` 接到同一执行合同。Quick 必须在业务流量前完成 APK manifest、精确 Profile 摘要和节点能力回执核对，任何缺失、未知字段或冲突均 fail closed；模型生成器还必须选择至少一个有界返回附件，当前为 1MiB，使声明的 download 原语在真实 Quick 中发生。同一 run 使用规范 UUID，reachability/capability 由固定角色区分；服务端判定要求唯一 start/end 双 barrier、同一进程实例、连续序号、能力门先于业务且窗口内无 drop/未归因业务。该日志只证明 request-entry coverage，正向成功或负向零业务结论还必须与同 run 客户端冻结结果和节点身份结合。新增 catalog evidence contract 将 Engine/runtime 的 20/3/1 精确次数与定义摘要机器绑定。旧 11 个 Profile 继续兼容。E-01 服务端子阶段已完成；0.5.12 云端 APK 已产生并核对，但 P40 正/负向结果尚未产生，详见 `docs/M0_TOKEN_QUICK_EXECUTION_CONTRACT_VALIDATION_2026-07-18.md`。
-- GitHub CI 已从“只监听 main、只编译”升级为 Debug 候选交付流水线：`codex/**` 也会触发，Android 候选等待凭据扫描、合同、服务器、网关和行为模型全绿，随后验证 Release 边界、APK 身份与 Debug 签名，生成 APK、机器清单、checksums 与中文安装说明；非 PR 构建追加 GitHub provenance attestation，工件保留 30 天。M0-EC1 source `49095c0314ac3900b6ed0c306d2eeaafc2edd87f` 的 GitHub run `29659812753` 六个 job 成功；云端 0.5.12 APK SHA-256=`04853208A59E35906366A61A92251CDED8BEDEA307753A37CD14844926FAD7EA`，身份、签名与 zipalign 已核对。watchdog 终态误报修复 commit `d0a904d` 的 GitHub run `29661388755` 也已六个 job 全绿。外部固定 CA 的网关隔离 TLS/netem 步骤因无叶证书 secrets 明确跳过，不折算为 PASS。
+- D-82/D-86/D-87 正负向现场采集与独立复核工作流已在本地实现：仓库外私有目录会冻结 P40 APK/Room、E-01 三次原始回执、pre-start receipt、双 barrier、raw journald、20/3/1 正向判定或负向零业务判定，并在私有 verification-stage 内重派生与重算。`.complete`、`COMPLETE` 和 sibling verification report 都只是中间状态；只有摘要与语义交叉绑定的 `<collection>.READY.json` 最后提交后才算发布。负向 `receipt_missing` 由一次性本机 loopback 代理制造，不修改 E-01；Room 主 DB 必须存在，WAL/SHM 只允许同时存在或同时缺失。2026-07-23 本地整仓门禁已通过；clean commit、同提交 CI 与真实 P40 READY 证据仍未完成，不能写成已完成 P40 正向或负向验收。
+- GitHub CI 已从“只监听 main、只编译”升级为 Debug 候选交付流水线：`codex/**` 也会触发，Android 候选等待凭据扫描、合同、服务器、网关和行为模型全绿，随后验证 Release 边界、APK 身份与 Debug 签名，生成 APK、机器清单、checksums 与中文安装说明；非 PR 构建必须用一份 attestation 精确签 APK、manifest、安装说明三项，追加 provenance 后最终清单精确为四项并由独立 verifier 逐项复核，写权限只授予 Android job；PR 工件明确标记 unattested。M0-EC1 source `49095c0314ac3900b6ed0c306d2eeaafc2edd87f` 的 GitHub run `29659812753` 六个 job 成功；云端 0.5.12 APK SHA-256=`04853208A59E35906366A61A92251CDED8BEDEA307753A37CD14844926FAD7EA`，身份、签名与 zipalign 已核对，但它是 D-87/D-88 前一版历史基线，不能用于本轮正式取证。watchdog 终态误报修复 commit `d0a904d` 的 GitHub run `29661388755` 也已六个 job 全绿。外部固定 CA 的网关隔离 TLS/netem 步骤因无叶证书 secrets 明确跳过，不折算为 PASS。
 
 ## 3. 下一阶段（按顺序）
 

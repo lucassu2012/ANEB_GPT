@@ -15,8 +15,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
 
 jobs:
   security:
@@ -32,19 +30,29 @@ jobs:
         run: python scripts/scan_repository_secrets.py
 
   android:
-    name: Verified Android candidate
+    name: Android candidate build
     needs: [security, contracts, server, gateway, behavior-model]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: android-actions/setup-android@v3
       - name: Install pinned Android identity tools
         run: sdkmanager "build-tools;35.0.0"
+      - name: Install evidence verifier dependencies
+        run: python -m pip install "jsonschema>=4.22,<5"
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, lint, and build Android probe
         working-directory: app
@@ -59,6 +67,10 @@ jobs:
           --max-workers=1
           -Pkotlin.compiler.execution.strategy=in-process
           -Pksp.incremental=false
+      - name: Revalidate D-82 bundle against the real APK
+        run: |
+          python -c "from scripts.tests.test_verify_token_quick_evidence_bundle import APK_INTEGRATION_AVAILABLE; raise SystemExit(0 if APK_INTEGRATION_AVAILABLE else 'D-82 real APK integration prerequisites unavailable')"
+          python -m unittest scripts.tests.test_verify_token_quick_evidence_bundle.TokenQuickEvidenceBundleVerifierTests -v
       - name: Verify Debug and Release component boundary
         shell: pwsh
         run: ./scripts/verify_release_boundary.ps1
@@ -72,18 +84,50 @@ jobs:
           --source-ref "${{ github.ref }}"
           --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           --build-tools-version "35.0.0"
-      - name: Attest exact Debug APK provenance
+      - name: Attest exact Debug candidate payload provenance
         if: github.event_name != 'pull_request'
+        id: attest
         uses: actions/attest@v4
         with:
-          subject-path: dist/aneb-probe-debug/*.apk
+          subject-checksums: dist/aneb-probe-debug/checksums.sha256
+      - name: Finalize attested Debug candidate
+        if: github.event_name != 'pull_request'
+        run: >-
+          python scripts/package_debug_candidate.py
+          --output dist/aneb-probe-debug
+          --finalize-bundle "${{ steps.attest.outputs.bundle-path }}"
+      - name: Reverify exact Debug candidate provenance
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          GH_PATH="$(command -v gh)"
+          if [[ "$GH_PATH" != "/usr/bin/gh" || ! -x "$GH_PATH" || -L "$GH_PATH" ]]; then
+            echo "::error::Trusted runner gh executable is unavailable: $GH_PATH"
+            exit 1
+          fi
+          python scripts/verify_ci_apk_provenance.py \
+            dist/aneb-probe-debug \
+            --source-commit "${{ github.sha }}" \
+            --gh-path "$GH_PATH"
       - name: Upload verified Debug candidate
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: aneb-probe-debug-${{ github.sha }}
+          name: aneb-probe-debug-verified-${{ github.sha }}
           path: dist/aneb-probe-debug/
           if-no-files-found: error
           retention-days: 30
+      - name: Upload review-unattested Debug candidate
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aneb-probe-debug-review-unattested-${{ github.event.pull_request.head.sha }}
+          path: dist/aneb-probe-debug/
+          if-no-files-found: error
+          retention-days: 14
 
   contracts:
     name: Profile, result, and packaging contracts

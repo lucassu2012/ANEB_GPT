@@ -1,6 +1,7 @@
 package com.aneb.probe.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -70,6 +71,47 @@ class TokenSimulationScorerTest {
     fun `document and image deadlines preserve approved representative targets`() {
         assertEquals(6_000.0, TokenSimulationScorer.uploadDeadlineMs("document", 5L * 1024 * 1024), 1e-9)
         assertEquals(10_000.0, TokenSimulationScorer.uploadDeadlineMs("image", 10L * 1024 * 1024), 1e-9)
+    }
+
+    @Test
+    fun `friendly contract reason never replaces frozen machine fields`() {
+        val known = TokenSimulationScorer.score(
+            TokenRunEvidence("quick", emptyList(), emptyList(), "receipt_missing"),
+        )
+        assertTrue(known.conclusions.single().contains("节点没有返回机器可读的能力回执"))
+        assertEquals("receipt_missing", known.capReason)
+        assertEquals("receipt_missing", known.notComputableReason)
+        assertTrue(known.conclusionItems.single().basis.contains("invalid_reason:receipt_missing"))
+
+        val unknownCode = "future_contract_rejection"
+        val unknown = TokenSimulationScorer.score(
+            TokenRunEvidence("quick", emptyList(), emptyList(), unknownCode),
+        )
+        assertTrue(unknown.conclusions.single().contains("测试前置校验未通过"))
+        assertEquals(unknownCode, unknown.capReason)
+        assertEquals(unknownCode, unknown.notComputableReason)
+        assertTrue(unknown.conclusionItems.single().basis.contains("invalid_reason:$unknownCode"))
+    }
+
+    @Test
+    fun `stress contract rejection keeps the same machine reason and safe text`() {
+        val known = TokenStressScorer.score(
+            TokenRunEvidence("stress", emptyList(), emptyList(), "receipt_missing"),
+        )
+        assertTrue(known.conclusions.single().contains("节点没有返回机器可读的能力回执"))
+        assertEquals("receipt_missing", known.capReason)
+        assertEquals("receipt_missing", known.notComputableReason)
+        assertTrue(known.conclusionItems.single().basis.contains("invalid_reason:receipt_missing"))
+
+        val unknownCode = "future_stress_contract_rejection"
+        val unknown = TokenStressScorer.score(
+            TokenRunEvidence("stress", emptyList(), emptyList(), unknownCode),
+        )
+        assertTrue(unknown.conclusions.single().contains("测试前置校验未通过"))
+        assertFalse(unknown.conclusions.single().contains(unknownCode))
+        assertEquals(unknownCode, unknown.capReason)
+        assertEquals(unknownCode, unknown.notComputableReason)
+        assertTrue(unknown.conclusionItems.single().basis.contains("invalid_reason:$unknownCode"))
     }
 
     private fun goodEvidence(variant: String, taskCount: Int): TokenRunEvidence {

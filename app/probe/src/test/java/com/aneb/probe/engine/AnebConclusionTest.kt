@@ -30,6 +30,9 @@ class AnebConclusionTest {
         assertEquals("network-invalid-evidence", network.conclusionItems.single().conclusionId)
         listOf(token.conclusionItems.single(), realtime.conclusionItems.single(), network.conclusionItems.single()).forEach { item ->
             assertEquals(AnebConclusionSeverity.FAILURE, item.severity)
+        }
+        assertTrue(token.conclusionItems.single().basis.contains("invalid_reason:bad_clock"))
+        listOf(realtime.conclusionItems.single(), network.conclusionItems.single()).forEach { item ->
             assertTrue(item.basis.contains("invalid_reason"))
         }
     }

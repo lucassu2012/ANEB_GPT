@@ -1,10 +1,11 @@
 # ANEB Codex 进展对齐报告——按《ANEB 系统开发计划 v1.0》映射
 
-> 更新日期：2026-07-19。
+> 更新日期：2026-07-23。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.10 / Room v19 是最近完成真机产品化验收的客户端；E-01 已运行 server 0.8.0，gateway 0.2.0 未部署到 E-01；behavior model 0.3.1 与 Profile catalog 1.5.0 已进入 M0-EC1 候选。App 0.5.12/code 44 的 commit `49095c0` 已通过 GitHub run `29659812753` 六个 job 并形成云端 APK，但尚未安装到 P40。E-01 live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`；服务端终态 success 证据和锁内验后检查已闭合，原部署进程 rc=99 仍如实保留为 watchdog 清理竞态误报。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
-> M0-EC1 边界：Token Quick 1.2.1 已建立 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 精确执行合同、真实 1MiB 返回附件和同-run服务端审计；E-01 服务端子阶段已通过，P40 正/负向跨端验收尚未完成。
+> 当前事实基线：App 0.5.10 / Room v19 是最近完成真机产品化验收的客户端；E-01 已运行 server 0.8.0，gateway 0.2.0 未部署到 E-01；behavior model 0.3.1 与 Profile catalog 1.5.0 已进入 M0-EC1 候选。App 0.5.12/code 44 的 commit `49095c0` 与 GitHub run `29659812753` 云端 APK 是 D-87 前一版历史基线，不能作为本轮正式取证候选；本轮 clean commit 与同提交 CI APK 尚待产生。E-01 live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`；服务端终态 success 证据和锁内验后检查已闭合，原部署进程 rc=99 仍如实保留为 watchdog 清理竞态误报。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> M0-EC1 边界：Token Quick 1.2.1 已建立 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 精确执行合同、真实 1MiB 返回附件、同-run服务端审计以及 D-82/D-86/D-87 正负采集/READY 发布合同；E-01 服务端子阶段与 2026-07-23 本地整仓门禁已通过，本轮 clean commit/云端 CI 与 P40 正负向跨端验收尚未完成。
+> 逐门里程碑账本：`docs/MILESTONE_LEDGER_2026-07-23.md`。后续任务必须回填实际 commit/run/APK/READY 身份，不能只更新叙述性进度。
 > 协同规则：2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 退役。P40 改为“实时只读现场检查 → 干净则直接测试 → 停止本轮全部 App/VPN/抓包/临时规则并恢复设置 → Huawei Launcher → 即时复核”；无法安全归属的既有会话不得擅自清理。E-01/阿里云继续执行独立预检、远端 `flock`、受限变更、原子回滚和验后检查。
 
 ## 0. 先讲偏差与裁定
@@ -154,7 +155,7 @@
 
 | 里程碑 | Codex 现状 | 验收判断 |
 |---|---|---|
-| **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0 | ［KNOWN｜HIGH］**首个窄切片离线闭环并通过 E-01 服务端子阶段，P40 跨端验收未闭环，通用执行合同仍部分分叉**；不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
+| **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0；D-82 正向与 D-86 `receipt_missing` 负向采集/独立复核已离线实现，D-87 以摘要绑定 READY 作为唯一发布提交点并补齐私有 ACL/父级 reparse 门禁；正式 READY 证据尚待云端候选和 P40 实跑生成 | ［KNOWN｜HIGH］**首个窄切片离线实现闭环并通过 E-01 服务端子阶段，P40 跨端验收未闭环，通用执行合同仍部分分叉**；采集工具本地测试不等于已经产生 P40 正向或负向证据，也不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
 | **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；P40 同点位 5-run TTFT CV 中位数 1.425%、最大值 4.986% | ［KNOWN｜HIGH］**原计划单节点验收切片通过；内容项中的同城/区域/中心三级部署未完成，因此 M1 整体仍为部分完成**。 |
 | **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
 | **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
@@ -162,7 +163,7 @@
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］rc=99 watchdog 误报修复已提交为 `d0a904d`，GitHub run `29661388755` 六个 job 全绿。下一步只读确认 E-01 仍为精确 0.8.0，并确认 P40 在线、Huawei Launcher 前台且无冲突进程/服务/VPN/tun。现场干净则完成 P40 0.5.12 正向/拒绝路径和同-run双 barrier 验收，来源不明则停止并协调；结束时停止本轮相关 App/VPN/抓包、清除临时网络条件、恢复临时设置、返回 Launcher 并立即复核。服务器未变化时不得为追求 rc=0 重复部署。
+1. ［KNOWN｜HIGH］rc=99 watchdog 误报修复已提交为 `d0a904d`，GitHub run `29661388755` 六个 job 全绿；E-01 当前为精确 0.8.0，无需重复部署。D-82/D-86 正负采集、三 subject CI APK provenance、P40 pre/final 身份、busy sentinel、负向 loopback 代理/精确 reverse 清理、mode-aware bundle 复核及 D-87 READY/ACL/reparse 门已完成本地实现；2026-07-23 整仓门禁以 Android/601 项脚本/41 项行为模型/server/gateway 全绿闭合。下一步产生 clean commit 并等待同提交新 CI 全绿；随后确认 P40 在线、Huawei Launcher 前台且无冲突进程/服务/VPN/tun，现场干净再用短会话依次完成 0.5.12 正向与 `receipt_missing` 负向验收。来源不明则停止并协调；结束时停止本轮相关 App/VPN/抓包、清除本轮 reverse/代理和临时设置、返回 Launcher并立即复核。服务器未变化时不得为追求 rc=0 重复部署。
 2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
 3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
 4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。

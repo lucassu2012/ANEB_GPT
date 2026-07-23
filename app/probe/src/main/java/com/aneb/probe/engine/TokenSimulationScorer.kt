@@ -3,6 +3,11 @@ package com.aneb.probe.engine
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
+internal fun tokenInvalidReasonText(reasonCode: String): String = when (reasonCode) {
+    "receipt_missing" -> "节点没有返回机器可读的能力回执，测试已在发送首个业务请求前停止"
+    else -> "测试前置校验未通过，测试已停止；具体机器原因已保留在结果证据中"
+}
+
 data class TokenTaskEvidence(
     val workloadKind: String,
     val uploadBytes: Long,
@@ -100,6 +105,7 @@ object TokenSimulationScorer {
         behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds(evidence.variant),
     ): TokenScoreResult {
         if (evidence.invalidReason != null) {
+            val friendlyReason = tokenInvalidReasonText(evidence.invalidReason)
             return TokenScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
@@ -107,13 +113,13 @@ object TokenSimulationScorer {
                     AnebConclusionItem(
                         conclusionId = "token-invalid-evidence",
                         severity = AnebConclusionSeverity.FAILURE,
-                        text = "测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。",
-                        basis = listOf("evidence:token-raw", "invalid_reason"),
+                        text = "测试证据无效：$friendlyReason；原始数据已保留，评分被抑制。",
+                        basis = listOf("evidence:token-raw", "invalid_reason:${evidence.invalidReason}"),
                     ),
                 ),
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
-                notComputableReason = "invalid_run:${evidence.invalidReason}",
+                notComputableReason = evidence.invalidReason,
             )
         }
         val tasks = evidence.tasks
