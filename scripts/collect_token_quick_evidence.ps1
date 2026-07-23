@@ -1896,12 +1896,12 @@ function Assert-LiveDevicePreflight {
     $processEvidence = [ordered]@{}
     $serviceEvidence = [ordered]@{}
     foreach ($package in $ConflictPackages) {
-        $pid = Invoke-AdbTextOnce -Arguments @(
+        $packageProcessId = Invoke-AdbTextOnce -Arguments @(
             'shell', "pidof '$package' 2>/dev/null || true"
         ) -Stage "pidof_$package"
-        $processEvidence[$package] = $pid
-        if (-not [string]::IsNullOrWhiteSpace($pid)) {
-            throw "live_state_conflict_process package=$package pid=$pid"
+        $processEvidence[$package] = $packageProcessId
+        if (-not [string]::IsNullOrWhiteSpace($packageProcessId)) {
+            throw "live_state_conflict_process package=$package pid=$packageProcessId"
         }
         $services = Invoke-AdbTextOnce -Arguments @(
             'shell', "dumpsys activity services '$package'"
@@ -3346,14 +3346,14 @@ function Stop-LogcatCaptureOnce {
 
 function Assert-TargetStopped {
     param([Parameter(Mandatory = $true)][string]$Stage)
-    $pid = Invoke-AdbTextOnce -Arguments @(
+    $targetProcessId = Invoke-AdbTextOnce -Arguments @(
         'shell', "pidof '$PackageName' 2>/dev/null || true"
     ) -Stage "target_pid_$Stage"
     $services = Invoke-AdbTextOnce -Arguments @(
         'shell', "dumpsys activity services '$PackageName'"
     ) -Stage "target_services_$Stage"
-    if (-not [string]::IsNullOrWhiteSpace($pid) -or $services -match 'ServiceRecord\{') {
-        throw "target_app_not_stopped stage=$Stage pid=$pid"
+    if (-not [string]::IsNullOrWhiteSpace($targetProcessId) -or $services -match 'ServiceRecord\{') {
+        throw "target_app_not_stopped stage=$Stage pid=$targetProcessId"
     }
 }
 
@@ -3592,15 +3592,15 @@ function Assert-NoUnattributedSessionBeforeHome {
     $servicesByPackage = [ordered]@{}
     $conflict = $false
     foreach ($package in $ConflictPackages) {
-        $pid = Invoke-AdbTextOnce -Arguments @(
+        $packageProcessId = Invoke-AdbTextOnce -Arguments @(
             'shell', "pidof '$package' 2>/dev/null || true"
         ) -Stage "busy_release_pidof_$package"
         $services = Invoke-AdbTextOnce -Arguments @(
             'shell', "dumpsys activity services '$package'"
         ) -Stage "busy_release_services_$package"
-        $processes[$package] = $pid
+        $processes[$package] = $packageProcessId
         $servicesByPackage[$package] = $services
-        if (-not [string]::IsNullOrWhiteSpace($pid) -or $services -match 'ServiceRecord\{') {
+        if (-not [string]::IsNullOrWhiteSpace($packageProcessId) -or $services -match 'ServiceRecord\{') {
             $conflict = $true
         }
     }
@@ -3773,16 +3773,16 @@ function Assert-LiveDeviceCleanAfter {
     $processes = [ordered]@{}
     $servicesByPackage = [ordered]@{}
     foreach ($package in $ConflictPackages) {
-        $pid = Invoke-AdbTextOnce -Arguments @(
+        $packageProcessId = Invoke-AdbTextOnce -Arguments @(
             'shell', "pidof '$package' 2>/dev/null || true"
         ) -Stage "final_pidof_$package"
         $services = Invoke-AdbTextOnce -Arguments @(
             'shell', "dumpsys activity services '$package'"
         ) -Stage "final_services_$package"
-        $processes[$package] = $pid
+        $processes[$package] = $packageProcessId
         $servicesByPackage[$package] = $services
-        if (-not [string]::IsNullOrWhiteSpace($pid) -or $services -match 'ServiceRecord\{') {
-            throw "final_state_conflict package=$package pid=$pid"
+        if (-not [string]::IsNullOrWhiteSpace($packageProcessId) -or $services -match 'ServiceRecord\{') {
+            throw "final_state_conflict package=$package pid=$packageProcessId"
         }
     }
     Write-JsonNoBom -Path (Join-Path $EvidenceDirectory 'device-processes-final.json') -Value $processes

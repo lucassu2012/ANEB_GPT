@@ -6,6 +6,7 @@ import os
 import base64
 import hashlib
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1114,6 +1115,22 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 self.assertIn("-TimeoutSeconds $CurlParentTimeoutSeconds", body)
                 self.assertNotIn("@(& $script:ResolvedTools.Curl", body)
                 self.assertIn("curl_timeout", body)
+
+    def test_collector_never_assigns_to_read_only_pid_automatic_variable(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        assignment_lines = [
+            source.count("\n", 0, match.start()) + 1
+            for match in re.finditer(
+                r"(?im)^\s*\$pid\s*(?:=|\+=|-=|\+\+|--)",
+                source,
+            )
+        ]
+        self.assertEqual(
+            [],
+            assignment_lines,
+            "PowerShell variable names are case-insensitive; assigning to $pid "
+            f"overwrites the read-only $PID automatic variable at lines {assignment_lines}",
+        )
 
     def test_bounded_native_process_kills_hung_child_with_machine_reason(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
