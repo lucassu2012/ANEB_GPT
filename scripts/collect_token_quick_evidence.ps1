@@ -1463,6 +1463,7 @@ chmod 0600 "$MARKER"
 printf 'LOCK_ACQUIRED nonce=%s pid=%s marker=%s\n' "$NONCE" "$$" "$MARKER"
 PARENT_PID=$$
 (
+    exec 9>&-
     sleep "$TTL_SECONDS"
     kill -TERM "$PARENT_PID" >/dev/null 2>&1 || true
 ) &
@@ -1542,7 +1543,7 @@ function Assert-PersistentAuditLock {
         'flock_rc=$?',
         'set -e',
         '[ "$flock_rc" -eq 1 ]',
-        "printf 'LOCK_HEALTHY nonce=%s pid=%s\\n' '$($Lock.Nonce)' '$($Lock.RemotePid)'"
+        "printf 'LOCK_HEALTHY nonce=%s pid=%s\n' '$($Lock.Nonce)' '$($Lock.RemotePid)'"
     ) -join '; '
     $output = Invoke-SshTextOnce -RemoteCommand $command -Stage "lock_health_$Stage"
     $expected = "LOCK_HEALTHY nonce=$($Lock.Nonce) pid=$($Lock.RemotePid)"
@@ -3901,7 +3902,7 @@ function Assert-AuditLockReleased {
         'set -Eeuo pipefail',
         "test ! -e '$($Lock.Marker)'",
         "flock -n '$RemoteLockPath' -c true",
-        "printf 'LOCK_RELEASE_VERIFIED nonce=%s\\n' '$($Lock.Nonce)'"
+        "printf 'LOCK_RELEASE_VERIFIED nonce=%s\n' '$($Lock.Nonce)'"
     ) -join '; '
     $output = Invoke-SshTextOnce -RemoteCommand $command -Stage 'lock_release_verification'
     if ($output.Trim() -cne "LOCK_RELEASE_VERIFIED nonce=$($Lock.Nonce)") {
@@ -3965,7 +3966,7 @@ function Wait-ForEndBarrierAudit {
         'deadline=$((SECONDS + 15))',
         'while (( SECONDS < deadline )); do',
         '  if journalctl --unit aneb-server.service --after-cursor "$cursor" --output=cat --no-pager | grep -F -m 1 -- "$pattern" >/dev/null; then',
-        "    printf 'END_BARRIER_AUDIT_VISIBLE\\n'",
+        "    printf 'END_BARRIER_AUDIT_VISIBLE\n'",
         '    exit 0',
         '  fi',
         '  sleep 0.2',

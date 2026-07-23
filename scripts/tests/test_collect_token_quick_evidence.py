@@ -1238,7 +1238,39 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertIn('kill -TERM "$PARENT_PID"', source)
         self.assertIn("function Assert-PersistentAuditLock", source)
         self.assertIn("LOCK_HEALTHY", source)
-        self.assertIn("flock -n", source[source.index("function Assert-PersistentAuditLock") :])
+        lock_assertion = source[source.index("function Assert-PersistentAuditLock") :]
+        self.assertIn("flock -n", lock_assertion)
+
+    def test_lock_watchdog_closes_inherited_flock_descriptor_before_sleep(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        watchdog = source.split("PARENT_PID=$$", 1)[1].split("GUARD_PID=$!", 1)[0]
+        self.assertIn("exec 9>&-", watchdog)
+        self.assertLess(watchdog.index("exec 9>&-"), watchdog.index('sleep "$TTL_SECONDS"'))
+
+    def test_lock_health_printf_emits_a_real_newline(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        lock_assertion = source[source.index("function Assert-PersistentAuditLock") :]
+        health_line = next(
+            line for line in lock_assertion.splitlines() if "printf 'LOCK_HEALTHY" in line
+        )
+        self.assertNotIn(
+            r"pid=%s\\n",
+            health_line,
+            "Bash printf must receive one backslash before n; two emit a literal \\\\n",
+        )
+
+    def test_remote_bash_printf_never_receives_a_literal_backslash_n(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        offenders = [
+            (line_number, line.strip())
+            for line_number, line in enumerate(source.splitlines(), start=1)
+            if "printf " in line and r"\\n" in line
+        ]
+        self.assertEqual(
+            [],
+            offenders,
+            "Remote Bash printf format strings must use one backslash before n",
+        )
 
     def test_remote_snapshot_parsers_accept_digit_bearing_contract_keys(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
