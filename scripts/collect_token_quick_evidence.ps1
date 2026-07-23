@@ -1494,6 +1494,7 @@ exit 76
     if (-not $process.Start()) {
         throw 'lock_ssh_launch_failed'
     }
+    $process.StandardInput.NewLine = "`n"
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $receiptTask = $process.StandardOutput.ReadLineAsync()
     if (-not $receiptTask.Wait(15000)) {
@@ -2112,7 +2113,7 @@ function Assert-ServerInfoBody {
     if (($profileKeys -join "`0") -cne ($expectedProfileKeys -join "`0") -or
         [string]$profiles[0].profile_id -cne 'token_multimodal_quick' -or
         [string]$profiles[0].profile_version -cne '1.2.1' -or
-        [string]$profiles[0].profile_sha256 -notmatch '^[0-9a-f]{64}$') {
+        [string]$profiles[0].profile_sha256 -notmatch '^sha256:[0-9a-f]{64}$') {
         throw "serverinfo_validated_profile_mismatch stage=$Stage"
     }
     return $body
@@ -2128,7 +2129,7 @@ function Assert-ServerInfoSequence {
     if ($ExpectedProfileSha256 -notmatch '^sha256:([0-9a-f]{64})$') {
         throw 'serverinfo_client_profile_sha256_invalid'
     }
-    $profileSha256 = [string]$Matches[1]
+    $profileSha256 = [string]$ExpectedProfileSha256
     $responses = @($Identity, $StartBarrier, $EndBarrier)
     $stages = @('identity', 'start_barrier', 'end_barrier')
     for ($index = 0; $index -lt $responses.Count; $index++) {

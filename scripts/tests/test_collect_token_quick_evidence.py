@@ -1247,6 +1247,17 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertIn("exec 9>&-", watchdog)
         self.assertLess(watchdog.index("exec 9>&-"), watchdog.index('sleep "$TTL_SECONDS"'))
 
+    def test_lock_release_uses_lf_only_protocol_lines(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start_lock = source.split("function Start-PersistentAuditLock", 1)[1].split(
+            "\nfunction ", 1
+        )[0]
+        release_lock = source.split("function Release-PersistentAuditLockOnce", 1)[1].split(
+            "\nfunction ", 1
+        )[0]
+        self.assertIn('$process.StandardInput.NewLine = "`n"', start_lock)
+        self.assertIn('StandardInput.WriteLine("RELEASE $($Lock.Nonce)")', release_lock)
+
     def test_lock_health_printf_emits_a_real_newline(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         lock_assertion = source[source.index("function Assert-PersistentAuditLock") :]
@@ -2727,7 +2738,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 "validated_profiles": [
                     {
                         "profile_id": "token_multimodal_quick",
-                        "profile_sha256": "a" * 64,
+                        "profile_sha256": "sha256:" + "a" * 64,
                         "profile_version": "1.2.1",
                     }
                 ],
@@ -2742,13 +2753,19 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         }
         forged = json.loads(json.dumps(serverinfo))
         forged["execution_capabilities"]["primitives"][2]["wire_contract_id"] = "forged"
+        bare_digest = json.loads(json.dumps(serverinfo))
+        bare_digest["execution_capabilities"]["validated_profiles"][0]["profile_sha256"] = (
+            "a" * 64
+        )
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             valid_path = root / "valid.json"
             forged_path = root / "forged.json"
+            bare_digest_path = root / "bare-digest.json"
             valid_path.write_text(json.dumps(serverinfo), encoding="utf-8")
             forged_path.write_text(json.dumps(forged), encoding="utf-8")
+            bare_digest_path.write_text(json.dumps(bare_digest), encoding="utf-8")
             wrapper = root / "serverinfo-contract.ps1"
             wrapper.write_text(
                 "$ErrorActionPreference = 'Stop'\n"
@@ -2761,7 +2778,11 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "$caught = $false\n"
                 + f"try {{ $null = Assert-ServerInfoBody -BodyPath '{forged_path}' -Stage 'forged' }} "
                 + "catch { if ($_.Exception.Message -like 'serverinfo_primitive_mismatch*') { $caught = $true } else { throw } }\n"
-                + "if (-not $caught) { throw 'forged_primitive_was_accepted' }\n",
+                + "if (-not $caught) { throw 'forged_primitive_was_accepted' }\n"
+                + "$bareCaught = $false\n"
+                + f"try {{ $null = Assert-ServerInfoBody -BodyPath '{bare_digest_path}' -Stage 'bare' }} "
+                + "catch { if ($_.Exception.Message -like 'serverinfo_validated_profile_mismatch*') { $bareCaught = $true } else { throw } }\n"
+                + "if (-not $bareCaught) { throw 'bare_profile_digest_was_accepted' }\n",
                 encoding="utf-8",
             )
             completed = subprocess.run(
@@ -2802,21 +2823,21 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 "$ErrorActionPreference = 'Stop'\n"
                 + function_source
                 + "\n"
-                + "$profile = 'a' * 64\n"
+                + "$profile = 'sha256:' + ('a' * 64)\n"
                 + "function New-Info([long]$Ts, [long]$Uptime, [string]$Sha) { "
                 + "[pscustomobject]@{ anchor_wall_unix_ns=1700000000000000000; srv_ts_us=$Ts; uptime_s=$Uptime; "
                 + "execution_capabilities=[pscustomobject]@{ validated_profiles=@([pscustomobject]@{ profile_sha256=$Sha }) } } }\n"
                 + "$identity = New-Info 100 10 $profile\n"
                 + "$start = New-Info 200 10 $profile\n"
                 + "$end = New-Info 300 11 $profile\n"
-                + "Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $end -ExpectedProfileSha256 ('sha256:' + $profile)\n"
+                + "Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $end -ExpectedProfileSha256 $profile\n"
                 + "$replayCaught = $false\n"
-                + "try { Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $start -ExpectedProfileSha256 ('sha256:' + $profile) } "
+                + "try { Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $start -ExpectedProfileSha256 $profile } "
                 + "catch { if ($_.Exception.Message -eq 'serverinfo_chronology_invalid') { $replayCaught = $true } else { throw } }\n"
                 + "if (-not $replayCaught) { throw 'serverinfo_replay_was_accepted' }\n"
-                + "$forged = New-Info 300 11 ('b' * 64)\n"
+                + "$forged = New-Info 300 11 ('sha256:' + ('b' * 64))\n"
                 + "$profileCaught = $false\n"
-                + "try { Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $forged -ExpectedProfileSha256 ('sha256:' + $profile) } "
+                + "try { Assert-ServerInfoSequence -Identity $identity -StartBarrier $start -EndBarrier $forged -ExpectedProfileSha256 $profile } "
                 + "catch { if ($_.Exception.Message -like 'serverinfo_profile_binding_mismatch*') { $profileCaught = $true } else { throw } }\n"
                 + "if (-not $profileCaught) { throw 'serverinfo_profile_substitution_was_accepted' }\n",
                 encoding="utf-8",
