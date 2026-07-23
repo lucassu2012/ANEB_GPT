@@ -2810,6 +2810,14 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows evidence publication contract")
     def test_ready_marker_is_digest_bound_and_is_the_last_release_commit(self) -> None:
         publish_ready = self._function_source("Publish-EvidenceReleaseReady")
+        self.assertIn(
+            "$roundTrip.committed_at_utc -is [DateTime]",
+            publish_ready,
+        )
+        self.assertIn(
+            "$roundTripCommittedAt -cne [string]$marker.committed_at_utc",
+            publish_ready,
+        )
         collection_id = "d82-token-quick-20260719T010203Z-" + "a" * 32
         run_id = "11111111-2222-7333-8444-555555555555"
         with tempfile.TemporaryDirectory() as temporary:

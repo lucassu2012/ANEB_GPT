@@ -4644,6 +4644,14 @@ function Publish-EvidenceReleaseReady {
             'status', 'verification_report_leaf', 'verification_report_sha256'
         )
         $actualReadyProperties = @($roundTrip.PSObject.Properties.Name | Sort-Object)
+        $roundTripCommittedAt = if ($roundTrip.committed_at_utc -is [DateTime]) {
+            ([DateTime]$roundTrip.committed_at_utc).ToUniversalTime().ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
+                [Globalization.CultureInfo]::InvariantCulture
+            )
+        } else {
+            [string]$roundTrip.committed_at_utc
+        }
         if (($actualReadyProperties -join "`0") -cne
                 (($expectedReadyProperties | Sort-Object) -join "`0") -or
             [string]$roundTrip.schema -cne 'aneb-d82-evidence-release' -or
@@ -4658,7 +4666,8 @@ function Publish-EvidenceReleaseReady {
             [string]$roundTrip.verification_report_leaf -cne
                 (Split-Path -Leaf $VerificationReportPath) -or
             [string]$roundTrip.verification_report_sha256 -cne $reportSha256 -or
-            [string]$roundTrip.committed_at_utc -notmatch
+            $roundTripCommittedAt -cne [string]$marker.committed_at_utc -or
+            $roundTripCommittedAt -notmatch
                 '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$') {
             throw 'evidence_release_marker_roundtrip_invalid'
         }
