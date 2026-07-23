@@ -1607,6 +1607,26 @@ function Invoke-ToolTextOnce {
     return ([string]$result.Text).Trim()
 }
 
+function ConvertTo-CanonicalAndroidComponent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Value,
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+    $match = [regex]::Match(
+        $Value,
+        '^(?<package>[A-Za-z0-9._]+)/(?<class>[A-Za-z0-9._$]+)$'
+    )
+    if (-not $match.Success) {
+        throw $Reason
+    }
+    $packageName = [string]$match.Groups['package'].Value
+    $className = [string]$match.Groups['class'].Value
+    if ($className.StartsWith('.', [StringComparison]::Ordinal)) {
+        $className = $packageName + $className
+    }
+    return $packageName + '/' + $className
+}
+
 function Assert-HuaweiLauncherFocused {
     param(
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$WindowDump,
@@ -1619,7 +1639,9 @@ function Assert-HuaweiLauncherFocused {
         if (-not $match.Success) {
             throw "live_state_focus_component_invalid source=$Label"
         }
-        return [string]$match.Groups['component'].Value
+        return ConvertTo-CanonicalAndroidComponent `
+            -Value ([string]$match.Groups['component'].Value) `
+            -Reason "live_state_focus_component_invalid source=$Label"
     }
 
     $windowLines = @($WindowDump -split "`r?`n" | Where-Object {
@@ -1643,8 +1665,11 @@ function Assert-HuaweiLauncherFocused {
     foreach ($line in $resumedLines) {
         $components.Add((& $extractComponent $line 'resumedActivity'))
     }
+    $expectedLauncher = ConvertTo-CanonicalAndroidComponent `
+        -Value $LauncherComponent `
+        -Reason 'launcher_component_invalid'
     foreach ($component in $components) {
-        if ($component -cne $LauncherComponent) {
+        if ($component -cne $expectedLauncher) {
             throw "live_state_not_launcher component=$component"
         }
     }
@@ -1862,7 +1887,7 @@ function Assert-LiveDevicePreflight {
         -EvidenceDirectory $EvidenceDirectory `
         -Stage 'preflight'
 
-    $window = Invoke-AdbTextOnce -Arguments @('shell', 'dumpsys window windows') -Stage 'focused_window'
+    $window = Invoke-AdbTextOnce -Arguments @('shell', 'dumpsys window') -Stage 'focused_window'
     $activity = Invoke-AdbTextOnce -Arguments @('shell', 'dumpsys activity activities') -Stage 'focused_activity'
     Write-TextNoBom -Path (Join-Path $EvidenceDirectory 'device-window-preflight.txt') -Text ($window + "`n")
     Write-TextNoBom -Path (Join-Path $EvidenceDirectory 'device-activity-preflight.txt') -Text ($activity + "`n")
@@ -3391,7 +3416,7 @@ function Assert-BusySentinelFocused {
         throw "busy_sentinel_not_owned stage=$Stage"
     }
     $window = Invoke-AdbTextOnce -Arguments @(
-        'shell', 'dumpsys window windows'
+        'shell', 'dumpsys window'
     ) -Stage "busy_sentinel_window_$Stage"
     $activity = Invoke-AdbTextOnce -Arguments @(
         'shell', 'dumpsys activity activities'
@@ -3416,14 +3441,27 @@ function Assert-BusySentinelFocused {
                 $focusShapeValid = $false
                 break
             }
-            $observed.Add([string]$match.Groups['component'].Value)
+            try {
+                $observed.Add((ConvertTo-CanonicalAndroidComponent `
+                    -Value ([string]$match.Groups['component'].Value) `
+                    -Reason 'busy_sentinel_focus_component_invalid'))
+            } catch {
+                $focusShapeValid = $false
+                break
+            }
         }
     }
+    $expectedSentinel = ConvertTo-CanonicalAndroidComponent `
+        -Value ([string]$script:BusySentinelComponent) `
+        -Reason 'busy_sentinel_component_invalid'
+    $expectedLauncher = ConvertTo-CanonicalAndroidComponent `
+        -Value $LauncherComponent `
+        -Reason 'launcher_component_invalid'
     $matched = $focusShapeValid -and $observed.Count -ge 3
     if ($matched) {
         foreach ($component in $observed) {
-            if ([string]$component -cne [string]$script:BusySentinelComponent -or
-                [string]$component -ceq $LauncherComponent) {
+            if ([string]$component -cne $expectedSentinel -or
+                [string]$component -ceq $expectedLauncher) {
                 $matched = $false
             }
         }
@@ -3620,7 +3658,7 @@ function Release-BusySentinelToLauncherOnce {
         'shell', 'input keyevent HOME'
     ) -Stage 'release_busy_sentinel_to_home'
     $window = Invoke-AdbTextOnce -Arguments @(
-        'shell', 'dumpsys window windows'
+        'shell', 'dumpsys window'
     ) -Stage 'verify_launcher_after_busy_sentinel'
     $activity = Invoke-AdbTextOnce -Arguments @(
         'shell', 'dumpsys activity activities'
@@ -3720,7 +3758,7 @@ function Assert-LiveDeviceCleanAfter {
         -EvidenceDirectory $EvidenceDirectory `
         -Stage 'final'
     $window = Invoke-AdbTextOnce -Arguments @(
-        'shell', 'dumpsys window windows'
+        'shell', 'dumpsys window'
     ) -Stage 'final_focused_window'
     $activity = Invoke-AdbTextOnce -Arguments @(
         'shell', 'dumpsys activity activities'

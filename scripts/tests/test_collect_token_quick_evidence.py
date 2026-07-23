@@ -1293,7 +1293,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         )[0]
         for required in (
             "get-state",
-            "dumpsys window windows",
+            "dumpsys window",
             "pidof",
             "dumpsys activity services",
             "enabled_accessibility_services",
@@ -1312,16 +1312,69 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertNotIn("force-stop", preflight)
         self.assertNotIn("am start", preflight)
 
+    def test_live_focus_sampling_uses_full_huawei_window_dump(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("dumpsys window windows", source)
+        self.assertGreaterEqual(source.count("'dumpsys window'"), 4)
+
+    def test_launcher_gate_accepts_huawei_equivalent_dual_resumed_fields(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        marker = "function Assert-HuaweiLauncherFocused"
+        function_source = marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
+        canonical_source = self._function_source(
+            "ConvertTo-CanonicalAndroidComponent"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper = Path(temporary) / "launcher-dual-resumed.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$LauncherComponent = 'com.huawei.android.launcher/.unihome.UniHomeLauncher'\n"
+                f"{canonical_source}\n"
+                f"{function_source}\n"
+                "$window = @'\n"
+                "mCurrentFocus=Window{42 u0 com.huawei.android.launcher/com.huawei.android.launcher.unihome.UniHomeLauncher}\n"
+                "'@\n"
+                "$activity = @'\n"
+                "mFocusedApp=ActivityRecord{1 u0 com.huawei.android.launcher/.unihome.UniHomeLauncher t2}\n"
+                "mResumedActivity: ActivityRecord{1 u0 com.huawei.android.launcher/.unihome.UniHomeLauncher t2}\n"
+                "ResumedActivity: ActivityRecord{1 u0 com.huawei.android.launcher/.unihome.UniHomeLauncher t2}\n"
+                "mLastResumedActivity=ActivityRecord{9 u0 com.example.history/.HistoricalActivity t1}\n"
+                "'@\n"
+                "$result=Assert-HuaweiLauncherFocused -WindowDump $window -ActivityDump $activity\n"
+                "if (@($result.ResumedComponents).Count -ne 2) { throw 'resumed_shape_not_preserved' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_launcher_gate_rejects_historical_launcher_when_current_focus_is_elsewhere(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         marker = "function Assert-HuaweiLauncherFocused"
         self.assertIn(marker, source)
         function_source = marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
+        canonical_source = self._function_source(
+            "ConvertTo-CanonicalAndroidComponent"
+        )
         with tempfile.TemporaryDirectory() as temporary:
             wrapper = Path(temporary) / "launcher-gate.ps1"
             wrapper.write_text(
                 "$ErrorActionPreference = 'Stop'\n"
                 "$LauncherComponent = 'com.huawei.android.launcher/.unihome.UniHomeLauncher'\n"
+                f"{canonical_source}\n"
                 f"{function_source}\n"
                 "$window = @'\n"
                 "mCurrentFocus=Window{42 u0 com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity}\n"
@@ -2000,7 +2053,8 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         sentinel_assert = source.split(
             "function Assert-BusySentinelFocused", 1
         )[1].split("\nfunction ", 1)[0]
-        self.assertIn("dumpsys window windows", sentinel_assert)
+        self.assertIn("dumpsys window", sentinel_assert)
+        self.assertNotIn("dumpsys window windows", sentinel_assert)
         self.assertIn("dumpsys activity activities", sentinel_assert)
         self.assertIn("Add-BusySentinelObservation", sentinel_assert)
         self.assertIn("busy-sentinel-observations.jsonl", source)
@@ -2172,6 +2226,8 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "\n"
                 + function_source("Add-BusySentinelObservation")
                 + "\n"
+                + function_source("ConvertTo-CanonicalAndroidComponent")
+                + "\n"
                 + function_source("Assert-BusySentinelFocused")
                 + "\n"
                 + function_source("Start-BusySentinel")
@@ -2182,7 +2238,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "$script:TargetStopSucceeded=$false; $script:BusySentinelRestoredAfterTarget=$false\n"
                 + "function Invoke-AdbTextOnce { param([string[]]$Arguments,[string]$Stage); switch -Wildcard ($Stage) { "
                 + "'start_busy_sentinel_settings' { return \"Starting: Intent { act=android.settings.SETTINGS }`nStatus: ok`nActivity: com.android.settings/.HWSettings`nComplete\" }; "
-                + "'busy_sentinel_window_*' { return 'mCurrentFocus=Window{42 u0 com.android.settings/.HWSettings}' }; "
+                + "'busy_sentinel_window_*' { return 'mCurrentFocus=Window{42 u0 com.android.settings/com.android.settings.HWSettings}' }; "
                 + "'busy_sentinel_activity_*' { return \"mFocusedApp=ActivityRecord{1 u0 com.android.settings/.HWSettings t9}`ntopResumedActivity=ActivityRecord{1 u0 com.android.settings/.HWSettings t9}\" }; "
                 + "default { throw \"unexpected_adb_stage=$Stage\" } } }\n"
                 + "Start-BusySentinel -EvidenceDirectory '"
