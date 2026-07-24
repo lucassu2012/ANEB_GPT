@@ -74,6 +74,34 @@ ROOM_SCHEMA = (
     / "com.aneb.probe.data.AnebDatabase"
     / "19.json"
 )
+ROOM_SCHEMA_V15 = ROOM_SCHEMA.with_name("15.json")
+NETWORK_COMPREHENSIVE_MIGRATION_COLUMNS = (
+    ("syntheticImpairment", "INTEGER NOT NULL DEFAULT 0"),
+    ("impairmentProfileId", "TEXT"),
+    ("impairmentProfileVersion", "TEXT"),
+    ("impairmentDownlinkMbps", "REAL"),
+    ("impairmentUplinkMbps", "REAL"),
+    ("impairmentAddedRttMs", "INTEGER"),
+    ("impairmentJitterMs", "INTEGER"),
+    ("impairmentExcludedCsv", "TEXT NOT NULL DEFAULT ''"),
+    ("impairmentAcknowledged", "INTEGER NOT NULL DEFAULT 0"),
+    ("impairmentOutageDurationMs", "INTEGER"),
+    ("recoveryTimeMs", "REAL"),
+    ("recoveryFailureCount", "INTEGER NOT NULL DEFAULT 0"),
+    ("postRecoverySuccessRatio", "REAL"),
+    ("gatewayImpairment", "INTEGER NOT NULL DEFAULT 0"),
+    ("gatewayExperimentId", "TEXT"),
+    ("gatewayProfileFingerprint", "TEXT"),
+    ("gatewayManagementBase", "TEXT"),
+    ("gatewayImpairmentLayer", "TEXT"),
+    ("gatewayAcknowledged", "INTEGER NOT NULL DEFAULT 0"),
+    ("gatewayCleanupAcknowledged", "INTEGER NOT NULL DEFAULT 0"),
+    ("gatewayBypassObserved", "INTEGER NOT NULL DEFAULT 0"),
+    ("gatewayUplinkDelayMs", "INTEGER"),
+    ("gatewayDownlinkDelayMs", "INTEGER"),
+    ("gatewayUplinkLossPct", "REAL"),
+    ("gatewayDownlinkLossPct", "REAL"),
+)
 
 
 def canonical_sha(value: object) -> str:
@@ -160,6 +188,9 @@ def valid_body() -> dict[str, object]:
         source_record_version="room-v19-token-envelope-v1",
     )
     body["profile"].update(profile_version="1.2.1", variant="quick")
+    body["profile"]["source_uri"] = (
+        "asset:///published/token_multimodal_quick/profile.json"
+    )
     body["profile"]["profile_fingerprint"]["canonicalization"] = "canonical-json-v1"
     body["profile"]["profile_fingerprint"]["value"] = f"sha256:{PROFILE_SHA}"
     body["profile"]["runtime_artifact_hash"]["value"] = f"sha256:{RUNTIME_SHA}"
@@ -324,7 +355,7 @@ def valid_body() -> dict[str, object]:
             {
                 "ref_id": "profile-artifact",
                 "kind": "content_addressed_artifact",
-                "uri": "profiles/published/token_multimodal_quick/profile.json",
+                "uri": "asset:///published/token_multimodal_quick/profile.json",
                 "media_type": "application/json",
                 "digest": {
                     "algorithm": "sha256",
@@ -338,7 +369,7 @@ def valid_body() -> dict[str, object]:
             {
                 "ref_id": "runtime-artifact",
                 "kind": "content_addressed_artifact",
-                "uri": "profiles/published/token_multimodal_quick/runtime_plan.json",
+                "uri": "asset:///published/token_multimodal_quick/runtime_plan.json",
                 "media_type": "application/json",
                 "digest": {
                     "algorithm": "sha256",
@@ -411,6 +442,43 @@ def create_room_schema(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE TABLE android_metadata (locale TEXT)")
     connection.execute("INSERT INTO android_metadata(locale) VALUES('en_US')")
     connection.execute(f"PRAGMA user_version = {exported['version']}")
+
+
+def recreate_migrated_network_comprehensive_schema(
+    connection: sqlite3.Connection,
+    *,
+    synthetic_default: str = "0",
+) -> None:
+    exported_v15 = json.loads(
+        ROOM_SCHEMA_V15.read_text(encoding="utf-8")
+    )["database"]
+    entity_v15 = next(
+        value
+        for value in exported_v15["entities"]
+        if value["tableName"] == "network_comprehensive_result"
+    )
+    connection.execute(
+        "DROP INDEX index_network_comprehensive_result_startedAtEpochMs"
+    )
+    connection.execute("DROP TABLE network_comprehensive_result")
+    connection.execute(
+        entity_v15["createSql"].replace(
+            "${TABLE_NAME}", "network_comprehensive_result"
+        )
+    )
+    for column, declaration in NETWORK_COMPREHENSIVE_MIGRATION_COLUMNS:
+        if column == "syntheticImpairment":
+            declaration = f"INTEGER NOT NULL DEFAULT {synthetic_default}"
+        connection.execute(
+            "ALTER TABLE `network_comprehensive_result` "
+            f"ADD COLUMN `{column}` {declaration}"
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS "
+        "`index_network_comprehensive_result_startedAtEpochMs` "
+        "ON `network_comprehensive_result` (`startedAtEpochMs`)"
+    )
+    connection.commit()
 
 
 def write_database(
@@ -748,6 +816,40 @@ class TokenQuickClientDbVerifierTests(unittest.TestCase):
         self.assertEqual(1, completed.returncode)
         self.assertEqual(
             "room_create_sql_mismatch", json.loads(completed.stdout)["reason_code"]
+        )
+
+    def test_accepts_exact_network_comprehensive_migration_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "aneb-probe.db"
+            write_database(database, valid_body())
+            connection = sqlite3.connect(database)
+            try:
+                recreate_migrated_network_comprehensive_schema(connection)
+            finally:
+                connection.close()
+            completed = self.run_verifier(database)
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual("ok", json.loads(completed.stdout)["reason_code"])
+
+    def test_rejects_unapproved_migration_default_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "aneb-probe.db"
+            write_database(database, valid_body())
+            connection = sqlite3.connect(database)
+            try:
+                recreate_migrated_network_comprehensive_schema(
+                    connection,
+                    synthetic_default="1",
+                )
+            finally:
+                connection.close()
+            completed = self.run_verifier(database)
+
+        self.assertEqual(1, completed.returncode)
+        self.assertEqual(
+            "room_create_sql_mismatch",
+            json.loads(completed.stdout)["reason_code"],
         )
 
     def test_rejects_malformed_android_metadata_schema(self) -> None:

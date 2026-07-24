@@ -49,6 +49,7 @@ MAX_DB_BYTES = 512 * 1024 * 1024
 MAX_RUN_START_DELTA_MS = 5_000
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_DIR = ROOT / "profiles" / "published" / PROFILE_ID
+PROFILE_ASSET_BASE = f"asset:///published/{PROFILE_ID}"
 ROOM_SCHEMA_PATH = (
     ROOT
     / "app"
@@ -57,6 +58,39 @@ ROOM_SCHEMA_PATH = (
     / "com.aneb.probe.data.AnebDatabase"
     / "19.json"
 )
+# SQLite preserves the physical order and DEFAULT clauses added by the explicit
+# v15→v18 ALTER TABLE migrations. This is the only legacy CREATE TABLE form
+# accepted in addition to Room's v19 fresh-install export.
+NETWORK_COMPREHENSIVE_MIGRATED_COLUMN_ORDER = (
+    "runId", "startedAtEpochMs", "serverBase", "claimScope", "profileId",
+    "profileVersion", "variant", "scorePolicyId", "scoreAnchorPolicyId",
+    "conclusionPolicyId", "status", "totalScore", "grade", "verdict",
+    "confidence", "downloadMbps", "uploadMbps", "idleRttMs", "loadedRttMs",
+    "latencyDeltaMs", "jitterMs", "requestLossRate", "throughputRobustCv",
+    "udpNonReturnRate", "postLoadPingMs", "downloadBytes", "uploadBytes",
+    "transferErrors", "metricsJson", "groupScoresJson", "conclusionsJson",
+    "evidenceJson", "syntheticImpairment", "impairmentProfileId",
+    "impairmentProfileVersion", "impairmentDownlinkMbps",
+    "impairmentUplinkMbps", "impairmentAddedRttMs", "impairmentJitterMs",
+    "impairmentExcludedCsv", "impairmentAcknowledged",
+    "impairmentOutageDurationMs", "recoveryTimeMs", "recoveryFailureCount",
+    "postRecoverySuccessRatio", "gatewayImpairment", "gatewayExperimentId",
+    "gatewayProfileFingerprint", "gatewayManagementBase",
+    "gatewayImpairmentLayer", "gatewayAcknowledged",
+    "gatewayCleanupAcknowledged", "gatewayBypassObserved",
+    "gatewayUplinkDelayMs", "gatewayDownlinkDelayMs",
+    "gatewayUplinkLossPct", "gatewayDownlinkLossPct",
+)
+NETWORK_COMPREHENSIVE_MIGRATED_DEFAULTS = {
+    "syntheticImpairment": "0",
+    "impairmentExcludedCsv": "''",
+    "impairmentAcknowledged": "0",
+    "recoveryFailureCount": "0",
+    "gatewayImpairment": "0",
+    "gatewayAcknowledged": "0",
+    "gatewayCleanupAcknowledged": "0",
+    "gatewayBypassObserved": "0",
+}
 
 
 class VerificationFailure(Exception):
@@ -341,6 +375,62 @@ def normalize_create_sql(value: str) -> str:
     return re.sub(r"\s+", " ", normalized)
 
 
+def known_migrated_create_sql(
+    table_name: str,
+    entity: dict[str, Any],
+) -> str | None:
+    if table_name != "network_comprehensive_result":
+        return None
+    fields = require_list(entity.get("fields"), "room_schema_export_invalid")
+    by_column: dict[str, dict[str, Any]] = {}
+    for value in fields:
+        field = require_dict(value, "room_schema_export_invalid")
+        column = field.get("columnName")
+        if (
+            not isinstance(column, str)
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column) is None
+            or column in by_column
+        ):
+            fail("room_schema_export_invalid")
+        by_column[column] = field
+    if set(by_column) != set(NETWORK_COMPREHENSIVE_MIGRATED_COLUMN_ORDER):
+        fail("room_schema_export_invalid")
+
+    definitions: list[str] = []
+    for column in NETWORK_COMPREHENSIVE_MIGRATED_COLUMN_ORDER:
+        field = by_column[column]
+        affinity = str(field.get("affinity", "")).upper()
+        if affinity not in {"INTEGER", "REAL", "TEXT", "BLOB"}:
+            fail("room_schema_export_invalid")
+        definition = f"`{column}` {affinity}"
+        if field.get("notNull") is True:
+            definition += " NOT NULL"
+        elif field.get("notNull") is not False:
+            fail("room_schema_export_invalid")
+        if column in NETWORK_COMPREHENSIVE_MIGRATED_DEFAULTS:
+            definition += " DEFAULT " + NETWORK_COMPREHENSIVE_MIGRATED_DEFAULTS[column]
+        definitions.append(definition)
+
+    primary = require_dict(entity.get("primaryKey"), "room_schema_export_invalid")
+    primary_columns = require_list(
+        primary.get("columnNames"), "room_schema_export_invalid"
+    )
+    if (
+        not primary_columns
+        or any(
+            not isinstance(column, str) or column not in by_column
+            for column in primary_columns
+        )
+    ):
+        fail("room_schema_export_invalid")
+    primary_sql = ", ".join(f"`{column}`" for column in primary_columns)
+    definitions.append(f"PRIMARY KEY({primary_sql})")
+    return (
+        f"CREATE TABLE IF NOT EXISTS `{table_name}` "
+        f"({', '.join(definitions)})"
+    )
+
+
 def verify_room_schema(connection: sqlite3.Connection) -> str:
     exported = load_room_schema()
     user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -424,11 +514,14 @@ def verify_room_schema(connection: sqlite3.Connection) -> str:
         expected_create = str(entity.get("createSql", "")).replace(
             "${TABLE_NAME}", table_name
         )
+        known_migrated = known_migrated_create_sql(table_name, entity)
+        allowed_create_sql = {normalize_create_sql(expected_create)}
+        if known_migrated is not None:
+            allowed_create_sql.add(normalize_create_sql(known_migrated))
         if (
             create_row is None
             or not isinstance(create_row[0], str)
-            or normalize_create_sql(create_row[0])
-            != normalize_create_sql(expected_create)
+            or normalize_create_sql(create_row[0]) not in allowed_create_sql
         ):
             fail("room_create_sql_mismatch")
         fields = require_list(entity.get("fields"), "room_schema_export_invalid")
@@ -436,25 +529,24 @@ def verify_room_schema(connection: sqlite3.Connection) -> str:
         primary_columns = require_list(
             primary.get("columnNames"), "room_schema_export_invalid"
         )
-        expected_columns = []
+        expected_columns: dict[str, tuple[str, int, int]] = {}
         for field in fields:
             field = require_dict(field, "room_schema_export_invalid")
             column = field.get("columnName")
-            expected_columns.append(
-                (
-                    column,
-                    str(field.get("affinity", "")).upper(),
-                    1 if field.get("notNull") is True else 0,
-                    primary_columns.index(column) + 1 if column in primary_columns else 0,
-                )
+            if not isinstance(column, str) or column in expected_columns:
+                fail("room_schema_export_invalid")
+            expected_columns[column] = (
+                str(field.get("affinity", "")).upper(),
+                1 if field.get("notNull") is True else 0,
+                primary_columns.index(column) + 1 if column in primary_columns else 0,
             )
         actual_columns = connection.execute(
             f"PRAGMA table_info({quote_identifier(table_name)})"
         ).fetchall()
-        projected = [
-            (str(row[1]), str(row[2]).upper(), int(row[3]), int(row[5]))
+        projected = {
+            str(row[1]): (str(row[2]).upper(), int(row[3]), int(row[5]))
             for row in actual_columns
-        ]
+        }
         if projected != expected_columns:
             fail("room_table_schema_mismatch")
         expected_foreign_keys = require_list(
@@ -1072,7 +1164,7 @@ def verify(
             or profile.get("contract_version")
             != execution_contract["profile_contract_version"]
             or profile.get("source_uri")
-            != "profiles/published/token_multimodal_quick/profile.json"
+            != f"{PROFILE_ASSET_BASE}/profile.json"
             or profile_fingerprint.get("algorithm") != "sha256"
             or profile_fingerprint.get("canonicalization") != "canonical-json-v1"
             or profile_fingerprint.get("value") != profile_digest
@@ -1494,7 +1586,7 @@ def verify(
             ref = ref_map[ref_id]
             if (
                 ref.get("kind") != "content_addressed_artifact"
-                or ref.get("uri") != f"profiles/published/{PROFILE_ID}/{file_name}"
+                or ref.get("uri") != f"{PROFILE_ASSET_BASE}/{file_name}"
                 or ref.get("media_type") != "application/json"
                 or ref.get("record_count") != 1
                 or ref.get("redaction") != "none"

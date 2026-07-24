@@ -309,7 +309,7 @@ def verify_evidence_refs(
         ref = ref_map[ref_id]
         if (
             ref.get("kind") != "content_addressed_artifact"
-            or ref.get("uri") != f"profiles/published/{base.PROFILE_ID}/{filename}"
+            or ref.get("uri") != f"{base.PROFILE_ASSET_BASE}/{filename}"
             or ref.get("media_type") != "application/json"
             or ref.get("record_count") != 1
             or ref.get("redaction") != "none"
@@ -422,7 +422,7 @@ def verify_negative_semantics(
         or profile.get("variant") != "quick"
         or profile.get("runtime_artifact_status") != "resolved"
         or profile.get("source_uri")
-        != "profiles/published/token_multimodal_quick/profile.json"
+        != f"{base.PROFILE_ASSET_BASE}/profile.json"
         or profile_fingerprint
         != {
             "algorithm": "sha256",
