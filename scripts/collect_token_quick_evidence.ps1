@@ -447,6 +447,25 @@ function Get-ExpectedProfileContractDefinitionSha256 {
     return $digest
 }
 
+function Get-ExpectedProfileDefinitionSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    Assert-NonEmptyFile -Path $Path -Label 'published Profile manifest'
+    try {
+        $utf8 = New-Object Text.UTF8Encoding($false, $true)
+        $text = $utf8.GetString([IO.File]::ReadAllBytes($Path))
+    } catch {
+        throw 'profile_manifest_contract_invalid'
+    }
+    $contract = (
+        '\A(?<profile>[0-9a-f]{64})  profile\.json\r?\n' +
+        '(?<runtime>[0-9a-f]{64})  runtime_plan\.json\r?\n\z'
+    )
+    if ($text -cnotmatch $contract) {
+        throw 'profile_manifest_contract_invalid'
+    }
+    return [string]$Matches.profile
+}
+
 function Get-LocalGitIdentity {
     param(
         [Parameter(Mandatory = $true)][string]$GitPath,
@@ -928,6 +947,8 @@ function Assert-LocalPreflight {
     $script:ServerCaPath = [string]$toolingFiles['server_ca']
     $serverCa = Get-ServerCaIdentity -Path $script:ServerCaPath
     $contractDigest = Get-ExpectedProfileContractDefinitionSha256 -Path $script:CatalogPath
+    $profileDigest = Get-ExpectedProfileDefinitionSha256 `
+        -Path ([string]$toolingFiles['profile_manifest'])
     $evidenceFull = Assert-NonReparseDirectoryChain `
         -Path $EvidenceRoot `
         -ReasonPrefix 'evidence_root'
@@ -972,7 +993,7 @@ function Assert-LocalPreflight {
         Git = $git
         RepositoryRoot = $repositoryRoot
         ProfileContractDefinitionSha256 = $contractDigest
-        ProfileDefinitionSha256 = [string]$toolingDigests['profile_definition']
+        ProfileDefinitionSha256 = $profileDigest
         ToolingFiles = $toolingFiles
         ToolingProvenance = $toolingProvenance
         ServerCa = $serverCa

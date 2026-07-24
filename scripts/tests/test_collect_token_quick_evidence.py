@@ -1899,6 +1899,57 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             )
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_profile_definition_identity_comes_from_the_strict_published_manifest(self) -> None:
+        resolver = self._function_source("Get-ExpectedProfileDefinitionSha256")
+        profile_digest = "a" * 64
+        runtime_digest = "b" * 64
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            valid = root / "manifest.sha256"
+            valid.write_text(
+                f"{profile_digest}  profile.json\n"
+                f"{runtime_digest}  runtime_plan.json\n",
+                encoding="utf-8",
+            )
+            invalid = root / "manifest-extra.sha256"
+            invalid.write_text(
+                valid.read_text(encoding="utf-8")
+                + f"{'c' * 64}  unrelated.json\n",
+                encoding="utf-8",
+            )
+            wrapper = root / "profile-definition-identity.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "function Assert-NonEmptyFile { param([string]$Path, [string]$Label) "
+                "if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or "
+                "(Get-Item -LiteralPath $Path).Length -le 0) { throw 'missing_file' } }\n"
+                f"{resolver}\n"
+                f"$actual = Get-ExpectedProfileDefinitionSha256 -Path {self._powershell_literal(valid)}\n"
+                f"if ($actual -cne '{profile_digest}') {{ throw 'profile_digest_mismatch' }}\n"
+                "$caught = $false\n"
+                "try { "
+                f"$null = Get-ExpectedProfileDefinitionSha256 -Path {self._powershell_literal(invalid)} "
+                "} catch { if ($_.Exception.Message -eq 'profile_manifest_contract_invalid') "
+                "{ $caught = $true } else { throw } }\n"
+                "if (-not $caught) { throw 'invalid_manifest_was_accepted' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_negative_audit_requires_one_capability_and_zero_business(self) -> None:
         audit = self._function_source("Assert-RequestEntryAuditReport")
         derivation = self._function_source("Invoke-EvidenceDerivationAndAudit")
