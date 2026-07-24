@@ -2451,6 +2451,125 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_busy_sentinel_evidence_accepts_equivalent_short_and_full_components(
+        self,
+    ) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        def function_source(name: str) -> str:
+            marker = f"function {name}"
+            return marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
+
+        required_stages = (
+            "sentinel_started",
+            "before_target_handoff",
+            "sentinel_restored_after_target",
+            "before_end_barrier",
+            "after_remote_snapshot",
+            "before_room_freeze",
+            "after_room_freeze",
+            "after_client_verifier",
+            "workflow_complete",
+            "cleanup_before_end_barrier",
+            "cleanup_after_end_barrier",
+            "before_release_home",
+            "after_release_guard",
+        )
+        short_component = "com.android.settings/.HWSettings"
+        full_component = (
+            "com.android.settings/com.android.settings.HWSettings"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            observations = root / "busy-sentinel-observations.jsonl"
+            observations.write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "schema": "aneb-d82-busy-sentinel-observation",
+                            "schema_version": "1.0.0",
+                            "captured_at_utc": "2026-07-24T00:00:00.0000000Z",
+                            "stage": stage,
+                            "expected_component": short_component,
+                            "observed_components": [full_component] * 4,
+                            "matched": True,
+                            "window_dump": "mCurrentFocus=Window{settings}",
+                            "activity_dump": "mFocusedApp=ActivityRecord{settings}",
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                    for stage in required_stages
+                ),
+                encoding="utf-8",
+            )
+            escaped_root = str(root).replace("'", "''")
+            wrapper = root / "busy-sentinel-evidence.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference='Stop'\nSet-StrictMode -Version 2.0\n"
+                + function_source("Assert-NonEmptyFile")
+                + "\n"
+                + function_source("ConvertTo-CanonicalAndroidComponent")
+                + "\n"
+                + function_source("Assert-BusySentinelEvidence")
+                + "\nAssert-BusySentinelEvidence -EvidenceDirectory '"
+                + escaped_root
+                + "' -ExpectedComponent '"
+                + short_component
+                + "'\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+            lines = observations.read_text(encoding="utf-8").splitlines()
+            mismatched = json.loads(lines[0])
+            mismatched["observed_components"][0] = (
+                "com.android.settings/com.android.settings.OtherSettings"
+            )
+            lines[0] = json.dumps(
+                mismatched,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            observations.write_text(
+                "\n".join(lines) + "\n",
+                encoding="utf-8",
+            )
+            rejected = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn(
+            "busy_sentinel_evidence_focus_invalid stage=sentinel_started",
+            rejected.stdout + rejected.stderr,
+        )
+
     def test_final_manifest_requires_raw_preflight_and_cleanup_state(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         finalizer = source.split("function Write-FinalEvidenceManifest", 1)[1].split(

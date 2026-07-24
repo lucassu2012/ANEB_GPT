@@ -3666,6 +3666,13 @@ function Assert-BusySentinelEvidence {
         [Parameter(Mandatory = $true)][string]$EvidenceDirectory,
         [Parameter(Mandatory = $true)][string]$ExpectedComponent
     )
+    try {
+        $canonicalExpectedComponent = ConvertTo-CanonicalAndroidComponent `
+            -Value $ExpectedComponent `
+            -Reason 'busy_sentinel_evidence_expected_component_invalid'
+    } catch {
+        throw 'busy_sentinel_evidence_expected_component_invalid'
+    }
     $path = Join-Path $EvidenceDirectory 'busy-sentinel-observations.jsonl'
     Assert-NonEmptyFile -Path $path -Label 'busy sentinel observations'
     $requiredStages = @(
@@ -3687,19 +3694,43 @@ function Assert-BusySentinelEvidence {
             throw 'busy_sentinel_evidence_json_invalid'
         }
         $stage = [string]$entry.stage
+        try {
+            $canonicalEntryExpectedComponent =
+                ConvertTo-CanonicalAndroidComponent `
+                    -Value ([string]$entry.expected_component) `
+                    -Reason 'busy_sentinel_evidence_entry_component_invalid'
+        } catch {
+            throw "busy_sentinel_evidence_entry_invalid stage=$stage"
+        }
         if ([string]$entry.schema -cne 'aneb-d82-busy-sentinel-observation' -or
             [string]$entry.schema_version -cne '1.0.0' -or
             $requiredStages -cnotcontains $stage -or $seen.ContainsKey($stage) -or
-            [string]$entry.expected_component -cne $ExpectedComponent -or
+            $canonicalEntryExpectedComponent -cne $canonicalExpectedComponent -or
             $entry.matched -isnot [bool] -or -not [bool]$entry.matched -or
             [string]::IsNullOrWhiteSpace([string]$entry.window_dump) -or
             [string]::IsNullOrWhiteSpace([string]$entry.activity_dump)) {
             throw "busy_sentinel_evidence_entry_invalid stage=$stage"
         }
         $observed = @($entry.observed_components)
-        if ($observed.Count -lt 3 -or @($observed | Where-Object {
-            [string]$_ -cne $ExpectedComponent
-        }).Count -gt 0) {
+        $focusInvalid = $observed.Count -lt 3
+        if (-not $focusInvalid) {
+            foreach ($component in $observed) {
+                try {
+                    $canonicalObservedComponent =
+                        ConvertTo-CanonicalAndroidComponent `
+                            -Value ([string]$component) `
+                            -Reason 'busy_sentinel_evidence_focus_component_invalid'
+                } catch {
+                    $focusInvalid = $true
+                    break
+                }
+                if ($canonicalObservedComponent -cne $canonicalExpectedComponent) {
+                    $focusInvalid = $true
+                    break
+                }
+            }
+        }
+        if ($focusInvalid) {
             throw "busy_sentinel_evidence_focus_invalid stage=$stage"
         }
         $seen[$stage] = $true
