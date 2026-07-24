@@ -2600,6 +2600,76 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("evidence_draft_digest_mismatch", completed.stdout + completed.stderr)
 
+    def test_manifest_draft_accepts_the_frozen_unicode_install_notes_path(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        def function(name: str) -> str:
+            marker = f"function {name}"
+            self.assertIn(marker, source)
+            return marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
+
+        functions = "\n".join(
+            function(name)
+            for name in ("Get-RelativeEvidencePath", "Assert-EvidenceManifestDraft")
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            candidate = evidence / "ci-candidate"
+            candidate.mkdir()
+            artifact = candidate / "ANEB-安装说明.txt"
+            artifact.write_text("trusted-install-notes\n", encoding="utf-8")
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            draft_path = evidence / "evidence-inventory.draft.json"
+            draft = {
+                "acceptance_eligible": False,
+                "evidence_scope": "inventory_only_not_d82_acceptance",
+                "file_count": 1,
+                "files": [
+                    {
+                        "bytes": artifact.stat().st_size,
+                        "path": "ci-candidate/ANEB-安装说明.txt",
+                        "sha256": digest,
+                    }
+                ],
+                "schema": "aneb-evidence-manifest-draft",
+                "schema_version": "1.0.0",
+                "status": "draft",
+                "total_bytes": artifact.stat().st_size,
+            }
+            draft_path.write_text(json.dumps(draft), encoding="utf-8")
+            wrapper = root / "assert-draft.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$CandidateInstallNotesName = 'ANEB-' + "
+                "[char]0x5B89 + [char]0x88C5 + [char]0x8BF4 + "
+                "[char]0x660E + '.txt'\n"
+                f"{functions}\n"
+                f"$null = Assert-EvidenceManifestDraft -EvidenceDirectory '{evidence}' "
+                f"-DraftPath '{draft_path}' "
+                '-RequiredPaths @("ci-candidate/$CandidateInstallNotesName")\n',
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_final_manifest_sidecar_requirements_follow_the_frozen_inventory_pair(self) -> None:
         helper = self._function_source("Get-RequiredFrozenRoomSidecarPaths")
         assert_nonempty = self._function_source("Assert-NonEmptyFile")

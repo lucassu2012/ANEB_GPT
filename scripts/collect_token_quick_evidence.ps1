@@ -4139,6 +4139,7 @@ function Assert-EvidenceManifestDraft {
     $seen = @{}
     $computedTotal = [int64]0
     $previousPath = $null
+    $frozenUnicodeCandidatePath = "ci-candidate/$CandidateInstallNotesName"
     foreach ($entry in $entries) {
         $expectedEntryKeys = @('bytes', 'path', 'sha256')
         $actualEntryKeys = @($entry.PSObject.Properties.Name | Sort-Object)
@@ -4146,7 +4147,8 @@ function Assert-EvidenceManifestDraft {
             throw 'evidence_draft_entry_contract_invalid'
         }
         $relative = [string]$entry.path
-        if ($relative -notmatch '^[A-Za-z0-9._/-]+$' -or
+        if (($relative -notmatch '^[A-Za-z0-9._/-]+$' -and
+                $relative -cne $frozenUnicodeCandidatePath) -or
             $relative.StartsWith('/') -or $relative.Contains('\') -or
             @($relative -split '/' | Where-Object { $_ -in @('', '.', '..') }).Count -gt 0) {
             throw 'evidence_draft_path_invalid'
