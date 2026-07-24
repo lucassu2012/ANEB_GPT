@@ -1585,37 +1585,26 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             root = Path(temporary)
             output = root / "app-logcat.txt"
             output.write_bytes(b"")
-            writer = root / "append-marker.ps1"
-            writer.write_text(
-                "$ErrorActionPreference = 'Stop'\n"
-                "Start-Sleep -Milliseconds 300\n"
-                f"[IO.File]::AppendAllText({self._powershell_literal(output)}, "
-                f"{self._powershell_literal(marker_line)}, "
-                "(New-Object Text.UTF8Encoding($false)))\n",
-                encoding="utf-8",
-            )
             wrapper = root / "empty-logcat-marker.ps1"
             wrapper.write_text(
                 "$ErrorActionPreference = 'Stop'\n"
                 "function Invoke-AdbTextOnce { param([string[]]$Arguments, [string]$Stage); return '' }\n"
                 "function Write-JsonNoBom { param([string]$Path, $Value); $script:MarkerWritten = $true }\n"
                 f"{boundary}\n{marker_writer}\n"
-                "$holder = Start-Process -FilePath "
-                f"{self._powershell_literal(self.powershell)} "
-                "-ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 10') "
-                "-WindowStyle Hidden -PassThru\n"
-                "$writer = Start-Process -FilePath "
-                f"{self._powershell_literal(self.powershell)} "
-                f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',{self._powershell_literal(writer)}) "
-                "-WindowStyle Hidden -PassThru\n"
+                "$holder = [Diagnostics.Process]::GetCurrentProcess()\n"
+                "$writer = Start-Job -ScriptBlock {\n"
+                "  param([string]$Path, [string]$Line)\n"
+                "  Start-Sleep -Milliseconds 300\n"
+                "  [IO.File]::AppendAllText($Path, $Line, (New-Object Text.UTF8Encoding($false)))\n"
+                f"}} -ArgumentList {self._powershell_literal(output)}, {self._powershell_literal(marker_line)}\n"
                 "try {\n"
                 f"  $logcat = [pscustomobject]@{{ Process=$holder; OutputPath={self._powershell_literal(output)} }}\n"
                 f"  Write-LogcatCaptureMarker -Logcat $logcat -MarkerNonce '{nonce}' "
                 f"-EvidenceDirectory {self._powershell_literal(root)}\n"
                 "  if (-not $script:MarkerWritten) { throw 'marker_receipt_not_written' }\n"
                 "} finally {\n"
-                "  foreach ($process in @($writer,$holder)) { "
-                "if ($null -ne $process -and -not $process.HasExited) { $process.Kill() } }\n"
+                "  $writer | Stop-Job -ErrorAction SilentlyContinue\n"
+                "  $writer | Remove-Job -Force -ErrorAction SilentlyContinue\n"
                 "}\n",
                 encoding="utf-8",
             )
