@@ -1231,21 +1231,23 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertIn('exec 9>"$LOCK_PATH"', source)
         self.assertIn("flock -n 9", source)
         self.assertIn("LOCK_ACQUIRED nonce=%s pid=%s marker=%s", source)
-        self.assertIn('while IFS= read -r command', source)
+        self.assertIn('if ! IFS= read -r -t "$TTL_SECONDS" command; then', source)
         self.assertIn('[[ "$command" == "RELEASE $NONCE" ]]', source)
         self.assertIn("LOCK_RELEASED nonce=%s", source)
         self.assertIn('trap cleanup EXIT HUP INT TERM', source)
-        self.assertIn('kill -TERM "$PARENT_PID"', source)
         self.assertIn("function Assert-PersistentAuditLock", source)
         self.assertIn("LOCK_HEALTHY", source)
         lock_assertion = source[source.index("function Assert-PersistentAuditLock") :]
         self.assertIn("flock -n", lock_assertion)
 
-    def test_lock_watchdog_closes_inherited_flock_descriptor_before_sleep(self) -> None:
+    def test_lock_ttl_is_enforced_by_the_holder_without_a_background_stdio_child(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
-        watchdog = source.split("PARENT_PID=$$", 1)[1].split("GUARD_PID=$!", 1)[0]
-        self.assertIn("exec 9>&-", watchdog)
-        self.assertLess(watchdog.index("exec 9>&-"), watchdog.index('sleep "$TTL_SECONDS"'))
+        holder = source.split("$remoteLockHolder = @'", 1)[1].split("\n'@", 1)[0]
+        self.assertIn('if ! IFS= read -r -t "$TTL_SECONDS" command; then', holder)
+        self.assertNotIn("PARENT_PID", holder)
+        self.assertNotIn("GUARD_PID", holder)
+        self.assertNotIn('sleep "$TTL_SECONDS"', holder)
+        self.assertNotRegex(holder, r"(?m)^\s*\)\s*&\s*$")
 
     def test_lock_release_uses_lf_only_protocol_lines(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -1555,6 +1557,66 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 f"$post = Get-PostMarkerLogText -Text '{escaped}' -MarkerNonce '{nonce}'\n"
                 f"if ($post -match '{old_run}') {{ throw 'old_run_replayed' }}\n"
                 f"if ($post -notmatch '{new_run}') {{ throw 'new_run_missing' }}\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
+    def test_logcat_marker_poll_accepts_an_existing_empty_redirect_file(self) -> None:
+        boundary = self._function_source("Get-PostMarkerLogText")
+        marker_writer = self._function_source("Write-LogcatCaptureMarker")
+        nonce = "c" * 32
+        marker_line = f"1784851221.985 31128 31128 I AnebD82 : D82_CAPTURE_MARKER nonce={nonce}\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "app-logcat.txt"
+            output.write_bytes(b"")
+            writer = root / "append-marker.ps1"
+            writer.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "Start-Sleep -Milliseconds 300\n"
+                f"[IO.File]::AppendAllText({self._powershell_literal(output)}, "
+                f"{self._powershell_literal(marker_line)}, "
+                "(New-Object Text.UTF8Encoding($false)))\n",
+                encoding="utf-8",
+            )
+            wrapper = root / "empty-logcat-marker.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "function Invoke-AdbTextOnce { param([string[]]$Arguments, [string]$Stage); return '' }\n"
+                "function Write-JsonNoBom { param([string]$Path, $Value); $script:MarkerWritten = $true }\n"
+                f"{boundary}\n{marker_writer}\n"
+                "$holder = Start-Process -FilePath "
+                f"{self._powershell_literal(self.powershell)} "
+                "-ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 10') "
+                "-WindowStyle Hidden -PassThru\n"
+                "$writer = Start-Process -FilePath "
+                f"{self._powershell_literal(self.powershell)} "
+                f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',{self._powershell_literal(writer)}) "
+                "-WindowStyle Hidden -PassThru\n"
+                "try {\n"
+                f"  $logcat = [pscustomobject]@{{ Process=$holder; OutputPath={self._powershell_literal(output)} }}\n"
+                f"  Write-LogcatCaptureMarker -Logcat $logcat -MarkerNonce '{nonce}' "
+                f"-EvidenceDirectory {self._powershell_literal(root)}\n"
+                "  if (-not $script:MarkerWritten) { throw 'marker_receipt_not_written' }\n"
+                "} finally {\n"
+                "  foreach ($process in @($writer,$holder)) { "
+                "if ($null -ne $process -and -not $process.HasExited) { $process.Kill() } }\n"
+                "}\n",
                 encoding="utf-8",
             )
             completed = subprocess.run(

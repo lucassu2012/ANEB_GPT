@@ -1444,12 +1444,7 @@ LOCK_PATH="${3:?lock path required}"
 [[ "$TTL_SECONDS" =~ ^[0-9]+$ ]] || exit 64
 [[ "$LOCK_PATH" == '/run/lock/aneb-deploy.lock' ]] || exit 64
 MARKER="/run/aneb-token-audit-$NONCE.lock"
-GUARD_PID=''
 cleanup() {
-    if [[ -n "$GUARD_PID" ]]; then
-        kill "$GUARD_PID" >/dev/null 2>&1 || true
-        wait "$GUARD_PID" 2>/dev/null || true
-    fi
     rm -f -- "$MARKER"
 }
 trap cleanup EXIT HUP INT TERM
@@ -1461,22 +1456,15 @@ fi
 printf '%s %s\n' "$NONCE" "$$" > "$MARKER"
 chmod 0600 "$MARKER"
 printf 'LOCK_ACQUIRED nonce=%s pid=%s marker=%s\n' "$NONCE" "$$" "$MARKER"
-PARENT_PID=$$
-(
-    exec 9>&-
-    sleep "$TTL_SECONDS"
-    kill -TERM "$PARENT_PID" >/dev/null 2>&1 || true
-) &
-GUARD_PID=$!
-while IFS= read -r command; do
-    if [[ "$command" == "RELEASE $NONCE" ]]; then
-        printf 'LOCK_RELEASED nonce=%s\n' "$NONCE"
-        exit 0
-    fi
-    printf 'LOCK_PROTOCOL_ERROR\n' >&2
-    exit 64
-done
-exit 76
+if ! IFS= read -r -t "$TTL_SECONDS" command; then
+    exit 76
+fi
+if [[ "$command" == "RELEASE $NONCE" ]]; then
+    printf 'LOCK_RELEASED nonce=%s\n' "$NONCE"
+    exit 0
+fi
+printf 'LOCK_PROTOCOL_ERROR\n' >&2
+exit 64
 '@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteLockHolder))
     $remoteCommand = "bash -c `"`$(printf '%s' '$encoded' | base64 -d)`" -- '$Nonce' '$LockTtlSeconds' '$RemoteLockPath'"
@@ -2337,7 +2325,7 @@ function Write-LogcatCaptureMarker {
             throw "logcat_exited_before_marker_visible rc=$($Logcat.Process.ExitCode)"
         }
         $text = if (Test-Path -LiteralPath $Logcat.OutputPath -PathType Leaf) {
-            Get-Content -LiteralPath $Logcat.OutputPath -Raw -Encoding UTF8
+            [string](Get-Content -LiteralPath $Logcat.OutputPath -Raw -Encoding UTF8)
         } else { '' }
         $markerMatches = [regex]::Matches(
             $text,
