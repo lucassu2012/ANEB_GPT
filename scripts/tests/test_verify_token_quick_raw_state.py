@@ -352,6 +352,19 @@ class TokenQuickRawStateVerifierTests(unittest.TestCase):
             )
             self.assert_reason(fixture, "raw_launcher_preflight_invalid")
 
+    def test_launcher_accepts_equivalent_short_and_full_component_forms(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.write(
+                "device-window-preflight.txt",
+                fixture.window(
+                    "com.huawei.android.launcher/"
+                    "com.huawei.android.launcher.unihome.UniHomeLauncher"
+                ),
+            )
+            report = fixture.verify()
+        self.assertEqual(6, report["launcher_components_verified"])
+
     def test_clean_derived_json_cannot_hide_final_foreground_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)
@@ -392,6 +405,24 @@ class TokenQuickRawStateVerifierTests(unittest.TestCase):
     def test_shortcut_target_alone_is_not_treated_as_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)
+            report = fixture.verify()
+        self.assertTrue(report["accessibility_snapshots_verified"])
+
+    def test_empty_enabled_accessibility_setting_is_clean_when_none_are_bound(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.write(
+                "device-accessibility-preflight.txt",
+                "enabled_accessibility_services=\n"
+                "User state:\n"
+                "  Bound services: {}\n",
+            )
+            fixture.write(
+                "device-accessibility-final.txt",
+                fixture.accessibility_final(enabled=""),
+            )
             report = fixture.verify()
         self.assertTrue(report["accessibility_snapshots_verified"])
 

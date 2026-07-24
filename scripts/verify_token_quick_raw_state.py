@@ -259,6 +259,15 @@ def _extract_component(line: str, *, reason: str) -> str:
     return matches[0]
 
 
+def _canonical_component(component: str, *, reason: str) -> str:
+    if COMPONENT_RE.fullmatch(component) is None:
+        fail(reason)
+    package_name, activity_name = component.split("/", 1)
+    if activity_name.startswith("."):
+        activity_name = package_name + activity_name
+    return f"{package_name}/{activity_name}"
+
+
 def verify_launcher_text(
     window_text: str,
     activity_text: str,
@@ -285,10 +294,14 @@ def verify_launcher_text(
     if len(window_lines) != 1 or len(focused_lines) != 1 or not resumed_lines:
         fail(reason)
     components = tuple(
-        _extract_component(line, reason=reason)
+        _canonical_component(
+            _extract_component(line, reason=reason),
+            reason=reason,
+        )
         for line in (window_lines + focused_lines + resumed_lines)
     )
-    if any(component != expected_launcher for component in components):
+    canonical_expected = _canonical_component(expected_launcher, reason=reason)
+    if any(component != canonical_expected for component in components):
         fail(reason)
     return components
 
@@ -348,7 +361,7 @@ def verify_accessibility_text(
 ) -> None:
     """Allow shortcuts, but reject either ANEB package when enabled or bound."""
 
-    if not enabled_output or "\n" in enabled_output or "\r" in enabled_output:
+    if "\n" in enabled_output or "\r" in enabled_output:
         fail(reason)
     if ANEB_PACKAGE_RE.search(enabled_output) is not None:
         fail(reason)
