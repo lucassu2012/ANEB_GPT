@@ -5286,7 +5286,8 @@ $script:RunId = $null
 $script:LogcatMarkerNonce = [Guid]::NewGuid().ToString('N').ToLowerInvariant()
 $script:StartBarrierId = [Guid]::NewGuid().ToString().ToLowerInvariant()
 $script:EndBarrierId = [Guid]::NewGuid().ToString().ToLowerInvariant()
-$collectionId = 'd82-token-quick-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' +
+$collectionCreatedAtUtc = [DateTime]::UtcNow
+$collectionId = 'd82-token-quick-' + $collectionCreatedAtUtc.ToString('yyyyMMddTHHmmssZ') + '-' +
     [Guid]::NewGuid().ToString('N').ToLowerInvariant()
 $paths = New-EvidenceStagingDirectory -CollectionId $collectionId
 $PartialDirectory = [string]$paths.Partial
@@ -5302,7 +5303,7 @@ Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-plan.json') -Value
     schema = 'aneb-d82-collector-plan'
     schema_version = '1.1.0'
     execution_mode = $script:ExecutionMode
-    created_at_utc = [DateTime]::UtcNow.ToString('o')
+    created_at_utc = $collectionCreatedAtUtc.ToString('o')
     collection_id = $collectionId
     profile_contract = $ProfileContract
     profile_contract_definition_sha256 = $script:ResolvedTools.ProfileContractDefinitionSha256

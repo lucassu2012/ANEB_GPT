@@ -440,6 +440,28 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertIn("$script:ExpectedApkSha256", initializer)
         self.assertIn("$script:ExpectedSignerSha256", initializer)
 
+    def test_collection_identity_and_plan_timestamp_share_one_frozen_clock_sample(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        formal = source.split("$script:LogcatMarkerNonce", 1)[1]
+        collection = formal.split(
+            "$paths = New-EvidenceStagingDirectory", 1
+        )[0]
+        plan = formal.split(
+            "Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-plan.json')",
+            1,
+        )[1].split("\n})", 1)[0]
+
+        self.assertIn("$collectionCreatedAtUtc = [DateTime]::UtcNow", collection)
+        self.assertIn(
+            "$collectionCreatedAtUtc.ToString('yyyyMMddTHHmmssZ')", collection
+        )
+        self.assertIn(
+            "created_at_utc = $collectionCreatedAtUtc.ToString('o')", plan
+        )
+        self.assertNotIn(
+            "created_at_utc = [DateTime]::UtcNow.ToString('o')", plan
+        )
+
     def test_preflight_rejects_missing_or_extra_ci_candidate_payload_without_external_calls(self) -> None:
         payloads = {
             "ANEB-Probe-0.5.12-codex-debug.apk": b"apk\n",
