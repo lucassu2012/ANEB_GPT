@@ -1826,6 +1826,79 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         ):
             self.assertIn(token, client)
 
+    def test_negative_client_db_binds_profile_definition_not_request_contract(self) -> None:
+        client = self._function_source("Invoke-ClientDbVerification")
+        profile_digest = "a" * 64
+        request_contract_digest = "b" * 64
+        run_id = "019f9602-ca33-70e3-ac48-74212385413e"
+        report = {
+            "schema": "aneb-token-quick-negative-client-db-report",
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "reason_code": "ok",
+            "run_id": run_id,
+            "run_uuid_unix_ms": 1784928193075,
+            "run_start_delta_ms": 5,
+            "started_at_epoch_ms": 1784928193080,
+            "ended_at_epoch_ms": 1784928193555,
+            "serialized_at_epoch_ms": 1784928193555,
+            "room_user_version": 19,
+            "frozen_source_unchanged": True,
+            "analysis_copy_used": True,
+            "strict_result_schema": "pass",
+            "negative_reason_code": "receipt_missing",
+            "endpoint_server_base": "http://127.0.0.1:18765",
+            "profile_sha256": f"sha256:{profile_digest}",
+            "business_task_count": 0,
+            "business_kpi_observation_count": 0,
+            "business_artifact_count": 0,
+            "network_score_count": 0,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wrapper = root / "negative-client-profile-binding.ps1"
+            result_path = root / "client-result.json"
+            result_path.write_text("{}\n", encoding="utf-8")
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$EvidenceMode = 'negative'\n"
+                "$NegativeClientDbVerifierPath = 'verify_token_quick_negative_client_db.py'\n"
+                "$ClientDbVerifierPath = 'verify_token_quick_client_db.py'\n"
+                "$NegativeClientServerBase = 'http://127.0.0.1:18765'\n"
+                "$ServerBase = 'https://aneb.invalid:8443'\n"
+                "$ToolCommandTimeoutSeconds = 30\n"
+                "$script:ResolvedTools = [pscustomobject]@{ "
+                "Python = 'python'; "
+                f"ProfileContractDefinitionSha256 = '{request_contract_digest}'; "
+                f"ProfileDefinitionSha256 = '{profile_digest}'; "
+                "ToolingFiles = @{ profile_manifest = 'manifest.sha256' } }\n"
+                "function Invoke-BoundedNativeTextOnce { "
+                f"[pscustomobject]@{{ ExitCode = 0; Text = {self._powershell_literal(json.dumps(report, separators=(',', ':')))} }} }}\n"
+                "function Write-TextNoBom { param([string]$Path, [string]$Text) "
+                "[IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false)) }\n"
+                "function Assert-NonEmptyFile { param([string]$Path, [string]$Label) "
+                "if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or "
+                "(Get-Item -LiteralPath $Path).Length -le 0) { throw 'missing_file' } }\n"
+                f"{client}\n"
+                f"$null = Invoke-ClientDbVerification -EvidenceDirectory {self._powershell_literal(root)} -RunId '{run_id}'\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_negative_audit_requires_one_capability_and_zero_business(self) -> None:
         audit = self._function_source("Assert-RequestEntryAuditReport")
         derivation = self._function_source("Invoke-EvidenceDerivationAndAudit")

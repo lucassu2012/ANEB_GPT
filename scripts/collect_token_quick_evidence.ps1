@@ -972,6 +972,7 @@ function Assert-LocalPreflight {
         Git = $git
         RepositoryRoot = $repositoryRoot
         ProfileContractDefinitionSha256 = $contractDigest
+        ProfileDefinitionSha256 = [string]$toolingDigests['profile_definition']
         ToolingFiles = $toolingFiles
         ToolingProvenance = $toolingProvenance
         ServerCa = $serverCa
@@ -3274,7 +3275,7 @@ function Invoke-ClientDbVerification {
             [string]$report.negative_reason_code -cne 'receipt_missing' -or
             [string]$report.endpoint_server_base -cne $NegativeClientServerBase -or
             [string]$report.profile_sha256 -cne (
-                'sha256:' + [string]$script:ResolvedTools.ProfileContractDefinitionSha256
+                'sha256:' + [string]$script:ResolvedTools.ProfileDefinitionSha256
             ) -or
             [int]$report.business_task_count -ne 0 -or
             [int]$report.business_kpi_observation_count -ne 0 -or
