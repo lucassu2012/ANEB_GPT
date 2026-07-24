@@ -2017,6 +2017,71 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         ):
                 self.assertIn(token, verify)
 
+    def test_room_copy_inventory_serializes_on_windows_powershell_5(self) -> None:
+        room_copy = self._function_source("Copy-FrozenRoomDatabase")
+        payload = b"frozen-room-copy-test\n"
+        payload_base64 = base64.b64encode(payload).decode("ascii")
+        payload_sha256 = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            wrapper = root / "room-copy-inventory.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference='Stop'\n"
+                "Set-StrictMode -Version 2.0\n"
+                "$PackageName='com.aneb.probe.codex'\n"
+                "$AdbSerial='TEST-SERIAL'\n"
+                "$script:ResolvedTools=[pscustomobject]@{Adb='adb'}\n"
+                f"$script:FrozenBytes=[Convert]::FromBase64String('{payload_base64}')\n"
+                "function Invoke-AdbTextOnce {\n"
+                "  param([string[]]$Arguments,[string]$Stage)\n"
+                "  if ($Stage -like 'room_state_*') { return 'present' }\n"
+                f"  if ($Stage -like 'room_digest_*') {{ return '{payload_sha256}  frozen' }}\n"
+                "  throw \"unexpected_adb_stage:$Stage\"\n"
+                "}\n"
+                "function Invoke-NativeToFileOnce {\n"
+                "  param([string]$Command,[string[]]$Arguments,[string]$OutputPath,"
+                "[string]$Stage,[int]$TimeoutSeconds)\n"
+                "  [IO.File]::WriteAllBytes($OutputPath,$script:FrozenBytes)\n"
+                "}\n"
+                "function Assert-NonEmptyFile {\n"
+                "  param([string]$Path,[string]$Label)\n"
+                "  if (-not (Test-Path -LiteralPath $Path -PathType Leaf) -or "
+                "(Get-Item -LiteralPath $Path).Length -le 0) { throw 'fixture_file_missing' }\n"
+                "}\n"
+                "function Write-JsonNoBom {\n"
+                "  param([string]$Path,$Value)\n"
+                "  [IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 8),"
+                "(New-Object Text.UTF8Encoding($false)))\n"
+                "}\n"
+                f"{room_copy}\n"
+                f"Copy-FrozenRoomDatabase -EvidenceDirectory {self._powershell_literal(root)}\n"
+                f"$report=Get-Content -LiteralPath {self._powershell_literal(root / 'room-copy-inventory.json')} "
+                "-Raw -Encoding UTF8 | ConvertFrom-Json\n"
+                "if ($report.files.Count -ne 3) { throw 'room_inventory_count_invalid' }\n"
+                "if (($report.files.name -join ',') -cne "
+                "'aneb-probe.db,aneb-probe.db-wal,aneb-probe.db-shm') "
+                "{ throw 'room_inventory_names_invalid' }\n"
+                "if (@($report.files | Where-Object state -ne 'present').Count -ne 0) "
+                "{ throw 'room_inventory_state_invalid' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_audit_report_contract_digest_mismatch_is_rejected_fail_closed(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         marker = "function Assert-RequestEntryAuditReport"

@@ -3183,7 +3183,7 @@ function Copy-FrozenRoomDatabase {
         schema_version = '1.0.0'
         captured_at_utc = [DateTime]::UtcNow.ToString('o')
         app_process_state = 'stopped_before_copy'
-        files = @($inventory)
+        files = $inventory.ToArray()
     })
 }
 
