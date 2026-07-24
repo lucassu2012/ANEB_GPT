@@ -77,6 +77,7 @@ UUID_V4_RE = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SHA256_ID_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 APK_PACKAGE_RE = re.compile(
@@ -1409,7 +1410,7 @@ def verify_serverinfo(
             or profile.get("profile_id") != "token_multimodal_quick"
             or profile.get("profile_version") != "1.2.1"
             or not isinstance(profile.get("profile_sha256"), str)
-            or SHA256_RE.fullmatch(profile["profile_sha256"]) is None
+            or SHA256_ID_RE.fullmatch(profile["profile_sha256"]) is None
         ):
             fail("serverinfo_response_invalid")
         if (
@@ -1497,7 +1498,7 @@ def verify_serverinfo(
             fail("negative_proxy_serverinfo_sequence_invalid")
     return snapshots[0]["execution_capabilities"]["validated_profiles"][0][
         "profile_sha256"
-    ]
+    ].removeprefix("sha256:")
 
 
 def verify_negative_proxy_evidence(

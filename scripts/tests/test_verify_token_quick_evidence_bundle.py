@@ -497,7 +497,7 @@ class BundleFixture:
         }
 
     def _serverinfo(self, sequence: int) -> dict[str, object]:
-        profile_digest = (
+        profile_digest = "sha256:" + (
             (self.repository / PROFILE_PATHS[0])
             .read_text(encoding="ascii")
             .splitlines()[0]
@@ -2303,6 +2303,44 @@ class TokenQuickEvidenceBundleVerifierTests(unittest.TestCase):
 
         self.assertEqual(1, completed.returncode)
         self.assertEqual("serverinfo_sequence_invalid", report["reason_code"])
+
+    def test_serverinfo_rejects_bare_profile_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = BundleFixture(Path(temporary))
+            digests = {}
+            for name in (
+                "identity-serverinfo.json",
+                "start-barrier.json",
+                "end-barrier.json",
+            ):
+                path = fixture.bundle / name
+                serverinfo = json.loads(path.read_text(encoding="utf-8"))
+                profile = serverinfo["execution_capabilities"]["validated_profiles"][0]
+                profile["profile_sha256"] = profile["profile_sha256"].removeprefix(
+                    "sha256:"
+                )
+                write_json(path, serverinfo)
+                label = {
+                    "identity-serverinfo.json": "identity",
+                    "start-barrier.json": "start_barrier",
+                    "end-barrier.json": "end_barrier",
+                }[name]
+                digests[label] = sha256_bytes(path.read_bytes())
+            final = json.loads(
+                (fixture.bundle / "evidence-manifest.final.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            final["source"]["serverinfo_body_sha256"] = digests
+            receipt = json.loads(
+                (fixture.bundle / "pre-start-receipt.json").read_text(encoding="utf-8")
+            )
+            receipt["serverinfo_body_sha256"] = digests["identity"]
+
+            with self.assertRaisesRegex(
+                bundle_verifier.BundleFailure, "^serverinfo_response_invalid$"
+            ):
+                bundle_verifier.verify_serverinfo(fixture.bundle, final, receipt)
 
     def test_self_consistent_manifest_cannot_hide_unclean_final_device(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
