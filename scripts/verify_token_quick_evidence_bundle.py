@@ -1511,7 +1511,6 @@ def verify_negative_proxy_evidence(
     )
     plan = require_dict(plan_value, "negative_proxy_evidence_invalid")
     source = require_dict(final.get("source"), "negative_proxy_evidence_invalid")
-    device = require_dict(final.get("device"), "negative_proxy_evidence_invalid")
     try:
         report = negative_proxy_verifier.verify(
             bundle,
@@ -1529,7 +1528,8 @@ def verify_negative_proxy_evidence(
         or report.get("reason_code") != "ok"
         or report.get("run_id") != final["run_id"]
         or report.get("client_delivery_proven") is not False
-        or report.get("adb_serial_sha256") != device.get("adb_serial_sha256")
+        or not isinstance(report.get("adb_transport_label_sha256"), str)
+        or SHA256_RE.fullmatch(report["adb_transport_label_sha256"]) is None
         or report.get("raw_files_verified")
         != len(negative_proxy_verifier.RAW_FILE_NAMES)
     ):

@@ -1582,7 +1582,7 @@ class NegativeBundleFixture(BundleFixture):
             canonical(ready) + b"\n" + canonical(passed) + b"\n"
         )
         (self.bundle / "negative-proxy.stderr.txt").write_bytes(b"")
-        mapping = f"{DEVICE_SERIAL} tcp:18765 tcp:{host_port}\n".encode("ascii")
+        mapping = f"UsbFfs tcp:18765 tcp:{host_port}\n".encode("ascii")
         (self.bundle / "adb-reverse-preflight.txt").write_bytes(b"\n")
         (self.bundle / "adb-reverse-active.txt").write_bytes(mapping)
         (self.bundle / "adb-reverse-before-remove.txt").write_bytes(mapping)

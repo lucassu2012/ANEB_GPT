@@ -19,6 +19,7 @@ PEER_SHA256 = "b" * 64
 DEVICE_PORT = 18765
 HOST_PORT = 45678
 DEVICE_SERIAL = "ABC123"
+REVERSE_TRANSPORT_LABEL = "UsbFfs"
 
 
 def canonical_json(value: object) -> bytes:
@@ -134,7 +135,9 @@ class EvidenceFixture:
         )
         (self.root / "negative-proxy.stderr.txt").write_bytes(b"")
         mapping = (
-            f"{DEVICE_SERIAL} tcp:{DEVICE_PORT} tcp:{HOST_PORT}\n".encode("ascii")
+            f"{REVERSE_TRANSPORT_LABEL} tcp:{DEVICE_PORT} tcp:{HOST_PORT}\n".encode(
+                "ascii"
+            )
         )
         (self.root / "adb-reverse-preflight.txt").write_bytes(b"\n")
         (self.root / "adb-reverse-active.txt").write_bytes(mapping)
@@ -173,7 +176,7 @@ class NegativeProxyEvidenceVerifierTests(unittest.TestCase):
                 "proxy_receipt_sha256",
                 "proxy_stdout_sha256",
                 "reverse_evidence_sha256",
-                "adb_serial_sha256",
+                "adb_transport_label_sha256",
                 "device_port",
                 "host_port",
                 "client_delivery_proven",
@@ -189,6 +192,10 @@ class NegativeProxyEvidenceVerifierTests(unittest.TestCase):
         self.assertEqual(PEER_SHA256, report["peer_certificate_sha256"])
         self.assertEqual(DEVICE_PORT, report["device_port"])
         self.assertEqual(HOST_PORT, report["host_port"])
+        self.assertEqual(
+            hashlib.sha256(REVERSE_TRANSPORT_LABEL.encode("ascii")).hexdigest(),
+            report["adb_transport_label_sha256"],
+        )
         self.assertIs(False, report["client_delivery_proven"])
         self.assertEqual(12, report["raw_files_verified"])
 
@@ -416,9 +423,8 @@ class NegativeProxyEvidenceVerifierTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = EvidenceFixture(Path(temporary))
             changed = (
-                f"{DEVICE_SERIAL} tcp:{DEVICE_PORT} tcp:{HOST_PORT + 1}\n".encode(
-                    "ascii"
-                )
+                f"{REVERSE_TRANSPORT_LABEL} tcp:{DEVICE_PORT} "
+                f"tcp:{HOST_PORT + 1}\n".encode("ascii")
             )
             (fixture.root / "adb-reverse-active.txt").write_bytes(changed)
             (fixture.root / "adb-reverse-before-remove.txt").write_bytes(changed)
@@ -443,9 +449,8 @@ class NegativeProxyEvidenceVerifierTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 fixture = EvidenceFixture(Path(temporary))
                 (fixture.root / name).write_bytes(
-                    f"{DEVICE_SERIAL} tcp:{DEVICE_PORT} tcp:{HOST_PORT}\n".encode(
-                        "ascii"
-                    )
+                    f"{REVERSE_TRANSPORT_LABEL} tcp:{DEVICE_PORT} "
+                    f"tcp:{HOST_PORT}\n".encode("ascii")
                 )
 
                 with self.assertRaises(NegativeProxyEvidenceFailure) as raised:
@@ -602,9 +607,8 @@ class NegativeProxyEvidenceVerifierTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = EvidenceFixture(Path(temporary))
             (fixture.root / "adb-reverse-before-remove.txt").write_bytes(
-                f"{DEVICE_SERIAL} tcp:{DEVICE_PORT} tcp:{HOST_PORT + 1}\n".encode(
-                    "ascii"
-                )
+                f"{REVERSE_TRANSPORT_LABEL} tcp:{DEVICE_PORT} "
+                f"tcp:{HOST_PORT + 1}\n".encode("ascii")
             )
 
             with self.assertRaises(NegativeProxyEvidenceFailure) as raised:

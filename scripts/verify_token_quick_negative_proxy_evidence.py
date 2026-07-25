@@ -605,8 +605,10 @@ def _verify_reverse(
     if active_mapping != before_mapping or active_mapping[1] != stdout_host_port:
         fail("negative_proxy_reverse_binding_mismatch")
     reverse_digest = _sha256(preflight + active + before_remove + final)
-    serial_digest = _sha256(active_mapping[0].encode("ascii"))
-    return reverse_digest, serial_digest
+    # The first `adb reverse --list` column is an ADB transport label, not a
+    # portable device serial. Huawei's Windows USB transport reports `UsbFfs`.
+    transport_label_digest = _sha256(active_mapping[0].encode("ascii"))
+    return reverse_digest, transport_label_digest
 
 
 def verify(
@@ -669,7 +671,7 @@ def verify(
     if stderr_raw != b"":
         fail("negative_proxy_stderr_not_empty")
     host_port, stdout_sha256 = _verify_stdout(stdout_raw, run_id=run_id)
-    reverse_sha256, adb_serial_sha256 = _verify_reverse(
+    reverse_sha256, adb_transport_label_sha256 = _verify_reverse(
         root,
         device_port=device_port,
         stdout_host_port=host_port,
@@ -690,7 +692,7 @@ def verify(
         "proxy_receipt_sha256": receipt_sha256,
         "proxy_stdout_sha256": stdout_sha256,
         "reverse_evidence_sha256": reverse_sha256,
-        "adb_serial_sha256": adb_serial_sha256,
+        "adb_transport_label_sha256": adb_transport_label_sha256,
         "device_port": device_port,
         "host_port": host_port,
         "client_delivery_proven": client_delivery_proven,
