@@ -3,12 +3,12 @@
 > ［KNOWN｜HIGH］D-80 已于 2026-07-19 取代本文中的共享状态、lease、待交接和受限 Verifier
 > 操作规则；这些词在事故叙述中仅表示历史事实，不能再作为当前门禁。
 
-> ［KNOWN｜HIGH］反方结论：M0-EC1 仍不能标记为“跨端正向验收完成”，但 E-01 服务端切换
-> 子阶段已经完成，不能继续写“0.8.0 尚未部署”。commit `49095c0` 的六个 GitHub CI job 已成功，
-> 0.5.12/code 44 云端 APK 已核对，但它是 D-87 前一版历史基线，不能用于本轮正式取证。E-01 当前运行 0.8.0；终态 success 证据和
-> 独立锁内验后检查支持这一部署状态，同时原部署进程 rc=99 必须保留为 watchdog 清理竞态误报，
-> 不能改写为命令返回成功。本轮本地整仓门禁已通过；剩余门禁是 clean commit 的云端 CI、新的同提交 APK，以及 P40 正/负向 run、
-> 同-run双 barrier、D-87 READY 审计和结束清理。
+> ［KNOWN｜HIGH］2026-07-25 状态更新：M0-EC1 Token Quick 窄切片已经完成正负跨端 READY，
+> 但不能扩大为 M0 全部完成或全部 Profile 已统一。正向 source `10927c1` / CI `30124854408` /
+> run `019f95f9-a317-7766-9725-243b9660b9f1` 与负向 source `67eb66d` / CI `30162011890` /
+> run `019f99c7-5b40-75ba-ad58-b5b522e9abf9` 均由独立 release verifier 复核通过。
+> 正负使用不同 CI APK，因此不能冒充同二进制性能 A/B。完整来源、READY 摘要、结果、清理和
+> 剩余边界见 `M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md`；本文后续保留合同形成过程和历史事故。
 
 ## 1. 目标与非目标
 
@@ -25,7 +25,7 @@
 
 | 单元 | 候选版本 | 当前状态 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.12-codex，code 44，Room v19 | ［KNOWN｜HIGH］commit `49095c0314ac3900b6ed0c306d2eeaafc2edd87f` 的 GitHub Actions run `29659812753` 与云端 APK SHA-256=`04853208A59E35906366A61A92251CDED8BEDEA307753A37CD14844926FAD7EA` 是 D-87 前一版历史基线；包名/版本/签名/zipalign 已核对，但它不包含本轮正负采集与 READY 发布合同。正式 P40 运行必须改用本轮 clean commit 及其同提交 CI APK；新 commit/run/SHA 在提交并通过 CI 后回填。0.5.11 负向证据只保留为历史。 |
+| P1 / ANEB Probe Android | 0.5.12-codex，code 44，Room v19 | ［KNOWN｜HIGH］正式正向 source `10927c197770fec02db8237d184f76fa0edc88f2` / CI `30124854408` / APK `aeb429f2…05fd`，正式负向 source `67eb66d3632f39f1445bb8785c047cc080f624a6` / CI `30162011890` / APK `f86aef14…c26e`；两者各自在同 run 内绑定 APK、设备、Profile、服务器与 READY。两提交的运行源目录无文件差异，但 APK 和 Debug 签名不同，不能声称严格同二进制 A/B。 |
 | P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］E-01 当前 active；live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`，来源 commit=`49095c0314ac3900b6ed0c306d2eeaafc2edd87f`。能力回执、旧端点、合成弱网与 UDP smoke 通过；部署终态 success 证据闭合，锁内验后共享主机指纹一致且临时残留为 0。原部署进程 rc=99 是 success 证据提交后的 watchdog collect/stop 误报，不能写成 rc=0。 |
 | P3 / aneb-ai-behavior-model | 0.3.1 | ［KNOWN｜HIGH］生成器按模型与 seed 可复现选择一个 1MiB 返回附件；本地全仓门禁中的 38 项行为模型测试通过 |
 | catalog / Profile 治理 | 1.5.0 | ［KNOWN｜HIGH］索引 Quick 1.2.1，并登记/冻结 request-entry 精确计数证据合同；本地 catalog 门禁通过 |
@@ -104,9 +104,9 @@
 | P2 能力加载、规范化哈希、回执与三项真实 handler | ［KNOWN｜HIGH］Go 离线测试与 E-01 live smoke 通过，当前 `/serverinfo` 精确返回 0.8.0 能力回执 | 0.8.0 能 fail closed，并能为精确 Quick 生成能力回执；E-01 当前已运行对应二进制 | 不能证明 P40 已调用 handler、接收完整响应或完成跨端正向验收 |
 | 部署脚本安全与候选回执 smoke | ［KNOWN｜HIGH］第二次受锁公网切换已执行；success 终态证据闭合，锁内验后 live/共享主机/残留检查通过；原部署进程仍如实记录 rc=99 | 当前 E-01 0.8.0 部署状态、精确来源与切换前后共享主机指纹可审计；首次自动回滚路径也保留历史实测 | 不能把 rc=99 改写成部署命令成功，也不能据此声明 P40 正向 run 或完整 M0-EC1 已完成 |
 | P1 解析、能力门禁与零业务请求路径 | ［KNOWN｜HIGH］0.5.11 历史门禁曾通过；0.5.12 的同-run传递、真实测量端点冻结、拒绝后单次持久化定向测试及最终 Android 单测/构建/Lint/发布边界门禁均通过；2026-07-23 本地 Debug 候选 SHA-256 为 `357D14DDF3F5A0B525045EB282E9369F6688915164F0BAF7071AA38AB5DF094E`，但它不是云端工件 | 缺失/冲突回执在控制面后、首个业务请求前拒绝；Quick 运行包不能被其他 variant 的自洽文件替换；合成 transport 的业务请求数为 0；同一 Token run 可绑定服务端控制/业务日志 | 不能证明 E-01 公网或 P40 真机路径 |
-| GitHub CI 与云端 APK | ［KNOWN｜HIGH］commit `49095c0` 的 run `29659812753` 六个 CI jobs 全部成功；0.5.12 APK 的 manifest/package/version/SHA/signature/zipalign 已独立核对，但这是 D-87 前一版历史基线 | 服务端 0.8.0 与上一版 App 有精确可追溯来源；可用于历史审计 | 不能作为本轮 D-82/D-86/D-87 正式真机候选；正式运行必须等待本轮 clean commit 的新 CI APK，也不能证明 P40 正向 Quick 已验收 |
-| P40 Pro / E-01 负向真机联调 | ［KNOWN｜HIGH］两次 Quick 客户端结果均 fail closed，持久化 INVALID/未评分且任务/KPI 字段为 0；界面原因指向能力回执缺失，但 retained result 未持久化机器 `reason_code` | P1 的客户端门禁会拒绝不兼容节点并且不产生客户端业务产物 | 现有包缺原始 `/serverinfo`、同 run 服务端访问计数/日志和 PCAP，不能单靠它证明目标必为 0.7 或服务端绝对零业务 HTTP 请求；也不能声称 0.8.0 正向路径已验收 |
-| 全仓质量门 | ［KNOWN｜HIGH］2026-07-23 本轮本地门禁 PASS：Android 单测/构建/Lint/发布边界、Profile/结果合同、server、gateway、601 项脚本测试（16 项为平台能力受限的显式 skip）及 41 项行为模型测试全部通过；600 个跟踪文件凭据扫描 PASS。D-82/D-86/D-87 正负模式、原子 READY 发布、父级 reparse、私有 ACL、Room sidecar、三 subject provenance、实际端点冻结和重复持久化拒绝均在本轮覆盖。`d0a904d` 的历史 GitHub run `29661388755` 仍为 watchdog 修复基线；本轮新 CI 尚未运行 | 部署侧覆盖 clean commit 绑定构建、`GOFIPS140=off` 污染覆盖、严格 staged/live 回执、远端互斥、原子回滚、终态证据和 watchdog 最终状态判定；采集侧已具备定向 fail-closed 回归 | 本地门禁不能替代 GitHub provenance 或 P40 正/负向跨端证据；本轮新提交与新 CI 未产生前不能沿用旧候选身份 |
+| GitHub CI 与云端 APK | ［KNOWN｜HIGH］正向 run `30124854408` 与负向 run `30162011890` 均完成 clean commit 构建、独立 provenance 复核和绿色 CI；负向最终 run 为 7/7 jobs 全绿 | 两条现场证据各自具有精确可追溯 APK 来源 | 正负 APK 字节与 Debug 签名不同，不能作为严格同二进制性能 A/B |
+| P40 Pro / E-01 正负真机联调 | ［KNOWN｜HIGH］正向 READY SHA `d67efb7f…790b`：20/3/1、3 个成功任务、99.2/A 但 `LOW/INCONCLUSIVE`；负向 READY SHA `b801131d…07af`：`receipt_missing`、control 1 / business 0、客户端任务/KPI/评分产物为零；两者独立 verifier PASS | P1/P2/P3 的 Token Quick 正向精确执行合同与负向 fail-closed 合同均在 P40/E-01 窄切片闭环 | 不能证明全部 Profile、外场质量、正式 Release 或真实厂商画像 |
+| 全仓质量门 | ［KNOWN｜HIGH］负向最终提交 `67eb66d` 的定向门禁为 negative proxy 25/25、collector 89/89、raw 41/41、bundle 118/118、release 27/27；GitHub run `30162011890` 7/7 jobs 全绿。Huawei stale WMS 与 `UsbFfs` transport-label 语义问题均先被 fail-closed 门拦截、修复并回归 | 本地与云端门禁、provenance、现场 READY 和清理形成连续证据链 | 不能替代未执行的外场、多节点、无线权限或正式签名发布验收 |
 
 ### 6.1 云端工件与现场 0.7.0 语境下的客户端负向证据
 
@@ -250,7 +250,7 @@ serverinfo/barrier 响应和客户端冻结结果。判定器本身不证明记�
 ［KNOWN｜HIGH］候选构建和部署前 Go 测试还必须显式固定 `GOFIPS140=off`。宿主为 `latest` 时可生成不同
 二进制；未记录或未覆盖该污染的 candidate/provenance 不可部署。
 
-### 7.2 D-82/D-86 正负向现场采集器（本地实现完成，真机证据待生成）
+### 7.2 D-82/D-86 正负向现场采集器（真机 READY 已生成）
 
 ［KNOWN｜HIGH］仓库现有 `scripts/collect_token_quick_evidence.ps1` 作为 Token Quick 正/负向的有界现场
 采集入口，并由 `prepare_token_run_evidence.py`、`verify_token_run_audit.py`、
@@ -273,16 +273,17 @@ Administrators，并在预检、创建后与发布前逐级拒绝父级 junction
 collection/run/mode/manifest SHA，并复核 Profile scope、正负计数、source/server/APK/device 身份和关键
 reverified/recomputed 标志。上述发布与复核链是“可信采集主机与获授权操作者”假设下的强内部一致性证明，
 不是对恶意采集主机、被替换的 ADB/系统工具或物理设备攻击者的密码学远程证明，也不事后证明 EvidenceRoot
-历史 ACL。当前增量加固正在统一复跑整仓门禁；
-既往及定向子测试通过只证明对应离线代码路径，不等于已经产生 P40/E-01 正向现场证据，最终测试数字以本次
-提交和 GitHub CI 的可追溯结果为准。
+历史 ACL。2026-07-25 的最终 READY 已使用该消费者完成独立重算；
+正向和负向现场结论只以 `M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md` 记录的 run、READY、manifest
+与 verification report 为准，既往及定向子测试仍只证明对应离线代码路径。
 
 ［KNOWN｜HIGH］`-EvidenceMode negative` 已实现 D-86 的 `negative_receipt_missing` 路径：一次性本机 loopback
 代理保留真实上游回执，仅向 Debug App 删除顶层 `execution_capabilities`；固定设备端口与动态主机端口通过
 精确 `adb reverse --no-rebind` 绑定，并在结束时只清理本轮映射。独立 verifier 同时要求客户端先持久化
 `receipt_missing`、score/grade 为 null、任务/KPI/网络产物为零、代理明确 `client_delivery_proven=false`，以及
-E-01 同-run 业务入口为零。Room 主 DB 必须存在，WAL/SHM 只允许同为存在或同为缺失。该实现和离线测试不等于
-已经取得真机负向证据；首次正式 P40 run 前仍需 clean commit、CI 候选来源证明和实时干净现场。
+E-01 同-run 业务入口为零。Room 主 DB 必须存在，WAL/SHM 只允许同为存在或同为缺失。该实现已在负向
+run `019f99c7-5b40-75ba-ad58-b5b522e9abf9` 生成 READY，并由独立消费者重算通过；其结论仍只适用于
+本次 Token Quick `receipt_missing` 合同。
 
 ## 8. 离线复核入口
 
@@ -298,7 +299,7 @@ Push-Location app; .\gradlew.bat ':probe:testDebugUnitTest'; Pop-Location
 powershell -ExecutionPolicy Bypass -File scripts/quality_gate.ps1
 ```
 
-［KNOWN｜HIGH］E-01 0.8.0 服务端切换已完成；commit `49095c0`、对应 GitHub CI 与 0.5.12 云端 APK
-只作为 D-87 前一版历史基线。当前缺口是：完成本轮整仓门禁并提交，取得同提交的新 CI APK，确认签名
-兼容，再在 P40 实时干净现场完成正/负向 run、D-82/D-86/D-87 READY 来源绑定审计和结束清理。
-缺口完成前不得把本记录改写成完整跨端验收。
+［KNOWN｜HIGH］E-01 0.8.0 服务端切换、同提交 CI APK、P40 正负 run、D-82/D-86/D-87 READY
+来源绑定审计和结束清理均已完成；本切片的最终记录为
+`M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md`。M0 总体缺口仍包括其他 Profile 的通用执行合同、
+外场/三级节点、真实授权画像、无线权限证据和正式签名 Release；不得把本窄切片改写为上述目标已完成。
