@@ -1680,6 +1680,39 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_negative_completion_requires_contract_detail(self) -> None:
+        boundary = self._function_source("Get-PostMarkerLogText")
+        completion = self._function_source("Get-TokenQuickCompletionFromLog")
+        nonce = "b" * 32
+        run_id = "019f8000-0000-7000-8000-000000000006"
+        log_text = (
+            f"D82_CAPTURE_MARKER nonce={nonce}\n"
+            f"TOKEN_V2_START run_id={run_id} variant=quick\n"
+            f"TOKEN_V2_RADIO run_id={run_id} status=unavailable samples=0\n"
+            f"TOKEN_V2_DB_WRITE run_id={run_id} ok=true\n"
+            f"TOKEN_V2_CONTRACT run_id={run_id} status=rejected reason=receipt_missing\n"
+            f"TOKEN_V2_END run_id={run_id} status=contract_rejected\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper = Path(temporary) / "negative-completion-missing-detail.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                f"{boundary}\n{completion}\n"
+                f"$actual = Get-TokenQuickCompletionFromLog -Text {self._powershell_literal(log_text)} "
+                f"-MarkerNonce '{nonce}' -EvidenceModeValue 'negative'\n"
+                "if ($null -ne $actual) { throw 'negative_run_should_not_be_returned' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [self.powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper)],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_negative_launch_passes_only_the_fixed_loopback_origin_to_the_app(self) -> None:
         launch = self._function_source("Start-TokenQuickRun")
         with tempfile.TemporaryDirectory() as temporary:
@@ -2008,7 +2041,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         log_text = (
             f"D82_CAPTURE_MARKER nonce={nonce}\n"
             f"TOKEN_V2_START run_id={run_id} variant=quick\n"
-            f"TOKEN_V2_CONTRACT run_id={run_id} status=rejected reason=receipt_missing\n"
+            f"TOKEN_V2_CONTRACT run_id={run_id} status=rejected reason=receipt_missing detail=x\n"
             f"TOKEN_V2_RADIO run_id={run_id} status=unavailable samples=0\n"
             f"TOKEN_V2_DB_WRITE run_id={run_id} ok=true\n"
             f"TOKEN_V2_END run_id={run_id} status=contract_rejected\n"

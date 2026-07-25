@@ -1468,7 +1468,10 @@ class NegativeBundleFixture(BundleFixture):
             f"TOKEN_V2_START run_id={RUN_ID} variant=quick server={negative_server_base}",
             f"TOKEN_V2_RADIO run_id={RUN_ID} status=unavailable samples=0",
             f"TOKEN_V2_DB_WRITE run_id={RUN_ID} ok=true",
-            f"TOKEN_V2_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing",
+            (
+                f"TOKEN_V2_CONTRACT run_id={RUN_ID} status=rejected "
+                "reason=receipt_missing detail=contract_rejected"
+            ),
             f"TOKEN_V2_END run_id={RUN_ID} status=contract_rejected",
         )
         (self.bundle / "app-logcat.txt").write_text(

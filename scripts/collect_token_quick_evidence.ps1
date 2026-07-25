@@ -2753,7 +2753,7 @@ function Get-TokenQuickCompletionFromLog {
         $required = @(
             "TOKEN_V2_RADIO run_id=$escaped status=[^\s]+ samples=[0-9]+\b",
             "TOKEN_V2_DB_WRITE run_id=$escaped ok=true\b",
-            "TOKEN_V2_CONTRACT run_id=$escaped status=rejected reason=receipt_missing\b",
+            "TOKEN_V2_CONTRACT run_id=$escaped status=rejected reason=receipt_missing detail=[^\s]+(?:\r?\n|$)",
             "TOKEN_V2_END run_id=$escaped status=contract_rejected\b"
         )
         $positions = New-Object System.Collections.Generic.List[int]

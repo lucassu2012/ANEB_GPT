@@ -773,7 +773,7 @@ def verify_logcat_lifecycle(
             ),
             re.compile(
                 rf"TOKEN_V2_CONTRACT run_id={escaped}\b "
-                rf"status=rejected reason=receipt_missing\s*$"
+                rf"status=rejected reason=receipt_missing detail=\S+\s*$"
             ),
             re.compile(
                 rf"TOKEN_V2_END run_id={escaped}\b "

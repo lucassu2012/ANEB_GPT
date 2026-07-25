@@ -39,7 +39,10 @@ def negative_log_events() -> list[str]:
         f"TOKEN_V2_START run_id={RUN_ID} variant=quick server=https://loopback:38443",
         f"TOKEN_V2_RADIO run_id={RUN_ID} status=unavailable samples=0",
         f"TOKEN_V2_DB_WRITE run_id={RUN_ID} ok=true",
-        f"TOKEN_V2_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing",
+        (
+            f"TOKEN_V2_CONTRACT run_id={RUN_ID} status=rejected "
+            "reason=receipt_missing detail=节点能力合同校验失败：节点未返回机器可读能力回执，测试已停止。"
+        ),
         f"TOKEN_V2_END run_id={RUN_ID} status=contract_rejected",
     ]
 
@@ -256,6 +259,20 @@ class TokenQuickRawStateVerifierTests(unittest.TestCase):
 
         self.assertEqual("negative_receipt_missing", report["execution_mode"])
         self.assertEqual(5, report["logcat_event_count"])
+
+    def test_receipt_missing_contract_detail_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            events = negative_log_events()
+            events[3] = (
+                f"TOKEN_V2_CONTRACT run_id={RUN_ID} status=rejected "
+                "reason=receipt_missing"
+            )
+            fixture.write("app-logcat.txt", fixture.logcat(events=events))
+            with self.assertRaises(raw_verifier.RawStateVerificationFailure) as captured:
+                fixture.verify(execution_mode="negative_receipt_missing")
+
+        self.assertEqual("raw_logcat_lifecycle_invalid", captured.exception.reason_code)
 
     def test_unknown_or_non_string_execution_mode_is_rejected(self) -> None:
         for execution_mode in ("negative", None, ["positive"]):
