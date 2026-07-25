@@ -2,7 +2,7 @@
 # ASCII-only. PowerShell 5.1 compatible.
 #
 # Safety sequence:
-#   1. Validate the catalog, published Token Quick bundle, and all Go server tests locally.
+#   1. Validate the catalog, published execution bundles, and all Go server tests locally.
 #   2. Cross-compile into a unique local temporary directory.
 #   3. Upload into a unique remote staging directory.
 #   4. Start the candidate on a loopback-only temporary port and validate its receipt.
@@ -30,6 +30,10 @@ $TokenQuickBundle = Join-Path $ProfilesDir 'published\token_multimodal_quick'
 $TokenQuickProfile = Join-Path $TokenQuickBundle 'profile.json'
 $TokenQuickRuntimePlan = Join-Path $TokenQuickBundle 'runtime_plan.json'
 $TokenQuickManifest = Join-Path $TokenQuickBundle 'manifest.sha256'
+$RealtimeQuickBundle = Join-Path $ProfilesDir 'published\ai_realtime_voice_quick'
+$RealtimeQuickProfile = Join-Path $RealtimeQuickBundle 'profile.json'
+$RealtimeQuickRuntimePlan = Join-Path $RealtimeQuickBundle 'runtime_plan.json'
+$RealtimeQuickManifest = Join-Path $RealtimeQuickBundle 'manifest.sha256'
 $Unit = Join-Path $ServerDir 'aneb-server.service'
 $VerifyCatalog = Join-Path $PSScriptRoot 'verify_spec_catalog.py'
 $BuildCandidate = Join-Path $PSScriptRoot 'build_server_candidate.py'
@@ -136,6 +140,9 @@ function Invoke-LocalSafetyGates {
     Assert-RequiredFile -Path $TokenQuickProfile -Label 'Token Quick profile'
     Assert-RequiredFile -Path $TokenQuickRuntimePlan -Label 'Token Quick runtime plan'
     Assert-RequiredFile -Path $TokenQuickManifest -Label 'Token Quick manifest'
+    Assert-RequiredFile -Path $RealtimeQuickProfile -Label 'Realtime Quick profile'
+    Assert-RequiredFile -Path $RealtimeQuickRuntimePlan -Label 'Realtime Quick runtime plan'
+    Assert-RequiredFile -Path $RealtimeQuickManifest -Label 'Realtime Quick manifest'
     foreach ($profilePath in $RootProfileFiles) {
         Assert-RequiredFile -Path $profilePath -Label 'root profile'
     }
@@ -211,7 +218,7 @@ function Invoke-LocalSafetyGates {
 
     Assert-RepositoryAtCommit -ExpectedCommit $script:ExpectedSourceCommit -Stage 'after local safety gates'
 
-    Write-Host 'local_safety_gates=pass catalog=verified server_tests=pass quick_bundle=complete'
+    Write-Host 'local_safety_gates=pass catalog=verified server_tests=pass execution_bundles=complete'
 }
 
 function Copy-ToRemote {
@@ -256,6 +263,9 @@ try {
         'execution-profiles/token_multimodal_quick/profile.json' = $TokenQuickProfile
         'execution-profiles/token_multimodal_quick/runtime_plan.json' = $TokenQuickRuntimePlan
         'execution-profiles/token_multimodal_quick/manifest.sha256' = $TokenQuickManifest
+        'execution-profiles/ai_realtime_voice_quick/profile.json' = $RealtimeQuickProfile
+        'execution-profiles/ai_realtime_voice_quick/runtime_plan.json' = $RealtimeQuickRuntimePlan
+        'execution-profiles/ai_realtime_voice_quick/manifest.sha256' = $RealtimeQuickManifest
     }
     if ($script:HaveIpCert) {
         $CandidateArtifacts['tls/ip-cert.pem'] = $IpCert
@@ -321,7 +331,7 @@ try {
 
     Write-Host '== [3/5] create isolated remote staging directory =='
     $WatchdogUnit = "aneb-deploy-expire-$DeploymentId"
-    $createStage = "set -Eeuo pipefail; umask 077; install -d -m 0700 '$RemoteStage' '$RemoteStage/root-profiles' '$RemoteStage/execution-profiles/token_multimodal_quick' '$RemoteStage/tls'"
+    $createStage = "set -Eeuo pipefail; umask 077; install -d -m 0700 '$RemoteStage' '$RemoteStage/root-profiles' '$RemoteStage/execution-profiles/token_multimodal_quick' '$RemoteStage/execution-profiles/ai_realtime_voice_quick' '$RemoteStage/tls'"
     & ssh @SshOpts $Remote $createStage
     if ($LASTEXITCODE -ne 0) {
         throw "remote staging creation failed with exit code $LASTEXITCODE"
@@ -424,6 +434,7 @@ LIVE_RECEIPT_SHA=""
 BASE_BINARY_SHA=""
 BASE_ROOT_PROFILES_SHA=""
 BASE_QUICK_BUNDLE_SHA=""
+BASE_REALTIME_QUICK_BUNDLE_SHA=""
 BASE_SERVICE_UNIT_SHA=""
 BASE_IP_CERT_SHA=""
 BASE_IP_KEY_SHA=""
@@ -645,6 +656,9 @@ expected = {
     'execution-profiles/token_multimodal_quick/profile.json',
     'execution-profiles/token_multimodal_quick/runtime_plan.json',
     'execution-profiles/token_multimodal_quick/manifest.sha256',
+    'execution-profiles/ai_realtime_voice_quick/profile.json',
+    'execution-profiles/ai_realtime_voice_quick/runtime_plan.json',
+    'execution-profiles/ai_realtime_voice_quick/manifest.sha256',
 }
 if ship_ip_cert == '1':
     expected.add('tls/ip-cert.pem')
@@ -731,6 +745,15 @@ live_paths = {
     ),
     'execution-profiles/token_multimodal_quick/manifest.sha256': Path(
         '/opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/profile.json': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_quick/profile.json'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/runtime_plan.json': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_quick/runtime_plan.json'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/manifest.sha256': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_quick/manifest.sha256'
     ),
 }
 if ship_ip_cert == '1':
@@ -983,6 +1006,15 @@ artifact_source_paths = {
     ),
     'execution-profiles/token_multimodal_quick/manifest.sha256': (
         'profiles/published/token_multimodal_quick/manifest.sha256'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/profile.json': (
+        'profiles/published/ai_realtime_voice_quick/profile.json'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/runtime_plan.json': (
+        'profiles/published/ai_realtime_voice_quick/runtime_plan.json'
+    ),
+    'execution-profiles/ai_realtime_voice_quick/manifest.sha256': (
+        'profiles/published/ai_realtime_voice_quick/manifest.sha256'
     ),
 }
 if ship_ip_cert == '1':
@@ -1464,11 +1496,12 @@ freeze_live_baseline() {
     local sample1_full sample1_v4 sample1_v6 sample1_nft sample1_docker sample1_extra
     local sample2_full sample2_v4 sample2_v6 sample2_nft sample2_docker sample2_extra
     local digest verify_docker_sha
-    validate_server_identity 'aneb-server/0.7.0' pre-switch
-    validate_legacy_surface pre-switch-0.7
+    validate_server_identity 'aneb-server/0.8.0' pre-switch
+    validate_legacy_surface pre-switch-0.8
     BASE_BINARY_SHA="$(file_sha256 /opt/aneb/bin/aneb-server)"
     BASE_ROOT_PROFILES_SHA="$(path_fingerprint /opt/aneb/profiles)"
     BASE_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_quick)"
+    BASE_REALTIME_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_quick)"
     BASE_SERVICE_UNIT_SHA="$(path_fingerprint /etc/systemd/system/aneb-server.service)"
     if [[ "$SHIP_IP_CERT" == "1" ]]; then
         BASE_IP_CERT_SHA="$(path_fingerprint /opt/aneb/tls/ip/cert.pem)"
@@ -1539,7 +1572,7 @@ freeze_live_baseline() {
         "firewall_fingerprint=$BASE_FIREWALL_SHA" \
         > "$STAGE/pre-switch-fingerprints.txt"
     echo 'pre_switch_firewall_stability=verified samples=2'
-    echo 'pre_switch_baseline=verified version=0.7.0 shared_host=frozen'
+    echo 'pre_switch_baseline=verified version=0.8.0 shared_host=frozen'
 }
 
 assert_shared_host_baseline() {
@@ -1627,6 +1660,10 @@ assert_restored_aneb_baseline() {
     }
     [[ "$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_quick)" == "$BASE_QUICK_BUNDLE_SHA" ]] || {
         echo 'ROLLBACK_VERIFY_FAILED surface=quick_bundle' >&2
+        return 1
+    }
+    [[ "$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_quick)" == "$BASE_REALTIME_QUICK_BUNDLE_SHA" ]] || {
+        echo 'ROLLBACK_VERIFY_FAILED surface=realtime_quick_bundle' >&2
         return 1
     }
     [[ "$(path_fingerprint /etc/systemd/system/aneb-server.service)" == "$BASE_SERVICE_UNIT_SHA" ]] || {
@@ -1799,6 +1836,7 @@ restore_item() {
         /opt/aneb/bin/aneb-server|\
         /opt/aneb/profiles|\
         /opt/aneb/execution-profiles/token_multimodal_quick|\
+        /opt/aneb/execution-profiles/ai_realtime_voice_quick|\
         /etc/systemd/system/aneb-server.service|\
         /opt/aneb/tls/ip/cert.pem|\
         /opt/aneb/tls/ip/key.pem) ;;
@@ -1848,6 +1886,7 @@ rollback_live() {
     restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1
     restore_item root-profiles /opt/aneb/profiles || rollback_rc=1
     restore_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick || rollback_rc=1
+    restore_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick || rollback_rc=1
     restore_item service-unit /etc/systemd/system/aneb-server.service || rollback_rc=1
     if [[ "$SHIP_IP_CERT" == "1" ]]; then
         restore_item ip-cert /opt/aneb/tls/ip/cert.pem || rollback_rc=1
@@ -1860,10 +1899,10 @@ rollback_live() {
         wait_live_server || rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
-        validate_server_identity 'aneb-server/0.7.0' rollback || rollback_rc=1
+        validate_server_identity 'aneb-server/0.8.0' rollback || rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
-        ( set -Eeuo pipefail; validate_legacy_surface rollback-0.7 )
+        ( set -Eeuo pipefail; validate_legacy_surface rollback-0.8 )
         local legacy_smoke_rc=$?
         if [[ $legacy_smoke_rc -ne 0 ]]; then
             rollback_rc=1
@@ -1879,7 +1918,7 @@ rollback_live() {
         echo 'ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97' >&2
         return 1
     fi
-    echo 'ROLLBACK_OK version=0.7.0 legacy_surface=pass fingerprints=match' >&2
+    echo 'ROLLBACK_OK version=0.8.0 legacy_surface=pass fingerprints=match' >&2
     return 0
 }
 
@@ -2379,6 +2418,7 @@ cleanup() {
         "/opt/aneb/bin/aneb-server.new-$DEPLOY_ID"
         "/opt/aneb/profiles.new-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/token_multimodal_quick.new-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID"
         "/opt/aneb/tls/ip/cert.pem.new-$DEPLOY_ID"
         "/opt/aneb/tls/ip/key.pem.new-$DEPLOY_ID"
@@ -2388,6 +2428,8 @@ cleanup() {
         "/opt/aneb/profiles.absent-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/token_multimodal_quick.restore-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/token_multimodal_quick.absent-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_quick.restore-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_quick.absent-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.restore-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.absent-$DEPLOY_ID"
         "/opt/aneb/tls/ip/cert.pem.restore-$DEPLOY_ID"
@@ -2544,14 +2586,17 @@ PY
 
 validate_receipt() {
     local base_url="$1"
-    local manifest="$2"
-    local output="$3"
-    local expected_h3="$4"
-    local receipt_sha_path="$5"
+    local token_manifest="$2"
+    local realtime_manifest="$3"
+    local output="$4"
+    local expected_h3="$5"
+    local receipt_sha_path="$6"
     local headers="${output%.json}.headers"
     curl -fksS --connect-timeout 2 --max-time 10 \
         -D "$headers" -o "$output" "$base_url/api/v1/serverinfo"
-    python3 - "$output" "$manifest" "$expected_h3" "$receipt_sha_path" <<'PY'
+    python3 - \
+        "$output" "$token_manifest" "$realtime_manifest" \
+        "$expected_h3" "$receipt_sha_path" <<'PY'
 import hashlib
 import json
 import os
@@ -2578,9 +2623,9 @@ body = json.loads(
 )
 if not isinstance(body, dict):
     raise SystemExit('serverinfo body must be an object')
-if body.get('version') != 'aneb-server/0.8.0':
+if body.get('version') != 'aneb-server/0.8.1':
     raise SystemExit(f'unexpected server version: {body.get("version")!r}')
-expected_h3_text = sys.argv[3]
+expected_h3_text = sys.argv[4]
 if expected_h3_text not in {'true', 'false'}:
     raise SystemExit('invalid expected h3 marker')
 expected_h3 = expected_h3_text == 'true'
@@ -2606,6 +2651,7 @@ if receipt['contract_version'] != '1.0.0':
 expected_primitives = [
     {'primitive_id': 'download', 'wire_contract_id': 'aneb-download-v1'},
     {'primitive_id': 'echo', 'wire_contract_id': 'aneb-echo-v1'},
+    {'primitive_id': 'realtime_sim', 'wire_contract_id': 'aneb-realtime-session-v1'},
     {'primitive_id': 'token_sim', 'wire_contract_id': 'aneb-token-task-v1'},
 ]
 actual_primitives = receipt['primitives']
@@ -2617,28 +2663,41 @@ for item in actual_primitives:
 if actual_primitives != expected_primitives:
     raise SystemExit(f'primitive receipt mismatch: {actual_primitives!r}')
 
-manifest_entries = {}
 manifest_pattern = re.compile(r'([0-9a-f]{64})  ([A-Za-z0-9_.-]+)')
-manifest_lines = Path(sys.argv[2]).read_text(encoding='utf-8').splitlines()
-for line in manifest_lines:
-    match = manifest_pattern.fullmatch(line)
-    if match is None or match.group(2) in manifest_entries:
-        raise SystemExit('invalid or duplicate manifest entry')
-    manifest_entries[match.group(2)] = match.group(1)
-if set(manifest_entries) != {'profile.json', 'runtime_plan.json'}:
-    raise SystemExit(f'unexpected manifest coverage: {set(manifest_entries)!r}')
+
+def read_manifest(path_text):
+    entries = {}
+    for line in Path(path_text).read_text(encoding='utf-8').splitlines():
+        match = manifest_pattern.fullmatch(line)
+        if match is None or match.group(2) in entries:
+            raise SystemExit('invalid or duplicate manifest entry')
+        entries[match.group(2)] = match.group(1)
+    if set(entries) != {'profile.json', 'runtime_plan.json'}:
+        raise SystemExit(f'unexpected manifest coverage: {set(entries)!r}')
+    return entries
+
+token_manifest_entries = read_manifest(sys.argv[2])
+realtime_manifest_entries = read_manifest(sys.argv[3])
 
 profiles = receipt['validated_profiles']
-if not isinstance(profiles, list) or len(profiles) != 1:
+if not isinstance(profiles, list) or len(profiles) != 2:
     raise SystemExit(f'unexpected validated profiles: {profiles!r}')
-profile = profiles[0]
-expected = {
-    'profile_id': 'token_multimodal_quick',
-    'profile_version': '1.2.1',
-    'profile_sha256': 'sha256:' + manifest_entries['profile.json'],
-}
-if profile != expected:
-    raise SystemExit(f'validated profile mismatch: {profile!r} != {expected!r}')
+expected_profiles = [
+    {
+        'profile_id': 'ai_realtime_voice_quick',
+        'profile_version': '1.1.1',
+        'profile_sha256': 'sha256:' + realtime_manifest_entries['profile.json'],
+    },
+    {
+        'profile_id': 'token_multimodal_quick',
+        'profile_version': '1.2.1',
+        'profile_sha256': 'sha256:' + token_manifest_entries['profile.json'],
+    },
+]
+if profiles != expected_profiles:
+    raise SystemExit(
+        f'validated profile mismatch: {profiles!r} != {expected_profiles!r}'
+    )
 canonical = json.dumps(
     receipt,
     sort_keys=True,
@@ -2646,7 +2705,7 @@ canonical = json.dumps(
     ensure_ascii=True,
 ).encode('ascii')
 receipt_sha = hashlib.sha256(canonical).hexdigest()
-receipt_sha_path = Path(sys.argv[4])
+receipt_sha_path = Path(sys.argv[5])
 descriptor, temporary_name = tempfile.mkstemp(
     dir=receipt_sha_path.parent,
     prefix=f'.{receipt_sha_path.name}.',
@@ -2665,7 +2724,8 @@ finally:
         temporary.unlink()
 print(
     'execution_receipt=verified '
-    f'profile=token_multimodal_quick@1.2.1 receipt_sha256={receipt_sha}'
+    'profiles=ai_realtime_voice_quick@1.1.1,token_multimodal_quick@1.2.1 '
+    f'receipt_sha256={receipt_sha}'
 )
 PY
 }
@@ -2690,6 +2750,9 @@ test -f "$STAGE/artifact-manifest.sha256"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/profile.json"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/runtime_plan.json"
 test -f "$STAGE/execution-profiles/token_multimodal_quick/manifest.sha256"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_quick/profile.json"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_quick/runtime_plan.json"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_quick/manifest.sha256"
 CURRENT_STAGE='uploaded_artifacts'
 validate_uploaded_artifacts
 STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"
@@ -2750,6 +2813,7 @@ CURRENT_STAGE='staged_receipt'
 validate_receipt \
     "http://127.0.0.1:$STAGE_PORT" \
     "$STAGE/execution-profiles/token_multimodal_quick/manifest.sha256" \
+    "$STAGE/execution-profiles/ai_realtime_voice_quick/manifest.sha256" \
     "$STAGE/staged-serverinfo.json" \
     false \
     "$STAGE/staged-receipt.sha256"
@@ -2776,7 +2840,7 @@ else
 fi
 
 # Nothing above this line mutates the live ANEB installation.
-# Freeze the exact 0.7 rollback identity and every shared-host surface before
+# Freeze the exact 0.8.0 rollback identity and every shared-host surface before
 # replacing any ANEB-owned live file. PID is intentionally not frozen because
 # both upgrade and rollback restart the ANEB service.
 CURRENT_STAGE='live_snapshot'
@@ -2786,6 +2850,7 @@ mkdir -m 0700 "$BACKUP"
 snapshot_item live-binary /opt/aneb/bin/aneb-server
 snapshot_item root-profiles /opt/aneb/profiles
 snapshot_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick
+snapshot_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick
 snapshot_item service-unit /etc/systemd/system/aneb-server.service
 if [[ "$SHIP_IP_CERT" == "1" ]]; then
     test -f "$STAGE/tls/ip-cert.pem"
@@ -2822,6 +2887,14 @@ atomic_replace_candidate \
     /opt/aneb/execution-profiles/token_multimodal_quick
 rm -rf -- "/opt/aneb/execution-profiles/token_multimodal_quick.new-$DEPLOY_ID"
 
+cp -a -- "$STAGE/execution-profiles/ai_realtime_voice_quick" \
+    "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID"
+chown -R aneb:aneb "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID"
+atomic_replace_candidate \
+    "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID" \
+    /opt/aneb/execution-profiles/ai_realtime_voice_quick
+rm -rf -- "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID"
+
 install -m 0644 "$STAGE/aneb-server.service" \
     "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID"
 atomic_replace_candidate "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID" \
@@ -2853,10 +2926,11 @@ if ! wait_live_server; then
     exit 1
 fi
 
-validate_server_identity 'aneb-server/0.8.0' live
+validate_server_identity 'aneb-server/0.8.1' live
 validate_receipt \
     'https://127.0.0.1:8443' \
     /opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256 \
+    /opt/aneb/execution-profiles/ai_realtime_voice_quick/manifest.sha256 \
     "$STAGE/live-serverinfo.json" \
     true \
     "$STAGE/live-receipt.sha256"

@@ -37,6 +37,7 @@ class SpecCatalogTest(unittest.TestCase):
             for entry in cls.published["profiles"]
         }
         cls.quick_profile = cls.published_profiles["token_multimodal_quick"]
+        cls.realtime_quick_profile = cls.published_profiles["ai_realtime_voice_quick"]
 
     def _validate_requirements(self, profile, *, required=True):
         errors = []
@@ -54,10 +55,14 @@ class SpecCatalogTest(unittest.TestCase):
     def test_repository_catalog_and_all_references_validate(self):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
-    def test_request_entry_evidence_contract_is_cataloged_and_source_bound(self):
-        self.assertEqual("1.5.0", self.catalog["catalog_version"])
-        self.assertEqual(1, len(self.catalog["execution_evidence_contracts"]))
-        entry = self.catalog["execution_evidence_contracts"][0]
+    def test_execution_evidence_contracts_are_cataloged_and_source_bound(self):
+        self.assertEqual("1.6.0", self.catalog["catalog_version"])
+        self.assertEqual(2, len(self.catalog["execution_evidence_contracts"]))
+        by_id = {
+            entry["contract_id"]: entry
+            for entry in self.catalog["execution_evidence_contracts"]
+        }
+        entry = by_id["aneb-token-quick-request-entry-counts"]
         self.assertEqual(
             "aneb-token-quick-request-entry-counts", entry["contract_id"]
         )
@@ -81,6 +86,33 @@ class SpecCatalogTest(unittest.TestCase):
             profile=profile,
             runtime=runtime,
             label="request-entry-contract",
+            errors=errors,
+        )
+        self.assertEqual([], errors)
+
+        realtime_entry = by_id["aneb-realtime-quick-protocol-signature"]
+        realtime_document = json.loads(
+            (REPO_ROOT / realtime_entry["path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                "contract_id": "aneb-realtime-simulation-engine",
+                "version": "1.0.0",
+            },
+            realtime_document["client_engine"],
+        )
+        realtime_profile = json.loads(
+            (REPO_ROOT / realtime_entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        realtime_runtime = json.loads(
+            (REPO_ROOT / realtime_entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            realtime_document,
+            profile=realtime_profile,
+            runtime=realtime_runtime,
+            label="realtime-protocol-contract",
             errors=errors,
         )
         self.assertEqual([], errors)
@@ -126,7 +158,10 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertTrue(any("must bind Token Quick 1.2.1" in error for error in errors), errors)
 
     def test_execution_evidence_document_rejects_runtime_count_drift(self):
-        entry = self.catalog["execution_evidence_contracts"][0]
+        entry = next(
+            item for item in self.catalog["execution_evidence_contracts"]
+            if item["contract_id"] == "aneb-token-quick-request-entry-counts"
+        )
         document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
         profile = json.loads(
             (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
@@ -144,6 +179,29 @@ class SpecCatalogTest(unittest.TestCase):
             errors=errors,
         )
         self.assertTrue(any("token_sim count" in error for error in errors), errors)
+
+    def test_realtime_execution_evidence_rejects_frame_count_drift(self):
+        entry = next(
+            item for item in self.catalog["execution_evidence_contracts"]
+            if item["contract_id"] == "aneb-realtime-quick-protocol-signature"
+        )
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        profile = json.loads(
+            (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        runtime = json.loads(
+            (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        document["runtime"]["uplink_frames"] += 1
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="realtime-protocol-contract",
+            errors=errors,
+        )
+        self.assertTrue(any("uplink_frames" in error for error in errors), errors)
 
     def test_runtime_bound_and_embedded_network_profiles_use_distinct_policies(self):
         published = next(
@@ -210,10 +268,33 @@ class SpecCatalogTest(unittest.TestCase):
             for entry in self.published["profiles"]
             if entry.get("execution_requirements_policy") == "required"
         }
-        self.assertEqual({"token_multimodal_quick"}, profiles_with_requirements)
-        self.assertEqual({"token_multimodal_quick"}, policies)
-        self.assertEqual(11, len(self.published_profiles) - len(profiles_with_requirements))
+        self.assertEqual(
+            {"token_multimodal_quick", "ai_realtime_voice_quick"},
+            profiles_with_requirements,
+        )
+        self.assertEqual(
+            {"token_multimodal_quick", "ai_realtime_voice_quick"},
+            policies,
+        )
+        self.assertEqual(10, len(self.published_profiles) - len(profiles_with_requirements))
         self.assertEqual([], self._validate_requirements(self.quick_profile))
+        self.assertEqual([], self._validate_requirements(self.realtime_quick_profile))
+
+    def test_realtime_quick_requires_only_realtime_primitive(self):
+        requirements = self.realtime_quick_profile["execution_requirements"]
+        self.assertEqual(
+            "aneb-realtime-simulation-engine",
+            requirements["client_engine"]["contract_id"],
+        )
+        self.assertEqual(
+            [
+                {
+                    "primitive_id": "realtime_sim",
+                    "wire_contract_id": "aneb-realtime-session-v1",
+                }
+            ],
+            requirements["required_primitives"],
+        )
 
     def test_duplicate_primitive_id_fails_schema_and_python_verifier(self):
         profile = copy.deepcopy(self.quick_profile)

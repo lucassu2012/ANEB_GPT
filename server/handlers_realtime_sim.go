@@ -174,6 +174,7 @@ func (a *app) handleRealtimeSim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	a.emitRealtimeProtocolSummary(r, plan, summaries)
 	_ = realtimeWriteJSON(conn, map[string]any{
 		"type":        "session_summary",
 		"session_id":  plan.SessionID,
@@ -181,6 +182,39 @@ func (a *app) handleRealtimeSim(w http.ResponseWriter, r *http.Request) {
 		"protocol_ok": allRealtimeTurnsOK(summaries),
 		"complete_us": nowMicros(),
 	})
+}
+
+func (a *app) emitRealtimeProtocolSummary(
+	r *http.Request,
+	plan realtimeSessionPlan,
+	summaries []realtimeTurnSummary,
+) {
+	scope, runID := auditIdentityWithScope(
+		r.Header.Values(anebRunIDHeader),
+		r.Header.Values(anebAuditScopeHeader),
+	)
+	if scope != "realtime_run" {
+		return
+	}
+	summary := realtimeProtocolSummary{
+		InstanceID: processAuditInstanceID,
+		RunID:      runID,
+		Sessions:   1,
+		Turns:      len(summaries),
+		ProtocolOK: allRealtimeTurnsOK(summaries),
+	}
+	for index, turn := range summaries {
+		summary.UplinkFrames += turn.UplinkFramesReceived
+		summary.DownlinkFrames += turn.DownlinkFramesEmitted
+		if index < len(plan.Turns) && plan.Turns[index].Interrupted {
+			summary.InterruptedTurns++
+		}
+	}
+	sink := a.realtimeSummary
+	if sink == nil {
+		sink = defaultRealtimeProtocolSummarySink()
+	}
+	_ = sink.TryEmit(summary)
 }
 
 func realtimeControlledDisconnectAfterTurn(r *http.Request) (*int, error) {

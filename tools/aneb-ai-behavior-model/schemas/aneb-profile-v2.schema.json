@@ -151,6 +151,15 @@
             "wire_contract_id": {"const": "aneb-download-v1"}
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["primitive_id", "wire_contract_id"],
+          "properties": {
+            "primitive_id": {"const": "realtime_sim"},
+            "wire_contract_id": {"const": "aneb-realtime-session-v1"}
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -170,7 +179,12 @@
           "type": "object",
           "required": ["contract_id", "min_version", "max_version_exclusive"],
           "properties": {
-            "contract_id": {"const": "aneb-token-simulation-engine"},
+            "contract_id": {
+              "enum": [
+                "aneb-token-simulation-engine",
+                "aneb-realtime-simulation-engine"
+              ]
+            },
             "min_version": {"$ref": "#/$defs/semver"},
             "max_version_exclusive": {"$ref": "#/$defs/semver"}
           },
@@ -188,12 +202,56 @@
         },
         "required_primitives": {
           "type": "array",
-          "minItems": 3,
+          "minItems": 1,
           "maxItems": 3,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/server_primitive"}
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "client_engine": {
+                "properties": {
+                  "contract_id": {"const": "aneb-token-simulation-engine"}
+                },
+                "required": ["contract_id"]
+              }
+            },
+            "required": ["client_engine"]
+          },
+          "then": {
+            "properties": {
+              "required_primitives": {
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "client_engine": {
+                "properties": {
+                  "contract_id": {"const": "aneb-realtime-simulation-engine"}
+                },
+                "required": ["contract_id"]
+              }
+            },
+            "required": ["client_engine"]
+          },
+          "then": {
+            "properties": {
+              "required_primitives": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "metric": {

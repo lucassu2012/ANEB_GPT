@@ -238,6 +238,20 @@ func TestRequestAuditLogsAllTokenBusinessPrimitives(t *testing.T) {
 	}
 }
 
+func TestRequestAuditLogsRealtimeBusinessUnderRealtimeScope(t *testing.T) {
+	logs := captureRequestAuditLogs(t, func(handler http.Handler) {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/realtime-sim", nil)
+		request.Header.Set(anebRunIDHeader, testRunID)
+		request.Header.Set("X-Aneb-Audit-Scope", "realtime_run")
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+	})
+
+	want := "method=GET path=/api/v1/realtime-sim role=none scope=realtime_run run_id=" + testRunID
+	if !strings.Contains(logs, want) {
+		t.Fatalf("realtime request was not isolated from Token audit scope: logs=%q", logs)
+	}
+}
+
 func TestRequestAuditRedactsLegacyInvalidAndDuplicateRunIDs(t *testing.T) {
 	logs := captureRequestAuditLogs(t, func(handler http.Handler) {
 		missing := httptest.NewRequest(http.MethodPost, "/api/v1/echo?query-secret=1", strings.NewReader("body-secret"))
@@ -336,11 +350,14 @@ func TestRequestAuditNormalizesAllContractAndUnknownAPIRoutes(t *testing.T) {
 			t.Errorf("contract route %q: got=%+v ok=%v want=%+v", path, got, ok, want)
 		}
 	}
+	realtime, ok := normalizeRequestAuditRoute("/api/v1/realtime-sim")
+	if !ok || realtime != (requestAuditRoute{class: "business", path: "/api/v1/realtime-sim"}) {
+		t.Fatalf("realtime route was not preserved exactly: got=%+v ok=%v", realtime, ok)
+	}
 
 	for _, path := range []string{
 		"/api/v1/profiles",
 		"/api/v1/stream",
-		"/api/v1/realtime-sim",
 		"/api/v1/upload",
 		"/api/v1/toolloop",
 		"/api/v1/results",

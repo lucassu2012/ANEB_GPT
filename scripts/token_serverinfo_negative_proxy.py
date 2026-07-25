@@ -64,6 +64,7 @@ class ProxyConfig:
     upstream_url: str
     ca_file: Path
     evidence_directory: Path
+    delivery_receipt_file: Path | None = None
     max_body_bytes: int = 1024 * 1024
     max_ca_bytes: int = 1024 * 1024
     max_header_bytes: int = 64 * 1024
@@ -127,6 +128,16 @@ def _validate_config(config: ProxyConfig) -> None:
         or len(config.upstream_url.encode("utf-8")) > 2048
         or not isinstance(config.ca_file, Path)
         or not isinstance(config.evidence_directory, Path)
+        or (
+            config.delivery_receipt_file is not None
+            and (
+                not isinstance(config.delivery_receipt_file, Path)
+                or config.delivery_receipt_file.name
+                != "negative-proxy-delivery-receipt.json"
+                or config.delivery_receipt_file.parent
+                != config.evidence_directory.parent
+            )
+        )
     ):
         raise NegativeProxyFailure("config_invalid")
 
@@ -469,6 +480,37 @@ def _write_failure_evidence(
     )
 
 
+def _write_delivery_receipt(
+    *,
+    config: ProxyConfig,
+    run_id: str,
+    body: bytes,
+) -> None:
+    path = config.delivery_receipt_file
+    if path is None:
+        return
+    try:
+        if os.path.lexists(path):
+            raise NegativeProxyFailure("delivery_receipt_exists")
+        receipt = {
+            "schema": "aneb-serverinfo-negative-proxy-delivery-receipt",
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "reason_code": "ok",
+            "run_id": run_id,
+            "response_status": 200,
+            "response_body_bytes": len(body),
+            "response_body_sha256": _sha256(body),
+            "response_write_completed": True,
+            "evidence_scope": "proxy_response_write_completed",
+        }
+        _atomic_write(path, _canonical_json(receipt))
+    except NegativeProxyFailure:
+        raise
+    except OSError:
+        raise NegativeProxyFailure("delivery_receipt_write_failed") from None
+
+
 def _single_header(
     headers: dict[str, list[str]],
     name: str,
@@ -790,6 +832,7 @@ class _SingleUseRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
         self.close_connection = True
 
     def _handle_single_request(self) -> None:
@@ -815,14 +858,37 @@ class _SingleUseRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
+        try:
+            self._send_json(200, body)
+            run_id = self.server.session.run_id
+            if run_id is None:
+                raise NegativeProxyFailure("delivery_run_id_missing")
+            _write_delivery_receipt(
+                config=self.server.session.config,
+                run_id=run_id,
+                body=body,
+            )
+        except (NegativeProxyFailure, OSError) as error:
+            reason_code = (
+                error.reason_code
+                if isinstance(error, NegativeProxyFailure)
+                else "response_write_failed"
+            )
+            self.server.result = ProxyServeResult(
+                status="fail",
+                reason_code=reason_code,
+                run_id=self.server.session.run_id,
+                listen_host=host,
+                listen_port=port,
+            )
+            return
         self.server.result = ProxyServeResult(
             status="pass",
             reason_code="ok",
-            run_id=self.server.session.run_id,
+            run_id=run_id,
             listen_host=host,
             listen_port=port,
         )
-        self._send_json(200, body)
 
     do_GET = _handle_single_request
     do_POST = _handle_single_request
@@ -885,6 +951,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--upstream-url", required=True)
     parser.add_argument("--ca-file", required=True, type=Path)
     parser.add_argument("--evidence-dir", required=True, type=Path)
+    parser.add_argument("--delivery-receipt-file", type=Path)
     parser.add_argument("--listen-port", type=int, default=0)
     parser.add_argument("--request-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--upstream-timeout-seconds", type=float, default=15.0)
@@ -921,6 +988,7 @@ def main(
             upstream_url=arguments.upstream_url,
             ca_file=arguments.ca_file,
             evidence_directory=arguments.evidence_dir,
+            delivery_receipt_file=arguments.delivery_receipt_file,
             max_body_bytes=arguments.max_body_bytes,
             max_ca_bytes=arguments.max_ca_bytes,
             max_header_bytes=arguments.max_header_bytes,

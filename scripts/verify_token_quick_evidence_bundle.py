@@ -466,6 +466,7 @@ def run_android_tool_once(command: list[str], *, failure_reason: str) -> bytes:
     if reader.is_alive():
         process.stdout.close()
         fail("android_tool_output_read_failed")
+    process.stdout.close()
     if timed_out:
         fail("android_tool_timeout")
     if overflow.is_set() or len(output) > MAX_ANDROID_TOOL_OUTPUT_BYTES:

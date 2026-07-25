@@ -24,13 +24,19 @@ const (
 	executionRequirementsContractVersion = "1.0.0"
 	tokenClientEngineContractID          = "aneb-token-simulation-engine"
 	tokenClientEngineContractVersion     = "1.0.0"
+	realtimeClientEngineContractID       = "aneb-realtime-simulation-engine"
+	realtimeClientEngineContractVersion  = "1.0.0"
 	serverCapabilityReceiptContractID    = "aneb-server-capability-receipt"
 	serverCapabilityReceiptVersion       = "1.0.0"
 	echoWireContractID                   = "aneb-echo-v1"
 	downloadWireContractID               = "aneb-download-v1"
+	realtimeWireContractID               = "aneb-realtime-session-v1"
 	tokenQuickExecutionProfileID         = "token_multimodal_quick"
 	tokenQuickExecutionProfileVersion    = "1.2.1"
 	tokenQuickExecutionModeID            = "token_simulation"
+	realtimeQuickExecutionProfileID      = "ai_realtime_voice_quick"
+	realtimeQuickExecutionProfileVersion = "1.1.1"
+	realtimeQuickExecutionModeID         = "ai_realtime_simulation"
 	probeSimulatorExecutionTarget        = "aneb_probe_simulator"
 	probeNodeClaimScope                  = "application_end_to_end_to_probe_node"
 )
@@ -79,10 +85,48 @@ type publishedExecutionProfile struct {
 	ExecutionRequirements json.RawMessage `json:"execution_requirements"`
 }
 
+type executionProfilePolicy struct {
+	ProfileID         string
+	ProfileVersion    string
+	ModeID            string
+	ContractName      string
+	ClientEngineID    string
+	ClientEngine      string
+	RequiredPrimitive map[string]string
+}
+
+var executionProfilePolicies = map[string]executionProfilePolicy{
+	realtimeQuickExecutionProfileID: {
+		ProfileID:      realtimeQuickExecutionProfileID,
+		ProfileVersion: realtimeQuickExecutionProfileVersion,
+		ModeID:         realtimeQuickExecutionModeID,
+		ContractName:   "AI realtime Quick",
+		ClientEngineID: realtimeClientEngineContractID,
+		ClientEngine:   realtimeClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"realtime_sim": realtimeWireContractID,
+		},
+	},
+	tokenQuickExecutionProfileID: {
+		ProfileID:      tokenQuickExecutionProfileID,
+		ProfileVersion: tokenQuickExecutionProfileVersion,
+		ModeID:         tokenQuickExecutionModeID,
+		ContractName:   "Token Quick",
+		ClientEngineID: tokenClientEngineContractID,
+		ClientEngine:   tokenClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"download":  downloadWireContractID,
+			"echo":      echoWireContractID,
+			"token_sim": tokenSimTaskContract,
+		},
+	},
+}
+
 func builtInExecutionPrimitives() []executionPrimitiveCapability {
 	return []executionPrimitiveCapability{
 		{PrimitiveID: "download", WireContractID: downloadWireContractID},
 		{PrimitiveID: "echo", WireContractID: echoWireContractID},
+		{PrimitiveID: "realtime_sim", WireContractID: realtimeWireContractID},
 		{PrimitiveID: "token_sim", WireContractID: tokenSimTaskContract},
 	}
 }
@@ -129,10 +173,11 @@ func loadExecutionCapabilityReceipt(dir string) (serverCapabilityReceipt, error)
 		if len(profile.ExecutionRequirements) == 0 {
 			continue
 		}
-		if profile.ContractVersion != "aneb-profile-v2" ||
-			profile.ProfileID != tokenQuickExecutionProfileID ||
-			profile.Version != tokenQuickExecutionProfileVersion ||
-			profile.ModeID != tokenQuickExecutionModeID ||
+		policy, supportedProfile := executionProfilePolicies[profile.ProfileID]
+		if !supportedProfile ||
+			profile.ContractVersion != "aneb-profile-v2" ||
+			profile.Version != policy.ProfileVersion ||
+			profile.ModeID != policy.ModeID ||
 			profile.ExecutionTarget != probeSimulatorExecutionTarget ||
 			profile.ClaimScope != probeNodeClaimScope {
 			return receipt, fmt.Errorf("%s: unsupported execution profile identity or target", profilePath)
@@ -144,7 +189,7 @@ func loadExecutionCapabilityReceipt(dir string) (serverCapabilityReceipt, error)
 		if err := decodeStrictJSONDocument(profile.ExecutionRequirements, &requirements); err != nil {
 			return receipt, fmt.Errorf("%s: invalid execution_requirements: %w", profilePath, err)
 		}
-		if err := validateExecutionRequirements(requirements, receipt.Primitives); err != nil {
+		if err := validateExecutionProfileRequirements(requirements, policy, receipt.Primitives); err != nil {
 			return receipt, fmt.Errorf("%s: %w", profilePath, err)
 		}
 		manifestDigest, err := verifyRuntimeBundleManifest(bundleDir)
@@ -191,11 +236,19 @@ func decodeStrictJSONDocument(raw []byte, destination any) error {
 }
 
 func validateExecutionRequirements(req executionRequirements, supported []executionPrimitiveCapability) error {
+	return validateExecutionProfileRequirements(req, executionProfilePolicies[tokenQuickExecutionProfileID], supported)
+}
+
+func validateExecutionProfileRequirements(
+	req executionRequirements,
+	policy executionProfilePolicy,
+	supported []executionPrimitiveCapability,
+) error {
 	if req.ContractID != executionRequirementsContractID || req.ContractVersion != executionRequirementsContractVersion {
 		return fmt.Errorf("unsupported execution requirements contract")
 	}
-	if req.ClientEngine.ContractID != tokenClientEngineContractID ||
-		!versionInRange(tokenClientEngineContractVersion, req.ClientEngine) {
+	if req.ClientEngine.ContractID != policy.ClientEngineID ||
+		!versionInRange(policy.ClientEngine, req.ClientEngine) {
 		return fmt.Errorf("client engine contract is incompatible")
 	}
 	if req.ServerCapabilityReceipt.ContractID != serverCapabilityReceiptContractID ||
@@ -216,11 +269,6 @@ func validateExecutionRequirements(req executionRequirements, supported []execut
 		available[capability.PrimitiveID] = capability.WireContractID
 	}
 	seen := make(map[string]struct{}, len(req.RequiredPrimitives))
-	expected := map[string]string{
-		"download":  downloadWireContractID,
-		"echo":      echoWireContractID,
-		"token_sim": tokenSimTaskContract,
-	}
 	for _, required := range req.RequiredPrimitives {
 		if _, duplicate := seen[required.PrimitiveID]; duplicate {
 			return fmt.Errorf("duplicate required primitive %q", required.PrimitiveID)
@@ -233,13 +281,13 @@ func validateExecutionRequirements(req executionRequirements, supported []execut
 		if wire != required.WireContractID {
 			return fmt.Errorf("unsupported wire contract %q for primitive %q", required.WireContractID, required.PrimitiveID)
 		}
-		expectedWire, expectedPrimitive := expected[required.PrimitiveID]
+		expectedWire, expectedPrimitive := policy.RequiredPrimitive[required.PrimitiveID]
 		if !expectedPrimitive || expectedWire != required.WireContractID {
-			return fmt.Errorf("required primitive set does not match Token Quick contract")
+			return fmt.Errorf("required primitive set does not match %s contract", policy.ContractName)
 		}
 	}
-	if len(seen) != len(expected) {
-		return fmt.Errorf("required primitive set does not match Token Quick contract")
+	if len(seen) != len(policy.RequiredPrimitive) {
+		return fmt.Errorf("required primitive set does not match %s contract", policy.ContractName)
 	}
 	return nil
 }

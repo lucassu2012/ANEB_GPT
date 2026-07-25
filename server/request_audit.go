@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	anebRunIDHeader     = "X-Aneb-Run-Id"
-	anebAuditRoleHeader = "X-Aneb-Audit-Role"
+	anebRunIDHeader      = "X-Aneb-Run-Id"
+	anebAuditRoleHeader  = "X-Aneb-Audit-Role"
+	anebAuditScopeHeader = "X-Aneb-Audit-Scope"
 
 	defaultRequestAuditQueueCapacity = 1024
 )
@@ -63,10 +64,11 @@ type requestAuditRoute struct {
 }
 
 var requestAuditContractRoutes = map[string]requestAuditRoute{
-	"/api/v1/echo":       {class: "business", path: "/api/v1/echo"},
-	"/api/v1/token-sim":  {class: "business", path: "/api/v1/token-sim"},
-	"/api/v1/download":   {class: "business", path: "/api/v1/download"},
-	"/api/v1/serverinfo": {class: "control", path: "/api/v1/serverinfo"},
+	"/api/v1/echo":         {class: "business", path: "/api/v1/echo"},
+	"/api/v1/token-sim":    {class: "business", path: "/api/v1/token-sim"},
+	"/api/v1/download":     {class: "business", path: "/api/v1/download"},
+	"/api/v1/realtime-sim": {class: "business", path: "/api/v1/realtime-sim"},
+	"/api/v1/serverinfo":   {class: "control", path: "/api/v1/serverinfo"},
 }
 
 var requestAuditOtherRoute = requestAuditRoute{class: "business", path: "/api/v1/other"}
@@ -246,7 +248,10 @@ func withRequestAuditSink(next http.Handler, sink requestAuditEmitter) http.Hand
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route, ok := normalizeRequestAuditRoute(r.URL.Path)
 		if ok {
-			scope, runID := auditIdentity(r.Header.Values(anebRunIDHeader))
+			scope, runID := auditIdentityWithScope(
+				r.Header.Values(anebRunIDHeader),
+				r.Header.Values(anebAuditScopeHeader),
+			)
 			record := requestAuditRecord{
 				class:  route.class,
 				method: auditMethod(r.Method),
@@ -325,11 +330,29 @@ func normalizeRequestAuditRole(class string, values []string) requestAuditRole {
 // legacy/unscoped request. Only one canonical UUID receives token_run scope;
 // malformed, duplicate, upper-case, or secret-like values are redacted.
 func auditIdentity(values []string) (scope string, runID string) {
-	if len(values) == 0 {
+	return auditIdentityWithScope(values, nil)
+}
+
+func auditIdentityWithScope(runValues []string, scopeValues []string) (scope string, runID string) {
+	if len(runValues) == 0 {
+		if len(scopeValues) != 0 {
+			return "invalid_header", "redacted"
+		}
 		return "legacy_unscoped", "none"
 	}
-	if len(values) != 1 || !canonicalAuditUUID.MatchString(values[0]) {
+	if len(runValues) != 1 || !canonicalAuditUUID.MatchString(runValues[0]) {
 		return "invalid_header", "redacted"
 	}
-	return "token_run", values[0]
+	if len(scopeValues) == 0 {
+		return "token_run", runValues[0]
+	}
+	if len(scopeValues) != 1 {
+		return "invalid_header", "redacted"
+	}
+	switch scopeValues[0] {
+	case "token_run", "realtime_run":
+		return scopeValues[0], runValues[0]
+	default:
+		return "invalid_header", "redacted"
+	}
 }

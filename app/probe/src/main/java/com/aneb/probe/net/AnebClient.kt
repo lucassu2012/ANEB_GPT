@@ -28,19 +28,27 @@ import kotlin.coroutines.resumeWithException
 
 internal const val ANEB_RUN_ID_HEADER = "X-Aneb-Run-Id"
 internal const val ANEB_AUDIT_ROLE_HEADER = "X-Aneb-Audit-Role"
+internal const val ANEB_AUDIT_SCOPE_HEADER = "X-Aneb-Audit-Scope"
 
 internal enum class AnebAuditRole(val headerValue: String) {
     REACHABILITY("reachability"),
     CAPABILITY("capability"),
 }
 
+enum class AnebAuditScope(val headerValue: String) {
+    TOKEN_RUN("token_run"),
+    REALTIME_RUN("realtime_run"),
+}
+
 internal fun Request.Builder.withAnebRunId(
     runId: String?,
     auditRole: AnebAuditRole? = null,
+    auditScope: AnebAuditScope? = null,
 ): Request.Builder = apply {
     if (runId != null) {
         header(ANEB_RUN_ID_HEADER, runId)
         auditRole?.let { header(ANEB_AUDIT_ROLE_HEADER, it.headerValue) }
+        auditScope?.let { header(ANEB_AUDIT_SCOPE_HEADER, it.headerValue) }
     }
 }
 
@@ -101,8 +109,18 @@ class AnebClient private constructor(
         client.connectionPool.evictAll()
     }
 
-    internal fun openWebSocket(url: String, listener: WebSocketListener): WebSocket =
-        client.newWebSocket(Request.Builder().url(url).build(), listener)
+    internal fun openWebSocket(
+        url: String,
+        listener: WebSocketListener,
+        runId: String? = null,
+        auditScope: AnebAuditScope? = null,
+    ): WebSocket = client.newWebSocket(
+        Request.Builder()
+            .url(url)
+            .withAnebRunId(runId, auditScope = auditScope)
+            .build(),
+        listener,
+    )
 
     // ------------------------------------------------------------------ echo
 
@@ -138,10 +156,21 @@ class AnebClient private constructor(
         val syntheticOutageActive: Boolean = false,
     )
 
-    suspend fun echo(url: String, callTimeoutMs: Long? = null, runId: String? = null): EchoResult {
+    suspend fun echo(
+        url: String,
+        callTimeoutMs: Long? = null,
+        runId: String? = null,
+        auditScope: AnebAuditScope? = null,
+    ): EchoResult {
         val body = "{\"probe\":\"aneb\"}"
             .toRequestBody("application/json".toMediaType())
-        val call = client.newCall(Request.Builder().url(url).withAnebRunId(runId).post(body).build())
+        val call = client.newCall(
+            Request.Builder()
+                .url(url)
+                .withAnebRunId(runId, auditScope = auditScope)
+                .post(body)
+                .build(),
+        )
         callTimeoutMs?.let { call.timeout().timeout(it.coerceAtLeast(100L), TimeUnit.MILLISECONDS) }
         val t0Us = nowUs()
         return try {
@@ -836,11 +865,12 @@ class AnebClient private constructor(
         url: String,
         runId: String,
         auditRole: AnebAuditRole,
+        auditScope: AnebAuditScope? = null,
     ): HttpTextResult = simpleCall(
         client.newCall(
             Request.Builder()
                 .url(url)
-                .withAnebRunId(runId, auditRole)
+                .withAnebRunId(runId, auditRole, auditScope)
                 .get()
                 .build(),
         ),

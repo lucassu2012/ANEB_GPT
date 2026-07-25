@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.8.0"
+const serverVersion = "aneb-server/0.8.1"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -21,6 +21,7 @@ type app struct {
 	dataDir               string
 	executionCapabilities serverCapabilityReceipt
 	requestAudit          requestAuditEmitter
+	realtimeSummary       realtimeProtocolSummaryEmitter
 	// allowInject 放行 /stream 的 &inject= 故障注入钩子（P0-C13 前置：
 	// 客户端 seq join/截断/畸形 event 健壮性验收需要服务端可控注入）。
 	// 默认 false；生产/取证部署绝不开启——注入流不是测量数据。

@@ -1655,6 +1655,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output = root / "app-logcat.txt"
+            writer_ready = root / "writer-ready.txt"
             output.write_bytes(b"")
             wrapper = root / "empty-logcat-marker.ps1"
             wrapper.write_text(
@@ -1664,10 +1665,18 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 f"{boundary}\n{marker_writer}\n"
                 "$holder = [Diagnostics.Process]::GetCurrentProcess()\n"
                 "$writer = Start-Job -ScriptBlock {\n"
-                "  param([string]$Path, [string]$Line)\n"
+                "  param([string]$Path, [string]$ReadyPath, [string]$Line)\n"
+                "  [IO.File]::WriteAllText($ReadyPath, 'ready', (New-Object Text.UTF8Encoding($false)))\n"
                 "  Start-Sleep -Milliseconds 300\n"
                 "  [IO.File]::AppendAllText($Path, $Line, (New-Object Text.UTF8Encoding($false)))\n"
-                f"}} -ArgumentList {self._powershell_literal(output)}, {self._powershell_literal(marker_line)}\n"
+                f"}} -ArgumentList {self._powershell_literal(output)}, "
+                f"{self._powershell_literal(writer_ready)}, "
+                f"{self._powershell_literal(marker_line)}\n"
+                "$readyDeadline = [DateTime]::UtcNow.AddSeconds(10)\n"
+                f"while (-not (Test-Path -LiteralPath {self._powershell_literal(writer_ready)} -PathType Leaf)) {{\n"
+                "  if ([DateTime]::UtcNow -ge $readyDeadline) { throw 'writer_start_timeout' }\n"
+                "  Start-Sleep -Milliseconds 50\n"
+                "}\n"
                 "try {\n"
                 f"  $logcat = [pscustomobject]@{{ Process=$holder; OutputPath={self._powershell_literal(output)} }}\n"
                 f"  Write-LogcatCaptureMarker -Logcat $logcat -MarkerNonce '{nonce}' "

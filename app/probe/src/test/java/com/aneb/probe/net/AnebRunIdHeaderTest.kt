@@ -21,6 +21,13 @@ class AnebRunIdHeaderTest {
             .url("https://aneb.test/api/v1/serverinfo")
             .withAnebRunId(runId, AnebAuditRole.CAPABILITY)
             .build()
+        val realtimeRequest = Request.Builder()
+            .url("https://aneb.test/api/v1/realtime-sim")
+            .withAnebRunId(
+                runId,
+                auditScope = AnebAuditScope.REALTIME_RUN,
+            )
+            .build()
 
         assertNull(withoutRunId.header(ANEB_RUN_ID_HEADER))
         assertNull(withoutRunId.header(ANEB_AUDIT_ROLE_HEADER))
@@ -28,5 +35,7 @@ class AnebRunIdHeaderTest {
         assertNull(businessRequest.header(ANEB_AUDIT_ROLE_HEADER))
         assertEquals(runId, capabilityRequest.header(ANEB_RUN_ID_HEADER))
         assertEquals("capability", capabilityRequest.header(ANEB_AUDIT_ROLE_HEADER))
+        assertEquals(runId, realtimeRequest.header(ANEB_RUN_ID_HEADER))
+        assertEquals("realtime_run", realtimeRequest.header(ANEB_AUDIT_SCOPE_HEADER))
     }
 }

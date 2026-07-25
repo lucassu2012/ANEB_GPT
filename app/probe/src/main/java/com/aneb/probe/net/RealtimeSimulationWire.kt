@@ -147,6 +147,7 @@ class RealtimeSimulationWire(private val client: AnebClient) {
 
     suspend fun runSession(
         url: String,
+        runId: String,
         plan: RealtimeSessionWirePlan,
         startAfterPreviousMs: Double,
         callbacks: RealtimeWireCallbacks = RealtimeWireCallbacks(),
@@ -183,7 +184,12 @@ class RealtimeSimulationWire(private val client: AnebClient) {
         val turnResults = mutableListOf<RealtimeTurnWireResult>()
         var sessionSummary: RealtimeSessionSummaryWire? = null
         return try {
-            val activeSocket = client.openWebSocket(url, listener)
+            val activeSocket = client.openWebSocket(
+                url = url,
+                listener = listener,
+                runId = runId,
+                auditScope = AnebAuditScope.REALTIME_RUN,
+            )
             socket = activeSocket
             openNanos = when (val event = receiveEvent(events)) {
                 is WireEvent.Open -> event.atNanos

@@ -1,0 +1,34 @@
+{
+  "schema": "aneb-realtime-protocol-exact-contract",
+  "contract_id": "aneb-realtime-quick-protocol-signature",
+  "version": "1.0.0",
+  "profile": {
+    "id": "ai_realtime_voice_quick",
+    "version": "1.1.1",
+    "canonical_sha256": "sha256:701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7"
+  },
+  "client_engine": {
+    "contract_id": "aneb-realtime-simulation-engine",
+    "version": "1.0.0"
+  },
+  "runtime": {
+    "canonical_sha256": "sha256:f2472d2faa7a3ab51582e1496a6925d106806fdd9747e097e20e38e921d9dc07",
+    "session_count": 1,
+    "turn_count": 3,
+    "frame_ms": 20,
+    "uplink_frames": 400,
+    "uplink_payload_bytes": 256000,
+    "planned_downlink_frames": 800,
+    "planned_downlink_payload_bytes": 768000,
+    "effective_downlink_frames": 676,
+    "effective_downlink_payload_bytes": 648960,
+    "interrupted_turns": 1,
+    "max_stop_within_ms": 300
+  },
+  "applies_to": [
+    "positive_completed"
+  ],
+  "exact_business_counts": {
+    "realtime_sim": 1
+  }
+}

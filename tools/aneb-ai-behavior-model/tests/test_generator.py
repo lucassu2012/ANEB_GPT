@@ -186,11 +186,38 @@ class GeneratorTest(unittest.TestCase):
         artifacts = build_artifacts(model, 20260716)
         profile, plan = derive_realtime_runtime_variant(artifacts, "quick")
         self.assertEqual(profile["profile_id"], "ai_realtime_voice_quick")
+        self.assertEqual(profile["version"], "1.1.1")
         self.assertEqual(profile["evidence_tier"], "quick")
         self.assertEqual(plan["session_count"], 1)
         self.assertLessEqual(plan["sessions"][0]["turn_count"], 3)
         self.assertTrue(any(turn["interrupted"] for turn in plan["sessions"][0]["turns"]))
         self.assertLess(profile["est_duration_s"], 90)
+        self.assertEqual(
+            profile["execution_requirements"],
+            {
+                "contract_id": "aneb-execution-requirements",
+                "contract_version": "1.0.0",
+                "client_engine": {
+                    "contract_id": "aneb-realtime-simulation-engine",
+                    "min_version": "1.0.0",
+                    "max_version_exclusive": "2.0.0",
+                },
+                "server_capability_receipt": {
+                    "contract_id": "aneb-server-capability-receipt",
+                    "min_version": "1.0.0",
+                    "max_version_exclusive": "2.0.0",
+                },
+                "required_primitives": [
+                    {
+                        "primitive_id": "realtime_sim",
+                        "wire_contract_id": "aneb-realtime-session-v1",
+                    }
+                ],
+            },
+        )
+        turns = plan["sessions"][0]["turns"]
+        self.assertEqual(sum(turn["uplink_frames"] for turn in turns), 400)
+        self.assertEqual(sum(turn["downlink_frames_before_stop"] for turn in turns), 676)
 
     def test_realtime_recovery_isolated_faults_are_hash_bound_test_actions(self) -> None:
         model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")

@@ -35,7 +35,7 @@ func TestServerInfo(t *testing.T) {
 	}
 	if info.ExecutionCapabilities.ContractID != serverCapabilityReceiptContractID ||
 		info.ExecutionCapabilities.ContractVersion != serverCapabilityReceiptVersion ||
-		len(info.ExecutionCapabilities.Primitives) != 3 {
+		len(info.ExecutionCapabilities.Primitives) != 4 {
 		t.Fatalf("execution capability receipt missing or invalid: %+v", info.ExecutionCapabilities)
 	}
 	// 单调锚点映射：anchor 必须与进程全局一致，srv_ts_us 为正且随请求前进。

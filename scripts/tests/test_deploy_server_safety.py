@@ -80,11 +80,16 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             body_path = root / "serverinfo.json"
-            manifest_path = root / "manifest.sha256"
+            token_manifest_path = root / "token-manifest.sha256"
+            realtime_manifest_path = root / "realtime-manifest.sha256"
             receipt_sha_path = root / "receipt.sha256"
             body_path.write_text(json.dumps(body), encoding="utf-8")
-            manifest_path.write_text(
+            token_manifest_path.write_text(
                 "1" * 64 + "  profile.json\n" + "2" * 64 + "  runtime_plan.json\n",
+                encoding="utf-8",
+            )
+            realtime_manifest_path.write_text(
+                "3" * 64 + "  profile.json\n" + "4" * 64 + "  runtime_plan.json\n",
                 encoding="utf-8",
             )
             return subprocess.run(
@@ -93,7 +98,8 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                     "-c",
                     program,
                     str(body_path),
-                    str(manifest_path),
+                    str(token_manifest_path),
+                    str(realtime_manifest_path),
                     "true" if expected_h3 else "false",
                     str(receipt_sha_path),
                 ],
@@ -105,7 +111,7 @@ class DeployServerSafetyContractTest(unittest.TestCase):
     @staticmethod
     def valid_receipt_body(*, h3_enabled: bool = False) -> dict[str, object]:
         return {
-            "version": "aneb-server/0.8.0",
+            "version": "aneb-server/0.8.1",
             "h3_enabled": h3_enabled,
             "execution_capabilities": {
                 "contract_id": "aneb-server-capability-receipt",
@@ -113,9 +119,18 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                 "primitives": [
                     {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
                     {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+                    {
+                        "primitive_id": "realtime_sim",
+                        "wire_contract_id": "aneb-realtime-session-v1",
+                    },
                     {"primitive_id": "token_sim", "wire_contract_id": "aneb-token-task-v1"},
                 ],
                 "validated_profiles": [
+                    {
+                        "profile_id": "ai_realtime_voice_quick",
+                        "profile_version": "1.1.1",
+                        "profile_sha256": "sha256:" + "3" * 64,
+                    },
                     {
                         "profile_id": "token_multimodal_quick",
                         "profile_version": "1.2.1",
@@ -124,6 +139,31 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                 ],
             },
         }
+
+    def test_candidate_contains_token_and_realtime_execution_profile_bundles(self) -> None:
+        for relative in (
+            "execution-profiles/token_multimodal_quick/profile.json",
+            "execution-profiles/token_multimodal_quick/runtime_plan.json",
+            "execution-profiles/token_multimodal_quick/manifest.sha256",
+            "execution-profiles/ai_realtime_voice_quick/profile.json",
+            "execution-profiles/ai_realtime_voice_quick/runtime_plan.json",
+            "execution-profiles/ai_realtime_voice_quick/manifest.sha256",
+        ):
+            self.assertIn(relative, self.source)
+
+    def test_upgrade_and_rollback_contract_is_exactly_080_to_081(self) -> None:
+        self.assertIn(
+            "validate_server_identity 'aneb-server/0.8.0' pre-switch",
+            self.remote,
+        )
+        self.assertIn(
+            "validate_server_identity 'aneb-server/0.8.1' live",
+            self.remote,
+        )
+        self.assertIn(
+            "validate_server_identity 'aneb-server/0.8.0' rollback",
+            self.remote,
+        )
 
     def test_local_gates_precede_the_first_remote_connection(self) -> None:
         main = self.source.split("# No ssh/scp call is made before this function returns successfully.", 1)[1]
@@ -200,16 +240,16 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         self.assertIn('kill -TERM -- "-$stage_pid"', self.remote)
         self.assertIn("STAGED_SERVER_STOP_FAILED", self.remote)
 
-    def test_pre_switch_requires_exact_070_identity_and_freezes_shared_host(self) -> None:
+    def test_pre_switch_requires_exact_080_identity_and_freezes_shared_host(self) -> None:
         freeze_call = self.remote.index("freeze_live_baseline\n")
         live_boundary = self.remote.index("LIVE_TOUCHED=1", freeze_call)
         self.assertLess(freeze_call, live_boundary)
         freeze_function = self.remote.index("freeze_live_baseline()")
         self.assertLess(freeze_function, freeze_call)
-        self.assertIn("validate_server_identity 'aneb-server/0.7.0' pre-switch", self.remote)
+        self.assertIn("validate_server_identity 'aneb-server/0.8.0' pre-switch", self.remote)
         freeze_body = self.remote.split("freeze_live_baseline() {", 1)[1].split("\n}", 1)[0]
-        identity = freeze_body.index("validate_server_identity 'aneb-server/0.7.0' pre-switch")
-        legacy = freeze_body.index("validate_legacy_surface pre-switch-0.7")
+        identity = freeze_body.index("validate_server_identity 'aneb-server/0.8.0' pre-switch")
+        legacy = freeze_body.index("validate_legacy_surface pre-switch-0.8")
         binary = freeze_body.index("BASE_BINARY_SHA=")
         self.assertLess(identity, legacy)
         self.assertLess(legacy, binary)
@@ -617,6 +657,7 @@ COMMIT
             "live-binary": "/opt/aneb/bin/aneb-server",
             "root-profiles": "/opt/aneb/profiles",
             "quick-bundle": "/opt/aneb/execution-profiles/token_multimodal_quick",
+            "realtime-quick-bundle": "/opt/aneb/execution-profiles/ai_realtime_voice_quick",
             "service-unit": "/etc/systemd/system/aneb-server.service",
         }
         for label, path in expected.items():
@@ -625,8 +666,8 @@ COMMIT
         self.assertIn("systemctl restart aneb-server", self.remote)
         self.assertIn("ROLLBACK_OK", self.remote)
         self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", self.remote)
-        self.assertIn("validate_server_identity 'aneb-server/0.7.0' rollback", self.remote)
-        self.assertIn("validate_legacy_surface rollback-0.7", self.remote)
+        self.assertIn("validate_server_identity 'aneb-server/0.8.0' rollback", self.remote)
+        self.assertIn("validate_legacy_surface rollback-0.8", self.remote)
         self.assertIn("assert_restored_aneb_baseline", self.remote)
         self.assertIn("assert_shared_host_baseline rollback", self.remote)
         self.assertIn("ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97", self.remote)
@@ -773,6 +814,15 @@ COMMIT
             ),
             "execution-profiles/token_multimodal_quick/manifest.sha256": (
                 "profiles/published/token_multimodal_quick/manifest.sha256"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/profile.json": (
+                "profiles/published/ai_realtime_voice_quick/profile.json"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/runtime_plan.json": (
+                "profiles/published/ai_realtime_voice_quick/runtime_plan.json"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/manifest.sha256": (
+                "profiles/published/ai_realtime_voice_quick/manifest.sha256"
             ),
         }
 
@@ -1269,6 +1319,10 @@ printf 'DEPLOY_OK\n'
             "rm -rf -- /opt/aneb/execution-profiles/token_multimodal_quick",
             live,
         )
+        self.assertNotIn(
+            "rm -rf -- /opt/aneb/execution-profiles/ai_realtime_voice_quick",
+            live,
+        )
 
     def test_atomic_exchange_failure_keeps_existing_target_unchanged(self) -> None:
         bash = self.find_gnu_bash()
@@ -1439,6 +1493,9 @@ exit 42
             "execution-profiles/token_multimodal_quick/profile.json",
             "execution-profiles/token_multimodal_quick/runtime_plan.json",
             "execution-profiles/token_multimodal_quick/manifest.sha256",
+            "execution-profiles/ai_realtime_voice_quick/profile.json",
+            "execution-profiles/ai_realtime_voice_quick/runtime_plan.json",
+            "execution-profiles/ai_realtime_voice_quick/manifest.sha256",
             "tls/ip-cert.pem",
             "tls/ip-key.pem",
         ):
@@ -1469,6 +1526,15 @@ exit 42
             ),
             "execution-profiles/token_multimodal_quick/manifest.sha256": (
                 "/opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/profile.json": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_quick/profile.json"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/runtime_plan.json": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_quick/runtime_plan.json"
+            ),
+            "execution-profiles/ai_realtime_voice_quick/manifest.sha256": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_quick/manifest.sha256"
             ),
         }
         with tempfile.TemporaryDirectory() as temporary:

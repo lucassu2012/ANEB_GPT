@@ -25,7 +25,7 @@ func validExecutionRequirements() executionRequirements {
 	}
 }
 
-func TestPublishedTokenQuickProducesExactCapabilityReceipt(t *testing.T) {
+func TestPublishedQuickProfilesProduceExactCapabilityReceipt(t *testing.T) {
 	receipt, err := loadExecutionCapabilityReceipt("../profiles/published")
 	if err != nil {
 		t.Fatalf("load execution receipt: %v", err)
@@ -33,14 +33,25 @@ func TestPublishedTokenQuickProducesExactCapabilityReceipt(t *testing.T) {
 	if receipt.ContractID != serverCapabilityReceiptContractID || receipt.ContractVersion != serverCapabilityReceiptVersion {
 		t.Fatalf("receipt identity mismatch: %+v", receipt)
 	}
-	if len(receipt.ValidatedProfiles) != 1 {
-		t.Fatalf("validated profiles=%d, want 1", len(receipt.ValidatedProfiles))
+	if len(receipt.ValidatedProfiles) != 2 {
+		t.Fatalf("validated profiles=%d, want 2", len(receipt.ValidatedProfiles))
 	}
-	profile := receipt.ValidatedProfiles[0]
-	if profile.ProfileID != "token_multimodal_quick" ||
-		profile.ProfileVersion != "1.2.1" ||
-		profile.ProfileSHA256 != "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773" {
-		t.Fatalf("unexpected validated profile: %+v", profile)
+	want := []validatedExecutionProfile{
+		{
+			ProfileID:      "ai_realtime_voice_quick",
+			ProfileVersion: "1.1.1",
+			ProfileSHA256:  "sha256:701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7",
+		},
+		{
+			ProfileID:      "token_multimodal_quick",
+			ProfileVersion: "1.2.1",
+			ProfileSHA256:  "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773",
+		},
+	}
+	for index := range want {
+		if receipt.ValidatedProfiles[index] != want[index] {
+			t.Fatalf("validated profile[%d]=%+v, want %+v", index, receipt.ValidatedProfiles[index], want[index])
+		}
 	}
 }
 

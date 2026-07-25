@@ -14,7 +14,7 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 
 ## 状态
 
-`v0.3.1` 可运行纵向切片（保留 v0.2.0 校准闸门、v0.3.0 跨端执行要求，并让 Token Quick 真实覆盖声明的下载原语）：
+`v0.3.2` 可运行纵向切片（保留 v0.2.0 校准闸门、v0.3.0 跨端执行要求，并让 Token Quick 与 AI realtime Quick 都发布可机器核验的精确执行合同）：
 
 - PCG32 跨语言确定性随机数；
 - Token `FAST / NORMAL / PAUSE` 三状态 Markov + 状态内经验分布；
@@ -25,7 +25,7 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 - 授权、隐私最小化的 Token 观测 JSONL → subject-disjoint 训练/留出数据包；
 - 训练集拟合、留出集独立验证和摘要绑定的 `calibrated → validated` 发布闸门；
 - Profile v2、验证报告和 SHA-256 manifest 导出；JSON/JSONL 条目使用 UTF-8 规范化语义哈希，排版变化不影响绑定，不等同于 pretty-printed 文件的原始字节哈希；
-- Token Quick Profile 发布固定版本化 `execution_requirements`，只声明 `echo`、`token_sim`、`download` 三项白名单原语及对应线路合同，不允许任意 URL 或脚本；
+- Token Quick Profile 固定声明 `echo`、`token_sim`、`download` 三项白名单原语；AI realtime Quick 固定声明 `realtime_sim/aneb-realtime-session-v1`，两者都禁止任意 URL、命令或脚本；
 - 业务轨迹禁止包含网络时延、丢包和实测 RTT。
 
 详细合同见：

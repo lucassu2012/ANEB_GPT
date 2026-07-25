@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import base64
 import contextlib
 import functools
@@ -17,6 +18,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -135,7 +137,7 @@ PROFILE_PATHS = (
 )
 SOURCE_SUPPORT_PATHS = (".gitignore",)
 ANDROID_BUILD_TOOLS_VERSION = "35.0.0"
-REAL_ANEB_APK = ROOT / "app" / "probe" / "build" / "outputs" / "apk" / "debug" / "probe-debug.apk"
+VERIFIER_PROCESS_TIMEOUT_SECONDS = 120
 
 
 def find_android_build_tools() -> Path | None:
@@ -166,15 +168,156 @@ def find_java() -> Path | None:
 
 ANDROID_BUILD_TOOLS = find_android_build_tools()
 JAVA = find_java()
-APK_INTEGRATION_AVAILABLE = (
-    ANDROID_BUILD_TOOLS is not None and JAVA is not None and REAL_ANEB_APK.is_file()
+ANDROID_PLATFORM_JAR = (
+    ANDROID_BUILD_TOOLS.parent.parent
+    / "platforms"
+    / "android-35"
+    / "android.jar"
+    if ANDROID_BUILD_TOOLS is not None
+    else None
 )
+KEYTOOL = (
+    JAVA.with_name("keytool.exe" if os.name == "nt" else "keytool")
+    if JAVA is not None
+    else None
+)
+APK_INTEGRATION_AVAILABLE = (
+    ANDROID_BUILD_TOOLS is not None
+    and JAVA is not None
+    and ANDROID_PLATFORM_JAR is not None
+    and ANDROID_PLATFORM_JAR.is_file()
+    and KEYTOOL is not None
+    and KEYTOOL.is_file()
+)
+_FROZEN_TOKEN_APK_TEMPORARY: tempfile.TemporaryDirectory[str] | None = None
+
+
+def run_frozen_apk_tool(command: list[str], step: str) -> None:
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
+    output = completed.stdout + completed.stderr
+    if completed.returncode != 0 or len(output) > 256 * 1024:
+        raise RuntimeError(f"Frozen Token APK fixture failed at {step}")
 
 
 @functools.lru_cache(maxsize=1)
-def real_apk_signer_sha256() -> str:
+def frozen_token_apk() -> Path:
+    global _FROZEN_TOKEN_APK_TEMPORARY
+    if (
+        ANDROID_BUILD_TOOLS is None
+        or JAVA is None
+        or ANDROID_PLATFORM_JAR is None
+        or KEYTOOL is None
+    ):
+        raise RuntimeError("Frozen Token APK fixture tools are unavailable")
+    _FROZEN_TOKEN_APK_TEMPORARY = tempfile.TemporaryDirectory(
+        prefix="aneb-token-frozen-apk-"
+    )
+    atexit.register(_FROZEN_TOKEN_APK_TEMPORARY.cleanup)
+    directory = Path(_FROZEN_TOKEN_APK_TEMPORARY.name)
+    manifest = directory / "AndroidManifest.xml"
+    unsigned_apk = directory / "unsigned.apk"
+    signed_apk = directory / "ANEB-Probe-0.5.12-codex-debug.apk"
+    keystore = directory / "debug.keystore"
+    manifest.write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.aneb.probe.codex" android:versionCode="44" '
+        'android:versionName="0.5.12-codex">\n'
+        '  <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35"/>\n'
+        '  <application android:label="ANEB frozen Token test fixture"/>\n'
+        "</manifest>\n",
+        encoding="utf-8",
+        newline="",
+    )
+    run_frozen_apk_tool(
+        [
+            str(ANDROID_BUILD_TOOLS / ("aapt2.exe" if os.name == "nt" else "aapt2")),
+            "link",
+            "-o",
+            str(unsigned_apk),
+            "-I",
+            str(ANDROID_PLATFORM_JAR),
+            "--manifest",
+            str(manifest),
+            "--min-sdk-version",
+            "29",
+            "--target-sdk-version",
+            "35",
+        ],
+        "aapt2-link",
+    )
+    with zipfile.ZipFile(unsigned_apk, "a") as archive:
+        archive.writestr("classes.dex", b"dex\n035\x00ANEB frozen Token test fixture")
+    run_frozen_apk_tool(
+        [
+            str(KEYTOOL),
+            "-genkeypair",
+            "-keystore",
+            str(keystore),
+            "-storepass",
+            "android",
+            "-keypass",
+            "android",
+            "-alias",
+            "androiddebugkey",
+            "-dname",
+            "CN=ANEB Frozen Token Test,O=ANEB,C=CN",
+            "-keyalg",
+            "RSA",
+            "-keysize",
+            "2048",
+            "-validity",
+            "3650",
+        ],
+        "keytool",
+    )
+    run_frozen_apk_tool(
+        [
+            str(JAVA),
+            "-jar",
+            str(ANDROID_BUILD_TOOLS / "lib" / "apksigner.jar"),
+            "sign",
+            "--ks",
+            str(keystore),
+            "--ks-pass",
+            "pass:android",
+            "--key-pass",
+            "pass:android",
+            "--out",
+            str(signed_apk),
+            str(unsigned_apk),
+        ],
+        "apksigner-sign",
+    )
+    return signed_apk
+
+
+@unittest.skipUnless(
+    APK_INTEGRATION_AVAILABLE,
+    "requires Java and Android Build Tools 35.0.0",
+)
+class FrozenTokenApkFixtureTests(unittest.TestCase):
+    def test_fixture_has_the_frozen_token_client_identity(self) -> None:
+        identity = bundle_verifier.verify_apk_identity(
+            frozen_token_apk().read_bytes(),
+            ANDROID_BUILD_TOOLS,
+        )
+
+        self.assertEqual("com.aneb.probe.codex", identity["package_name"])
+        self.assertEqual("0.5.12-codex", identity["version_name"])
+        self.assertEqual(44, identity["version_code"])
+
+
+@functools.lru_cache(maxsize=1)
+def frozen_apk_signer_sha256() -> str:
     if ANDROID_BUILD_TOOLS is None or JAVA is None:
         raise RuntimeError("Android identity tools are unavailable")
+    apk = frozen_token_apk()
     completed = subprocess.run(
         [
             str(JAVA),
@@ -182,7 +325,7 @@ def real_apk_signer_sha256() -> str:
             str(ANDROID_BUILD_TOOLS / "lib" / "apksigner.jar"),
             "verify",
             "--print-certs",
-            str(REAL_ANEB_APK),
+            str(apk),
         ],
         check=False,
         capture_output=True,
@@ -190,7 +333,7 @@ def real_apk_signer_sha256() -> str:
     )
     output = completed.stdout + completed.stderr
     if completed.returncode != 0 or len(output) > 256 * 1024:
-        raise RuntimeError("Real ANEB APK signature verification failed")
+        raise RuntimeError("Frozen Token APK signature verification failed")
     match = re.fullmatch(
         rb"(?s).*^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})\r?$.*",
         output,
@@ -255,8 +398,8 @@ class BundleFixture:
         self.bundle = root / f"{COLLECTION_ID}.complete"
         self.repository.mkdir()
         self.bundle.mkdir()
-        self.apk_sha = sha256_bytes(REAL_ANEB_APK.read_bytes())
-        self.signer_sha = real_apk_signer_sha256()
+        self.apk_sha = sha256_bytes(frozen_token_apk().read_bytes())
+        self.signer_sha = frozen_apk_signer_sha256()
         self.device_policy_path = root / "approved-device-policy.json"
         write_json(
             self.device_policy_path,
@@ -382,7 +525,7 @@ class BundleFixture:
         self.candidate_directory = self.bundle / "ci-candidate"
         self.candidate_directory.mkdir()
         self.candidate_apk = self.candidate_directory / CI_APK_NAME
-        shutil.copyfile(REAL_ANEB_APK, self.candidate_apk)
+        shutil.copyfile(frozen_token_apk(), self.candidate_apk)
         write_json(
             self.candidate_directory / "provenance.sigstore.json",
             {"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json"},
@@ -656,11 +799,11 @@ class BundleFixture:
             },
         )
 
-        shutil.copyfile(REAL_ANEB_APK, self.bundle / "installed-base.apk")
+        shutil.copyfile(frozen_token_apk(), self.bundle / "installed-base.apk")
         self.apk_sha = sha256_bytes(
             (self.bundle / "installed-base.apk").read_bytes()
         )
-        self.signer_sha = real_apk_signer_sha256()
+        self.signer_sha = frozen_apk_signer_sha256()
         shutil.copyfile(self.device_policy_path, self.bundle / "device-policy.json")
         for stage in ("preflight", "final"):
             (self.bundle / f"device-adb-serial-{stage}.txt").write_text(
@@ -1201,7 +1344,7 @@ class BundleFixture:
             text=True,
             capture_output=True,
             check=False,
-            timeout=60,
+            timeout=VERIFIER_PROCESS_TIMEOUT_SECONDS,
         )
         return completed, json.loads(completed.stdout)
 
@@ -1259,7 +1402,7 @@ class BundleFixture:
             text=True,
             capture_output=True,
             check=False,
-            timeout=60,
+            timeout=VERIFIER_PROCESS_TIMEOUT_SECONDS,
         )
         return completed, json.loads(completed.stdout)
 
@@ -1295,7 +1438,7 @@ class BundleFixture:
             text=True,
             capture_output=True,
             check=False,
-            timeout=60,
+            timeout=VERIFIER_PROCESS_TIMEOUT_SECONDS,
         )
         return completed, json.loads(completed.stdout)
 
@@ -1335,7 +1478,7 @@ class BundleFixture:
             text=True,
             capture_output=True,
             check=False,
-            timeout=60,
+            timeout=VERIFIER_PROCESS_TIMEOUT_SECONDS,
         )
         report = json.loads(completed.stdout)
         return completed, report

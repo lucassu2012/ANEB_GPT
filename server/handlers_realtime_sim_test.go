@@ -122,6 +122,86 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 	}
 }
 
+func TestRealtimeSimEmitsBoundedProtocolSummary(t *testing.T) {
+	summaries := make(chan realtimeProtocolSummary, 1)
+	server := httptest.NewServer((&app{
+		realtimeSummary: realtimeProtocolSummaryEmitterFunc(func(summary realtimeProtocolSummary) bool {
+			summaries <- summary
+			return true
+		}),
+	}).routes())
+	defer server.Close()
+
+	headers := http.Header{}
+	headers.Set(anebRunIDHeader, testRunID)
+	headers.Set(anebAuditScopeHeader, "realtime_run")
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/realtime-sim"
+	conn, _, err := websocket.DefaultDialer.Dial(url, headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	plan := realtimeSessionPlan{
+		ContractVersion: realtimeSessionContract,
+		SessionID:       "must-not-enter-summary",
+		Seed:            42,
+		SetupMs:         0,
+		FrameMs:         20,
+		Turns: []realtimeTurnPlan{{
+			TurnID:                "must-not-enter-summary",
+			TurnIndex:             0,
+			UplinkFrames:          1,
+			UplinkFrameBytes:      16,
+			ResponseWaitMs:        0,
+			PlannedDownlinkFrames: 1,
+			DownlinkFrameBytes:    16,
+		}},
+	}
+	if err := conn.WriteJSON(plan); err != nil {
+		t.Fatal(err)
+	}
+	if ready := readRealtimeTestControl(t, conn); ready["type"] != "session_ready" {
+		t.Fatalf("unexpected ready: %#v", ready)
+	}
+	if err := conn.WriteJSON(realtimeControl{Type: "turn_start", TurnID: plan.Turns[0].TurnID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, encodeRealtimeTestUplink(0, 0, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(realtimeControl{Type: "speech_commit", TurnID: plan.Turns[0].TurnID}); err != nil {
+		t.Fatal(err)
+	}
+	if messageType, _, err := conn.ReadMessage(); err != nil || messageType != websocket.BinaryMessage {
+		t.Fatalf("expected downlink frame, type=%d err=%v", messageType, err)
+	}
+	if turn := readRealtimeTestControl(t, conn); turn["type"] != "turn_summary" {
+		t.Fatalf("unexpected turn summary: %#v", turn)
+	}
+	if session := readRealtimeTestControl(t, conn); session["type"] != "session_summary" {
+		t.Fatalf("unexpected session summary: %#v", session)
+	}
+
+	select {
+	case got := <-summaries:
+		want := realtimeProtocolSummary{
+			InstanceID:     processAuditInstanceID,
+			RunID:          testRunID,
+			Sessions:       1,
+			Turns:          1,
+			UplinkFrames:   1,
+			DownlinkFrames: 1,
+			ProtocolOK:     true,
+		}
+		if got != want {
+			t.Fatalf("protocol summary=%+v, want %+v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("protocol summary was not emitted before the final response")
+	}
+}
+
 func TestRealtimeWaitForFrameOrBargeChecksQueuedControlAfterDeadline(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/realtime-sim", nil)
 	incoming := make(chan realtimeInbound, 1)

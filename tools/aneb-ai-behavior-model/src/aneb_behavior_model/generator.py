@@ -190,6 +190,27 @@ def derive_realtime_runtime_variant(
         plan["sessions"] = [quick_session]
         plan["session_count"] = 1
         profile["profile_id"] = "ai_realtime_voice_quick"
+        profile["version"] = "1.1.1"
+        profile["execution_requirements"] = {
+            "contract_id": "aneb-execution-requirements",
+            "contract_version": "1.0.0",
+            "client_engine": {
+                "contract_id": "aneb-realtime-simulation-engine",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "server_capability_receipt": {
+                "contract_id": "aneb-server-capability-receipt",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "required_primitives": [
+                {
+                    "primitive_id": "realtime_sim",
+                    "wire_contract_id": "aneb-realtime-session-v1",
+                }
+            ],
+        }
         profile.setdefault("business", {})["label"] = "AI 实时语音快测"
     elif variant == "recovery":
         # Recovery is deliberately separate from Standard. The business model

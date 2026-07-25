@@ -9,6 +9,7 @@ import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.RealtimeSimulationResultEntity
 import com.aneb.probe.net.AnebClient
+import com.aneb.probe.net.AnebAuditScope
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
 import com.aneb.probe.net.NetGuard
@@ -102,10 +103,160 @@ internal suspend fun <T> runRealtimeSessionWithMonitor(
 private class RealtimeResultPersistenceException(cause: Throwable) :
     Exception("realtime_result_persistence_failed", cause)
 
-private data class RealtimeDurableResult(
+private class RealtimeContractRejectionAlreadyPersistedException(cause: Throwable) :
+    IllegalStateException("realtime_contract_rejection_already_persisted", cause)
+
+internal data class RealtimeDurableResult(
     val result: RealtimeSimulationResult,
     val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
     val radio: FormalRadioEvidence,
+)
+
+internal class RealtimeContractFailurePublisher(
+    private val runId: String,
+    private val startedAt: Long,
+    private val variant: String,
+    private val source: RealtimeResultEnvelopeSource,
+    private val producer: AnebResultProducerContext,
+    private val device: AnebResultDeviceContext,
+    private val network: AnebResultNetworkContext,
+    private val endedAtEpochMs: () -> Long,
+    private val radio: suspend () -> FormalRadioEvidence,
+    private val resultCommitter: DurableResultCommitter<RealtimeDurableResult>,
+) {
+    suspend fun persist(
+        error: ExecutionContractException,
+        serverBase: String,
+    ): RealtimeDurableResult = try {
+        val frozenRadio = radio()
+        val result = buildFailedRealtimeSimulationResult(
+            runId = runId,
+            startedAt = startedAt,
+            server = serverBase,
+            variant = variant,
+            reason = error.reasonCode,
+            source = source,
+            radio = frozenRadio,
+        )
+        val durable = buildRealtimeDurableResult(
+            result = result,
+            source = source,
+            producer = producer,
+            device = device,
+            network = network,
+            endedAtEpochMs = endedAtEpochMs(),
+            status = "failed",
+            radio = frozenRadio,
+        )
+        resultCommitter.commit(durable)
+        durable
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: RealtimeResultPersistenceException) {
+        throw error
+    } catch (error: Exception) {
+        throw RealtimeResultPersistenceException(error)
+    }
+}
+
+internal object RealtimeExecutionContractRunner {
+    suspend fun authorize(
+        runId: String,
+        serverBase: String,
+        profile: ScenarioProfile,
+        profileCanonicalSha256: String,
+        transport: ExecutionCapabilityTransport,
+        log: suspend (String) -> Unit,
+        failurePublisher: RealtimeContractFailurePublisher,
+    ): ExecutionAuthorization? = try {
+        RealtimeExecutionContractGate.authorize(
+            serverBase = serverBase,
+            profile = profile,
+            profileCanonicalSha256 = profileCanonicalSha256,
+            transport = transport,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: ExecutionContractException) {
+        val durable = failurePublisher.persist(error, serverBase)
+        try {
+            log(
+                "REALTIME_V1_RADIO run_id=$runId status=${durable.radio.collectionStatus} " +
+                    "samples=${durable.radio.samples.size}",
+            )
+            log("REALTIME_V1_DB_WRITE run_id=$runId ok=true")
+            log(
+                "REALTIME_V1_CONTRACT run_id=$runId status=rejected reason=${error.reasonCode} " +
+                    "detail=${error.userMessage.replace(' ', '_')}",
+            )
+            log("REALTIME_V1_END run_id=$runId status=contract_rejected")
+        } catch (logError: CancellationException) {
+            throw logError
+        } catch (logError: Exception) {
+            throw RealtimeContractRejectionAlreadyPersistedException(logError)
+        }
+        null
+    }
+}
+
+internal fun buildFailedRealtimeSimulationResult(
+    runId: String,
+    startedAt: Long,
+    server: String,
+    variant: String,
+    reason: String,
+    source: RealtimeResultEnvelopeSource,
+    radio: FormalRadioEvidence,
+): RealtimeSimulationResult {
+    val evidence = RealtimeRunEvidence(variant, emptyList(), reason)
+    val profile = source.profile
+    val scorePolicy = profile?.evaluation?.scorePolicyId?.takeIf(String::isNotBlank)
+        ?: if (variant == "recovery") "realtime-recovery-score-v2" else "realtime-interaction-score-v1"
+    return RealtimeSimulationResult(
+        runId, startedAt, server, profile?.profileId ?: "ai_realtime_voice_$variant", profile?.version ?: "unknown",
+        profile?.business?.behaviorModelId ?: "unknown",
+        profile?.business?.behaviorModelVersion ?: "unknown",
+        profile?.business?.behaviorModelHash ?: "unknown",
+        profile?.business?.calibrationStatus ?: "unknown",
+        variant,
+        scorePolicy,
+        profile?.evaluation?.scoreAnchorPolicyId?.takeIf(String::isNotBlank) ?: "compliance-anchors-v1",
+        profile?.evaluation?.conclusionPolicyId?.takeIf(String::isNotBlank)
+            ?: if (variant == "recovery") "realtime-recovery-conclusions-v3" else "realtime-interaction-conclusions-v2",
+        RealtimeSimulationScorer.score(
+            evidence,
+            scorePolicy,
+            radio.events,
+            profile?.business?.behaviorFeatureIds.orEmpty(),
+        ),
+        evidence,
+    )
+}
+
+internal fun buildRealtimeDurableResult(
+    result: RealtimeSimulationResult,
+    source: RealtimeResultEnvelopeSource,
+    producer: AnebResultProducerContext,
+    device: AnebResultDeviceContext,
+    network: AnebResultNetworkContext,
+    endedAtEpochMs: Long,
+    status: String,
+    radio: FormalRadioEvidence,
+): RealtimeDurableResult = RealtimeDurableResult(
+    result = result,
+    envelope = RealtimeResultEnvelopeV2.build(
+        RealtimeResultEnvelopeInput(
+            result = result,
+            source = source,
+            producer = producer,
+            device = device,
+            network = network,
+            endedAtEpochMs = endedAtEpochMs,
+            status = status,
+            radio = radio,
+        ),
+    ),
+    radio = radio,
 )
 
 class RealtimeSimulationEngine(private val context: Context) {
@@ -198,6 +349,45 @@ class RealtimeSimulationEngine(private val context: Context) {
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
             val wsUrl = measureBase.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/v1/realtime-sim"
             log("REALTIME_V1_PROFILE id=${profile.profileId} version=${profile.version} model=${plan.modelId}@${plan.modelVersion} sessions=${plan.sessionCount}")
+            val authorization = RealtimeExecutionContractRunner.authorize(
+                runId = runId,
+                serverBase = measureBase,
+                profile = profile,
+                profileCanonicalSha256 = loaded.profileHash,
+                transport = AnebRealtimeExecutionTransport(AnebClient(initialBound), runId),
+                log = log,
+                failurePublisher = RealtimeContractFailurePublisher(
+                    runId = runId,
+                    startedAt = startedAt,
+                    variant = config.variant,
+                    source = envelopeSource,
+                    producer = AnebResultProducerContext(
+                        component = "aneb-probe-android",
+                        componentVersion = BuildConfig.VERSION_NAME,
+                        buildType = BuildConfig.BUILD_TYPE,
+                    ),
+                    device = AnebResultDeviceContext(
+                        manufacturer = Build.MANUFACTURER,
+                        model = Build.MODEL,
+                        osRelease = Build.VERSION.RELEASE,
+                        apiLevel = Build.VERSION.SDK_INT,
+                        appPackage = BuildConfig.APPLICATION_ID,
+                        appVersionName = BuildConfig.VERSION_NAME,
+                        appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                    ),
+                    network = networkContext(config.transport, guard, initialBound),
+                    endedAtEpochMs = System::currentTimeMillis,
+                    radio = radioCollector::freeze,
+                    resultCommitter = resultCommitter,
+                ),
+            ) ?: run {
+                _telemetry.value = RealtimeSimulationTelemetry(phase = RealtimeSimulationPhase.FAILED)
+                return@channelFlow
+            }
+            log(
+                "REALTIME_V1_CONTRACT run_id=$runId status=authorized " +
+                    "authorization=${authorization.name.lowercase()}",
+            )
             val evidence = mutableListOf<RealtimeSessionEvidence>()
             var invalidReason: String? = null
             val totalTurns = plan.sessions.sumOf { it.turnCount }.coerceAtLeast(1)
@@ -274,7 +464,11 @@ class RealtimeSimulationEngine(private val context: Context) {
                             continue
                         }
                         val echo = try {
-                            client.echo("$measureBase/api/v1/echo")
+                            client.echo(
+                                url = "$measureBase/api/v1/echo",
+                                runId = runId,
+                                auditScope = AnebAuditScope.REALTIME_RUN,
+                            )
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
@@ -295,6 +489,7 @@ class RealtimeSimulationEngine(private val context: Context) {
                 ) {
                     RealtimeSimulationWire(client).runSession(
                         sessionWsUrl,
+                        runId,
                         wirePlan,
                         session.startAfterPreviousMs,
                         RealtimeWireCallbacks(
@@ -591,24 +786,15 @@ class RealtimeSimulationEngine(private val context: Context) {
         radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
-        val evidence = RealtimeRunEvidence(variant, emptyList(), reason)
         val radio = radioCollector.freeze()
-        val profile = source.profile
-        val scorePolicy = profile?.evaluation?.scorePolicyId?.takeIf(String::isNotBlank)
-            ?: if (variant == "recovery") "realtime-recovery-score-v2" else "realtime-interaction-score-v1"
-        val result = RealtimeSimulationResult(
-            runId, startedAt, server, profile?.profileId ?: "ai_realtime_voice_$variant", profile?.version ?: "unknown",
-            profile?.business?.behaviorModelId ?: "unknown",
-            profile?.business?.behaviorModelVersion ?: "unknown",
-            profile?.business?.behaviorModelHash ?: "unknown",
-            profile?.business?.calibrationStatus ?: "unknown",
-            variant,
-            scorePolicy,
-            profile?.evaluation?.scoreAnchorPolicyId?.takeIf(String::isNotBlank) ?: "compliance-anchors-v1",
-            profile?.evaluation?.conclusionPolicyId?.takeIf(String::isNotBlank)
-                ?: if (variant == "recovery") "realtime-recovery-conclusions-v3" else "realtime-interaction-conclusions-v2",
-            RealtimeSimulationScorer.score(evidence, scorePolicy, radio.events, profile?.business?.behaviorFeatureIds.orEmpty()),
-            evidence,
+        val result = buildFailedRealtimeSimulationResult(
+            runId = runId,
+            startedAt = startedAt,
+            server = server,
+            variant = variant,
+            reason = reason,
+            source = source,
+            radio = radio,
         )
         publishResult(
             result = result,
@@ -635,32 +821,30 @@ class RealtimeSimulationEngine(private val context: Context) {
         radio: FormalRadioEvidence,
         log: suspend (String) -> Unit,
     ) {
-        val envelope = RealtimeResultEnvelopeV2.build(
-            RealtimeResultEnvelopeInput(
-                result = result,
-                source = source,
-                producer = AnebResultProducerContext(
-                    component = "aneb-probe-android",
-                    componentVersion = BuildConfig.VERSION_NAME,
-                    buildType = BuildConfig.BUILD_TYPE,
-                ),
-                device = AnebResultDeviceContext(
-                    manufacturer = Build.MANUFACTURER,
-                    model = Build.MODEL,
-                    osRelease = Build.VERSION.RELEASE,
-                    apiLevel = Build.VERSION.SDK_INT,
-                    appPackage = BuildConfig.APPLICATION_ID,
-                    appVersionName = BuildConfig.VERSION_NAME,
-                    appVersionCode = BuildConfig.VERSION_CODE.toLong(),
-                ),
-                network = networkContext(transport, guard, bound),
-                endedAtEpochMs = endedAtEpochMs,
-                status = status,
-                radio = radio,
+        val durable = buildRealtimeDurableResult(
+            result = result,
+            source = source,
+            producer = AnebResultProducerContext(
+                component = "aneb-probe-android",
+                componentVersion = BuildConfig.VERSION_NAME,
+                buildType = BuildConfig.BUILD_TYPE,
             ),
+            device = AnebResultDeviceContext(
+                manufacturer = Build.MANUFACTURER,
+                model = Build.MODEL,
+                osRelease = Build.VERSION.RELEASE,
+                apiLevel = Build.VERSION.SDK_INT,
+                appPackage = BuildConfig.APPLICATION_ID,
+                appVersionName = BuildConfig.VERSION_NAME,
+                appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+            ),
+            network = networkContext(transport, guard, bound),
+            endedAtEpochMs = endedAtEpochMs,
+            status = status,
+            radio = radio,
         )
         try {
-            resultCommitter.commit(RealtimeDurableResult(result, envelope, radio))
+            resultCommitter.commit(durable)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

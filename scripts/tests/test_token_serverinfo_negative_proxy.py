@@ -405,7 +405,12 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
-            config = ProxyConfig.for_test(evidence_directory=Path(temporary) / "evidence")
+            root = Path(temporary)
+            delivery_receipt = root / "negative-proxy-delivery-receipt.json"
+            config = replace(
+                ProxyConfig.for_test(evidence_directory=root / "evidence"),
+                delivery_receipt_file=delivery_receipt,
+            )
             ready: queue.Queue[tuple[str, int]] = queue.Queue()
             completed: queue.Queue[object] = queue.Queue()
 
@@ -443,6 +448,22 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
                 raise result
             self.assertEqual("pass", result.status)
             self.assertEqual(RUN_ID, result.run_id)
+            delivery = json.loads(delivery_receipt.read_bytes())
+            self.assertEqual(
+                {
+                    "schema": "aneb-serverinfo-negative-proxy-delivery-receipt",
+                    "schema_version": "1.0.0",
+                    "status": "pass",
+                    "reason_code": "ok",
+                    "run_id": RUN_ID,
+                    "response_status": 200,
+                    "response_body_bytes": len(body),
+                    "response_body_sha256": hashlib.sha256(body).hexdigest(),
+                    "response_write_completed": True,
+                    "evidence_scope": "proxy_response_write_completed",
+                },
+                delivery,
+            )
 
     def test_http_get_body_is_rejected_without_upstream_forwarding(self) -> None:
         fetcher = RecordingFetcher(

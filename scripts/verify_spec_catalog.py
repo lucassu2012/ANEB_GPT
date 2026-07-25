@@ -22,14 +22,26 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$")
 EXPECTED_CONSUMERS = {"P1", "P2", "P3", "Profile"}
 EXECUTION_REQUIREMENTS_CONTRACT = ("aneb-execution-requirements", "1.0.0")
-CLIENT_ENGINE_CONTRACT = ("aneb-token-simulation-engine", "1.0.0")
 SERVER_CAPABILITY_RECEIPT_CONTRACT = ("aneb-server-capability-receipt", "1.0.0")
-EXECUTION_REQUIREMENTS_PRIMITIVES = {
-    "echo": "aneb-echo-v1",
-    "token_sim": "aneb-token-task-v1",
-    "download": "aneb-download-v1",
+EXECUTION_PROFILE_POLICIES = {
+    "token_multimodal_quick": {
+        "mode_id": "token_simulation",
+        "client_engine": ("aneb-token-simulation-engine", "1.0.0"),
+        "primitives": {
+            "echo": "aneb-echo-v1",
+            "token_sim": "aneb-token-task-v1",
+            "download": "aneb-download-v1",
+        },
+    },
+    "ai_realtime_voice_quick": {
+        "mode_id": "ai_realtime_simulation",
+        "client_engine": ("aneb-realtime-simulation-engine", "1.0.0"),
+        "primitives": {
+            "realtime_sim": "aneb-realtime-session-v1",
+        },
+    },
 }
-MIGRATED_EXECUTION_PROFILES = {"token_multimodal_quick"}
+MIGRATED_EXECUTION_PROFILES = set(EXECUTION_PROFILE_POLICIES)
 
 
 class DuplicateJsonKey(ValueError):
@@ -144,8 +156,14 @@ def _validate_execution_requirements(
     actual_contract = (value.get("contract_id"), value.get("contract_version"))
     if actual_contract != EXECUTION_REQUIREMENTS_CONTRACT:
         errors.append(f"{label}.execution_requirements: unsupported contract id/version {actual_contract!r}")
-    if profile.get("mode_id") != "token_simulation":
-        errors.append(f"{label}.execution_requirements: only token_simulation is supported")
+    policy = EXECUTION_PROFILE_POLICIES.get(profile.get("profile_id"))
+    if policy is None:
+        errors.append(f"{label}.execution_requirements: unsupported migrated profile")
+        return
+    if profile.get("mode_id") != policy["mode_id"]:
+        errors.append(
+            f"{label}.execution_requirements: mode does not match migrated profile"
+        )
 
     client = value.get("client_engine")
     client_keys = {"contract_id", "min_version", "max_version_exclusive"}
@@ -157,7 +175,8 @@ def _validate_execution_requirements(
         errors,
     )
     if isinstance(client, dict):
-        if client.get("contract_id") != CLIENT_ENGINE_CONTRACT[0]:
+        expected_client = policy["client_engine"]
+        if client.get("contract_id") != expected_client[0]:
             errors.append(f"{label}.execution_requirements.client_engine: unsupported contract_id")
         if client_valid:
             _validate_range(
@@ -165,7 +184,7 @@ def _validate_execution_requirements(
                     "min_inclusive": client.get("min_version"),
                     "max_exclusive": client.get("max_version_exclusive"),
                 },
-                CLIENT_ENGINE_CONTRACT[1],
+                expected_client[1],
                 f"{label}.execution_requirements.client_engine.version_range",
                 errors,
             )
@@ -215,14 +234,15 @@ def _validate_execution_requirements(
             if primitive_id in seen:
                 errors.append(f"{item_label}.primitive_id: duplicate {primitive_id!r}")
             seen.add(primitive_id)
-        expected_wire = EXECUTION_REQUIREMENTS_PRIMITIVES.get(primitive_id)
+        expected_primitives = policy["primitives"]
+        expected_wire = expected_primitives.get(primitive_id)
         if expected_wire is None:
             errors.append(f"{item_label}.primitive_id: unknown primitive {primitive_id!r}")
         elif item_valid and primitive.get("wire_contract_id") != expected_wire:
             errors.append(
                 f"{item_label}.wire_contract_id: unsupported wire contract for {primitive_id!r}"
             )
-    if seen != set(EXECUTION_REQUIREMENTS_PRIMITIVES):
+    if seen != set(policy["primitives"]):
         errors.append(f"{primitive_label}: must declare exactly the supported primitive set")
 
 
@@ -491,6 +511,15 @@ def _validate_execution_evidence_document(
     label: str,
     errors: list[str],
 ) -> None:
+    if isinstance(document, dict) and document.get("schema") == "aneb-realtime-protocol-exact-contract":
+        _validate_realtime_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label=label,
+            errors=errors,
+        )
+        return
     root_keys = {
         "schema",
         "contract_id",
@@ -540,7 +569,7 @@ def _validate_execution_evidence_document(
         errors,
     ):
         actual = (client_engine.get("contract_id"), client_engine.get("version"))
-        if actual != CLIENT_ENGINE_CONTRACT:
+        if actual != ("aneb-token-simulation-engine", "1.0.0"):
             errors.append(f"{label}.client_engine: unsupported contract id/version {actual!r}")
 
     runtime_ref = document.get("runtime")
@@ -601,6 +630,183 @@ def _validate_execution_evidence_document(
         errors.append(f"{label}.exact_business_counts.download count does not match bound runtime")
 
 
+def _validate_realtime_execution_evidence_document(
+    document: dict[str, Any],
+    *,
+    profile: Any,
+    runtime: Any,
+    label: str,
+    errors: list[str],
+) -> None:
+    root_keys = {
+        "schema",
+        "contract_id",
+        "version",
+        "profile",
+        "client_engine",
+        "runtime",
+        "applies_to",
+        "exact_business_counts",
+    }
+    if not _strict_keys(document, root_keys, set(), label, errors):
+        return
+    if document.get("contract_id") != "aneb-realtime-quick-protocol-signature":
+        errors.append(f"{label}.contract_id: unsupported realtime evidence contract")
+    _semver(document.get("version"), f"{label}.version", errors)
+    if document.get("version") != "1.0.0":
+        errors.append(f"{label}.version: unsupported realtime evidence contract version")
+    if document.get("applies_to") != ["positive_completed"]:
+        errors.append(f"{label}.applies_to: expected only positive_completed")
+
+    profile_ref = document.get("profile")
+    if _strict_keys(
+        profile_ref,
+        {"id", "version", "canonical_sha256"},
+        set(),
+        f"{label}.profile",
+        errors,
+    ) and isinstance(profile, dict):
+        if (
+            profile_ref.get("id") != "ai_realtime_voice_quick"
+            or profile_ref.get("version") != "1.1.1"
+        ):
+            errors.append(f"{label}.profile: contract must bind AI Realtime Quick 1.1.1")
+        if profile_ref.get("id") != profile.get("profile_id"):
+            errors.append(f"{label}.profile.id: does not match bound profile")
+        if profile_ref.get("version") != profile.get("version"):
+            errors.append(f"{label}.profile.version: does not match bound profile")
+        expected_sha = f"sha256:{canonical_json_sha256(profile)}"
+        if profile_ref.get("canonical_sha256") != expected_sha:
+            errors.append(f"{label}.profile.canonical_sha256: does not match bound profile")
+
+    client_engine = document.get("client_engine")
+    if _strict_keys(
+        client_engine,
+        {"contract_id", "version"},
+        set(),
+        f"{label}.client_engine",
+        errors,
+    ):
+        actual = (client_engine.get("contract_id"), client_engine.get("version"))
+        if actual != ("aneb-realtime-simulation-engine", "1.0.0"):
+            errors.append(f"{label}.client_engine: unsupported contract id/version {actual!r}")
+
+    sessions: list[dict[str, Any]] = []
+    if isinstance(runtime, dict) and isinstance(runtime.get("sessions"), list):
+        sessions = [item for item in runtime["sessions"] if isinstance(item, dict)]
+        if len(sessions) != len(runtime["sessions"]):
+            errors.append(f"{label}: bound runtime sessions must contain only objects")
+    elif isinstance(runtime, dict):
+        errors.append(f"{label}: bound runtime sessions must be an array")
+    turns = [
+        turn
+        for session in sessions
+        for turn in session.get("turns", [])
+        if isinstance(turn, dict)
+    ]
+    if any(
+        not isinstance(session.get("turns"), list)
+        or len([turn for turn in session["turns"] if isinstance(turn, dict)]) != len(session["turns"])
+        for session in sessions
+    ):
+        errors.append(f"{label}: bound runtime turns must contain only objects")
+
+    runtime_ref = document.get("runtime")
+    runtime_keys = {
+        "canonical_sha256",
+        "session_count",
+        "turn_count",
+        "frame_ms",
+        "uplink_frames",
+        "uplink_payload_bytes",
+        "planned_downlink_frames",
+        "planned_downlink_payload_bytes",
+        "effective_downlink_frames",
+        "effective_downlink_payload_bytes",
+        "interrupted_turns",
+        "max_stop_within_ms",
+    }
+    if _strict_keys(
+        runtime_ref,
+        runtime_keys,
+        set(),
+        f"{label}.runtime",
+        errors,
+    ) and isinstance(runtime, dict):
+        expected_sha = f"sha256:{canonical_json_sha256(runtime)}"
+        if runtime_ref.get("canonical_sha256") != expected_sha:
+            errors.append(f"{label}.runtime.canonical_sha256: does not match bound runtime")
+        frame_values = {
+            session.get("frame_ms")
+            for session in sessions
+            if type(session.get("frame_ms")) is int
+        }
+        expected = {
+            "session_count": len(sessions),
+            "turn_count": len(turns),
+            "frame_ms": next(iter(frame_values)) if len(frame_values) == 1 else None,
+            "uplink_frames": sum(
+                turn.get("uplink_frames", 0)
+                for turn in turns
+                if type(turn.get("uplink_frames")) is int
+            ),
+            "uplink_payload_bytes": sum(
+                turn.get("uplink_frames", 0) * turn.get("uplink_frame_bytes", 0)
+                for turn in turns
+                if type(turn.get("uplink_frames")) is int
+                and type(turn.get("uplink_frame_bytes")) is int
+            ),
+            "planned_downlink_frames": sum(
+                turn.get("planned_downlink_frames", 0)
+                for turn in turns
+                if type(turn.get("planned_downlink_frames")) is int
+            ),
+            "planned_downlink_payload_bytes": sum(
+                turn.get("planned_downlink_frames", 0) * turn.get("downlink_frame_bytes", 0)
+                for turn in turns
+                if type(turn.get("planned_downlink_frames")) is int
+                and type(turn.get("downlink_frame_bytes")) is int
+            ),
+            "effective_downlink_frames": sum(
+                turn.get("downlink_frames_before_stop", 0)
+                for turn in turns
+                if type(turn.get("downlink_frames_before_stop")) is int
+            ),
+            "effective_downlink_payload_bytes": sum(
+                turn.get("downlink_frames_before_stop", 0) * turn.get("downlink_frame_bytes", 0)
+                for turn in turns
+                if type(turn.get("downlink_frames_before_stop")) is int
+                and type(turn.get("downlink_frame_bytes")) is int
+            ),
+            "interrupted_turns": sum(turn.get("interrupted") is True for turn in turns),
+            "max_stop_within_ms": max(
+                (
+                    turn["expected_stop_within_ms"]
+                    for turn in turns
+                    if turn.get("interrupted") is True
+                    and type(turn.get("expected_stop_within_ms")) is int
+                ),
+                default=None,
+            ),
+        }
+        for key, value in expected.items():
+            if runtime_ref.get(key) != value:
+                errors.append(f"{label}.runtime.{key}: does not match bound runtime")
+
+    counts = document.get("exact_business_counts")
+    if _strict_keys(
+        counts,
+        {"realtime_sim"},
+        set(),
+        f"{label}.exact_business_counts",
+        errors,
+    ):
+        if type(counts.get("realtime_sim")) is not int or counts.get("realtime_sim") != len(sessions):
+            errors.append(
+                f"{label}.exact_business_counts.realtime_sim count does not match bound runtime"
+            )
+
+
 def _validate_execution_evidence_contracts(
     root: Path,
     catalog: dict[str, Any],
@@ -647,6 +853,16 @@ def _validate_execution_evidence_contracts(
             }
             if any(entry.get(key) != value for key, value in expected_paths.items()):
                 errors.append(f"{label}: contract must bind Token Quick 1.2.1 paths")
+        elif identity == ("aneb-realtime-quick-protocol-signature", "1.0.0"):
+            expected_paths = {
+                "path": "spec/execution-contracts/ai_realtime_voice_quick-1.1.1.protocol.json",
+                "profile_path": "profiles/published/ai_realtime_voice_quick/profile.json",
+                "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
+            }
+            if any(entry.get(key) != value for key, value in expected_paths.items()):
+                errors.append(f"{label}: contract must bind AI Realtime Quick 1.1.1 paths")
+        else:
+            errors.append(f"{label}: unsupported execution evidence contract identity")
         if entry.get("hash_strategy_id") not in hash_strategy_ids:
             errors.append(f"{label}.hash_strategy_id: unknown hash strategy")
         if not isinstance(entry.get("canonical_sha256"), str) or not SHA256_RE.fullmatch(

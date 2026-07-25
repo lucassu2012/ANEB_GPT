@@ -9,14 +9,15 @@
 
 | 单元 | 仓库候选版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.12（code 44，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；对声明执行要求的 Token Quick 在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏审计 ID；Room 版本、指标、门限和评分均不变 |
-| P2 / aneb-server | 0.8.0 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；E-01 当前已部署 0.8.0，P40 跨端验收仍独立进行 |
-| P3 / aneb-ai-behavior-model | 0.3.1 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；生成带运行计划和受限执行要求的 v2 发布包，并保证 Token Quick 实际覆盖声明的下载原语；保留绑定留出报告的 validated 门禁 |
-| Profile 横切机制 | 1.5.0 | ［KNOWN｜HIGH］索引全部正式资产，新增 Token Quick request-entry 精确计数证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式；结果合同仍按共享核心、兼容 v1 和严格 v2 独立演进 |
+| P1 / ANEB Probe Android | 0.5.13（code 45，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；Token Quick 与 AI realtime Quick 均在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏、分族审计 ID；Room 版本、指标、门限和评分均不变 |
+| P2 / aneb-server | 0.8.1 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 与 AI realtime Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；0.8.1 是 M0-EC2 离线候选，E-01 是否切换必须由受保护部署和验后证据确认 |
+| P3 / aneb-ai-behavior-model | 0.3.2 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；Token Quick 与 AI realtime Quick 均生成带运行计划和受限执行要求的 v2 发布包；保留绑定留出报告的 validated 门禁 |
+| Profile 横切机制 | 1.6.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token Quick request-entry 计数与 AI realtime Quick 协议签名证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
-［KNOWN｜HIGH］M0-EC1 只为 `token_multimodal_quick@1.2.1` 接通执行能力握手；其余 11 个
-Published Profile 没有 `execution_requirements`，继续走原有兼容路径。任何不兼容字段或语义变化
+［KNOWN｜HIGH］M0-EC1/M0-EC2 为 `token_multimodal_quick@1.2.1` 与
+`ai_realtime_voice_quick@1.1.1` 接通执行能力握手；其余 10 个 Published Profile 没有
+`execution_requirements`，继续走原有兼容路径。任何不兼容字段或语义变化
 仍必须先升级 catalog/contract 主版本，再升级消费者。
 
 ## 两族 Profile 与两条 v2 校验路径
@@ -71,7 +72,7 @@ fail closed。
 - ［KNOWN｜HIGH］20 次 echo 来自 `aneb-token-simulation-engine@1.0.0` 的生产常量，3 次
   token-sim 和 1 次 download 来自 Quick 1.2.1 冻结运行计划。合同同时绑定 Engine 身份、Profile/runtime
   规范化摘要和精确计数；Kotlin 回归交叉核对生产常量、任务数和附件任务数。
-- ［KNOWN｜HIGH］catalog 1.5.0 登记该合同并冻结其规范化 SHA-256；目录清单拒绝未索引、缺失、重复或
+- ［KNOWN｜HIGH］catalog 1.6.0 登记该合同并冻结其规范化 SHA-256；目录清单拒绝未索引、缺失、重复或
   身份/摘要漂移。服务端审计判定器只从该合同读取计数，缺失或畸形时 fail closed。
 - ［KNOWN｜HIGH］request-entry 计数只证明请求进入服务端审计边界，不证明响应成功、客户端接收或评分；
   正式结论仍须和同 run 客户端冻结结果及 D-82 原始来源/新鲜度证据组合。
@@ -149,7 +150,7 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 
 ## P3 校准发布闸门
 
-- ［KNOWN｜HIGH］P3 v0.3.1 保留 v0.2.0 的校准门禁：只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠；0.3.0 增加执行要求，0.3.1 再保证 Quick 从模型派生计划中真实选择一个有界返回附件，以覆盖声明的 download 原语。
+- ［KNOWN｜HIGH］P3 v0.3.2 保留 v0.2.0 的校准门禁：只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠；0.3.1 保证 Token Quick 覆盖 download，0.3.2 再为 AI realtime Quick 冻结单一 realtime 原语与精确帧签名合同。
 - ［KNOWN｜HIGH］calibrated 候选只由 training 拟合，holdout 报告按 `token-holdout-validation-v1` 独立生成；任一 P50/P95、pause 或转移矩阵门限失败即禁止 promote。
 - ［KNOWN｜HIGH］validated 模型 build/runtime 发布必须携带原报告和 dataset manifest，并现场重算报告与 promoted 模型；单独篡改 `status=pass` 无效。
 - ［KNOWN｜HIGH］当前 4 个 catalog 模型仍全部为 hypothesis；Schema 和流水线存在不等于真实业务校准已经完成。

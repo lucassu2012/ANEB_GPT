@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.5.0",
+  "catalog_version": "1.6.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.12",
+      "current_version": "0.5.13",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -27,7 +27,7 @@
     },
     "P2": {
       "component": "aneb-server",
-      "current_version": "0.8.0",
+      "current_version": "0.8.1",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -40,7 +40,7 @@
     },
     "P3": {
       "component": "aneb-ai-behavior-model",
-      "current_version": "0.3.1",
+      "current_version": "0.3.2",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -55,7 +55,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.5.0",
+      "current_version": "1.6.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -217,6 +217,20 @@
         "P2",
         "Profile"
       ]
+    },
+    {
+      "contract_id": "aneb-realtime-quick-protocol-signature",
+      "version": "1.0.0",
+      "path": "spec/execution-contracts/ai_realtime_voice_quick-1.1.1.protocol.json",
+      "canonical_sha256": "20d14deee5681de61c83e86ef550e6c89217d186f5832ab6bb9c0a5a49d5afd6",
+      "profile_path": "profiles/published/ai_realtime_voice_quick/profile.json",
+      "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P2",
+        "Profile"
+      ]
     }
   ],
   "model_assets": [
@@ -361,11 +375,12 @@
       "profiles": [
         {
           "profile_id": "ai_realtime_voice_quick",
-          "version": "1.1.0",
+          "version": "1.1.1",
           "path": "profiles/published/ai_realtime_voice_quick/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
-          "manifest_path": "profiles/published/ai_realtime_voice_quick/manifest.sha256"
+          "manifest_path": "profiles/published/ai_realtime_voice_quick/manifest.sha256",
+          "execution_requirements_policy": "required"
         },
         {
           "profile_id": "ai_realtime_voice_recovery",
