@@ -1445,6 +1445,55 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_launcher_gate_uses_activity_manager_when_window_dump_is_stale(
+        self,
+    ) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        marker = "function Assert-HuaweiLauncherFocused"
+        function_source = marker + source.split(marker, 1)[1].split(
+            "\nfunction ", 1
+        )[0]
+        canonical_source = self._function_source(
+            "ConvertTo-CanonicalAndroidComponent"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper = Path(temporary) / "launcher-stale-window.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$LauncherComponent = 'com.huawei.android.launcher/.unihome.UniHomeLauncher'\n"
+                f"{canonical_source}\n"
+                f"{function_source}\n"
+                "$window = @'\n"
+                "mCurrentFocus=Window{41 u0 com.aneb.experiencelab/com.aneb.experiencelab.MainActivity}\n"
+                "mCurrentFocus=Window{42 u0 NotificationShade}\n"
+                "'@\n"
+                "$activity = @'\n"
+                "mFocusedApp=ActivityRecord{1 u0 com.huawei.android.launcher/.unihome.UniHomeLauncher t2}\n"
+                "ResumedActivity: ActivityRecord{1 u0 com.huawei.android.launcher/.unihome.UniHomeLauncher t2}\n"
+                "'@\n"
+                "$result=Assert-HuaweiLauncherFocused -WindowDump $window -ActivityDump $activity\n"
+                "if ($result.FocusedAppComponent -cne "
+                "'com.huawei.android.launcher/com.huawei.android.launcher.unihome.UniHomeLauncher') "
+                "{ throw 'activity_authority_not_preserved' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_launcher_gate_rejects_historical_launcher_when_current_focus_is_elsewhere(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         marker = "function Assert-HuaweiLauncherFocused"
@@ -2471,6 +2520,16 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             release.index("after_release_guard"),
             release.index("input keyevent HOME"),
         )
+        self.assertIn("input keyevent KEYCODE_WAKEUP", release)
+        self.assertIn("wm dismiss-keyguard", release)
+        self.assertLess(
+            release.index("input keyevent KEYCODE_WAKEUP"),
+            release.index("wm dismiss-keyguard"),
+        )
+        self.assertLess(
+            release.index("wm dismiss-keyguard"),
+            release.index("input keyevent HOME"),
+        )
 
         finalizer = source.split("function Write-FinalEvidenceManifest", 1)[1].split(
             "\nfunction ", 1
@@ -2593,7 +2652,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "$script:TargetStopSucceeded=$false; $script:BusySentinelRestoredAfterTarget=$false\n"
                 + "function Invoke-AdbTextOnce { param([string[]]$Arguments,[string]$Stage); switch -Wildcard ($Stage) { "
                 + "'start_busy_sentinel_settings' { return \"Starting: Intent { act=android.settings.SETTINGS }`nStatus: ok`nActivity: com.android.settings/.HWSettings`nComplete\" }; "
-                + "'busy_sentinel_window_*' { return 'mCurrentFocus=Window{42 u0 com.android.settings/com.android.settings.HWSettings}' }; "
+                + "'busy_sentinel_window_*' { return \"mCurrentFocus=Window{41 u0 com.aneb.experiencelab/com.aneb.experiencelab.MainActivity}`nmCurrentFocus=Window{42 u0 NotificationShade}\" }; "
                 + "'busy_sentinel_activity_*' { return \"mFocusedApp=ActivityRecord{1 u0 com.android.settings/.HWSettings t9}`ntopResumedActivity=ActivityRecord{1 u0 com.android.settings/.HWSettings t9}\" }; "
                 + "default { throw \"unexpected_adb_stage=$Stage\" } } }\n"
                 + "Start-BusySentinel -EvidenceDirectory '"
@@ -2719,7 +2778,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                             "captured_at_utc": "2026-07-24T00:00:00.0000000Z",
                             "stage": stage,
                             "expected_component": short_component,
-                            "observed_components": [full_component] * 4,
+                            "observed_components": [full_component] * 2,
                             "matched": True,
                             "window_dump": "mCurrentFocus=Window{settings}",
                             "activity_dump": "mFocusedApp=ActivityRecord{settings}",

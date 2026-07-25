@@ -1665,14 +1665,15 @@ function Assert-HuaweiLauncherFocused {
     $resumedLines = @($ActivityDump -split "`r?`n" | Where-Object {
         $_ -match '^\s*(?:topResumedActivity|mResumedActivity|ResumedActivity)\s*[:=]'
     })
-    if ($windowLines.Count -ne 1 -or $focusedLines.Count -ne 1 -or $resumedLines.Count -lt 1) {
+    # Huawei may concatenate stale WMS sections in `dumpsys window`; keep that
+    # raw dump as evidence, but use ActivityManager's focused/resumed pair.
+    if ($focusedLines.Count -ne 1 -or $resumedLines.Count -lt 1) {
         throw (
             'live_state_focus_ambiguous window={0} focused={1} resumed={2}' -f
             $windowLines.Count, $focusedLines.Count, $resumedLines.Count
         )
     }
     $components = New-Object System.Collections.Generic.List[string]
-    $components.Add((& $extractComponent $windowLines[0] 'mCurrentFocus'))
     $components.Add((& $extractComponent $focusedLines[0] 'mFocusedApp'))
     foreach ($line in $resumedLines) {
         $components.Add((& $extractComponent $line 'resumedActivity'))
@@ -1686,9 +1687,9 @@ function Assert-HuaweiLauncherFocused {
         }
     }
     return [pscustomobject]@{
-        WindowComponent = [string]$components[0]
-        FocusedAppComponent = [string]$components[1]
-        ResumedComponents = @($components | Select-Object -Skip 2)
+        WindowEvidenceLineCount = $windowLines.Count
+        FocusedAppComponent = [string]$components[0]
+        ResumedComponents = @($components | Select-Object -Skip 1)
     }
 }
 
@@ -3444,10 +3445,12 @@ function Assert-BusySentinelFocused {
         $_ -match '^\s*(?:topResumedActivity|mResumedActivity|ResumedActivity)\s*[:=]'
     })
     $observed = New-Object System.Collections.Generic.List[string]
-    $focusShapeValid = $windowLines.Count -eq 1 -and
-        $focusedLines.Count -eq 1 -and $resumedLines.Count -ge 1
+    # Treat ActivityManager as the foreground authority; WMS remains archived
+    # because Huawei's aggregate dump can contain older duplicated sections.
+    $focusShapeValid = $focusedLines.Count -eq 1 -and
+        $resumedLines.Count -ge 1
     if ($focusShapeValid) {
-        foreach ($line in @($windowLines[0], $focusedLines[0]) + $resumedLines) {
+        foreach ($line in @($focusedLines[0]) + $resumedLines) {
             $match = [regex]::Match([string]$line, $componentPattern)
             if (-not $match.Success) {
                 $focusShapeValid = $false
@@ -3469,7 +3472,7 @@ function Assert-BusySentinelFocused {
     $expectedLauncher = ConvertTo-CanonicalAndroidComponent `
         -Value $LauncherComponent `
         -Reason 'launcher_component_invalid'
-    $matched = $focusShapeValid -and $observed.Count -ge 3
+    $matched = $focusShapeValid -and $observed.Count -ge 2
     if ($matched) {
         foreach ($component in $observed) {
             if ([string]$component -cne $expectedSentinel -or
@@ -3667,8 +3670,16 @@ function Release-BusySentinelToLauncherOnce {
         -EvidenceDirectory $EvidenceDirectory `
         -Stage 'after_release_guard'
     $null = Invoke-AdbTextOnce -Arguments @(
+        'shell', 'input keyevent KEYCODE_WAKEUP'
+    ) -Stage 'wake_before_busy_sentinel_home'
+    $null = Invoke-AdbTextOnce -Arguments @(
+        'shell', 'wm dismiss-keyguard'
+    ) -Stage 'dismiss_keyguard_before_busy_sentinel_home'
+    Start-Sleep -Milliseconds 500
+    $null = Invoke-AdbTextOnce -Arguments @(
         'shell', 'input keyevent HOME'
     ) -Stage 'release_busy_sentinel_to_home'
+    Start-Sleep -Milliseconds 500
     $window = Invoke-AdbTextOnce -Arguments @(
         'shell', 'dumpsys window'
     ) -Stage 'verify_launcher_after_busy_sentinel'
@@ -3734,7 +3745,7 @@ function Assert-BusySentinelEvidence {
             throw "busy_sentinel_evidence_entry_invalid stage=$stage"
         }
         $observed = @($entry.observed_components)
-        $focusInvalid = $observed.Count -lt 3
+        $focusInvalid = $observed.Count -lt 2
         if (-not $focusInvalid) {
             foreach ($component in $observed) {
                 try {
