@@ -39,6 +39,16 @@
 | EC1-09 结束清理 | 停止本轮 ANEB/代理/VPN/抓包，清除 reverse/临时设置，回到 Huawei Launcher 并即时复核；服务器无临时残留 | 结束现场只读清单；READY 的 final-clean 证据 | ［KNOWN｜HIGH］完成；最终 PhoneGuard receipt `f1614e31…bcef`，Launcher、冲突 PID/service/accessibility/VPN/tun=0，reverse 已清，E-01 marker 不存在且锁已释放 |
 | EC1-10 切片结案 | 回填 commit/run/APK SHA、正负 run/READY、结论与剩余风险；只在全部门通过后标记 M0-EC1 完成 | 本账本、计划对齐文档、验证记录、CI 与 READY | ［KNOWN｜HIGH］完成；完整证据与限制见 `M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md`，完成仅适用于 Token Quick 窄切片 |
 
+### 3.1 下一执行切片：M0-EC2 AI 实时 Quick
+
+| 门 | 应实现的内容 | 当前状态 |
+|---|---|---|
+| EC2-01 范围冻结 | 固定 Profile、候选版本、实时协议签名、正负证据、非目标和停止条件 | ［KNOWN｜HIGH］完成；见 `M0_EC2_AI_REALTIME_QUICK_SCOPE_2026-07-25.md` |
+| EC2-02～06 离线实现 | 通用执行门、服务器白名单注册表、实时审计/摘要、拒绝持久化、参数化采集与复核 | ［KNOWN｜HIGH］待实现 |
+| EC2-07 离线门 | Kotlin/Go/Python 正反例、全仓质量门、凭据扫描与 clean commit | ［KNOWN｜HIGH］待执行 |
+| EC2-08 云端门 | 同提交 0.5.13/0.8.1 provenance 与全绿 CI | ［KNOWN｜HIGH］待执行 |
+| EC2-09～10 跨端结案 | 受保护部署、P40 正负 READY、精确清理与独立复核 | ［KNOWN｜HIGH］待执行；离线门通过前禁止触碰 P40/E-01 |
+
 ## 4. 已冻结的关键节点
 
 1. ［KNOWN｜HIGH］D-80：`SHARED_TEST_STATUS.md`、claim、lease、待交接、异常锁定和二次 Verifier 已退役；不得再次用它们阻塞或授权 P40。
