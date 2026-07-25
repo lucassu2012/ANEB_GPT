@@ -9,8 +9,11 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +21,12 @@ from pathlib import Path
 
 CONTRACT_VERSION = "aneb-debug-candidate-v1"
 EXPECTED_PACKAGE = "com.aneb.probe.codex"
+PROVENANCE_BUNDLE_NAME = "provenance.sigstore.json"
+INSTALL_NOTES_NAME = "ANEB-安装说明.txt"
+MAX_PROVENANCE_BUNDLE_BYTES = 16 * 1024 * 1024
+MAX_CANDIDATE_PAYLOAD_BYTES = 512 * 1024 * 1024
+MAX_CANDIDATE_TOTAL_BYTES = 600 * 1024 * 1024
+MAX_CANDIDATE_PAYLOADS = 32
 PACKAGE_NAME_RE = re.compile(r"package:.*?\bname='(?P<value>[^']+)'")
 VERSION_CODE_RE = re.compile(r"package:.*?\bversionCode='(?P<value>[^']+)'")
 VERSION_NAME_RE = re.compile(r"package:.*?\bversionName='(?P<value>[^']+)'")
@@ -31,6 +40,14 @@ CERT_SHA_RE = re.compile(
 
 
 class CandidateError(ValueError):
+    pass
+
+
+class DuplicateJsonKey(ValueError):
+    pass
+
+
+class NonstandardJsonConstant(ValueError):
     pass
 
 
@@ -51,6 +68,62 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def _is_reparse(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return True
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = getattr(info, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_flag)
+
+
+def _assert_nonreparse_lexical_chain(path: Path, *, reason: str) -> Path:
+    try:
+        absolute = Path(os.path.abspath(os.fspath(path)))
+    except (OSError, TypeError, ValueError) as error:
+        raise CandidateError(reason) from error
+    for component in reversed((absolute, *absolute.parents)):
+        if not os.path.lexists(component):
+            continue
+        if _is_reparse(component):
+            raise CandidateError(reason)
+    return absolute
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateJsonKey(key)
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise NonstandardJsonConstant(value)
+
+
+def _read_regular_file(path: Path, *, maximum: int, reason: str) -> bytes:
+    if _is_reparse(path) or not path.is_file():
+        raise CandidateError(reason)
+    try:
+        size = path.stat().st_size
+        if not 0 < size <= maximum:
+            raise CandidateError(reason)
+        with path.open("rb") as stream:
+            raw = stream.read(maximum + 1)
+    except CandidateError:
+        raise
+    except OSError as error:
+        raise CandidateError(reason) from error
+    if len(raw) != size or len(raw) > maximum:
+        raise CandidateError(reason)
+    return raw
 
 
 def parse_identity(badging: str, signer: str) -> ApkIdentity:
@@ -158,7 +231,7 @@ SHA-256：{apk_sha256}
 4. 桌面名称应为 ANEB Probe，应用详情包名应为 {identity.package_id}，可与 Claude 包并存。
 5. 测试结束后返回桌面并彻底退出 ANEB。
 
-如果版本、包名或 SHA-256 任一不匹配，不要安装。
+如果版本、包名或 SHA-256 任一不匹配，请不要安装。
 """
 
 
@@ -176,9 +249,14 @@ def package_candidate(
     metadata = load_gradle_metadata(metadata_path)
     identity = parse_identity(badging, signer)
     verify_debug_boundary(identity, metadata, apk)
+    output = _assert_nonreparse_lexical_chain(
+        output,
+        reason="candidate_output_invalid",
+    )
     if output.exists() and any(output.iterdir()):
         raise CandidateError("candidate_output_not_empty")
     output.mkdir(parents=True, exist_ok=True)
+    _assert_nonreparse_lexical_chain(output, reason="candidate_output_invalid")
 
     apk_name = f"ANEB-Probe-{identity.version_name}-debug.apk"
     packaged_apk = output / apk_name
@@ -214,17 +292,155 @@ def package_candidate(
     }
     manifest_path = output / "build-manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (output / "ANEB-安装说明.txt").write_text(
+    (output / INSTALL_NOTES_NAME).write_text(
         installation_text(identity, apk_name, apk_digest, source_sha),
         encoding="utf-8",
     )
     checksums = [
         f"{apk_digest}  {apk_name}",
         f"{sha256(manifest_path)}  {manifest_path.name}",
-        f"{sha256(output / 'ANEB-安装说明.txt')}  ANEB-安装说明.txt",
+        f"{sha256(output / INSTALL_NOTES_NAME)}  {INSTALL_NOTES_NAME}",
     ]
     (output / "checksums.sha256").write_text("\n".join(checksums) + "\n", encoding="utf-8")
     return manifest
+
+
+def _rebuild_checksums(output: Path) -> dict[str, str]:
+    try:
+        paths = list(output.iterdir())
+    except OSError as error:
+        raise CandidateError("candidate_inventory_invalid") from error
+    names = {path.name for path in paths}
+    apk_names = {
+        name
+        for name in names
+        if re.fullmatch(r"ANEB-Probe-[A-Za-z0-9._-]+-debug\.apk", name)
+    }
+    expected_names = {
+        "checksums.sha256",
+        "build-manifest.json",
+        INSTALL_NOTES_NAME,
+        PROVENANCE_BUNDLE_NAME,
+        *apk_names,
+    }
+    if (
+        len(apk_names) != 1
+        or names != expected_names
+        or not any(path.name == "checksums.sha256" for path in paths)
+        or any(
+            not path.is_file()
+            or _is_reparse(path)
+            or path.name.startswith(".")
+            or unicodedata.normalize("NFC", path.name) != path.name
+            or any(ord(character) < 32 or ord(character) == 127 for character in path.name)
+            for path in paths
+        )
+    ):
+        raise CandidateError("candidate_inventory_invalid")
+    try:
+        sizes = {path.name: path.stat().st_size for path in paths}
+    except OSError as error:
+        raise CandidateError("candidate_inventory_invalid") from error
+    if (
+        any(not 0 < size <= MAX_CANDIDATE_PAYLOAD_BYTES for size in sizes.values())
+        or sum(sizes.values()) > MAX_CANDIDATE_TOTAL_BYTES
+    ):
+        raise CandidateError("candidate_inventory_invalid")
+    payloads = sorted(
+        (path for path in paths if path.name != "checksums.sha256"),
+        key=lambda path: path.name,
+    )
+    try:
+        inventory = {path.name: sha256(path) for path in payloads}
+    except OSError as error:
+        raise CandidateError("candidate_inventory_invalid") from error
+    content = "".join(
+        f"{digest}  {name}\n" for name, digest in inventory.items()
+    ).encode("utf-8")
+    temporary_name: str | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".checksums.", suffix=".tmp", dir=output
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, output / "checksums.sha256")
+        temporary_name = None
+    except OSError as error:
+        raise CandidateError("checksums_rebuild_failed") from error
+    finally:
+        if temporary_name is not None:
+            try:
+                Path(temporary_name).unlink()
+            except OSError:
+                pass
+    return inventory
+
+
+def finalize_candidate(candidate: Path, bundle: Path) -> dict[str, object]:
+    """Attach one Sigstore bundle and atomically rebuild the candidate inventory."""
+
+    candidate = _assert_nonreparse_lexical_chain(
+        candidate,
+        reason="candidate_directory_invalid",
+    )
+    bundle = _assert_nonreparse_lexical_chain(
+        bundle,
+        reason="attestation_bundle_invalid",
+    )
+    if not candidate.is_dir() or _is_reparse(candidate):
+        raise CandidateError("candidate_directory_invalid")
+    if not bundle.is_file() or _is_reparse(bundle):
+        raise CandidateError("attestation_bundle_invalid")
+    try:
+        candidate = candidate.resolve(strict=True)
+        bundle = bundle.resolve(strict=True)
+    except OSError as error:
+        raise CandidateError("candidate_path_invalid") from error
+    if candidate == bundle or candidate in bundle.parents:
+        raise CandidateError("attestation_bundle_boundary_invalid")
+    try:
+        raw = _read_regular_file(
+            bundle,
+            maximum=MAX_PROVENANCE_BUNDLE_BYTES,
+            reason="attestation_bundle_invalid",
+        )
+        parsed = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        DuplicateJsonKey,
+        NonstandardJsonConstant,
+    ) as error:
+        raise CandidateError("attestation_bundle_invalid") from error
+    if not 0 < len(raw) <= MAX_PROVENANCE_BUNDLE_BYTES or not isinstance(parsed, dict):
+        raise CandidateError("attestation_bundle_invalid")
+    target = candidate / PROVENANCE_BUNDLE_NAME
+    try:
+        with target.open("xb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        inventory = _rebuild_checksums(candidate)
+    except FileExistsError as error:
+        raise CandidateError("attestation_bundle_target_exists") from error
+    except Exception:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise
+    return {
+        "bundle_sha256": inventory[PROVENANCE_BUNDLE_NAME],
+        "payload_count": len(inventory),
+    }
 
 
 def build_tool(name: str, version: str = "") -> Path:
@@ -268,9 +484,14 @@ def run_tool(tool: Path, *arguments: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apk", type=Path, required=True)
-    parser.add_argument("--metadata", type=Path, required=True)
+    parser.add_argument("--apk", type=Path)
+    parser.add_argument("--metadata", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--finalize-bundle",
+        type=Path,
+        help="Attach the actions/attest bundle and atomically rebuild checksums.",
+    )
     parser.add_argument("--source-sha", default="")
     parser.add_argument("--source-ref", default="")
     parser.add_argument("--run-url", default="")
@@ -284,6 +505,31 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.finalize_bundle is not None:
+        if args.apk is not None or args.metadata is not None:
+            print(
+                "ANEB debug candidate finalization: FAIL: "
+                "finalize_mode_arguments_invalid",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            report = finalize_candidate(args.output, args.finalize_bundle)
+        except CandidateError as error:
+            print(f"ANEB debug candidate finalization: FAIL: {error}", file=sys.stderr)
+            return 1
+        print(
+            "ANEB debug candidate finalization: PASS: "
+            f"bundle_sha256={report['bundle_sha256']} "
+            f"payload_count={report['payload_count']}"
+        )
+        return 0
+    if args.apk is None or args.metadata is None:
+        print(
+            "ANEB debug candidate packaging: FAIL: apk_and_metadata_required",
+            file=sys.stderr,
+        )
+        return 1
     try:
         badging = run_tool(build_tool("aapt2", args.build_tools_version), "dump", "badging", str(args.apk))
         signer = run_tool(

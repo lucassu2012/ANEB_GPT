@@ -39,6 +39,7 @@ app/.kotlin/
 
 # Public cloud checkpoint: real-device databases/logs/screenshots stay local.
 evidence/
+/ValidationEvidence/
 
 # Bundled AI behavior-model generated artifacts are reproducible and not source.
 tools/aneb-ai-behavior-model/build/

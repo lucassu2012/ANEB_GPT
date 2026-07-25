@@ -1,9 +1,12 @@
 # ANEB Codex 进展对齐报告——按《ANEB 系统开发计划 v1.0》映射
 
-> 更新日期：2026-07-18。
+> 更新日期：2026-07-25。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.10 / Room v19、server 0.7.0、gateway 0.2.0、behavior model 0.2.0、Profile catalog 1.3.1；551 项 JVM 测试、Lint 零 error、8 Schema/catalog、12 项测量/结果测试 + 8 项候选打包测试 + 6 项凭据安全测试、31 项行为模型与 Go 门禁通过。三类统一结果、语义结论项、正式 RadioCollector、默认网络 PATH_CHANGE、TTFT 重复性、版本化结果合同、P3 校准发布流水线和 M4 开测前自救/批量导出/AI 实时后台断网切片已闭环；0.5.10 已加固系统下载导出的失败清理边界，并建立云端可下载、可核验的 Debug 候选流水线。M4 凭据安全门现已进入本地质量门与独立云端 job，新增 job 的真实云端结果待下一次 run 回填。0.5.9 P40 蜂窝 Quick 已完成动态 UI 与 strict-v2 JSONL 纵向复验，0.5.10 精确 APK 真机仍待共享手机明确交还。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> 当前事实基线：App 0.5.12-codex / code 44 / Room v19 已完成 M0-EC1 Token Quick 正负 READY；E-01 运行 server 0.8.0，gateway 0.2.0 未部署到 E-01；behavior model 0.3.1 与 Profile catalog 1.5.0 进入该窄切片。正向 source `10927c1` / GitHub run `30124854408` 与负向 source `67eb66d` / run `30162011890` 的 CI APK、真机 run 和 READY 均已独立复核。E-01 live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`；服务端终态 success 证据和锁内验后检查已闭合，原部署进程 rc=99 仍如实保留为 watchdog 清理竞态误报。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖仍明确列为缺口。
+> M0-EC1 边界：Token Quick 1.2.1 已建立 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 精确执行合同、真实 1MiB 返回附件、同-run服务端审计以及 D-82/D-86/D-87 正负 READY。正向 run `019f95f9-a317-7766-9725-243b9660b9f1` 和负向 run `019f99c7-5b40-75ba-ad58-b5b522e9abf9` 已完成，窄切片可以结案；正负使用不同 CI APK，因此不能冒充同二进制性能 A/B，且不能扩大为全部 Profile 已统一。
+> 逐门里程碑账本：`docs/MILESTONE_LEDGER_2026-07-23.md`。后续任务必须回填实际 commit/run/APK/READY 身份，不能只更新叙述性进度。
+> 协同规则：2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 退役。P40 改为“实时只读现场检查 → 干净则直接测试 → 停止本轮全部 App/VPN/抓包/临时规则并恢复设置 → Huawei Launcher → 即时复核”；无法安全归属的既有会话不得擅自清理。E-01/阿里云继续执行独立预检、远端 `flock`、受限变更、原子回滚和验后检查。
 
 ## 0. 先讲偏差与裁定
 
@@ -11,7 +14,7 @@
 - ［INFERRED｜HIGH］现阶段保持逻辑隔离更合适；出现独立发布节奏或独立负责人后再物理拆仓。
 - ［KNOWN｜HIGH］“Profile 即数据”目前只完成了一半：业务参数、质量目标、动态指标和运行计划已数据化；新增一种全新的传输原语、采样语义或评分算法仍然需要代码。可执行的铁律应是：**已有原语内的业务变化只改 Profile；新增原语先升 spec/contract，再改 P1/P2 引擎。**
 - ［KNOWN｜HIGH］JSON 与 YAML 都能承载声明式合同。当前产物已统一为可校验 JSON；为了形式改成 YAML没有业务价值，后续重点是单一 schema、兼容区间和消费者一致性。
-- ［KNOWN｜HIGH］现有 Profile 有两族合同：服务端根 Profile（4 个相位 Profile）和 App 发布 Profile v2（12 个业务/测量 Profile）。两族尚未收敛成 P1/P2 同时解释的一个端到端合同，这是 M0 的真实治理欠账。
+- ［KNOWN｜HIGH］现有 Profile 有两族合同：服务端根 Profile（4 个相位 Profile）和 App 发布 Profile v2（12 个业务/测量 Profile）。M0-EC1 只让 `token_multimodal_quick@1.2.1` 成为 P1/P2/P3 可同时证明的首个窄切片；其余 Published Profile 与根 Profile 家族尚未收敛成通用端到端合同，仍是 M0 的治理欠账。
 - ［KNOWN｜HIGH］真实第三方 App 适配器尚未进入主 App。依照此前“ANEB App 只做自建节点仿真”的产品边界，未来 Profile 3 应放在独立 `aneb-adapters` 模块，不得把真实 API、账号或脆弱自动化混入 P1b 核心评分链。
 
 ## 1. 一页结论
@@ -19,11 +22,11 @@
 | 计划单元 | Codex 当前状态 | 结论 |
 |---|---|---|
 | **P1a 前台 UI** | **0.5.10 产品化大部完成；开测、导出和统一结论已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL，设置页可把全部独立验真的 v1/v2 历史按时间导出，并分别提示格式不支持与完整性异常。0.5.9 直接展示评分器冻结的完成性、Profile 业务行为、门限与瓶颈；0.5.10 对下载目录的创建、写入、完成和失败清理逐阶段验真，禁止半成品或误报成功。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
-| **P1b 测量引擎** | **M1 单节点验收切片闭环** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果均先落 Room 再发布，0.5.8 起在同一事务冻结 `aneb-result-v2`、1Hz 无线样本与环境事件，0.5.9 起每条结论冻结稳定 ID、严重级别及指标/证据依据，兼容 v1 保留历史验证。0.5.6 的 5-run TTFT 任务对齐 CV 中位数 1.425%、最大值 4.986%，通过 ≤10% 门限。 |
-| **P2 服务器侧** | **当前 App 所需单节点矩阵完成；原计划 P2 部分完成** | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.7.0`，已覆盖当前 App 使用的 Token、上传、下载、工具循环、WebSocket 实时双工、测速、UDP、结果与逐 run 合成弱网；对照原计划仍缺 RTP/WebRTC 语音回环、通用 100MiB/1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
-| **P3 标准与业务模型** | **0.2.0 校准流水线闭环；真实画像未校准** | ［KNOWN｜HIGH］除确定性 Token/Stress/AI 实时/Recovery 生成外，现已实现授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算；现有 4 个模型仍明确为 `hypothesis`，没有获准观测数据，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
-| **横切 Profile 体系** | **1.3.1 目录与版本化结果/结论/校准合同已冻结，执行合同仍分叉** | ［KNOWN｜HIGH］`spec/catalog.json` 已机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、6 个运行包及消费者边界；12 个正式 Profile 已随结论策略升级小版本，Token/AI 实时运行计划重新绑定规范化哈希。1.3.1 只同步 P1 0.5.10 消费者版本，不改 Profile 内容。结果合同分为内部共享 core、兼容 v1 与严格 v2，另含 Token 观测、校准数据集和留出验证合同。P1/P2 尚未共同解释同一份 v2 descriptor。 |
-| **里程碑位置** | **M1 单节点验收切片通过、三级节点未完成；M0 治理部分完成；M3 仅 WebSocket 仿真轨完成；M4 开测自救切片通过；M2 未启动** | ［KNOWN｜HIGH］详见 §7；不以单节点重复性冒充跨节点、外场或真实业务画像完成度。 |
+| **P1b 测量引擎** | **M1 单节点验收切片闭环；0.5.12 M0-EC1 Token Quick 正负 READY 完成** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果均先落 Room 再发布，0.5.8 起在同一事务冻结 `aneb-result-v2`、1Hz 无线样本与环境事件，0.5.9 起每条结论冻结稳定 ID、严重级别及指标/证据依据，兼容 v1 保留历史验证。0.5.11 为 Quick 增加业务流量前的 APK manifest 与节点能力回执门禁；0.5.12 再为同一 Token run 绑定规范审计 UUID，并以固定角色区分 reachability/capability。服务端判定要求唯一 start/end 双 barrier、同一进程实例、连续序号、能力门先于业务且无 drop/未归因业务；日志只证明 request-entry coverage，必须与客户端冻结结果结合。不兼容时仍在业务前 fail closed 并抑制评分。正向 20/3/1 与负向 `receipt_missing` 零业务产物已在 P40/E-01 各自形成独立 READY。 |
+| **P2 服务器侧** | **0.8.0 已部署；Token Quick 跨端窄切片完成** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.0`，已覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、UDP、结果与逐 run 合成弱网，并新增 manifest 验真的 Quick 能力回执和同-run request-entry 审计。Token Quick 正向 20/3/1 与负向业务入口为零已和客户端同 run 证据共同闭环；锁内验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 100MiB/1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
+| **P3 标准与业务模型** | **0.3.1 本地候选；真实画像未校准** | ［KNOWN｜HIGH］0.2.0 的授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.0 增加 M0-EC1 执行要求，0.3.1 修正 Quick 选择算法，使真实运行计划至少包含一个模型派生的有界返回附件。现有 4 个模型仍为 `hypothesis`，没有获准观测数据，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
+| **横切 Profile 体系** | **1.5.0 首个 Token Quick 跨端执行切片已验收** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、6 个运行包、1 个 execution evidence contract 及消费者边界；`token_multimodal_quick@1.2.1` 以规范化哈希、客户端引擎区间、服务端回执和三项白名单原语形成 P1/P2/P3 共用合同，并真实执行 1MiB download；20/3/1 精确 request-entry 与 `receipt_missing` 零业务负向已形成独立 READY。其余 11 个 Published Profile 保持兼容。结果 core/v1/v2、Token 观测、校准数据集、指标、门限和评分均不改变；通用 Profile 执行合同仍未全部收敛。 |
+| **里程碑位置** | **M1 单节点验收切片通过、三级节点未完成；M0 首个 Token Quick 窄切片正负跨端完成；M3 仅 WebSocket 仿真轨完成；M4 开测自救切片通过；M2 未启动** | ［KNOWN｜HIGH］详见 §7；M0-EC1 的完成不能扩大为 M0 全部完成，也不以单节点重复性冒充跨节点、外场或真实业务画像完成度。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -80,9 +83,9 @@
 - ［KNOWN｜HIGH］AI 实时后台正常 Quick run `019f7238-d040-71a0-b874-6c211f051e0d` 完成 3/3 轮；后台真实 Wi-Fi 中断 run `019f7240-bf42-7a48-b23b-3235286da018` 观察到 1/1 会话中断、2/3 轮失败和 51.8% 帧返回率，分数/等级为 null。结果首屏先报告业务任务受损，再给出 ≤1% 会话中断率与 ≥99% 帧返回率目标，同时禁止缺少 PATH_CHANGE 证据时单因归因。两条信封摘要均匹配。
 - ［KNOWN｜HIGH］最终 PATH_CHANGE run `019f72f5-557c-71b0-a7d9-b462055f0545` 在真实 Wi-Fi 关闭窗口冻结 `default_network_lost path=path-1 transport=wifi`、5 个无线样本、1/1 会话中断与 3/3 轮失败；结果页以“默认 Wi-Fi 网络丢失”展示同窗关联，并明确不能单独证明因果。该信封当前 Schema 错误 0、摘要匹配。最终批量 JSONL 导出 27/31 条，27/27 摘要匹配且 4 个旧摘要异常 id 未混入。
 - ［KNOWN｜HIGH］App 0.5.8 已落实结果版本边界：27 条不可变历史在兼容 v1 下 27/27 结构通过；三类新生产者改发严格 v2。P40 Token Quick run `019f730f-a0d5-7417-9e01-0866bacdfc57` 为 v2、3/3 任务对齐字段完整、120 条无线样本、Schema 零错误且独立摘要匹配，97.0/A 仍保持 LOW/INCONCLUSIVE。见 `P40_APP_0.5.8_RESULT_VERSIONING_VALIDATION_2026-07-18.md`。
-- ［KNOWN｜HIGH］App 0.5.9 把三类字符串结论升级为评分器冻结的语义项：稳定 `conclusion_id`、准确 `info/recommendation/warning/failure`、原始文本和指标/证据 basis；导出器不再按条目位置猜级别，结果页不再另写行为特征。正常、必需指标缺失、无效证据及默认网络变化共现均有回归；计划受控中断单独按恢复任务完成性评价，Token 缺指标时也不再吞掉已观察到的任务完成事实。12 个 Profile 与对应结论策略已升小版本，6 个 Token/AI 实时运行包重新哈希绑定。545 项 JVM 测试、Lint 零 error、Schema/catalog、测量分析、行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条冻结结论和系统下载目录 strict-v2 JSONL 均复验通过。当前精确 APK 只在其后调整失败门限 basis 与 Token 缺指标结论，已自动化验证但尚待共享手机释放后做同二进制安装确认。酒店 Wi-Fi 的前序失败发生在门户未认证时，不作为网络质量 A/B。见 `APP_0.5.9_SEMANTIC_CONCLUSION_VALIDATION_2026-07-18.md`。
-- ［KNOWN｜HIGH］App 0.5.10 将所有系统下载导出收紧为“创建 pending → 写入全部 UTF-8 字节 → 完成标记成功”后才返回成功；打开、写入或完成失败均尝试删除半成品，清理失败则保留 URI 并显式报告。6 个故障注入测试覆盖成功、创建失败、打开失败、磁盘写入失败、完成失败和清理失败；全量现为 90 suites / 551 tests，Lint 0 error / 11 notices，其他门禁均通过。该变化不改结果正文、摘要、Schema、Profile 或评分。精确 APK 真机导出验收待 Experience Lab 明确释放共享 P40。见 `APP_0.5.10_EXPORT_RELIABILITY_VALIDATION_2026-07-18.md`。
-- ［KNOWN｜HIGH］云端 Debug 交付流水线已完成真实闭环：Codex 分支触发 GitHub run `29633753923`，合同、Go 服务端、网关控制面/竞争/构建、行为模型和 Android 候选五个 job 成功；工件 `8426436270` 精确包含 APK、机器清单、三份 SHA-256 和中文安装说明。云端 APK 身份为 `com.aneb.probe.codex` / `0.5.10-codex` / code 42，SHA-256 `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`；attestation `35942948` 已离线验证。外部固定 CA 的隔离 TLS/netem 命名空间步骤因无叶证书 secrets 明确未执行，不折算为 PASS。见 `CLOUD_DEBUG_CANDIDATE_DELIVERY_2026-07-18.md`。
+- ［KNOWN｜HIGH］App 0.5.9 把三类字符串结论升级为评分器冻结的语义项：稳定 `conclusion_id`、准确 `info/recommendation/warning/failure`、原始文本和指标/证据 basis；导出器不再按条目位置猜级别，结果页不再另写行为特征。正常、必需指标缺失、无效证据及默认网络变化共现均有回归；计划受控中断单独按恢复任务完成性评价，Token 缺指标时也不再吞掉已观察到的任务完成事实。12 个 Profile 与对应结论策略已升小版本，6 个 Token/AI 实时运行包重新哈希绑定。545 项 JVM 测试、Lint 零 error、Schema/catalog、测量分析、行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条冻结结论和系统下载目录 strict-v2 JSONL 均复验通过。实测后重构的精确 0.5.9 APK 未另行安装，随后由 0.5.10 云端候选取代；0.5.10 证据不倒写为该精确 0.5.9 二进制证据。酒店 Wi-Fi 的前序失败发生在门户未认证时，不作为网络质量 A/B。见 `APP_0.5.9_SEMANTIC_CONCLUSION_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］App 0.5.10 将所有系统下载导出收紧为“创建 pending → 写入全部 UTF-8 字节 → 完成标记成功”后才返回成功；打开、写入或完成失败均尝试删除半成品，清理失败则保留 URI 并显式报告。6 个故障注入测试覆盖成功、创建失败、打开失败、磁盘写入失败、完成失败和清理失败；全量现为 90 suites / 551 tests，Lint 0 error / 11 notices，其他门禁均通过。精确云端候选已在 P40 完成跨 Debug 签名数据保全：Room v19 integrity OK，保留 36 条信封/10 条 `test_run`，安全偏好/API key 未恢复。批量导出 32/36 条通过离线验证（v1=27、v2=5、唯一 run=32、重复=0），4 条完整性异常透明拒绝；单条 v2 与批次对应行逐字节一致，两条 MediaStore 记录均为 `is_pending=0`。该变化不改结果正文、摘要、Schema、Profile 或评分；成功路径真机证据不冒充失败分支真机覆盖。见 `APP_0.5.10_EXPORT_RELIABILITY_VALIDATION_2026-07-18.md`。
+- ［KNOWN｜HIGH］云端 Debug 交付流水线已完成安全门后的真实闭环：commit `51fdd7c81f1f63a7202dd40d8ce86f5931d0d1a2` 触发 GitHub run `29635434193`，凭据扫描、合同、Go 服务端、网关控制面/竞争/构建、行为模型和 Android 候选六个 job 成功；工件 `8427011992` 名称绑定同一 commit，ZIP 摘要 `ffef2b3f0c3177e3ac81794b3d7ced536eee3afae71f5927e6a43fd6db3cccb0`。云端 APK 身份为 `com.aneb.probe.codex` / `0.5.10-codex` / code 42，SHA-256 `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85`；attestation `35945988` / Rekor `2193995642` 已离线验证。外部固定 CA 的隔离 TLS/netem 命名空间步骤因无叶证书 secrets 明确跳过，不折算为 PASS。见 `CLOUD_DEBUG_CANDIDATE_DELIVERY_2026-07-18.md`。
 - ［KNOWN｜HIGH］软件弱网可控制带宽、应用时延、抖动和短时不可用；真实 RSRP/SINR 仍需屏蔽箱、衰减器或基站模拟器。
 
 ## 4. P2 服务器侧
@@ -91,7 +94,7 @@
 
 - ［KNOWN｜HIGH］P2 当前实现与部署技术栈是 Go。
 - ［INFERRED｜HIGH］为了匹配旧计划而改写为 FastAPI不会增加测量能力，当前不应重写。
-- ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.7.0`，端点包括 `/profiles`、`/echo`、`/stream`、`/token-sim`、`/realtime-sim`、`/upload`、`/download`、`/toolloop`、`/results`、`/serverinfo`、`/impairments` 与 UDP/8443。
+- ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.0`，端点包括 `/profiles`、`/echo`、`/stream`、`/token-sim`、`/realtime-sim`、`/upload`、`/download`、`/toolloop`、`/results`、`/serverinfo`、`/impairments` 与 UDP/8443；`serverinfo` 还提供 Quick 能力回执，入口审计按 D-81/D-82 只证明 request entry。
 - ［KNOWN｜HIGH］`s3_multimodal@0.3.0` 已包含两段 12MiB `download_burst`；端点响应带版本、序号和服务端诊断时间信息。
 - ［KNOWN｜HIGH］E-01 有两个逐 run 隔离的用户态合成弱网合同；共享主机未使用全局 netem。
 - ［KNOWN｜HIGH］独立 `aneb-gateway/0.2.0` 已实现 IP 层双向整形、固定 Debug CA、严格双网口/路由预检、资源所有权和失败清理；它没有部署到 E-01。
@@ -152,7 +155,7 @@
 
 | 里程碑 | Codex 现状 | 验收判断 |
 |---|---|---|
-| **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；执行 Profile 合同仍分叉 | ［KNOWN｜HIGH］**治理骨架增强、跨端执行合同未闭环**；不能把目录治理等同于 P1/P2 已共用解释器。 |
+| **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0；D-82 正向与 D-86 `receipt_missing` 负向均已在 P40/E-01 生成 D-87 READY 并由独立消费者复核 | ［KNOWN｜HIGH］**首个 Token Quick 窄切片正负跨端闭环，M0 总体仍部分完成且通用执行合同仍分叉**；正负使用不同 CI APK，只支持各自合同闭环，不是严格同二进制性能 A/B；不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
 | **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；P40 同点位 5-run TTFT CV 中位数 1.425%、最大值 4.986% | ［KNOWN｜HIGH］**原计划单节点验收切片通过；内容项中的同城/区域/中心三级部署未完成，因此 M1 整体仍为部分完成**。 |
 | **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
 | **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
@@ -160,13 +163,14 @@
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
-2. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
-3. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。
-4. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
-5. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入、全量门禁、真实 GitHub Actions 工件和来源证明核验；下一步只在共享 P40 明确交还后，安装云端 SHA `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1`，验证首次启动、单条/混合批量导出并主动退出。签名密钥仍服从仓库外 Product Owner 所有权边界。
-6. ［KNOWN｜HIGH］M4 高置信凭据扫描已接入本地质量门和独立 GitHub security job；工作区与暂存区双读、日志脱敏及 6 项定向测试通过，新增云端 job 待真实 run 验证。已经披露的凭据仍必须撤销，扫描结果不能替代供应商审计。
-7. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
+1. ［KNOWN｜HIGH］M0-EC1 Token Quick 正负 READY 已完成：正向 source `10927c1` / CI `30124854408` / run `019f95f9-a317-7766-9725-243b9660b9f1`，负向 source `67eb66d` / CI `30162011890` / run `019f99c7-5b40-75ba-ad58-b5b522e9abf9`；独立 release verifier 与结束清理均通过，详见 `M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md`。下一步不重复部署 E-01 或重跑该窄切片，转入计划架构中的下一项未完成门；A6 受 D-110 约束，在 v3 neutral package 明确交接前不得打开旧 material PNG/template-v2。
+2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
+3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
+4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。
+5. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
+6. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入、全量门禁、真实 GitHub Actions 工件、来源证明和 P40 精确候选验收；混合批量 32/36 条及单条 v2 已通过离线验证，两条成功导出的 MediaStore 行均完成。下一步是不依赖 ADB 的终端用户整链与正式签名 Release；签名密钥仍服从仓库外 Product Owner 所有权边界。
+7. ［KNOWN｜HIGH］M4 高置信凭据扫描已接入本地质量门和独立 GitHub security job；工作区与暂存区双读、日志脱敏及 6 项定向测试通过，run `29635434193` 的 `Tracked-source credential scan` 与其后 Android 候选 job 均成功。已经披露的凭据仍必须撤销，扫描结果不能替代供应商审计。
+8. ［KNOWN｜HIGH］M2 三级部署、专用网关最终 TLS/P40 硬件验收和真实射频弱网继续保持 `BLOCKED_EXTERNAL`，不拿单节点或软件损伤冒充。
 
 ## 9. 原计划待拍板项回写
 
@@ -177,6 +181,7 @@
 
 ## 10. 与 Claude 侧对齐原则
 
+- ［KNOWN｜HIGH］双方不再读取或写入 `SHARED_TEST_STATUS.md` 领取权限；只依据 P40 实时现场决定是否开始。任何无法安全归属的活动会话都不得被另一方擅自停止或覆盖。
 - ［KNOWN｜HIGH］E-01 部署仍由 Codex 单点执行，权威合同为 `docs/TEST_SERVER_CAPABILITIES.md`；Claude 提需求/补丁，不直接覆盖共享服务器。
 - ［KNOWN｜HIGH］两侧都按 P1a/P1b/P2/P3/Profile/M0–M4 更新进展，版本、测试数字、真机 run 和部署状态必须能回指仓库或原始证据。
 - ［KNOWN｜HIGH］“已实现”“已部署”“已真机验证”“已达到目标”是四个不同状态，后续报告不得混写。

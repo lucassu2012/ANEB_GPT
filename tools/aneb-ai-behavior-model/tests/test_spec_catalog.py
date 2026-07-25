@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import jsonschema
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VERIFIER_PATH = REPO_ROOT / "scripts" / "verify_spec_catalog.py"
@@ -22,6 +24,24 @@ class SpecCatalogTest(unittest.TestCase):
     def setUpClass(cls):
         cls.catalog_path = REPO_ROOT / "spec" / "catalog.json"
         cls.catalog = json.loads(cls.catalog_path.read_text(encoding="utf-8"))
+        schema_path = REPO_ROOT / "tools/aneb-ai-behavior-model/schemas/aneb-profile-v2.schema.json"
+        cls.profile_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.Draft202012Validator.check_schema(cls.profile_schema)
+        cls.profile_validator = jsonschema.Draft202012Validator(cls.profile_schema)
+        cls.published = next(
+            family for family in cls.catalog["profile_families"]
+            if family["family_id"] == "published-profile-v2"
+        )
+        cls.published_profiles = {
+            entry["profile_id"]: json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+            for entry in cls.published["profiles"]
+        }
+        cls.quick_profile = cls.published_profiles["token_multimodal_quick"]
+
+    def _validate_requirements(self, profile, *, required=True):
+        errors = []
+        VERIFY._validate_execution_requirements(profile, required=required, label="mutated-profile", errors=errors)
+        return errors
 
     def _validate_mutation(self, mutate):
         catalog = copy.deepcopy(self.catalog)
@@ -33,6 +53,97 @@ class SpecCatalogTest(unittest.TestCase):
 
     def test_repository_catalog_and_all_references_validate(self):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
+
+    def test_request_entry_evidence_contract_is_cataloged_and_source_bound(self):
+        self.assertEqual("1.5.0", self.catalog["catalog_version"])
+        self.assertEqual(1, len(self.catalog["execution_evidence_contracts"]))
+        entry = self.catalog["execution_evidence_contracts"][0]
+        self.assertEqual(
+            "aneb-token-quick-request-entry-counts", entry["contract_id"]
+        )
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                "contract_id": "aneb-token-simulation-engine",
+                "version": "1.0.0",
+            },
+            document["client_engine"],
+        )
+        profile = json.loads(
+            (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        runtime = json.loads(
+            (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="request-entry-contract",
+            errors=errors,
+        )
+        self.assertEqual([], errors)
+
+    def test_execution_evidence_contract_inventory_and_catalog_shape_fail_closed(self):
+        def remove_contract(catalog):
+            catalog["execution_evidence_contracts"] = []
+
+        errors = self._validate_mutation(remove_contract)
+        self.assertTrue(any("unindexed assets" in error for error in errors), errors)
+
+        def duplicate_contract(catalog):
+            catalog["execution_evidence_contracts"].append(
+                copy.deepcopy(catalog["execution_evidence_contracts"][0])
+            )
+
+        errors = self._validate_mutation(duplicate_contract)
+        self.assertTrue(any("duplicate contract id/version" in error for error in errors), errors)
+
+        def add_unknown_field(catalog):
+            catalog["execution_evidence_contracts"][0]["script"] = "arbitrary"
+
+        errors = self._validate_mutation(add_unknown_field)
+        self.assertTrue(any("unverified keys ['script']" in error for error in errors), errors)
+
+        def break_contract_digest(catalog):
+            catalog["execution_evidence_contracts"][0]["canonical_sha256"] = "0" * 64
+
+        errors = self._validate_mutation(break_contract_digest)
+        self.assertTrue(
+            any("canonical_sha256 does not match evidence contract" in error for error in errors),
+            errors,
+        )
+
+        def redirect_contract(catalog):
+            entry = catalog["execution_evidence_contracts"][0]
+            entry["profile_path"] = "profiles/published/token_multimodal_standard/profile.json"
+            entry["runtime_plan_path"] = (
+                "profiles/published/token_multimodal_standard/runtime_plan.json"
+            )
+
+        errors = self._validate_mutation(redirect_contract)
+        self.assertTrue(any("must bind Token Quick 1.2.1" in error for error in errors), errors)
+
+    def test_execution_evidence_document_rejects_runtime_count_drift(self):
+        entry = self.catalog["execution_evidence_contracts"][0]
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        profile = json.loads(
+            (REPO_ROOT / entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        runtime = json.loads(
+            (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        document["exact_business_counts"]["token_sim"] += 1
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="request-entry-contract",
+            errors=errors,
+        )
+        self.assertTrue(any("token_sim count" in error for error in errors), errors)
 
     def test_runtime_bound_and_embedded_network_profiles_use_distinct_policies(self):
         published = next(
@@ -86,6 +197,100 @@ class SpecCatalogTest(unittest.TestCase):
 
         errors = self._validate_mutation(mutate)
         self.assertTrue(any("runtime references are forbidden" in error for error in errors), errors)
+
+    def test_profile_schema_accepts_all_published_profiles_and_locks_migration_scope(self):
+        profiles_with_requirements = set()
+        for profile_id, profile in self.published_profiles.items():
+            schema_errors = list(self.profile_validator.iter_errors(profile))
+            self.assertEqual([], schema_errors, (profile_id, schema_errors))
+            if "execution_requirements" in profile:
+                profiles_with_requirements.add(profile_id)
+        policies = {
+            entry["profile_id"]
+            for entry in self.published["profiles"]
+            if entry.get("execution_requirements_policy") == "required"
+        }
+        self.assertEqual({"token_multimodal_quick"}, profiles_with_requirements)
+        self.assertEqual({"token_multimodal_quick"}, policies)
+        self.assertEqual(11, len(self.published_profiles) - len(profiles_with_requirements))
+        self.assertEqual([], self._validate_requirements(self.quick_profile))
+
+    def test_duplicate_primitive_id_fails_schema_and_python_verifier(self):
+        profile = copy.deepcopy(self.quick_profile)
+        profile["execution_requirements"]["required_primitives"].append(
+            copy.deepcopy(profile["execution_requirements"]["required_primitives"][0])
+        )
+        self.assertTrue(list(self.profile_validator.iter_errors(profile)))
+        errors = self._validate_requirements(profile)
+        self.assertTrue(any("duplicate 'echo'" in error for error in errors), errors)
+
+    def test_unknown_primitive_or_wire_contract_fails_closed(self):
+        for field, value, expected_error in (
+            ("primitive_id", "arbitrary_network_call", "unknown primitive"),
+            ("wire_contract_id", "aneb-echo-v2", "unsupported wire contract"),
+        ):
+            with self.subTest(field=field):
+                profile = copy.deepcopy(self.quick_profile)
+                profile["execution_requirements"]["required_primitives"][0][field] = value
+                self.assertTrue(list(self.profile_validator.iter_errors(profile)))
+                errors = self._validate_requirements(profile)
+                self.assertTrue(any(expected_error in error for error in errors), errors)
+
+    def test_missing_fields_and_arbitrary_execution_keys_fail_closed(self):
+        mutations = (
+            (
+                lambda requirements: requirements["client_engine"].pop("min_version"),
+                "missing keys ['min_version']",
+            ),
+            (
+                lambda requirements: requirements.update({"script": "curl https://example.invalid"}),
+                "unverified keys ['script']",
+            ),
+            (
+                lambda requirements: requirements["required_primitives"][0].update(
+                    {"url": "https://example.invalid"}
+                ),
+                "unverified keys ['url']",
+            ),
+            (
+                lambda requirements: requirements["required_primitives"].pop(),
+                "must declare exactly the supported primitive set",
+            ),
+        )
+        for mutate, expected_error in mutations:
+            with self.subTest(expected_error=expected_error):
+                profile = copy.deepcopy(self.quick_profile)
+                mutate(profile["execution_requirements"])
+                self.assertTrue(list(self.profile_validator.iter_errors(profile)))
+                errors = self._validate_requirements(profile)
+                self.assertTrue(any(expected_error in error for error in errors), errors)
+
+    def test_incompatible_engine_and_receipt_ranges_fail_python_verifier(self):
+        for member in ("client_engine", "server_capability_receipt"):
+            with self.subTest(member=member):
+                profile = copy.deepcopy(self.quick_profile)
+                profile["execution_requirements"][member]["min_version"] = "2.0.0"
+                profile["execution_requirements"][member]["max_version_exclusive"] = "3.0.0"
+                self.assertEqual([], list(self.profile_validator.iter_errors(profile)))
+                errors = self._validate_requirements(profile)
+                self.assertTrue(any("is outside [2.0.0, 3.0.0)" in error for error in errors), errors)
+
+    def test_unknown_execution_contract_fails_schema_and_python_verifier(self):
+        profile = copy.deepcopy(self.quick_profile)
+        profile["execution_requirements"]["contract_id"] = "aneb-execution-requirements-unknown"
+        self.assertTrue(list(self.profile_validator.iter_errors(profile)))
+        errors = self._validate_requirements(profile)
+        self.assertTrue(any("unsupported contract id/version" in error for error in errors), errors)
+
+    def test_catalog_execution_policy_cannot_be_removed_or_moved(self):
+        def remove_policy(catalog):
+            published = catalog["profile_families"][1]
+            quick = next(item for item in published["profiles"] if item["profile_id"] == "token_multimodal_quick")
+            quick.pop("execution_requirements_policy")
+
+        errors = self._validate_mutation(remove_policy)
+        self.assertTrue(any("not in the migration allowlist" in error for error in errors), errors)
+        self.assertTrue(any("catalog policy set is not recognized" in error for error in errors), errors)
 
     def test_all_runtime_manifests_use_canonical_json_hashes(self):
         published = next(

@@ -70,6 +70,29 @@ def derive_token_runtime_variant(
             min(tasks, key=lambda task: float(task["planned_duration_ms"]))
             for tasks in by_kind.values()
         ]
+        # Quick declares download as a required primitive, so its generated
+        # plan must actually exercise one bounded response artifact. Preserve
+        # one task per workload kind and replace only that kind's shortest
+        # task with the smallest/shortest model-derived artifact task.
+        if not any(int(task["response_artifact_bytes"]) > 0 for task in selected):
+            artifact_candidates = [
+                task for task in plan["tasks"]
+                if int(task["response_artifact_bytes"]) > 0
+            ]
+            if not artifact_candidates:
+                raise ValueError("quick variant requires a model-derived response artifact")
+            artifact_task = min(
+                artifact_candidates,
+                key=lambda task: (
+                    int(task["response_artifact_bytes"]),
+                    float(task["planned_duration_ms"]),
+                    str(task["task_id"]),
+                ),
+            )
+            selected = [
+                artifact_task if task["workload_kind"] == artifact_task["workload_kind"] else task
+                for task in selected
+            ]
         for index, task in enumerate(selected):
             task["start_after_previous_ms"] = 0.0 if index == 0 else min(
                 800.0,
@@ -78,6 +101,35 @@ def derive_token_runtime_variant(
         plan["tasks"] = selected
         plan["task_count"] = len(selected)
         profile["profile_id"] = "token_multimodal_quick"
+        profile["version"] = "1.2.1"
+        profile["execution_requirements"] = {
+            "contract_id": "aneb-execution-requirements",
+            "contract_version": "1.0.0",
+            "client_engine": {
+                "contract_id": "aneb-token-simulation-engine",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "server_capability_receipt": {
+                "contract_id": "aneb-server-capability-receipt",
+                "min_version": "1.0.0",
+                "max_version_exclusive": "2.0.0",
+            },
+            "required_primitives": [
+                {
+                    "primitive_id": "echo",
+                    "wire_contract_id": "aneb-echo-v1",
+                },
+                {
+                    "primitive_id": "token_sim",
+                    "wire_contract_id": "aneb-token-task-v1",
+                },
+                {
+                    "primitive_id": "download",
+                    "wire_contract_id": "aneb-download-v1",
+                },
+            ],
+        }
         profile.setdefault("business", {})["label"] = "多模态 Token 快测"
     elif variant == "stress":
         video_tasks = [

@@ -1,6 +1,6 @@
 # ANEB 云端续开发 Checkpoint
 
-> 时间：2026-07-17（Asia/Shanghai）
+> 截至：2026-07-23（Asia/Shanghai）
 > GitHub：`lucassu2012/ANEB_GPT`
 > 发布策略：公开仓只包含源码、设计文档和可复现测试；本机 `evidence/`、设备数据库、日志、密钥、APK、构建缓存不发布。
 
@@ -11,9 +11,12 @@
 - AI 真实业务行为模型独立开发，通过冻结的 Profile v2、模型哈希和确定性轨迹与 App 对接。
 - Token、AI 实时交互、网络综合性能三类测试独立评分，禁止混入原有 AQS。
 - 缺失测量值必须为 `null`/“—”，不得填 0；95% 达标结论必须带有效样本数和置信度。
+- 2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 已退役，不再作为任何操作授权。P40 开测前只读确认设备在线、Huawei Launcher 前台、无冲突 ANEB/业务 App/服务/VPN/tun/抓包；现场干净即可直接测试，无法安全归属的既有会话不得擅自停止或覆盖。结束时停止本轮全部相关进程与网络工具、移除本轮临时规则、恢复临时设置、回到 Launcher 并立即复核。
+- E-01 与阿里云变更仍走独立保护链：变更前核对实际基线，远端 `flock` 覆盖完整生命周期，只做受限变更，失败时原子回滚，结束后复核服务身份、共享主机与网络基线。退役状态文件不能替代这些检查。
 
-批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-64；完整指标、目标、评分与结论合同见
-`docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`。
+批准记录见 `docs/DECISION_LOG.md` 的 D-36～D-89；完整指标、目标、评分与结论合同见
+`docs/PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md`；逐门状态、权威证据与下一动作见
+`docs/MILESTONE_LEDGER_2026-07-23.md`。
 
 ## 2. 已完成
 
@@ -23,7 +26,7 @@
 - Android 已实现 Profile v2 fail-closed 校验、计划哈希验证、真实上传/SSE Token 流、250ms 动态仪表、Token Simulation Score v1、Room v13 独立结果表及历史详情页。
 - E-01 已部署 `POST /api/v1/token-sim`，严格执行上传接收、处理基线和逐 Token 绝对时序；服务端不合成网络损伤。
 - AI 实时交互 Quick/Standard/Recovery Profile 已发布为哈希绑定的运行计划；Android 已实现 20ms 双向音频帧、时钟同步、动态准时帧仪表、打断、独立评分、Room v14 结果冻结和历史详情页。
-- E-01 已升级到 `aneb-server/0.7.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针，以及逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复路径。
+- E-01 当前运行 `aneb-server/0.8.0`，支持最大 128MiB 的受控 Token 上传、Token SSE、实时交互 WebSocket、连接级受控中断、HTTP/3、同端口带序号 UDP 探针、逐 run 隔离的容量/应用时延与一次性 2 秒请求中断恢复，并新增 Quick 能力回执和隐私有界 request-entry 审计。live binary SHA-256=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`；锁内验后共享主机指纹一致、临时残留为 0。原部署进程 rc=99 保留为 success 证据提交后的 watchdog 清理竞态误报，不改写为命令成功。
 - P40 Pro 已完成两次 Quick 端到端验收：3/3 任务和 1080/1080 Token 完成，动态 Token/s、RTT、上行速率、准时率、评分、结论与落库均通过；测试后已退出到华为桌面。
 - `scripts/quality_gate.ps1` 已覆盖 Android 单测/Lint/APK、Debug/Release API 入口边界、8 个 Schema/catalog、版本化 JSONL/TTFT 分析、行为模型 31 项测试和 Go 服务端/网关测试；Room 校验器使用每次构建独立的 SQLite 临时目录，避免 Codex/Claude 并行构建争抢 DLL。本轮 541 项 JVM 测试、0 failures/0 skipped、Lint 0 errors（11 warnings）、12 项测量分析测试、Go/行为模型测试和 0.5.8 APK 构建通过；最终 Debug APK 为 61,754,256 bytes，SHA-256 `B857A8AD2E6CA443CC6B0B60162DE7E5D73A7E4532D9E27F2A92808A83F8DAF0`。
 - App 0.5.5 / Room v19 已使 Token、AI 实时和网络综合新 run 在同一事务冻结类型化行、`aneb-result-v1`、1Hz 无线样本和环境事件；三类结果页可保存或分享经身份/摘要校验的原样 JSONL，Profile 未测指标显式 `missing`，无线时间序列由 R01 证据引用。P40 最终 runs `019f71a6-bbf0-7c71-b8b8-b8338297c6e0` / `019f71a9-191f-7fe3-9995-d4765ed6652f` / `019f71aa-f127-7db3-a4d0-651e57e6a955` 的 Schema 均为零错误、无线样本数一一相符，独立 Python 摘要全部匹配；0.5.4 的 JVM/Python 指数词法缺陷已否决并修复。详见 `docs/P40_APP_0.5.5_RADIO_AND_CANONICAL_VALIDATION_2026-07-18.md`。
@@ -46,19 +49,22 @@
 - E-01 部署权已由 Product Owner 裁定归 Codex。2026-07-17 12:03 CST 已在 `aneb-server/0.5.1` 上将 `s3_multimodal` 从 0.2.1 升至 0.3.0：两段 Token 流后分别增加 12MiB `download_burst`，共 10 阶段；节点本机合同/echo/download/UDP smoke 与公网 Profile/12MiB 精确字节验证均通过。0.4.6 App 能执行该 phase，并只在响应体精确排空时向机器日志输出 D1 原始 goodput；旧版 Room/AQS 不加字段、不变分。共享能力说明固定维护在 `docs/TEST_SERVER_CAPABILITIES.md`。
 - 网络 Recovery 独立 Profile 已完成 E-01 与 P40 闭环。`aneb-server/0.7.0` 只对触发 run 武装一次 2000ms 应用请求中断，其他 run 与正常路由旁路；App 0.4.8 动态显示恢复计时、服务器确认中断、失败探针与恢复后 RTT，并由 Room v17 冻结。4 次 P40 run 恢复 2084.4–2227.3ms、恢复后成功率均 100%，结论仍按单事件证据保持 `LOW/INCONCLUSIVE`。测试后两套 ANEB 均无 PID/服务。
 - 专用 IP 层网关已生产化到 `aneb-gateway/0.2.0`：固定 Debug CA 与逐启动证书链核验、真实转发/回程和全部 main-table 路由预检、严格 IFB/filter/ingress 所有权、可重试失败清理、状态目录防 symlink/mount、严格 Token/TLS key 来源、同步审计，以及带回滚的一键安装/预检/安全卸载均已实现。App 0.5.0 仅对“提交结果未知”执行同 run 对账和一次幂等 POST；明确 409/4xx 拒绝立即失败且绝不重试。一次性 Token 只经随机句柄交接，失败/取消先做有界清理再冻结证据。发布复审关闭 9 项 P1；Go 定向测试重复 20 轮及 E-01 隔离安装安全回归通过。`0.067ms → 97.753ms → 0.051ms` 是固定 CA 加固前的数据面集成证据，不冒充最终发布证据；最终 TLS 正向生命周期缺离线 CA 签发的现场叶证书，P40 网络层真机还缺独占双网口 Linux/AP，二者均为 `BLOCKED_EXTERNAL`。
-- App 0.5.9 已统一三类结论语义：每条结论由类别评分器冻结稳定 ID、严重级别、文本和指标/证据 basis，统一覆盖任务完成性、Profile 业务行为、逐项门限和主要瓶颈；导出器不再按顺序推断语义，Compose 不再维护另一套行为文案。结论策略变化同步升级 12 个 Profile 与 catalog 1.3.0，并重新生成 6 个哈希绑定运行包。545 项 JVM 测试、Lint 0 error、Schema/catalog、12 项分析、31 项行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条语义结论与下载目录 strict-v2 JSONL 已复验。当前精确 APK 随后只调整失败门限 basis 与 Token 缺指标时的任务完成结论，已通过回归但待 Experience Lab 释放共享 P40 后做同二进制安装确认。酒店 Wi-Fi 前序失败只因门户未认证，不作为网络质量 A/B。
-- App 0.5.10 已加固系统下载导出：只有 pending 行创建、完整写入和完成更新全部成功才返回成功；任何中途失败都尝试删除半成品，清理失败会保留 URI 与明确错误供诊断。6 个故障注入测试覆盖全部生命周期，当前 90 suites / 551 JVM tests、Lint 0 error / 11 notices 与全仓门禁通过；catalog 1.3.1 只同步 P1 消费者版本。结果正文、摘要、Schema、Profile 与评分均未改变。精确 APK 真机安装/导出待 Experience Lab 明确交还 P40。
-- GitHub CI 已从“只监听 main、只编译”升级为 Debug 候选交付流水线：`codex/**` 也会触发，Android 候选等待合同/服务器/网关/行为模型全绿，随后验证 Release 边界、APK 身份与 Debug 签名，生成 APK、机器清单、checksums 与中文安装说明；非 PR 构建追加 GitHub provenance attestation，工件保留 30 天。actionlint、20 项脚本测试、真实本地 APK 打包和全量门禁已通过。GitHub run `29633753923` 五个 job 成功；工件 `8426436270` 的 ZIP/内部校验和、云端 APK 身份与 SHA `2C05E347E66CC2049292452745DD68B6EDF2CECE2CB8501D509C4B9A6653DED1` 均复核通过，attestation `35942948` 已用官方 CLI 离线验真。外部固定 CA 的网关隔离 TLS/netem 命名空间步骤因无叶证书 secrets 明确未执行，不折算为 PASS。
+- App 0.5.9 已统一三类结论语义：每条结论由类别评分器冻结稳定 ID、严重级别、文本和指标/证据 basis，统一覆盖任务完成性、Profile 业务行为、逐项门限和主要瓶颈；导出器不再按顺序推断语义，Compose 不再维护另一套行为文案。结论策略变化同步升级 12 个 Profile 与 catalog 1.3.0，并重新生成 6 个哈希绑定运行包。545 项 JVM 测试、Lint 0 error、Schema/catalog、12 项分析、31 项行为模型及 Go 门禁通过。P40 蜂窝 Quick run `019f7377-9a61-7db5-a8c4-1ac57de1a486` 在紧邻 0.5.9 候选上完成 3/3 轮、99.8/A、LOW/INCONCLUSIVE；动态 UI、12 条语义结论与下载目录 strict-v2 JSONL 已复验。实测后重构的精确 0.5.9 APK 没有另行安装，随后由 0.5.10 云端候选取代；不能把 0.5.10 验收倒写成该 0.5.9 二进制证据。酒店 Wi-Fi 前序失败只因门户未认证，不作为网络质量 A/B。
+- App 0.5.10 已加固系统下载导出：只有 pending 行创建、完整写入和完成更新全部成功才返回成功；任何中途失败都尝试删除半成品，清理失败会保留 URI 与明确错误供诊断。6 个故障注入测试覆盖全部生命周期，当前 90 suites / 551 JVM tests、Lint 0 error / 11 notices 与全仓门禁通过；catalog 1.3.1 只同步 P1 消费者版本。云端 SHA `49244B3157FCC47D54EDA61A51EAF4B69A71BD2B95314BAE54E327CE8B0F6D85` 已在 P40 安装为 code 42；跨 Debug 签名的数据保全后 Room v19 integrity OK，保留 36 条信封/10 条 `test_run`，安全偏好/API key 未恢复。批量导出 `aneb_results_32_of_36_20260718_161911.jsonl` 通过 32 条 v1/v2 离线验证并透明拒绝 4 条完整性异常；单条 v2 与批次对应行逐字节一致，两条 MediaStore 记录均为 `is_pending=0`。
+- M0-EC1 把 App 0.5.12、server 0.8.0、behavior model 0.3.1、catalog 1.5.0 与 `token_multimodal_quick@1.2.1` 接到同一执行合同。Quick 必须在业务流量前完成 APK manifest、精确 Profile 摘要和节点能力回执核对，任何缺失、未知字段或冲突均 fail closed；模型生成器还必须选择至少一个有界返回附件，当前为 1MiB，使声明的 download 原语在真实 Quick 中发生。同一 run 使用规范 UUID，reachability/capability 由固定角色区分；服务端判定要求唯一 start/end 双 barrier、同一进程实例、连续序号、能力门先于业务且窗口内无 drop/未归因业务。该日志只证明 request-entry coverage，正向成功或负向零业务结论还必须与同 run 客户端冻结结果和节点身份结合。新增 catalog evidence contract 将 Engine/runtime 的 20/3/1 精确次数与定义摘要机器绑定。旧 11 个 Profile 继续兼容。E-01 服务端子阶段已完成；0.5.12 云端 APK 已产生并核对，但 P40 正/负向结果尚未产生，详见 `docs/M0_TOKEN_QUICK_EXECUTION_CONTRACT_VALIDATION_2026-07-18.md`。
+- D-82/D-86/D-87 正负向现场采集与独立复核工作流已在本地实现：仓库外私有目录会冻结 P40 APK/Room、E-01 三次原始回执、pre-start receipt、双 barrier、raw journald、20/3/1 正向判定或负向零业务判定，并在私有 verification-stage 内重派生与重算。`.complete`、`COMPLETE` 和 sibling verification report 都只是中间状态；只有摘要与语义交叉绑定的 `<collection>.READY.json` 最后提交后才算发布。负向 `receipt_missing` 由一次性本机 loopback 代理制造，不修改 E-01；Room 主 DB 必须存在，WAL/SHM 只允许同时存在或同时缺失。2026-07-23 本地整仓门禁已通过；clean commit、同提交 CI 与真实 P40 READY 证据仍未完成，不能写成已完成 P40 正向或负向验收。
+- GitHub CI 已从“只监听 main、只编译”升级为 Debug 候选交付流水线：`codex/**` 也会触发，Android 候选等待凭据扫描、合同、服务器、网关和行为模型全绿，随后验证 Release 边界、APK 身份与 Debug 签名，生成 APK、机器清单、checksums 与中文安装说明；非 PR 构建必须用一份 attestation 精确签 APK、manifest、安装说明三项，追加 provenance 后最终清单精确为四项并由独立 verifier 逐项复核，写权限只授予 Android job；PR 工件明确标记 unattested。M0-EC1 source `49095c0314ac3900b6ed0c306d2eeaafc2edd87f` 的 GitHub run `29659812753` 六个 job 成功；云端 0.5.12 APK SHA-256=`04853208A59E35906366A61A92251CDED8BEDEA307753A37CD14844926FAD7EA`，身份、签名与 zipalign 已核对，但它是 D-87/D-88 前一版历史基线，不能用于本轮正式取证。watchdog 终态误报修复 commit `d0a904d` 的 GitHub run `29661388755` 也已六个 job 全绿。外部固定 CA 的网关隔离 TLS/netem 步骤因无叶证书 secrets 明确跳过，不折算为 PASS。
 
 ## 3. 下一阶段（按顺序）
 
-1. 版本化结果合同（compatible v1 + strict v2）、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector、TTFT 同条件重复性复测及 0.5.9 蜂窝单条导出均已完成；0.5.10 已补齐下载文件失败清理。后续在共享手机释放后补当前版本的 v1+v2 混合批量导出与同二进制用户路径。
-2. P3 v0.2.0 的授权观测、训练/留出隔离、校准验证和 validated 发布复算流水线已完成；真实授权数据仍是外部输入，到位前保持 hypothesis。
-3. M4 的开测前自救、历史批量导出、失败清理和云端 Debug 候选打包已通过本地与 GitHub 云端门禁；云端工件、APK 身份/校验和及来源证明均已核验。下一项在共享 P40 明确释放后，用同一云端 SHA 做不依赖 ADB 的安装/首次启动/单条与混合批量导出整链。签名密钥仍由 Product Owner 在仓库外保管，缺密钥不能冒充正式 Release。
-4. 继续补 AI 实时真实断网、切后台恢复和打断边缘条件真机回归；真实网络事件不得混用受控服务端恢复分数。
-5. 完成 Token/网络综合 Standard 长时回归，以及 Stress 的取消、断网、切后台恢复和重复测试分布；单次 Stress 继续保持低置信。
-6. 三类结果的完成性、业务行为特征、瓶颈和逐项网络建议已由 0.5.9 统一冻结，AI 实时动态视觉与 JSONL 语义项真机复验已完成；后续以 0.5.10 精确二进制补 Token/网络抽样和导出失败清理用户路径，因果措辞继续服从证据范围。
-7. 专用网关 0.2.0 软件、安装安全与 App 0.5.1 异常闭环已完成；先由离线 CA 为 `192.168.77.1` 签发现场叶证书，再在独占硬件上执行最终 TLS/安装生命周期和 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
+1. M0-EC1 的 E-01 0.8.0 服务端子阶段和 watchdog rc=99 误报修复 CI 复现已经完成。下一步只读确认 E-01 精确身份和 P40 实时现场干净；若存在无法安全归属的会话则停止并协调，不擅自清理。随后完成 0.5.12 Quick 正向和不兼容回执零业务请求验收；结束时停止本任务相关 App/VPN/抓包、清除临时网络条件、恢复临时设置、返回 Huawei Launcher 并立即复核。服务器未变化时不得为了追求 rc=0 重复部署；P40 证据完成前不写“跨端正向验收完成”。
+2. 版本化结果合同（compatible v1 + strict v2）、spec 逻辑目录、三引擎结果信封、JSONL、正式 RadioCollector、TTFT 同条件重复性复测、0.5.10 精确云端二进制安装、单条 v2 和混合 v1+v2 批量导出均已完成；下载失败清理已有自动化故障注入。下一步补普通用户不依赖 ADB 的完整安装/首次启动/测试/导出链，以及 Android 系统真实失败路径的产品提示回归。
+3. P3 v0.2.0 的授权观测、训练/留出隔离、校准验证和 validated 发布复算流水线已完成；真实授权数据仍是外部输入，到位前保持 hypothesis。
+4. M4 的开测前自救、历史批量导出、失败清理、凭据扫描和云端 Debug 候选打包已通过本地与真实 GitHub 云端门禁；云端工件、APK 身份/校验和、来源证明及 P40 精确候选导出均已核验。下一项是不依赖 ADB 的终端用户路径与正式签名 Release；签名密钥仍由 Product Owner 在仓库外保管，缺密钥不能冒充正式 Release。
+5. 继续补 AI 实时真实断网、切后台恢复和打断边缘条件真机回归；真实网络事件不得混用受控服务端恢复分数。
+6. 完成 Token/网络综合 Standard 长时回归，以及 Stress 的取消、断网、切后台恢复和重复测试分布；单次 Stress 继续保持低置信。
+7. 三类结果的完成性、业务行为特征、瓶颈和逐项网络建议已由 0.5.9 统一冻结；0.5.10 精确云端候选已完成 AI 实时单条与三类混合批量导出，后续补 Token/网络动态页面抽样和真实导出失败提示，因果措辞继续服从证据范围。
+8. 专用网关 0.2.0 软件、安装安全与 App 0.5.1 异常闭环已完成；先由离线 CA 为 `192.168.77.1` 签发现场叶证书，再在独占硬件上执行最终 TLS/安装生命周期和 P40 网络层容量/丢包/恢复真机闭环。真实 RSRP/SINR 仍必须由屏蔽箱、衰减器或基站模拟器产生，三条证据链不得混分。
 
 ## 4. 关键目录
 

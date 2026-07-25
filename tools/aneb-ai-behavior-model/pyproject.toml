@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aneb-ai-behavior-model"
-version = "0.2.0"
+version = "0.3.1"
 description = "Deterministic AI workload behavior modeling and ANEB Profile generation"
 requires-python = ">=3.11"
 dependencies = []

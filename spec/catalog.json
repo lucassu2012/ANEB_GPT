@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.3.1",
+  "catalog_version": "1.5.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.10",
+      "current_version": "0.5.12",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -19,6 +19,7 @@
       "roles": [
         "consume_server_root_profiles",
         "consume_published_profile_v2",
+        "consume_execution_requirements_v1",
         "verify_runtime_bound_bundles",
         "emit_aneb_result_v2",
         "export_aneb_result_v1_v2_integrity"
@@ -26,19 +27,20 @@
     },
     "P2": {
       "component": "aneb-server",
-      "current_version": "0.7.0",
+      "current_version": "0.8.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
       },
       "roles": [
         "serve_server_root_profiles",
+        "consume_published_profile_v2_execution_requirements",
         "provide_allowlisted_profile_primitives"
       ]
     },
     "P3": {
       "component": "aneb-ai-behavior-model",
-      "current_version": "0.2.0",
+      "current_version": "0.3.1",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -47,12 +49,13 @@
         "own_profile_and_trace_schemas",
         "own_result_schema",
         "publish_behavior_models",
+        "publish_execution_requirements_v1",
         "publish_runtime_bound_bundles"
       ]
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.3.1",
+      "current_version": "1.5.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -60,6 +63,7 @@
       "roles": [
         "index_all_profile_assets",
         "enforce_compatibility_and_integrity",
+        "govern_execution_requirements_v1",
         "govern_result_contract"
       ]
     }
@@ -77,12 +81,13 @@
   "schemas": [
     {
       "schema_id": "aneb-profile-v2",
-      "schema_version": "2.0.0",
+      "schema_version": "2.1.0",
       "path": "tools/aneb-ai-behavior-model/schemas/aneb-profile-v2.schema.json",
       "json_schema_id": "https://aneb.local/schemas/aneb-profile-v2.schema.json",
       "contract_version": "aneb-profile-v2",
       "consumers": [
         "P1",
+        "P2",
         "P3",
         "Profile"
       ]
@@ -198,6 +203,22 @@
       ]
     }
   ],
+  "execution_evidence_contracts": [
+    {
+      "contract_id": "aneb-token-quick-request-entry-counts",
+      "version": "1.0.0",
+      "path": "spec/execution-contracts/token_multimodal_quick-1.2.1.request-entry.json",
+      "canonical_sha256": "b8c956c6b323b849a603a17fa7b83504d01e1c6cb7ea67e4740dcc4a136467a0",
+      "profile_path": "profiles/published/token_multimodal_quick/profile.json",
+      "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P2",
+        "Profile"
+      ]
+    }
+  ],
   "model_assets": [
     {
       "model_id": "ai-realtime-voice-behavior-v0.1",
@@ -303,7 +324,7 @@
     },
     {
       "family_id": "published-profile-v2",
-      "family_version": "2.0.0",
+      "family_version": "2.1.0",
       "contract_version": "aneb-profile-v2",
       "profile_version_range": {
         "min_inclusive": "1.0.0",
@@ -312,6 +333,7 @@
       "schema_ref": "aneb-profile-v2",
       "consumers": [
         "P1",
+        "P2",
         "P3",
         "Profile"
       ],
@@ -399,11 +421,12 @@
         },
         {
           "profile_id": "token_multimodal_quick",
-          "version": "1.1.0",
+          "version": "1.2.1",
           "path": "profiles/published/token_multimodal_quick/profile.json",
           "validation_group_id": "behavior_runtime_bound",
           "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
-          "manifest_path": "profiles/published/token_multimodal_quick/manifest.sha256"
+          "manifest_path": "profiles/published/token_multimodal_quick/manifest.sha256",
+          "execution_requirements_policy": "required"
         },
         {
           "profile_id": "token_multimodal_standard",

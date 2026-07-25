@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "token_multimodal_quick",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "mode_id": "token_simulation",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node",
@@ -568,16 +568,44 @@
       "model_hash": "sha256:76d4e93bdcd2951291169a867674004c7a13a28cd2a393f3da3aa0d14bd3cb5b",
       "seed": 20260716,
       "runtime_artifact": "runtime_plan.json",
-      "runtime_artifact_hash": "sha256:04a4bb16ac36207dbabff0d5d0207482a73c933327a04a49be662f74791e00a6"
+      "runtime_artifact_hash": "sha256:83e5c828784e1df89939f1c42fbdd296e3bb02c362676e82603a34575f17e926"
     }
   ],
   "evidence_tier": "quick",
-  "est_duration_s": 112.8,
+  "est_duration_s": 119.3,
   "execution_plan": {
     "contract_version": "aneb-token-runtime-plan-v1",
     "artifact": "runtime_plan.json",
-    "artifact_hash": "sha256:04a4bb16ac36207dbabff0d5d0207482a73c933327a04a49be662f74791e00a6",
+    "artifact_hash": "sha256:83e5c828784e1df89939f1c42fbdd296e3bb02c362676e82603a34575f17e926",
     "seed": 20260716,
     "variant": "quick"
+  },
+  "execution_requirements": {
+    "contract_id": "aneb-execution-requirements",
+    "contract_version": "1.0.0",
+    "client_engine": {
+      "contract_id": "aneb-token-simulation-engine",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "server_capability_receipt": {
+      "contract_id": "aneb-server-capability-receipt",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "required_primitives": [
+      {
+        "primitive_id": "echo",
+        "wire_contract_id": "aneb-echo-v1"
+      },
+      {
+        "primitive_id": "token_sim",
+        "wire_contract_id": "aneb-token-task-v1"
+      },
+      {
+        "primitive_id": "download",
+        "wire_contract_id": "aneb-download-v1"
+      }
+    ]
   }
 }

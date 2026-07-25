@@ -13,6 +13,12 @@ import (
 )
 
 func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
+	const (
+		frameMs          = 20
+		bargeAfterFrames = 2
+		plannedFrames    = 100
+		expectedStopMs   = 300
+	)
 	server := httptest.NewServer((&app{}).routes())
 	defer server.Close()
 	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/realtime-sim"
@@ -26,7 +32,7 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 		SessionID:       "session-test",
 		Seed:            42,
 		SetupMs:         1,
-		FrameMs:         20,
+		FrameMs:         frameMs,
 		Turns: []realtimeTurnPlan{{
 			TurnID:                "turn-test",
 			TurnIndex:             0,
@@ -34,11 +40,11 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 			UplinkFrames:          2,
 			UplinkFrameBytes:      32,
 			ResponseWaitMs:        1,
-			PlannedDownlinkFrames: 5,
+			PlannedDownlinkFrames: plannedFrames,
 			DownlinkFrameBytes:    48,
 			Interrupted:           true,
-			BargeInAfterFrames:    intPointer(2),
-			ExpectedStopWithinMs:  intPointer(300),
+			BargeInAfterFrames:    intPointer(bargeAfterFrames),
+			ExpectedStopWithinMs:  intPointer(expectedStopMs),
 		}},
 	}
 	if err := conn.WriteJSON(plan); err != nil {
@@ -62,6 +68,8 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 
 	frames := 0
 	var turnSummary map[string]any
+	var bargeSentAt time.Time
+	var summaryReceivedAt time.Time
 	deadline := time.Now().Add(3 * time.Second)
 	for turnSummary == nil && time.Now().Before(deadline) {
 		messageType, data, readErr := conn.ReadMessage()
@@ -70,10 +78,11 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 		}
 		if messageType == websocket.BinaryMessage {
 			frames++
-			if frames == 2 {
+			if frames == bargeAfterFrames {
 				if err := conn.WriteJSON(realtimeControl{Type: "barge_in", TurnID: "turn-test", TurnIndex: 0}); err != nil {
 					t.Fatal(err)
 				}
+				bargeSentAt = time.Now()
 			}
 			continue
 		}
@@ -83,17 +92,63 @@ func TestRealtimeSimExecutesDuplexTurnAndBargeIn(t *testing.T) {
 		}
 		if value["type"] == "turn_summary" {
 			turnSummary = value
+			summaryReceivedAt = time.Now()
 		}
 	}
 	if turnSummary == nil || turnSummary["barge_in_received"] != true || turnSummary["protocol_ok"] != true {
 		t.Fatalf("unexpected turn summary: %#v", turnSummary)
 	}
-	if frames != 2 {
-		t.Fatalf("expected exactly two frames before stop, got %d", frames)
+	if frames < bargeAfterFrames || frames >= plannedFrames {
+		t.Fatalf("barge-in did not stop an active response: got %d of %d planned frames", frames, plannedFrames)
+	}
+	emitted, ok := turnSummary["downlink_frames_emitted"].(float64)
+	if !ok || int(emitted) != frames {
+		t.Fatalf("server/client emitted frame mismatch: summary=%v client=%d", turnSummary["downlink_frames_emitted"], frames)
+	}
+	if bargeSentAt.IsZero() || summaryReceivedAt.IsZero() {
+		t.Fatal("missing barge-in timing anchors")
+	}
+	if elapsed := summaryReceivedAt.Sub(bargeSentAt); elapsed > expectedStopMs*time.Millisecond {
+		t.Fatalf("barge-in stop exceeded target: got %s, want <= %dms", elapsed, expectedStopMs)
+	}
+	bargeRecvUs, bargeOK := turnSummary["barge_in_recv_us"].(float64)
+	stopAckUs, stopOK := turnSummary["stop_ack_us"].(float64)
+	if !bargeOK || !stopOK || bargeRecvUs <= 0 || stopAckUs < bargeRecvUs || stopAckUs-bargeRecvUs > expectedStopMs*1_000 {
+		t.Fatalf("invalid server stop anchors: barge_recv_us=%v stop_ack_us=%v", turnSummary["barge_in_recv_us"], turnSummary["stop_ack_us"])
 	}
 	sessionSummary := readRealtimeTestControl(t, conn)
 	if sessionSummary["type"] != "session_summary" || sessionSummary["protocol_ok"] != true {
 		t.Fatalf("unexpected session summary: %#v", sessionSummary)
+	}
+}
+
+func TestRealtimeWaitForFrameOrBargeChecksQueuedControlAfterDeadline(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/realtime-sim", nil)
+	incoming := make(chan realtimeInbound, 1)
+	readErrors := make(chan error, 1)
+	incoming <- realtimeInbound{
+		messageType: websocket.TextMessage,
+		data:        []byte(`{"type":"barge_in","turn_id":"turn-test","turn_index":0}`),
+	}
+	turn := realtimeTurnPlan{
+		TurnID:      "turn-test",
+		TurnIndex:   0,
+		Interrupted: true,
+	}
+
+	control, err := realtimeWaitForFrameOrBarge(
+		request,
+		nil,
+		incoming,
+		readErrors,
+		time.Now().Add(-time.Millisecond),
+		turn,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control == nil || control.Type != "barge_in" || control.TurnID != turn.TurnID {
+		t.Fatalf("queued barge-in was skipped after deadline: %#v", control)
 	}
 }
 

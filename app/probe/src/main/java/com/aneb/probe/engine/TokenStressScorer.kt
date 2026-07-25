@@ -37,6 +37,7 @@ object TokenStressScorer {
         behaviorFeatureIds: List<String> = defaultBehaviorFeatureIds,
     ): TokenScoreResult {
         if (evidence.invalidReason != null) {
+            val friendlyReason = tokenInvalidReasonText(evidence.invalidReason)
             return TokenScoreResult(
                 null, null, TokenVerdict.INVALID, TokenConfidence.INVALID,
                 emptyMap(), emptyMap(), evidence.invalidReason,
@@ -44,14 +45,14 @@ object TokenStressScorer {
                     AnebConclusionItem(
                         "token-stress-invalid-evidence",
                         AnebConclusionSeverity.FAILURE,
-                        "测试证据无效：${evidence.invalidReason}；原始数据已保留，评分被抑制。",
-                        listOf("evidence:token-raw", "invalid_reason"),
+                        "测试证据无效：$friendlyReason；原始数据已保留，评分被抑制。",
+                        listOf("evidence:token-raw", "invalid_reason:${evidence.invalidReason}"),
                     ),
                 ),
                 confidenceMethodId = "token-stress-sample-coverage-v1",
                 coverageRatio = null,
                 minimumSampleSatisfied = false,
-                notComputableReason = "invalid_run:${evidence.invalidReason}",
+                notComputableReason = evidence.invalidReason,
             )
         }
         val tasks = evidence.tasks.filter { it.workloadKind == "video" }

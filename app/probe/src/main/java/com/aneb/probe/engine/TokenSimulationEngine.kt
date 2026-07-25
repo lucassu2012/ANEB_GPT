@@ -101,11 +101,214 @@ internal fun deriveTokenTtftBasis(
 private class TokenResultPersistenceException(cause: Throwable) :
     IllegalStateException("token_result_persistence_failed", cause)
 
-private data class TokenDurableResult(
+private class TokenContractRejectionAlreadyPersistedException(cause: Throwable) :
+    IllegalStateException("token_contract_rejection_already_persisted", cause)
+
+internal data class TokenDurableResult(
     val result: TokenSimulationResult,
     val envelope: com.aneb.probe.data.ResultEnvelopeEntity,
     val radio: FormalRadioEvidence,
 )
+
+internal class TokenContractFailurePublisher(
+    private val runId: String,
+    private val startedAt: Long,
+    private val variant: String,
+    private val source: TokenResultEnvelopeSource,
+    private val producer: AnebResultProducerContext,
+    private val device: AnebResultDeviceContext,
+    private val network: AnebResultNetworkContext,
+    private val endedAtEpochMs: () -> Long,
+    private val radio: suspend () -> FormalRadioEvidence,
+    private val resultCommitter: DurableResultCommitter<TokenDurableResult>,
+) {
+    suspend fun persist(
+        error: TokenExecutionContractException,
+        serverBase: String,
+    ): TokenDurableResult = try {
+        val result = buildFailedTokenSimulationResult(
+            runId = runId,
+            startedAt = startedAt,
+            server = serverBase,
+            variant = variant,
+            reason = error.reasonCode,
+            source = source,
+        )
+        val durable = buildTokenDurableResult(
+            result = result,
+            source = source,
+            producer = producer,
+            device = device,
+            network = network,
+            endedAtEpochMs = endedAtEpochMs(),
+            status = "failed",
+            radio = radio(),
+        )
+        resultCommitter.commit(durable)
+        durable
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: TokenResultPersistenceException) {
+        throw error
+    } catch (error: Exception) {
+        throw TokenResultPersistenceException(error)
+    }
+}
+
+internal object TokenExecutionContractRunner {
+    suspend fun authorize(
+        runId: String,
+        serverBase: String,
+        profile: ScenarioProfile,
+        profileCanonicalSha256: String,
+        transport: TokenExecutionTransport,
+        log: suspend (String) -> Unit,
+        failurePublisher: TokenContractFailurePublisher,
+    ): AuthorizedTokenTraffic? = try {
+        TokenExecutionContractGate.authorize(
+            serverBase = serverBase,
+            profile = profile,
+            profileCanonicalSha256 = profileCanonicalSha256,
+            transport = transport,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: TokenExecutionContractException) {
+        val durable = failurePublisher.persist(error, serverBase)
+        try {
+            log(
+                "TOKEN_V2_RADIO run_id=$runId status=${durable.radio.collectionStatus} " +
+                    "samples=${durable.radio.samples.size}",
+            )
+            log("TOKEN_V2_DB_WRITE run_id=$runId ok=true")
+            log(
+                "TOKEN_V2_CONTRACT run_id=$runId status=rejected reason=${error.reasonCode} " +
+                    "detail=${error.userMessage.replace(' ', '_')}",
+            )
+            log("TOKEN_V2_END run_id=$runId status=contract_rejected")
+        } catch (logError: CancellationException) {
+            throw logError
+        } catch (logError: Exception) {
+            throw TokenContractRejectionAlreadyPersistedException(logError)
+        }
+        null
+    }
+}
+
+internal fun buildFailedTokenSimulationResult(
+    runId: String,
+    startedAt: Long,
+    server: String,
+    variant: String,
+    reason: String,
+    source: TokenResultEnvelopeSource,
+): TokenSimulationResult {
+    val evidence = TokenRunEvidence(variant, emptyList(), emptyList(), reason)
+    val profile = source.profile
+    val policies = tokenPolicies(variant)
+    return TokenSimulationResult(
+        runId, startedAt, server, profile?.profileId ?: "token_multimodal_$variant", profile?.version ?: "unknown",
+        profile?.business?.behaviorModelId ?: "unknown",
+        profile?.business?.behaviorModelVersion ?: "unknown",
+        profile?.business?.behaviorModelHash ?: "unknown",
+        profile?.business?.calibrationStatus ?: "unknown",
+        variant,
+        profile?.evaluation?.scorePolicyId?.takeIf { it.isNotBlank() } ?: policies.first,
+        profile?.evaluation?.scoreAnchorPolicyId?.takeIf { it.isNotBlank() } ?: policies.second,
+        profile?.evaluation?.conclusionPolicyId?.takeIf { it.isNotBlank() } ?: policies.third,
+        scoreTokenEvidence(evidence, profile?.business?.behaviorFeatureIds.orEmpty()), evidence,
+    )
+}
+
+internal fun buildTokenDurableResult(
+    result: TokenSimulationResult,
+    source: TokenResultEnvelopeSource,
+    producer: AnebResultProducerContext,
+    device: AnebResultDeviceContext,
+    network: AnebResultNetworkContext,
+    endedAtEpochMs: Long,
+    status: String,
+    radio: FormalRadioEvidence,
+): TokenDurableResult = TokenDurableResult(
+    result = result,
+    envelope = TokenResultEnvelopeV2.build(
+        TokenResultEnvelopeInput(
+            result = result,
+            source = source,
+            producer = producer,
+            device = device,
+            network = network,
+            endedAtEpochMs = endedAtEpochMs,
+            status = status,
+            radio = radio,
+        ),
+    ),
+    radio = radio,
+)
+
+internal fun tokenSimulationResultEntity(result: TokenSimulationResult): TokenSimulationResultEntity =
+    TokenSimulationResultEntity(
+        runId = result.runId,
+        startedAtEpochMs = result.startedAtEpochMs,
+        serverBase = result.serverBase,
+        claimScope = "application_end_to_end_to_probe_node",
+        profileId = result.profileId,
+        profileVersion = result.profileVersion,
+        behaviorModelId = result.behaviorModelId,
+        behaviorModelVersion = result.behaviorModelVersion,
+        behaviorModelHash = result.behaviorModelHash,
+        calibrationStatus = result.calibrationStatus,
+        variant = result.variant,
+        scorePolicyId = result.scorePolicyId,
+        scoreAnchorPolicyId = result.scoreAnchorPolicyId,
+        conclusionPolicyId = result.conclusionPolicyId,
+        totalScore = result.score.totalScore,
+        grade = result.score.grade,
+        verdict = result.score.verdict.name,
+        confidence = result.score.confidence.name,
+        capReason = result.score.capReason,
+        metricsJson = Json.encodeToString(JsonObject.serializer(), buildJsonObject {
+            result.score.metrics.forEach { (id, metric) ->
+                put(id, buildJsonObject {
+                    put("value", metric.value?.let(::JsonPrimitive) ?: JsonNull)
+                    put("compliance_ratio", metric.complianceRatio?.let(::JsonPrimitive) ?: JsonNull)
+                    put("sample_count", metric.sampleCount)
+                    put("minimum_sample_count", metric.minimumSampleCount)
+                    put("target_compliance_ratio", metric.targetComplianceRatio)
+                    put("score", metric.score?.let(::JsonPrimitive) ?: JsonNull)
+                })
+            }
+        }),
+        conclusionsJson = Json.encodeToString(
+            JsonArray.serializer(),
+            JsonArray(result.score.conclusions.map(::JsonPrimitive)),
+        ),
+        evidenceJson = Json.encodeToString(
+            JsonObject.serializer(),
+            TokenResultEnvelopeV2.rawEvidenceJson(result.evidence).withTokenContractVersion(result.variant),
+        ),
+    )
+
+private fun JsonObject.withTokenContractVersion(variant: String): JsonObject = buildJsonObject {
+    put("contract_version", "aneb-token-run-evidence-v1")
+    put("variant", variant)
+    this@withTokenContractVersion.forEach { (key, value) -> put(key, value) }
+}
+
+private fun scoreTokenEvidence(
+    evidence: TokenRunEvidence,
+    behaviorFeatureIds: List<String>,
+): TokenScoreResult = if (evidence.variant == "stress") {
+    TokenStressScorer.score(evidence, behaviorFeatureIds)
+} else {
+    TokenSimulationScorer.score(evidence, behaviorFeatureIds)
+}
+
+private fun tokenPolicies(variant: String): Triple<String, String, String> = if (variant == "stress") {
+    Triple("token-stress-score-v1", "compliance-anchors-v1", "token-stress-conclusions-v2")
+} else {
+    Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v2")
+}
 
 /** Executes the hash-bound Profile v2 Token plan and produces an independent score. */
 class TokenSimulationEngine(private val context: Context) {
@@ -124,7 +327,7 @@ class TokenSimulationEngine(private val context: Context) {
         store = DurableResultStore { durable: TokenDurableResult ->
             val db = AnebDatabase.get(context)
             db.withTransaction {
-                db.tokenSimulationResultDao().insert(durable.result.toEntity())
+                db.tokenSimulationResultDao().insert(tokenSimulationResultEntity(durable.result))
                 db.resultEnvelopeDao().insert(durable.envelope)
                 durable.radio.radioEntities(durable.result.runId).takeIf { it.isNotEmpty() }
                     ?.let { db.radioSampleDao().insertAll(it) }
@@ -190,9 +393,46 @@ class TokenSimulationEngine(private val context: Context) {
             val client = AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
-                reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
+                reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase, runId) }.getOrNull()
             }
             val measureBase = ReachabilityProbe.preferredMeasureBase(configuredBase, reach)
+            val tokenTraffic = TokenExecutionContractRunner.authorize(
+                runId = runId,
+                serverBase = measureBase,
+                profile = profile,
+                profileCanonicalSha256 = loaded.profileHash,
+                transport = AnebTokenExecutionTransport(client, runId),
+                log = log,
+                failurePublisher = TokenContractFailurePublisher(
+                    runId = runId,
+                    startedAt = startedAt,
+                    variant = config.variant,
+                    source = envelopeSource,
+                    producer = AnebResultProducerContext(
+                        component = "aneb-probe-android",
+                        componentVersion = BuildConfig.VERSION_NAME,
+                        buildType = BuildConfig.BUILD_TYPE,
+                    ),
+                    device = AnebResultDeviceContext(
+                        manufacturer = Build.MANUFACTURER,
+                        model = Build.MODEL,
+                        osRelease = Build.VERSION.RELEASE,
+                        apiLevel = Build.VERSION.SDK_INT,
+                        appPackage = BuildConfig.APPLICATION_ID,
+                        appVersionName = BuildConfig.VERSION_NAME,
+                        appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                    ),
+                    network = networkContext(config.transport, guard, bound),
+                    endedAtEpochMs = System::currentTimeMillis,
+                    radio = radioCollector::freeze,
+                    resultCommitter = resultCommitter,
+                ),
+            ) ?: run {
+                _telemetry.value = TokenSimulationTelemetry(phase = TokenSimulationPhase.FAILED)
+                return@channelFlow
+            }
+            log("TOKEN_V2_CONTRACT run_id=$runId status=${tokenTraffic.authorization.name.lowercase()}")
+
             if (config.variant == "stress") {
                 loadedMonitorJob = launch {
                     while (isActive) {
@@ -201,7 +441,7 @@ class TokenSimulationEngine(private val context: Context) {
                             continue
                         }
                         val echo = try {
-                            client.echo("$measureBase/api/v1/echo")
+                            tokenTraffic.echo("$measureBase/api/v1/echo")
                         } catch (e: CancellationException) {
                             throw e
                         } catch (_: Exception) {
@@ -229,7 +469,7 @@ class TokenSimulationEngine(private val context: Context) {
             )
             val echoResults = mutableListOf<AnebClient.EchoResult>()
             repeat(ECHO_SAMPLES) { index ->
-                val echo = client.echo("$measureBase/api/v1/echo")
+                val echo = tokenTraffic.echo("$measureBase/api/v1/echo")
                 echoResults += echo
                 val validRtt = echoResults.mapNotNull { sample -> sample.rttUs?.takeIf { sample.error == null }?.div(1_000.0) }
                 _telemetry.value = _telemetry.value.copy(
@@ -273,7 +513,7 @@ class TokenSimulationEngine(private val context: Context) {
                     tokenSizesBytes = task.tokenStream.sizesBytes,
                 )
                 loadedMonitorEnabled.set(config.variant == "stress")
-                val taskResult = client.tokenSim(
+                val taskResult = tokenTraffic.tokenSim(
                     url = "$measureBase/api/v1/token-sim",
                     plan = wirePlan,
                     uploadChunkBytes = task.upload.chunkBytes,
@@ -339,7 +579,7 @@ class TokenSimulationEngine(private val context: Context) {
                     val downloadStart = AtomicLong(-1L)
                     val downloadedBytes = AtomicLong(0L)
                     loadedMonitorEnabled.set(config.variant == "stress")
-                    val download = client.downloadThroughput(
+                    val download = tokenTraffic.downloadThroughput(
                         "$measureBase/api/v1/download?bytes=${task.responseArtifactBytes}&chunk_kb=256",
                     ) { bytes, now ->
                         val started = downloadStart.updateAndGet { old -> if (old < 0L) now else old }
@@ -392,7 +632,7 @@ class TokenSimulationEngine(private val context: Context) {
                 invalidReason = invalidReason,
                 loadedRttSamplesMs = loadedRttSnapshot,
             )
-            val score = score(evidence, profile.business.behaviorFeatureIds)
+            val score = scoreTokenEvidence(evidence, profile.business.behaviorFeatureIds)
             val endedAt = System.currentTimeMillis()
             val result = TokenSimulationResult(
                 runId, startedAt, measureBase, profile.profileId, profile.version,
@@ -424,6 +664,16 @@ class TokenSimulationEngine(private val context: Context) {
             throw e
         } catch (e: TokenResultPersistenceException) {
             throw e
+        } catch (e: TokenContractRejectionAlreadyPersistedException) {
+            throw e
+        } catch (e: TokenExecutionContractException) {
+            finishFailed(
+                runId, startedAt, configuredBase, config.variant, e.reasonCode,
+                envelopeSource, config.transport, guard, bound, radioCollector, log,
+            )
+            log("TOKEN_V2_CONTRACT run_id=$runId status=rejected reason=${e.reasonCode}")
+            log("TOKEN_V2_FAILED run_id=$runId error=${e.userMessage.replace(' ', '_')}")
+            log("TOKEN_V2_END run_id=$runId status=contract_rejected")
         } catch (e: Exception) {
             finishFailed(
                 runId, startedAt, configuredBase, config.variant, e.toString(),
@@ -529,20 +779,13 @@ class TokenSimulationEngine(private val context: Context) {
         radioCollector: FormalRadioEvidenceCollector,
         log: suspend (String) -> Unit,
     ) {
-        val evidence = TokenRunEvidence(variant, emptyList(), emptyList(), reason)
-        val policies = policies(variant)
-        val profile = source.profile
-        val result = TokenSimulationResult(
-            runId, startedAt, server, profile?.profileId ?: "token_multimodal_$variant", profile?.version ?: "unknown",
-            profile?.business?.behaviorModelId ?: "unknown",
-            profile?.business?.behaviorModelVersion ?: "unknown",
-            profile?.business?.behaviorModelHash ?: "unknown",
-            profile?.business?.calibrationStatus ?: "unknown",
-            variant,
-            profile?.evaluation?.scorePolicyId?.takeIf { it.isNotBlank() } ?: policies.first,
-            profile?.evaluation?.scoreAnchorPolicyId?.takeIf { it.isNotBlank() } ?: policies.second,
-            profile?.evaluation?.conclusionPolicyId?.takeIf { it.isNotBlank() } ?: policies.third,
-            score(evidence, profile?.business?.behaviorFeatureIds.orEmpty()), evidence,
+        val result = buildFailedTokenSimulationResult(
+            runId = runId,
+            startedAt = startedAt,
+            server = server,
+            variant = variant,
+            reason = reason,
+            source = source,
         )
         publishResult(
             result = result,
@@ -570,32 +813,30 @@ class TokenSimulationEngine(private val context: Context) {
         log: suspend (String) -> Unit,
     ) {
         val radio = radioCollector.freeze()
-        val envelope = TokenResultEnvelopeV2.build(
-            TokenResultEnvelopeInput(
-                result = result,
-                source = source,
-                producer = AnebResultProducerContext(
-                    component = "aneb-probe-android",
-                    componentVersion = BuildConfig.VERSION_NAME,
-                    buildType = BuildConfig.BUILD_TYPE,
-                ),
-                device = AnebResultDeviceContext(
-                    manufacturer = Build.MANUFACTURER,
-                    model = Build.MODEL,
-                    osRelease = Build.VERSION.RELEASE,
-                    apiLevel = Build.VERSION.SDK_INT,
-                    appPackage = BuildConfig.APPLICATION_ID,
-                    appVersionName = BuildConfig.VERSION_NAME,
-                    appVersionCode = BuildConfig.VERSION_CODE.toLong(),
-                ),
-                network = networkContext(transport, guard, bound),
-                endedAtEpochMs = endedAtEpochMs,
-                status = status,
-                radio = radio,
+        val durable = buildTokenDurableResult(
+            result = result,
+            source = source,
+            producer = AnebResultProducerContext(
+                component = "aneb-probe-android",
+                componentVersion = BuildConfig.VERSION_NAME,
+                buildType = BuildConfig.BUILD_TYPE,
             ),
+            device = AnebResultDeviceContext(
+                manufacturer = Build.MANUFACTURER,
+                model = Build.MODEL,
+                osRelease = Build.VERSION.RELEASE,
+                apiLevel = Build.VERSION.SDK_INT,
+                appPackage = BuildConfig.APPLICATION_ID,
+                appVersionName = BuildConfig.VERSION_NAME,
+                appVersionCode = BuildConfig.VERSION_CODE.toLong(),
+            ),
+            network = networkContext(transport, guard, bound),
+            endedAtEpochMs = endedAtEpochMs,
+            status = status,
+            radio = radio,
         )
         try {
-            resultCommitter.commit(TokenDurableResult(result, envelope, radio))
+            resultCommitter.commit(durable)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -604,54 +845,6 @@ class TokenSimulationEngine(private val context: Context) {
         }
         log("TOKEN_V2_RADIO run_id=${result.runId} status=${radio.collectionStatus} samples=${radio.samples.size}")
         log("TOKEN_V2_DB_WRITE run_id=${result.runId} ok=true")
-    }
-
-    private fun TokenSimulationResult.toEntity(): TokenSimulationResultEntity = TokenSimulationResultEntity(
-        runId = runId,
-        startedAtEpochMs = startedAtEpochMs,
-        serverBase = serverBase,
-        claimScope = "application_end_to_end_to_probe_node",
-        profileId = profileId,
-        profileVersion = profileVersion,
-        behaviorModelId = behaviorModelId,
-        behaviorModelVersion = behaviorModelVersion,
-        behaviorModelHash = behaviorModelHash,
-        calibrationStatus = calibrationStatus,
-        variant = variant,
-        scorePolicyId = scorePolicyId,
-        scoreAnchorPolicyId = scoreAnchorPolicyId,
-        conclusionPolicyId = conclusionPolicyId,
-        totalScore = score.totalScore,
-        grade = score.grade,
-        verdict = score.verdict.name,
-        confidence = score.confidence.name,
-        capReason = score.capReason,
-        metricsJson = Json.encodeToString(JsonObject.serializer(), buildJsonObject {
-            score.metrics.forEach { (id, metric) ->
-                put(id, buildJsonObject {
-                    putNullableDouble("value", metric.value)
-                    putNullableDouble("compliance_ratio", metric.complianceRatio)
-                    put("sample_count", metric.sampleCount)
-                    put("minimum_sample_count", metric.minimumSampleCount)
-                    put("target_compliance_ratio", metric.targetComplianceRatio)
-                    putNullableDouble("score", metric.score)
-                })
-            }
-        }),
-        conclusionsJson = Json.encodeToString(
-            JsonArray.serializer(),
-            JsonArray(score.conclusions.map(::JsonPrimitive)),
-        ),
-        evidenceJson = Json.encodeToString(
-            JsonObject.serializer(),
-            TokenResultEnvelopeV2.rawEvidenceJson(evidence).withContractVersion(variant),
-        ),
-    )
-
-    private fun JsonObject.withContractVersion(variant: String): JsonObject = buildJsonObject {
-        put("contract_version", "aneb-token-run-evidence-v1")
-        put("variant", variant)
-        this@withContractVersion.forEach { (key, value) -> put(key, value) }
     }
 
     private fun networkContext(
@@ -687,10 +880,6 @@ class TokenSimulationEngine(private val context: Context) {
         )
     }
 
-    private fun kotlinx.serialization.json.JsonObjectBuilder.putNullableDouble(key: String, value: Double?) {
-        put(key, value?.let(::JsonPrimitive) ?: JsonNull)
-    }
-
     private fun median(values: List<Double>): Double? = values.sorted().takeIf { it.isNotEmpty() }?.let { sorted ->
         val middle = sorted.size / 2
         if (sorted.size % 2 == 0) (sorted[middle - 1] + sorted[middle]) / 2.0 else sorted[middle]
@@ -698,24 +887,11 @@ class TokenSimulationEngine(private val context: Context) {
 
     private fun medianLong(values: List<Long>): Long? = values.sorted().takeIf { it.isNotEmpty() }?.let { sorted -> sorted[sorted.size / 2] }
 
-    private fun score(evidence: TokenRunEvidence, behaviorFeatureIds: List<String>): TokenScoreResult =
-        if (evidence.variant == "stress") {
-            TokenStressScorer.score(evidence, behaviorFeatureIds)
-        } else {
-            TokenSimulationScorer.score(evidence, behaviorFeatureIds)
-        }
-
-    private fun policies(variant: String): Triple<String, String, String> = if (variant == "stress") {
-        Triple("token-stress-score-v1", "compliance-anchors-v1", "token-stress-conclusions-v2")
-    } else {
-        Triple("token-sim-score-v1", "compliance-anchors-v1", "token-sim-conclusions-v2")
-    }
-
-    private companion object {
+    internal companion object {
         const val ECHO_SAMPLES = 20
-        const val ECHO_GAP_MS = 80L
-        const val LOADED_ECHO_GAP_MS = 250L
-        const val LOADED_ECHO_IDLE_GAP_MS = 50L
-        const val LIVE_WINDOW_NANOS = 1_000_000_000L
+        private const val ECHO_GAP_MS = 80L
+        private const val LOADED_ECHO_GAP_MS = 250L
+        private const val LOADED_ECHO_IDLE_GAP_MS = 50L
+        private const val LIVE_WINDOW_NANOS = 1_000_000_000L
     }
 }
