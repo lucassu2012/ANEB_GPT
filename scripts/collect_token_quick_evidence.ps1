@@ -3388,7 +3388,7 @@ function Add-BusySentinelObservation {
         [Parameter(Mandatory = $true)][string]$Stage,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$WindowDump,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ActivityDump,
-        [Parameter(Mandatory = $true)][string[]]$ObservedComponents,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ObservedComponents,
         [Parameter(Mandatory = $true)][bool]$Matched
     )
     if ($Stage -notmatch '^[a-z0-9_]{1,64}$') {

@@ -2630,6 +2630,55 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_busy_sentinel_records_empty_observation_before_failing_closed(
+        self,
+    ) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        def function_source(name: str) -> str:
+            marker = f"function {name}"
+            return marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            escaped_root = str(root).replace("'", "''")
+            wrapper = root / "busy-sentinel-empty-observation.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference='Stop'\nSet-StrictMode -Version 2.0\n"
+                + function_source("Add-BusySentinelObservation")
+                + "\n"
+                + "$script:BusySentinelComponent='com.android.settings/.HWSettings'\n"
+                + "Add-BusySentinelObservation "
+                + "-EvidenceDirectory '"
+                + escaped_root
+                + "' -Stage 'sentinel_started' -WindowDump '' -ActivityDump '' "
+                + "-ObservedComponents @() -Matched $false\n"
+                + "$lines=@(Get-Content -LiteralPath (Join-Path '"
+                + escaped_root
+                + "' 'busy-sentinel-observations.jsonl'))\n"
+                + "if ($lines.Count -ne 1) { throw 'empty_observation_count_invalid' }\n"
+                + "$entry=$lines[0] | ConvertFrom-Json\n"
+                + "if ($entry.matched -ne $false -or @($entry.observed_components).Count -ne 0) "
+                + "{ throw 'empty_observation_payload_invalid' }\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_busy_sentinel_evidence_accepts_equivalent_short_and_full_components(
         self,
     ) -> None:
