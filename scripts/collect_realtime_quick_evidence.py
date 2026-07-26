@@ -619,6 +619,18 @@ def clean_snapshot_hash(snapshot: PhoneSnapshot) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _is_empty_service_dump(value: str) -> bool:
+    normalized = value.strip()
+    return normalized in {"", "(nothing)", "No services"} or (
+        re.fullmatch(
+            r"ACTIVITY MANAGER SERVICES \(dumpsys activity services\)\r?\n"
+            r"[ \t]*\(nothing\)",
+            normalized,
+        )
+        is not None
+    )
+
+
 def parse_phone_snapshot(raw: dict[str, object]) -> PhoneSnapshot:
     expected = {
         "device_state",
@@ -668,15 +680,7 @@ def parse_phone_snapshot(raw: dict[str, object]) -> PhoneSnapshot:
             raise CollectorError(
                 f"phone_live_state_rejected reason=process_active package={package}"
             )
-        empty_service_dump = service in {"", "(nothing)", "No services"} or (
-            re.fullmatch(
-                r"ACTIVITY MANAGER SERVICES \(dumpsys activity services\)\r?\n"
-                r"[ \t]*\(nothing\)",
-                service,
-            )
-            is not None
-        )
-        if not empty_service_dump:
+        if not _is_empty_service_dump(service):
             raise CollectorError(
                 f"phone_live_state_rejected reason=service_active package={package}"
             )
@@ -3642,7 +3646,7 @@ class LiveCollectorBackend:
             ["shell", "dumpsys", "activity", "services", PACKAGE_NAME],
             code="target_services_after_stop",
         )
-        if pid or services not in {"", "(nothing)", "No services"}:
+        if pid or not _is_empty_service_dump(services):
             raise CollectorError("target_app_not_stopped")
         self.app_launch_attempted = False
 

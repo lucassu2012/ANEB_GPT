@@ -686,6 +686,82 @@ class EvidencePublicationTests(unittest.TestCase):
         backend.cleanup_remote_complete = True
         return backend
 
+    def test_stop_target_accepts_huawei_empty_service_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = self.backend_for_publication(Path(temporary))
+            backend.app_launch_attempted = True
+
+            class FakeAdb:
+                def text(
+                    self,
+                    tail: list[str],
+                    *,
+                    code: str,
+                    allowed_returncodes: frozenset[int] = frozenset({0}),
+                ) -> str:
+                    del code, allowed_returncodes
+                    if tail == ["shell", "am", "force-stop", collector.PACKAGE_NAME]:
+                        return ""
+                    if tail == ["shell", "pidof", collector.PACKAGE_NAME]:
+                        return ""
+                    if tail == [
+                        "shell",
+                        "dumpsys",
+                        "activity",
+                        "services",
+                        collector.PACKAGE_NAME,
+                    ]:
+                        return (
+                            "ACTIVITY MANAGER SERVICES "
+                            "(dumpsys activity services)\n  (nothing)"
+                        )
+                    raise AssertionError(tail)
+
+            backend.adb = FakeAdb()
+            backend._stop_target()
+
+            self.assertFalse(backend.app_launch_attempted)
+
+    def test_stop_target_rejects_unknown_service_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = self.backend_for_publication(Path(temporary))
+            backend.app_launch_attempted = True
+
+            class FakeAdb:
+                def text(
+                    self,
+                    tail: list[str],
+                    *,
+                    code: str,
+                    allowed_returncodes: frozenset[int] = frozenset({0}),
+                ) -> str:
+                    del code, allowed_returncodes
+                    if tail == ["shell", "am", "force-stop", collector.PACKAGE_NAME]:
+                        return ""
+                    if tail == ["shell", "pidof", collector.PACKAGE_NAME]:
+                        return ""
+                    if tail == [
+                        "shell",
+                        "dumpsys",
+                        "activity",
+                        "services",
+                        collector.PACKAGE_NAME,
+                    ]:
+                        return (
+                            "ACTIVITY MANAGER SERVICES "
+                            "(dumpsys activity services)\nwarning: incomplete"
+                        )
+                    raise AssertionError(tail)
+
+            backend.adb = FakeAdb()
+            with self.assertRaisesRegex(
+                collector.CollectorError,
+                "target_app_not_stopped",
+            ):
+                backend._stop_target()
+
+            self.assertTrue(backend.app_launch_attempted)
+
     def test_manifest_is_canonical_and_excludes_itself_and_complete_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
