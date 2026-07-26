@@ -271,10 +271,18 @@ class HttpsUpstreamFetcher:
         self._context = context
 
     def fetch(self, headers: dict[str, str]) -> UpstreamResponse:
+        expected_headers = {"X-Aneb-Run-Id", "X-Aneb-Audit-Role"}
+        if "X-Aneb-Audit-Scope" in headers:
+            expected_headers.add("X-Aneb-Audit-Scope")
         if (
-            set(headers) != {"X-Aneb-Run-Id", "X-Aneb-Audit-Role"}
+            set(headers) != expected_headers
             or headers.get("X-Aneb-Audit-Role") != "capability"
             or RUN_ID_RE.fullmatch(headers.get("X-Aneb-Run-Id", "")) is None
+            or (
+                "X-Aneb-Audit-Scope" in headers
+                and headers["X-Aneb-Audit-Scope"]
+                not in {"token_run", "realtime_run"}
+            )
         ):
             raise NegativeProxyFailure("forward_headers_invalid")
         connection: http.client.HTTPSConnection | None = None
@@ -292,6 +300,11 @@ class HttpsUpstreamFetcher:
             )
             connection.putheader("X-Aneb-Run-Id", headers["X-Aneb-Run-Id"])
             connection.putheader("X-Aneb-Audit-Role", headers["X-Aneb-Audit-Role"])
+            if "X-Aneb-Audit-Scope" in headers:
+                connection.putheader(
+                    "X-Aneb-Audit-Scope",
+                    headers["X-Aneb-Audit-Scope"],
+                )
             connection.endheaders()
             if connection.sock is None:
                 raise NegativeProxyFailure("upstream_peer_certificate_missing")
@@ -527,6 +540,24 @@ def _single_header(
     return values[0]
 
 
+def _optional_single_header(
+    headers: dict[str, list[str]],
+    name: str,
+    reason_code: str,
+) -> str | None:
+    values = [
+        value
+        for key, candidates in headers.items()
+        if key.casefold() == name.casefold()
+        for value in candidates
+    ]
+    if not values:
+        return None
+    if len(values) != 1 or not isinstance(values[0], str):
+        raise NegativeProxyFailure(reason_code)
+    return values[0]
+
+
 def _request_header_size(headers: dict[str, list[str]]) -> int:
     total = 0
     for key, values in headers.items():
@@ -705,11 +736,20 @@ class NegativeProxySession:
         )
         if role != "capability":
             raise NegativeProxyFailure("request_audit_role_invalid")
+        scope = _optional_single_header(
+            headers,
+            "X-Aneb-Audit-Scope",
+            "request_audit_scope_invalid",
+        )
+        if scope is not None and scope not in {"token_run", "realtime_run"}:
+            raise NegativeProxyFailure("request_audit_scope_invalid")
         self._accepted_requests = 1
         forwarded = {
             "X-Aneb-Run-Id": run_id,
             "X-Aneb-Audit-Role": role,
         }
+        if scope is not None:
+            forwarded["X-Aneb-Audit-Scope"] = scope
         self._upstream_requests = 1
         try:
             response = self.fetcher.fetch(forwarded)

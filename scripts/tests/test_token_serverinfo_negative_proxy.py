@@ -90,6 +90,42 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
             self.assertEqual(raw, (evidence / "upstream-serverinfo.raw").read_bytes())
             self.assertEqual(served, (evidence / "filtered-serverinfo.json").read_bytes())
 
+    def test_realtime_audit_scope_is_forwarded_exactly_when_present(self) -> None:
+        fetcher = RecordingFetcher(
+            UpstreamResponse(
+                200,
+                (("Content-Type", "application/json"),),
+                b'{"version":"aneb-server/0.8.1","execution_capabilities":{"ok":true}}',
+                b"peer",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            session = NegativeProxySession(
+                ProxyConfig.for_test(
+                    evidence_directory=Path(temporary) / "negative-proxy"
+                ),
+                fetcher=fetcher,
+            )
+
+            session.process(
+                method="GET",
+                path="/api/v1/serverinfo",
+                headers={
+                    "X-Aneb-Run-Id": [RUN_ID],
+                    "X-Aneb-Audit-Role": ["capability"],
+                    "X-Aneb-Audit-Scope": ["realtime_run"],
+                },
+            )
+
+        self.assertEqual(
+            {
+                "X-Aneb-Run-Id": RUN_ID,
+                "X-Aneb-Audit-Role": "capability",
+                "X-Aneb-Audit-Scope": "realtime_run",
+            },
+            fetcher.calls[0],
+        )
+
     def test_wrong_method_fails_before_upstream(self) -> None:
         fetcher = RecordingFetcher(
             UpstreamResponse(200, (), b'{"execution_capabilities":{"ok":true}}', b"peer"),
@@ -139,6 +175,24 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
                 "/api/v1/serverinfo",
                 {"X-Aneb-Run-Id": [RUN_ID], "X-Aneb-Audit-Role": ["reachability"]},
                 "request_audit_role_invalid",
+            ),
+            (
+                "/api/v1/serverinfo",
+                {
+                    "X-Aneb-Run-Id": [RUN_ID],
+                    "X-Aneb-Audit-Role": ["capability"],
+                    "X-Aneb-Audit-Scope": ["realtime_run", "token_run"],
+                },
+                "request_audit_scope_invalid",
+            ),
+            (
+                "/api/v1/serverinfo",
+                {
+                    "X-Aneb-Run-Id": [RUN_ID],
+                    "X-Aneb-Audit-Role": ["capability"],
+                    "X-Aneb-Audit-Scope": ["other"],
+                },
+                "request_audit_scope_invalid",
             ),
         )
         for path, headers, expected_reason in cases:
@@ -644,6 +698,7 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
                     {
                         "X-Aneb-Run-Id": RUN_ID,
                         "X-Aneb-Audit-Role": "capability",
+                        "X-Aneb-Audit-Scope": "realtime_run",
                     },
                 )
 
@@ -664,6 +719,7 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
             [
                 ("X-Aneb-Run-Id", RUN_ID),
                 ("X-Aneb-Audit-Role", "capability"),
+                ("X-Aneb-Audit-Scope", "realtime_run"),
             ],
             connection.request_headers,
         )

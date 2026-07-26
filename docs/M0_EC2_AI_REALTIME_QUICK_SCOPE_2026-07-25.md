@@ -23,7 +23,7 @@
 
 | 项目 | 当前值 | 证据边界 |
 |---|---:|---|
-| Profile | `ai_realtime_voice_quick@1.1.0` | ［KNOWN｜HIGH］当前没有 `execution_requirements` |
+| Profile | `ai_realtime_voice_quick@1.1.1` | ［KNOWN｜HIGH］本地候选已加入冻结的 `execution_requirements`；规范化 Profile SHA-256=`701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7` |
 | runtime | `aneb-realtime-runtime-plan-v1` | ［KNOWN｜HIGH］当前 manifest runtime SHA-256=`f2472d2faa7a3ab51582e1496a6925d106806fdd9747e097e20e38e921d9dc07` |
 | session | 1 | ［COMPUTED｜HIGH］来自 create-once `runtime_plan.json` |
 | turn | 3 | ［COMPUTED｜HIGH］2 个完整轮次 + 1 个打断轮次 |
@@ -106,18 +106,39 @@
 
 ## 7. 差距矩阵与落地顺序
 
-| 门 | 当前差距 | 落地与验证 |
-|---|---|---|
-| EC2-01 Profile/P3 | 实时 Quick 无执行要求，generator/catalog 只强制 Token | TDD 更新 generator、schema 语义测试、Profile 1.1.1、manifest、catalog 1.6.0 与协议合同 |
-| EC2-02 P2 能力 | server loader 硬编码唯一 Token 身份和三原语 | 抽取 fail-closed Profile 注册表；增加 realtime 原语；保留 Token 回归和未知 Profile 拒绝 |
-| EC2-03 P2 审计 | `/realtime-sim` 被降为 `/api/v1/other` | 增加精确路由、受限 `realtime_run` scope、会话摘要与并发/污染/日志隐私测试 |
-| EC2-04 P1 能力门 | Realtime 直接开 WebSocket | 抽取通用 Gate 核心；Quick 在首个 WS 前授权；Standard/Recovery 未迁移时保持既有兼容 |
-| EC2-05 P1 持久化 | 没有实时合同拒绝专用生命周期 | TDD 固定机器 reason、零会话/帧、null score/grade、单次 Room 终态与日志顺序 |
-| EC2-06 采集/复核 | collector、DB/audit/bundle/release verifier 均为 Token 专用 | 参数化共享安全骨架，增加实时协议/DB/摘要 verifier；READY 仍为唯一发布点 |
-| EC2-07 离线门 | 无第二 Profile 跨语言漂移测试 | Kotlin/Go/Python 正反例、全仓质量门、凭据扫描、clean commit |
-| EC2-08 云端门 | 无同提交 0.5.13/0.8.1 provenance | GitHub CI 全绿后独立复核 APK、server candidate、manifest/checksums/attestation |
-| EC2-09 真机正负 | 当前证据不是 M0-EC2 合同证据 | 受保护部署 0.8.1 后，P40 正向与 `receipt_missing` 负向各生成独立 READY |
-| EC2-10 收尾 | 尚无最终里程碑记录 | 精确清理 P40/E-01，独立复核两个 READY，回填账本与计划对齐 |
+| 门 | 应实现的内容 | 当前状态 | 下一验收 |
+|---|---|---|---|
+| EC2-01 Profile/P3 | generator、schema、Profile 1.1.1、manifest、catalog 1.6.0 与协议合同 | ［KNOWN｜HIGH］本地完成；behavior model 0.3.2、Profile SHA 与 runtime SHA 已进入 catalog/manifest 漂移测试 | clean commit + CI 重算 |
+| EC2-02 P2 能力 | fail-closed Profile 注册表、`realtime_sim` 原语并保留 Token 兼容 | ［KNOWN｜HIGH］本地完成；服务器候选为 `aneb-server/0.8.1`，未知 Profile/原语/版本拒绝测试已覆盖 | 同提交 Linux candidate + E-01 受保护切换 |
+| EC2-03 P2 审计 | 精确实时路由、`realtime_run` scope、有界会话摘要及隐私/污染门 | ［KNOWN｜HIGH］本地完成；并发、缺号、未归因流量、摘要不一致与日志隐私均 fail closed | 真机同-run 原始 journal 重算 |
+| EC2-04 P1 能力门 | Quick 在首个 WebSocket 前验证本地/节点/Profile/原语合同 | ［KNOWN｜HIGH］本地完成；能力缺失/冲突在业务前拒绝，Standard/Recovery 保持兼容 | CI APK + P40 正负请求计数 |
+| EC2-05 P1 持久化 | 固定机器 reason、零业务产物、null score/grade、单次 Room 终态 | ［KNOWN｜HIGH］本地完成；Room v19、结果信封、日志顺序和二次插入防护均有正反例 | 真机冻结 DB/WAL/SHM 独立复算 |
+| EC2-06 采集/复核 | 实时 collector、DB/audit/协议摘要/cross-bundle verifier 与 D-87 READY | ［KNOWN｜HIGH］本地完成；正/负模式库存分离、私有根 ACL、manifest、独立 report 与 READY 最终消费者已闭合 | 两次真实 collection 各自发布 READY |
+| EC2-07 离线门 | Kotlin/Go/Python 正反例、全仓质量门、凭据扫描与 clean commit | ［KNOWN｜HIGH］本地门禁完成；Realtime 定向 100 项通过（1 项设计跳过），最终全仓 719 项 Python 通过（16 项设计跳过）、behavior model 43/43、Android/Go/发布边界全绿，651 个跟踪文件及 13 个 staged 路径密钥扫描通过 | 提交本候选并进入 CI provenance |
+| EC2-08 云端门 | 同提交 0.5.13/0.8.1 provenance | ［KNOWN｜HIGH］未执行 | push 后等待 GitHub CI 全绿并独立复核四项候选 |
+| EC2-09 真机正负 | P40 正向 exact signature 与负向 `receipt_missing` zero-business | ［KNOWN｜HIGH］未执行；当前没有 M0-EC2 READY | 受保护部署 0.8.1 后分别短租用 P40 |
+| EC2-10 收尾 | 精确清理 P40/E-01、独立复核两个 READY 并回填账本 | ［KNOWN｜HIGH］未执行 | EC2-09 后执行 |
+
+### 7.1 本地候选已形成的执行链
+
+1. ［KNOWN｜HIGH］`scripts/collect_realtime_quick_evidence.py` 已把 clean commit、CI 候选、
+   P40 实时现场、E-01 `flock`/指纹、三次 serverinfo、Room 冻结、journal 与正/负合同收进
+   同一个受限工作流；导入模块本身不访问手机、服务器或网络。
+2. ［KNOWN｜HIGH］`scripts/verify_realtime_quick_collection.py` 会重算 manifest、候选来源、
+   设备身份、前后 PhoneGuard、远端稳定指纹、锁 nonce、serverinfo 时序和跨端语义；正向包拒绝
+   任意负向代理残留，负向包必须包含完整代理、交付与四阶段 reverse 证据。
+3. ［KNOWN｜HIGH］证据根目录使用只读 ACL 探针：owner 必须为当前用户，可写主体只允许当前用户、
+   SYSTEM 与 Administrators；采集时写入路径绑定的安全回执，READY publisher 与最终 consumer
+   都会重新读取实时 ACL，漂移即拒绝。
+4. ［KNOWN｜HIGH］`publish_realtime_quick_ready.py` 先发布独立 verification report，再以
+   no-replace 方式最后提交 `<collection>.READY.json`；任何后验失败会移除本轮 `COMPLETE` 并降级，
+   未经 READY 的 `.complete` 不能被消费者当作成功。
+5. ［KNOWN｜HIGH］2026-07-26 第一轮全仓门禁的 719 项 Python 回归出现 1 次
+   `test_optional_certificate_is_published_from_its_single_validated_snapshot` 瞬时失败；
+   同一用例随后 20/20、完整模块 21/21 通过，无法复现，故未修改生产构建逻辑。最终冻结输入的
+   全仓门禁 719/719 通过（16 项按设计跳过），同时 behavior model 43/43、Android 与 Go 全绿。
+6. ［KNOWN｜HIGH］本地实现和上述验证全程零 ADB、零 P40、零 E-01；E-01 仍为
+   `aneb-server/0.8.0`，0.8.1 不能写成已部署，任何 READY 也不能写成已生成。
 
 ## 8. 硬约束与停止条件
 
