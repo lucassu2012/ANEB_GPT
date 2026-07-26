@@ -1,0 +1,56 @@
+{
+  "schema": "aneb-network-protocol-bounded-contract",
+  "contract_id": "aneb-network-quick-protocol-bounds",
+  "version": "1.0.0",
+  "profile": {
+    "id": "network_comprehensive_quick",
+    "version": "1.2.0",
+    "canonical_sha256": "sha256:15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc"
+  },
+  "client_engine": {
+    "contract_id": "aneb-network-comprehensive-engine",
+    "version": "1.0.0"
+  },
+  "runtime": {
+    "canonical_sha256": "sha256:8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603",
+    "phase_count": 6,
+    "phase_types": [
+      "path_setup",
+      "idle_latency",
+      "download_loaded",
+      "upload_loaded",
+      "udp_sequence",
+      "post_load_latency"
+    ],
+    "path_setup_attempts": 3,
+    "idle_rtt_samples": 10,
+    "download_duration_ms": 6000,
+    "download_request_bytes": 33554432,
+    "download_parallel": 4,
+    "upload_duration_ms": 6000,
+    "upload_request_bytes": 8388608,
+    "upload_parallel": 2,
+    "udp_packets": 50,
+    "udp_packet_bytes": 256,
+    "udp_rate_per_second": 50,
+    "post_load_rtt_samples": 5
+  },
+  "applies_to": [
+    "positive_completed"
+  ],
+  "required_business_primitives": [
+    "download",
+    "echo",
+    "udp_echo",
+    "upload"
+  ],
+  "udp_wire_contract": {
+    "contract_id": "aneb-udp-echo-v2",
+    "run_id_format": "uuid-rfc4122-canonical",
+    "run_id_bytes": 16,
+    "sequence_bytes": 4,
+    "monotonic_send_timestamp_bytes": 8,
+    "minimum_packet_bytes": 33,
+    "server_behavior": "echo_exact_bytes_no_amplification"
+  }
+}

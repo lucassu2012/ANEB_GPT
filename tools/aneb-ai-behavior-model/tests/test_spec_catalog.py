@@ -38,6 +38,7 @@ class SpecCatalogTest(unittest.TestCase):
         }
         cls.quick_profile = cls.published_profiles["token_multimodal_quick"]
         cls.realtime_quick_profile = cls.published_profiles["ai_realtime_voice_quick"]
+        cls.network_quick_profile = cls.published_profiles["network_comprehensive_quick"]
 
     def _validate_requirements(self, profile, *, required=True):
         errors = []
@@ -56,8 +57,8 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
     def test_execution_evidence_contracts_are_cataloged_and_source_bound(self):
-        self.assertEqual("1.7.0", self.catalog["catalog_version"])
-        self.assertEqual(2, len(self.catalog["execution_evidence_contracts"]))
+        self.assertEqual("1.8.0", self.catalog["catalog_version"])
+        self.assertEqual(3, len(self.catalog["execution_evidence_contracts"]))
         by_id = {
             entry["contract_id"]: entry
             for entry in self.catalog["execution_evidence_contracts"]
@@ -113,6 +114,33 @@ class SpecCatalogTest(unittest.TestCase):
             profile=realtime_profile,
             runtime=realtime_runtime,
             label="realtime-protocol-contract",
+            errors=errors,
+        )
+        self.assertEqual([], errors)
+
+        network_entry = by_id["aneb-network-quick-protocol-bounds"]
+        network_document = json.loads(
+            (REPO_ROOT / network_entry["path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                "contract_id": "aneb-network-comprehensive-engine",
+                "version": "1.0.0",
+            },
+            network_document["client_engine"],
+        )
+        network_profile = json.loads(
+            (REPO_ROOT / network_entry["profile_path"]).read_text(encoding="utf-8")
+        )
+        network_runtime = json.loads(
+            (REPO_ROOT / network_entry["runtime_plan_path"]).read_text(encoding="utf-8")
+        )
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            network_document,
+            profile=network_profile,
+            runtime=network_runtime,
+            label="network-protocol-contract",
             errors=errors,
         )
         self.assertEqual([], errors)
@@ -235,8 +263,8 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual("canonical-json-sha256-v1", groups["behavior_runtime_bound"]["hash_strategy_id"])
         self.assertEqual("forbidden", groups["network_embedded_phases"]["runtime_manifest_policy"])
         self.assertIsNone(groups["network_embedded_phases"]["hash_strategy_id"])
-        self.assertEqual(6, len(runtime_bound))
-        self.assertEqual(6, len(embedded_network))
+        self.assertEqual(7, len(runtime_bound))
+        self.assertEqual(5, len(embedded_network))
         self.assertTrue(all("runtime_plan_path" in profile and "manifest_path" in profile for profile in runtime_bound))
         self.assertTrue(all("runtime_plan_path" not in profile and "manifest_path" not in profile for profile in embedded_network))
 
@@ -283,16 +311,25 @@ class SpecCatalogTest(unittest.TestCase):
             if entry.get("execution_requirements_policy") == "required"
         }
         self.assertEqual(
-            {"token_multimodal_quick", "ai_realtime_voice_quick"},
+            {
+                "token_multimodal_quick",
+                "ai_realtime_voice_quick",
+                "network_comprehensive_quick",
+            },
             profiles_with_requirements,
         )
         self.assertEqual(
-            {"token_multimodal_quick", "ai_realtime_voice_quick"},
+            {
+                "token_multimodal_quick",
+                "ai_realtime_voice_quick",
+                "network_comprehensive_quick",
+            },
             policies,
         )
-        self.assertEqual(10, len(self.published_profiles) - len(profiles_with_requirements))
+        self.assertEqual(9, len(self.published_profiles) - len(profiles_with_requirements))
         self.assertEqual([], self._validate_requirements(self.quick_profile))
         self.assertEqual([], self._validate_requirements(self.realtime_quick_profile))
+        self.assertEqual([], self._validate_requirements(self.network_quick_profile))
 
     def test_realtime_quick_requires_only_realtime_primitive(self):
         requirements = self.realtime_quick_profile["execution_requirements"]
@@ -306,6 +343,22 @@ class SpecCatalogTest(unittest.TestCase):
                     "primitive_id": "realtime_sim",
                     "wire_contract_id": "aneb-realtime-session-v1",
                 }
+            ],
+            requirements["required_primitives"],
+        )
+
+    def test_network_quick_requires_exact_network_primitive_set(self):
+        requirements = self.network_quick_profile["execution_requirements"]
+        self.assertEqual(
+            "aneb-network-comprehensive-engine",
+            requirements["client_engine"]["contract_id"],
+        )
+        self.assertEqual(
+            [
+                {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+                {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+                {"primitive_id": "udp_echo", "wire_contract_id": "aneb-udp-echo-v2"},
+                {"primitive_id": "upload", "wire_contract_id": "aneb-upload-v1"},
             ],
             requirements["required_primitives"],
         )

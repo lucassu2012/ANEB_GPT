@@ -10,6 +10,7 @@ import java.net.SocketTimeoutException
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CancellationException
@@ -29,30 +30,58 @@ data class NetworkUdpProbeResult(
 
 /** 带序号的 UDP 应用探针；0 回包报告不可达，不冒充 IP 层丢包率。 */
 class NetworkUdpProbe(private val bound: BoundNetwork?) {
-    suspend fun run(serverBase: String, packets: Int, packetBytes: Int, ratePerSecond: Int): NetworkUdpProbeResult =
+    suspend fun run(
+        serverBase: String,
+        runId: String,
+        packets: Int,
+        packetBytes: Int,
+        ratePerSecond: Int,
+    ): NetworkUdpProbeResult =
         withContext(Dispatchers.IO) {
+            UUID.fromString(runId)
             require(packets > 0 && packetBytes in MIN_PACKET_BYTES..MAX_PACKET_BYTES && ratePerSecond in 1..200)
-            val uri = URI(serverBase)
-            val host = requireNotNull(uri.host) { "udp_host_missing" }
-            val address = resolve(host)
-            val socket = DatagramSocket(null)
-            try {
-                bound?.network?.bindSocket(socket)
-                socket.bind(InetSocketAddress(0))
-                socket.connect(InetSocketAddress(address, UDP_PORT))
-                socket.soTimeout = RECEIVE_POLL_MS
-                exchange(socket, packets, packetBytes, ratePerSecond)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                NetworkUdpProbeResult(0, emptyList(), emptyList(), "${e.javaClass.simpleName}:${e.message.orEmpty()}")
-            } finally {
-                socket.close()
-            }
+            execute(serverBase, runId, packets, packetBytes, ratePerSecond)
         }
+
+    suspend fun runLegacy(
+        serverBase: String,
+        packets: Int,
+        packetBytes: Int,
+        ratePerSecond: Int,
+    ): NetworkUdpProbeResult = withContext(Dispatchers.IO) {
+        require(packets > 0 && packetBytes in LEGACY_MIN_PACKET_BYTES..MAX_PACKET_BYTES && ratePerSecond in 1..200)
+        execute(serverBase, null, packets, packetBytes, ratePerSecond)
+    }
+
+    private suspend fun execute(
+        serverBase: String,
+        runId: String?,
+        packets: Int,
+        packetBytes: Int,
+        ratePerSecond: Int,
+    ): NetworkUdpProbeResult {
+        val uri = URI(serverBase)
+        val host = requireNotNull(uri.host) { "udp_host_missing" }
+        val address = resolve(host)
+        val socket = DatagramSocket(null)
+        return try {
+            bound?.network?.bindSocket(socket)
+            socket.bind(InetSocketAddress(0))
+            socket.connect(InetSocketAddress(address, UDP_PORT))
+            socket.soTimeout = RECEIVE_POLL_MS
+            exchange(socket, runId, packets, packetBytes, ratePerSecond)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            NetworkUdpProbeResult(0, emptyList(), emptyList(), "${e.javaClass.simpleName}:${e.message.orEmpty()}")
+        } finally {
+            socket.close()
+        }
+    }
 
     private suspend fun exchange(
         socket: DatagramSocket,
+        runId: String?,
         packets: Int,
         packetBytes: Int,
         ratePerSecond: Int,
@@ -66,9 +95,15 @@ class NetworkUdpProbe(private val bound: BoundNetwork?) {
                 try {
                     val datagram = DatagramPacket(buffer, buffer.size)
                     socket.receive(datagram)
-                    val decoded = NetworkUdpPacket.decode(datagram.data, datagram.length) ?: continue
-                    val sent = sentAt[decoded.seq] ?: continue
-                    received.add(decoded.seq)
+                    val seq = if (runId == null) {
+                        NetworkUdpPacket.decodeLegacy(datagram.data, datagram.length)?.seq
+                    } else {
+                        NetworkUdpPacket.decode(datagram.data, datagram.length)
+                            ?.takeIf { it.runId == runId }
+                            ?.seq
+                    } ?: continue
+                    val sent = sentAt[seq] ?: continue
+                    received.add(seq)
                     rtts.add((SystemClock.elapsedRealtimeNanos() - sent) / 1e6)
                 } catch (_: SocketTimeoutException) {
                     // Periodic cancellation/deadline check.
@@ -83,7 +118,11 @@ class NetworkUdpProbe(private val bound: BoundNetwork?) {
         try {
             repeat(packets) { seq ->
                 val at = SystemClock.elapsedRealtimeNanos()
-                val bytes = NetworkUdpPacket.encode(seq, at, packetBytes)
+                val bytes = if (runId == null) {
+                    NetworkUdpPacket.encodeLegacy(seq, at, packetBytes)
+                } else {
+                    NetworkUdpPacket.encode(runId, seq, at, packetBytes)
+                }
                 sentAt[seq] = at
                 socket.send(DatagramPacket(bytes, bytes.size))
                 sent++
@@ -108,7 +147,8 @@ class NetworkUdpProbe(private val bound: BoundNetwork?) {
 
     companion object {
         const val UDP_PORT = 8443
-        private const val MIN_PACKET_BYTES = 17
+        private const val LEGACY_MIN_PACKET_BYTES = 17
+        private const val MIN_PACKET_BYTES = 33
         private const val MAX_PACKET_BYTES = 512
         private const val RECEIVE_POLL_MS = 200
         private const val RECEIVE_GRACE_MS = 1_500L
@@ -116,14 +156,16 @@ class NetworkUdpProbe(private val bound: BoundNetwork?) {
 }
 
 internal object NetworkUdpPacket {
-    private val magic = byteArrayOf('A'.code.toByte(), 'N'.code.toByte(), 'E'.code.toByte(), 'B'.code.toByte(), '1'.code.toByte())
+    private val magic = byteArrayOf('A'.code.toByte(), 'N'.code.toByte(), 'E'.code.toByte(), 'B'.code.toByte(), '2'.code.toByte())
+    private val legacyMagic = byteArrayOf('A'.code.toByte(), 'N'.code.toByte(), 'E'.code.toByte(), 'B'.code.toByte(), '1'.code.toByte())
 
-    data class Decoded(val seq: Int, val sentAtNanos: Long)
+    data class Decoded(val runId: String, val seq: Int, val sentAtNanos: Long)
+    data class LegacyDecoded(val seq: Int, val sentAtNanos: Long)
 
-    fun encode(seq: Int, sentAtNanos: Long, size: Int): ByteArray {
+    fun encodeLegacy(seq: Int, sentAtNanos: Long, size: Int): ByteArray {
         require(size >= 17)
         val bytes = ByteArray(size) { index -> ((seq * 31 + index * 17) and 0xff).toByte() }
-        magic.copyInto(bytes)
+        legacyMagic.copyInto(bytes)
         ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).apply {
             position(5)
             putInt(seq)
@@ -132,10 +174,33 @@ internal object NetworkUdpPacket {
         return bytes
     }
 
+    fun encode(runId: String, seq: Int, sentAtNanos: Long, size: Int): ByteArray {
+        require(size >= 33)
+        val runUuid = UUID.fromString(runId)
+        val bytes = ByteArray(size) { index -> ((seq * 31 + index * 17) and 0xff).toByte() }
+        magic.copyInto(bytes)
+        ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).apply {
+            position(5)
+            putLong(runUuid.mostSignificantBits)
+            putLong(runUuid.leastSignificantBits)
+            putInt(seq)
+            putLong(sentAtNanos)
+        }
+        return bytes
+    }
+
     fun decode(bytes: ByteArray, length: Int): Decoded? {
-        if (length < 17 || magic.indices.any { bytes[it] != magic[it] }) return null
+        if (length < 33 || magic.indices.any { bytes[it] != magic[it] }) return null
+        return ByteBuffer.wrap(bytes, 5, 28).order(ByteOrder.BIG_ENDIAN).let {
+            val runId = UUID(it.long, it.long).toString()
+            Decoded(runId, it.int, it.long)
+        }
+    }
+
+    fun decodeLegacy(bytes: ByteArray, length: Int): LegacyDecoded? {
+        if (length < 17 || legacyMagic.indices.any { bytes[it] != legacyMagic[it] }) return null
         return ByteBuffer.wrap(bytes, 5, 12).order(ByteOrder.BIG_ENDIAN).let {
-            Decoded(it.int, it.long)
+            LegacyDecoded(it.int, it.long)
         }
     }
 }

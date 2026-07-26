@@ -17,6 +17,8 @@ internal data class NetworkResultEnvelopeSource(
     val profile: ScenarioProfile?,
     val profileHash: String? = null,
     val profileUri: String? = null,
+    val runtimeArtifactHash: String? = null,
+    val runtimeAssetUri: String? = null,
 )
 
 internal data class NetworkResultEnvelopeInput(
@@ -43,6 +45,8 @@ internal object NetworkResultEnvelopeV2 {
             ?: "measurement_engine_invalid_result".takeIf { result.verdict == TokenVerdict.INVALID }
         val valid = invalidReason == null
         val profileResolved = profile != null && input.source.profileHash.isSha256Digest() && input.source.profileUri != null
+        val runtimeRequired = profile?.executionPlan != null
+        val runtimeResolved = input.source.runtimeArtifactHash.isSha256Digest() && input.source.runtimeAssetUri != null
         val missingFields = buildList {
             add("/context/endpoint/node_id")
             add("/context/endpoint/server_version")
@@ -57,15 +61,25 @@ internal object NetworkResultEnvelopeV2 {
             add("/context/network/bound_network_generation")
             if (!profileResolved) {
                 add("/profile")
-                add("/profile/runtime_artifact_hash")
             }
+            if (runtimeRequired && !runtimeResolved) add("/profile/runtime_artifact_hash")
         }.distinct().sorted()
         val definitions = profile?.measurements?.associateBy { it.metricId }.orEmpty()
         val evidenceRefs = buildJsonArray {
             if (profileResolved) {
                 add(artifactEvidenceRef(
+                    refId = "profile-artifact",
                     uri = requireNotNull(input.source.profileUri),
                     digest = requireNotNull(input.source.profileHash),
+                    description = "Canonical network-comprehensive Profile parsed for this run.",
+                ))
+            }
+            if (runtimeResolved) {
+                add(artifactEvidenceRef(
+                    refId = "runtime-artifact",
+                    uri = requireNotNull(input.source.runtimeAssetUri),
+                    digest = requireNotNull(input.source.runtimeArtifactHash),
+                    description = "Canonical network-comprehensive runtime plan verified for this run.",
                 ))
             }
             add(buildJsonObject {
@@ -97,7 +111,11 @@ internal object NetworkResultEnvelopeV2 {
                 put("missing_fields", JsonArray(missingFields.map(::JsonPrimitive)))
                 put("notes", buildJsonArray {
                     add(JsonPrimitive("Only context observed by the formal network-comprehensive engine is included; absent fields were not reconstructed."))
-                    add(JsonPrimitive("Network Profiles contain executable phases directly, so a separate runtime artifact is not applicable."))
+                    add(JsonPrimitive(
+                        if (runtimeRequired)
+                            "The Network Quick runtime artifact was independently manifest-bound to the Profile before execution."
+                        else "This legacy Network Profile contains executable phases directly; a separate runtime artifact is not applicable.",
+                    ))
                     add(JsonPrimitive(
                         if (input.radio.collectionStatus == "collected")
                             "Public Android radio observations were sampled at 1Hz; coordinates are excluded from this shareable result."
@@ -334,21 +352,33 @@ internal object NetworkResultEnvelopeV2 {
         put("variant", result.variant)
         put("profile_fingerprint", digestJson(source.profileHash, resolved, "canonical-json-v1"))
         put("profile_evidence_ref_id", if (resolved) "profile-artifact" else null)
-        put("runtime_artifact_status", if (resolved) "not_applicable" else "unavailable")
-        put("runtime_artifact_hash", JsonNull)
-        put("runtime_artifact_evidence_ref_id", JsonNull)
+        val runtimeRequired = source.profile?.executionPlan != null
+        val runtimeResolved = source.runtimeArtifactHash.isSha256Digest() && source.runtimeAssetUri != null
+        put("runtime_artifact_status", when {
+            runtimeResolved -> "resolved"
+            runtimeRequired -> "unavailable"
+            resolved -> "not_applicable"
+            else -> "unavailable"
+        })
+        put("runtime_artifact_hash", digestJson(source.runtimeArtifactHash, runtimeResolved, "canonical-json-v1"))
+        put("runtime_artifact_evidence_ref_id", if (runtimeResolved) "runtime-artifact" else null)
         put("source_uri", source.profileUri.takeIf { resolved })
     }
 
-    private fun artifactEvidenceRef(uri: String, digest: String): JsonObject = buildJsonObject {
-        put("ref_id", "profile-artifact")
+    private fun artifactEvidenceRef(
+        refId: String,
+        uri: String,
+        digest: String,
+        description: String,
+    ): JsonObject = buildJsonObject {
+        put("ref_id", refId)
         put("kind", "content_addressed_artifact")
         put("uri", uri)
         put("media_type", "application/json")
         put("digest", digestJson(digest, true, "canonical-json-v1"))
         put("record_count", 1)
         put("redaction", "none")
-        put("description", "Canonical network-comprehensive Profile parsed for this run.")
+        put("description", description)
     }
 
     private fun deviceContext(device: AnebResultDeviceContext): JsonObject = buildJsonObject {

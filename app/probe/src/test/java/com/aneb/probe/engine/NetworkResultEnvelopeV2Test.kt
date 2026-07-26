@@ -78,6 +78,50 @@ class NetworkResultEnvelopeV2Test {
             .any { it.jsonPrimitive.content == "/context/radio" })
     }
 
+    @Test fun quickRuntimeArtifactIsFrozenAsContentAddressedEvidence() {
+        val quickProfile = profile(listOf("NET-B01")).copy(
+            version = "1.2.0",
+            executionPlan = ProfileExecutionPlan(
+                contractVersion = "aneb-network-runtime-plan-v1",
+                artifact = "runtime_plan.json",
+                artifactHash = DIGEST_B,
+                seed = 20260727,
+                variant = "quick",
+            ),
+        )
+        val envelope = NetworkResultEnvelopeV2.build(
+            input(
+                result(metrics = emptyMap(), evidenceJson = completeEvidenceJson()),
+                NetworkResultEnvelopeSource(
+                    profile = quickProfile,
+                    profileHash = DIGEST_A,
+                    profileUri = "asset:///published/network_comprehensive_quick/profile.json",
+                    runtimeArtifactHash = DIGEST_B,
+                    runtimeAssetUri = "asset:///published/network_comprehensive_quick/runtime_plan.json",
+                ),
+            ),
+        )
+        val root = Json.parseToJsonElement(envelope.bodyJson).jsonObject
+        val profileRef = root.getValue("profile").jsonObject
+
+        assertEquals("resolved", profileRef.getValue("runtime_artifact_status").jsonPrimitive.content)
+        assertEquals("runtime-artifact", profileRef.getValue("runtime_artifact_evidence_ref_id").jsonPrimitive.content)
+        assertEquals(
+            DIGEST_B,
+            profileRef.getValue("runtime_artifact_hash").jsonObject.getValue("value").jsonPrimitive.content,
+        )
+        assertTrue(
+            root.getValue("evidence").jsonObject.getValue("refs").jsonArray.any {
+                it.jsonObject.getValue("ref_id").jsonPrimitive.content == "runtime-artifact"
+            },
+        )
+        assertTrue(
+            root.getValue("completeness").jsonObject.getValue("missing_fields").jsonArray.none {
+                it.jsonPrimitive.content == "/profile/runtime_artifact_hash"
+            },
+        )
+    }
+
     @Test fun preflightFailureRetainsOriginalContextAndSuppressesScore() {
         val failed = result(
             status = "invalid",
@@ -224,5 +268,6 @@ class NetworkResultEnvelopeV2Test {
 
     private companion object {
         const val DIGEST_A = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        const val DIGEST_B = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
 }

@@ -9,18 +9,18 @@
 
 | 单元 | 仓库候选版本 | 对目录资产的职责 |
 |---|---:|---|
-| P1 / ANEB Probe Android | 0.5.13（code 45，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token/AI 实时运行包执行合同与跨语言规范化哈希校验；Token Quick 与 AI realtime Quick 均在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏、分族审计 ID；Room 版本、指标、门限和评分均不变 |
-| P2 / aneb-server | 0.8.1 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token Quick 与 AI realtime Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；0.8.1 是 M0-EC2 离线候选，E-01 是否切换必须由受保护部署和验后证据确认 |
+| P1 / ANEB Probe Android | 0.5.14（code 46，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token、AI 实时和 Network Quick 运行包执行合同与跨语言规范化哈希校验；三种 Quick 均在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏、分族审计 ID；Room 版本、指标、门限和评分均不变 |
+| P2 / aneb-server | 0.8.2 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token、AI realtime 与 Network Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；0.8.2 是 M0-EC3 离线候选，E-01 是否切换必须由受保护部署和验后证据确认 |
 | P3 / aneb-ai-behavior-model | 0.3.2 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；Token Quick 与 AI realtime Quick 均生成带运行计划和受限执行要求的 v2 发布包；保留绑定留出报告的 validated 门禁 |
-| Profile 横切机制 | 1.6.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token Quick request-entry 计数与 AI realtime Quick 协议签名证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
+| Profile 横切机制 | 1.8.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token request-entry、AI realtime 协议签名和 Network Quick 执行协议证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
-［KNOWN｜HIGH］M0-EC1/M0-EC2 为 `token_multimodal_quick@1.2.1` 与
-`ai_realtime_voice_quick@1.1.1` 接通执行能力握手；其余 10 个 Published Profile 没有
+［KNOWN｜HIGH］M0-EC1/M0-EC2/M0-EC3 为 `token_multimodal_quick@1.2.1`、
+`ai_realtime_voice_quick@1.1.1` 与 `network_comprehensive_quick@1.2.0` 接通执行能力握手；其余 9 个 Published Profile 没有
 `execution_requirements`，继续走原有兼容路径。任何不兼容字段或语义变化
 仍必须先升级 catalog/contract 主版本，再升级消费者。
 
-## 两族 Profile 与两条 v2 校验路径
+## 两族 Profile 与三条 v2 校验路径
 
 ### 1. 服务端根 Profile
 
@@ -40,10 +40,10 @@
 | v2 校验组 | 数量 | mode | 运行资产策略 |
 |---|---:|---|---|
 | `behavior_runtime_bound` | 6 | Token 3 + AI realtime 3 | 必须同目录包含 `profile.json`、`runtime_plan.json`、`manifest.sha256`；模型、seed、variant、runtime contract 和规范化哈希必须交叉一致 |
-| `network_embedded_phases` | 6 | network comprehensive | phases 全部内嵌在 `profile.json`；禁止 `execution_plan`、`behavior_trace`、`runtime_plan.json` 和 `manifest.sha256` |
+| `network_runtime_bound` | 1 | Network Quick | 必须同目录包含三件套；无行为模型，但必须冻结 deterministic runtime plan、四项受限原语、seed、variant 和规范化哈希 |
+| `network_embedded_phases` | 5 | 其余 network comprehensive | phases 全部内嵌在 `profile.json`；禁止 `execution_plan`、`behavior_trace`、`runtime_plan.json` 和 `manifest.sha256` |
 
-网络综合 Profile 没有外部行为模型运行计划，因此给它补一个空 manifest 会制造错误的完整性
-语义。反过来，Token/AI realtime 如果缺 manifest，P1 就无法证明 Profile 与运行计划绑定，必须
+Network Quick 的运行计划是确定性测量编排，不是 AI 行为模型；其余网络综合 Profile 仍没有独立运行计划，给它们补空 manifest 会制造错误的完整性语义。反过来，任何 runtime-bound Profile 如果缺 manifest，P1 就无法证明 Profile 与运行计划绑定，必须
 fail closed。
 
 ## Token Quick 执行能力握手（M0-EC1）
@@ -76,6 +76,18 @@ fail closed。
   身份/摘要漂移。服务端审计判定器只从该合同读取计数，缺失或畸形时 fail closed。
 - ［KNOWN｜HIGH］request-entry 计数只证明请求进入服务端审计边界，不证明响应成功、客户端接收或评分；
   正式结论仍须和同 run 客户端冻结结果及 D-82 原始来源/新鲜度证据组合。
+
+## Network Quick 执行与 request-entry 证据合同
+
+- ［KNOWN｜HIGH］`spec/execution-contracts/network_comprehensive_quick-1.2.0.protocol.json`
+  冻结 `aneb-network-quick-protocol-bounds@1.0.0`：Profile/runtime 摘要、P1 Engine 身份、
+  四个业务原语和 `aneb-udp-echo-v2` 线协议必须同时匹配。
+- ［KNOWN｜HIGH］正向服务端窗口要求 capability 先于业务；HTTP 至少进入 18 次 echo、4 次
+  download、2 次 upload，UDP 必须恰好进入 50 个 256-byte 数据报且序号为 0..49。负向窗口
+  只允许 capability control，全部 HTTP/UDP 业务为零。
+- ［KNOWN｜HIGH］HTTP 与 UDP 共用进程级审计实例、FIFO 序号和 drop 可见性；旧 `ANEB1` 只保留
+  无归属回显兼容，不能成为 Network Quick 同-run 证据。判定仍只证明 request entry，必须与冻结
+  Room 结果、APK/E-01 provenance 共同使用，应用数据报未返回不得表述为 IP 层丢包。
 
 ## 哈希合同
 
@@ -129,7 +141,7 @@ catalog 校验器只使用 Python 标准库；结果 Schema/JSONL 校验器使�
 - 引用缺失、越出仓库、ID/版本不一致、重复 Profile ID 时失败；
 - Schema、模型、根 Profile、published Profile、runtime plan 或 manifest 有未索引文件时失败；
 - Token/AI realtime 的 runtime contract、模型、seed、variant、条目计数或语义哈希不一致时失败；
-- Network Profile 声明或出现 runtime manifest 时失败；
+- Network Quick 的 deterministic runtime contract、seed、variant、阶段、四项原语或语义哈希不一致时失败；其余 Network Profile 声明 runtime manifest 时失败；
 - catalog 出现当前校验器不认识的字段时失败，要求先同步升级校验器。
 
 catalog 校验器负责目录完整性、交叉引用和当前合同不变量；`verify_result_schema.py` 使用
@@ -140,7 +152,7 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 ## 版本化结果合同当前接线状态
 
 - ［KNOWN｜HIGH］Token、AI 实时和网络综合的新 run 均在 Room v19 中把类型化结果与统一结果信封同事务落库；
-  Profile/运行计划指纹（网络综合为不适用）、评分审计字段与原始证据在引擎最终化时冻结。
+  Profile/运行计划指纹（Network Quick 适用，其余网络综合为不适用）、评分审计字段与原始证据在引擎最终化时冻结。
 - ［KNOWN｜HIGH］App 0.5.8 的三类新 run 统一发出 `aneb-result-v2`；v1 兼容验证器保留已发布历史，v2 对 Token 任务对齐字段执行严格必填。共享核心没有公开版本身份，App 不得发出它。
 - ［KNOWN｜HIGH］JSONL 核心按开始时间/run id 确定排序，支持 v1/v2，核验 run/test/schema 身份和规范化 SHA-256 后原样输出 `bodyJson`，不解析重算；未来版本暂不支持与摘要/身份异常使用不同错误类型和用户提示。
 - ［KNOWN｜HIGH］三类结果页均可将单条冻结信封保存为 JSONL 或以文件分享；旧记录没有信封时明确禁用，不做历史补算。
@@ -159,6 +171,6 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 
 1. 先判断是已有原语内的 Profile 变体，还是新增 phase/测量语义；后者必须先升级合同和消费者。
 2. 发布即冻结；修改既有正式 Profile 必须升级 `version`。
-3. Token/AI realtime 必须生成完整三件套并重算规范化 manifest；Network 必须保持单文件内嵌 phases。
+3. Token/AI realtime 与 Network Quick 必须生成完整三件套并重算规范化 manifest；其余 Network Profile 必须保持单文件内嵌 phases。
 4. 在 `catalog.json` 登记 ID、版本、路径、验证组与消费者；禁止只把文件丢进目录。
 5. 串行通过 catalog 校验、P3 测试、P1 integrity/capability 测试和 P2 对应原语测试后再发布。

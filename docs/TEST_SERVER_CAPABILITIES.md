@@ -7,23 +7,30 @@
 | 项目 | 当前合同 |
 |---|---|
 | 节点 | E-01，深圳，公网 `120.79.148.0:8443` |
-| 服务端 | `aneb-server/0.8.0`，Linux/amd64 |
+| 服务端 | `aneb-server/0.8.1`，Linux/amd64 |
 | 主通道 | `https://120.79.148.0:8443`；项目 App 使用自有 IP-SAN 信任锚 |
 | SNI 通道 | `https://120-79-148-0.sslip.io:8443`；部分蜂窝网络已观察到 SNI-keyed RST，只用于 REACH 对照，不作为强制主通道 |
-| 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针 |
+| 协议 | TCP/TLS（HTTP/1.1、HTTP/2）+ UDP/8443 HTTP/3 + 同端口 `ANEB1` 带序号 UDP 应用探针；`ANEB2` 仅存在于尚未部署的 0.8.2 候选 |
 | 服务隔离 | systemd 用户 `aneb`；`MemoryMax=384M`、`CPUQuota=120%`、`TasksMax=256` |
 | 部署所有权 | **仅 Codex 部署**。Claude 提交需求或补丁，但不直接改 E-01，避免共享资源互相覆盖 |
-| 最近验证 | ［KNOWN｜HIGH］2026-07-19 CST；受 `/run/lock/aneb-deploy.lock` 保护的 0.7.0→0.8.0 切换完成，E-01 当前为 0.8.0/`active`，MainPID=`25911`；live binary=`fad6fdd53ebb73c63b2bf3b9f03106f1348626853cb344d72c3f6d08511fdce7`，来源 commit=`49095c0314ac3900b6ed0c306d2eeaafc2edd87f`，部署证据 ID=`20260719044556-5090b2edb9004930acc86149847db4ff`。锁内验后 fingerprint：qdisc=`e9455ff1a3a44f3b5979ee068f8c4e3fe90aa0ebdd30e89add8299403958cbac`，firewall full=`08e3d3dfeb9f3e4ddc69ba440c5af7697536b0d45c3016068b33cb9d36ab75dd`，v4=`66b46a501b972e9b8d3d7fa0ab38e9e2b0fb24f5e521f4c5ca11ef60a53a0100`，v6=`192a359dda179d478c0e99eb3b0817894794ce62495afd489ed12a5e433c395e`，nft=`dd5369267b8eb08ddfdfde3a0e1c57f034951d608c45ac1409ccdafc77024657`，Docker=`b2e8249213709dfa6d8e735940b2a51ab6d5d782eabf2995e5e45d71404dad7d`；全部与切换前一致，staging/watchdog/owned-path 残留均为 0。原部署进程在 success 终态证据已提交后因 transient watchdog collect/stop 竞态返回 rc=99；该退出码不得改写为 0，也不等于 P40/M0-EC1 正向验收完成。 |
+| 最近验证 | ［KNOWN｜HIGH］2026-07-26 CST；受保护只读 Preflight 与 Phase 0 卸载后 clean-host 复核均确认 E-01 为 `aneb-server/0.8.1`、`active`、H3=true，live binary SHA-256=`43e7dc1696f08ec3c460fe094f021274d54492612a910aee0c2db98c39445197`；Phase 0 owned WG/IFB/专用链/路径残留为 0。该证据不表示下述 0.8.2 候选已部署。 |
 
 > ［KNOWN｜HIGH］2026-07-18 的 0.7.0 六项指纹仍是本次切换前冻结的历史回滚基线；当时的
 > 自动状态释放流程已经退役，不构成当前操作授权。当前规则见 D-80 和下述切换门禁。
 
-［KNOWN｜HIGH］当前 0.8 合同要求所有 HTTP 响应带 `X-Aneb-Server: aneb-server/0.8.0`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
+［KNOWN｜HIGH］当前部署要求所有 HTTP 响应带 `X-Aneb-Server: aneb-server/0.8.1`。`GET /api/v1/serverinfo` 的 `h3_enabled=true` 只表示服务端启用了 H3；某次请求是否真的走 H3，必须看该次协商记录/`X-Aneb-Proto`，不得推断。
 
-### 1.1 `aneb-server/0.8.0` 已部署执行能力（**P40 跨端验收待完成**）
+### 1.1 `aneb-server/0.8.2` M0-EC3 候选（尚未部署）
 
-> ［KNOWN｜HIGH］E-01 当前是 `aneb-server/0.8.0`，精确身份见上表。本小节说明已部署服务端
-> 能力及后续验收门禁；公网 smoke 和锁内验后检查不等于 P40 正向 run 已完成。
+- ［KNOWN｜HIGH］0.8.2 候选把 `network_comprehensive_quick@1.2.0` 加入第三个精确校验的运行包；Profile 规范化 SHA-256 为 `15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc`，runtime plan 规范化 SHA-256 为 `8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603`。
+- ［KNOWN｜HIGH］候选能力回执新增 `upload/aneb-upload-v1` 与 `udp_echo/aneb-udp-echo-v2`；Network Quick 要求 `download`、`echo`、`upload`、`udp_echo` 四项原语全部精确匹配，并在首个业务请求前完成 P1/P2/Profile 对账。
+- ［KNOWN｜HIGH］`ANEB2` UDP 数据报固定绑定当前 run UUID、序号和发送时间；服务端只做同长度原样回显，不提供任意转发，也不放大流量。0.8.2 保留接收 `ANEB1` 仅用于旧客户端兼容，但 0.5.14 Network Quick 只发送并接受同 run 的 `ANEB2`。
+- ［KNOWN｜HIGH］候选服务启动时若发布 Network Quick，TCP 与 UDP 必须配置为相同端口；生产仍固定 8443，loopback staged candidate 可使用同一个随机 TCP/UDP 端口。UDP 缺失或端口不一致时服务拒绝启动。
+- ［KNOWN｜HIGH］部署必须从当前精确 0.8.1 基线受保护切换，并在锁内验证三份运行包、六项能力、HTTP/UDP smoke、共享主机指纹和完整 0.8.1 回滚面。完成受保护部署前，不得把本文候选能力写成 E-01 当前能力。
+
+### 1.2 `aneb-server/0.8.0` 历史部署记录
+
+> ［KNOWN｜HIGH］本小节保留 2026-07-19 的 0.8.0 历史切换证据，不描述当前 E-01 现态；当前现态以上表 0.8.1 为准。
 
 > ［KNOWN｜HIGH］2026-07-18 首次 0.8.0 切换尝试中，候选能力回执和全量旧端点 smoke
 > 均通过；旧部署器随后因把 `iptables-save`/`ip6tables-save` 每次运行产生的

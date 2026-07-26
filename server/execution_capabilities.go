@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,10 +27,14 @@ const (
 	tokenClientEngineContractVersion     = "1.0.0"
 	realtimeClientEngineContractID       = "aneb-realtime-simulation-engine"
 	realtimeClientEngineContractVersion  = "1.0.0"
+	networkClientEngineContractID        = "aneb-network-comprehensive-engine"
+	networkClientEngineContractVersion   = "1.0.0"
 	serverCapabilityReceiptContractID    = "aneb-server-capability-receipt"
 	serverCapabilityReceiptVersion       = "1.0.0"
 	echoWireContractID                   = "aneb-echo-v1"
 	downloadWireContractID               = "aneb-download-v1"
+	uploadWireContractID                 = "aneb-upload-v1"
+	udpEchoWireContractID                = "aneb-udp-echo-v2"
 	realtimeWireContractID               = "aneb-realtime-session-v1"
 	tokenQuickExecutionProfileID         = "token_multimodal_quick"
 	tokenQuickExecutionProfileVersion    = "1.2.1"
@@ -37,6 +42,9 @@ const (
 	realtimeQuickExecutionProfileID      = "ai_realtime_voice_quick"
 	realtimeQuickExecutionProfileVersion = "1.1.1"
 	realtimeQuickExecutionModeID         = "ai_realtime_simulation"
+	networkQuickExecutionProfileID       = "network_comprehensive_quick"
+	networkQuickExecutionProfileVersion  = "1.2.0"
+	networkQuickExecutionModeID          = "network_comprehensive"
 	probeSimulatorExecutionTarget        = "aneb_probe_simulator"
 	probeNodeClaimScope                  = "application_end_to_end_to_probe_node"
 )
@@ -96,6 +104,20 @@ type executionProfilePolicy struct {
 }
 
 var executionProfilePolicies = map[string]executionProfilePolicy{
+	networkQuickExecutionProfileID: {
+		ProfileID:      networkQuickExecutionProfileID,
+		ProfileVersion: networkQuickExecutionProfileVersion,
+		ModeID:         networkQuickExecutionModeID,
+		ContractName:   "Network Comprehensive Quick",
+		ClientEngineID: networkClientEngineContractID,
+		ClientEngine:   networkClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"download": downloadWireContractID,
+			"echo":     echoWireContractID,
+			"udp_echo": udpEchoWireContractID,
+			"upload":   uploadWireContractID,
+		},
+	},
 	realtimeQuickExecutionProfileID: {
 		ProfileID:      realtimeQuickExecutionProfileID,
 		ProfileVersion: realtimeQuickExecutionProfileVersion,
@@ -128,6 +150,8 @@ func builtInExecutionPrimitives() []executionPrimitiveCapability {
 		{PrimitiveID: "echo", WireContractID: echoWireContractID},
 		{PrimitiveID: "realtime_sim", WireContractID: realtimeWireContractID},
 		{PrimitiveID: "token_sim", WireContractID: tokenSimTaskContract},
+		{PrimitiveID: "udp_echo", WireContractID: udpEchoWireContractID},
+		{PrimitiveID: "upload", WireContractID: uploadWireContractID},
 	}
 }
 
@@ -138,6 +162,34 @@ func baseServerCapabilityReceipt() serverCapabilityReceipt {
 		Primitives:        builtInExecutionPrimitives(),
 		ValidatedProfiles: []validatedExecutionProfile{},
 	}
+}
+
+func validateExecutionRuntimeConfig(receipt serverCapabilityReceipt, httpAddr, udpEchoAddr string) error {
+	requiresNetwork := false
+	for _, profile := range receipt.ValidatedProfiles {
+		if profile.ProfileID == networkQuickExecutionProfileID {
+			requiresNetwork = true
+			break
+		}
+	}
+	if !requiresNetwork {
+		return nil
+	}
+	if udpEchoAddr == "" {
+		return fmt.Errorf("Network Comprehensive Quick requires UDP echo but udp echo is disabled")
+	}
+	_, httpPort, err := net.SplitHostPort(httpAddr)
+	if err != nil {
+		return fmt.Errorf("invalid HTTP listen address %q: %w", httpAddr, err)
+	}
+	_, udpPort, err := net.SplitHostPort(udpEchoAddr)
+	if err != nil {
+		return fmt.Errorf("invalid UDP echo address %q: %w", udpEchoAddr, err)
+	}
+	if httpPort != udpPort {
+		return fmt.Errorf("Network Comprehensive Quick requires matching TCP and UDP ports, got TCP %s and UDP %s", httpPort, udpPort)
+	}
+	return nil
 }
 
 // loadExecutionCapabilityReceipt validates every published profile that opts in to

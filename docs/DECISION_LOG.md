@@ -115,6 +115,10 @@
 > ［KNOWN｜HIGH］D-73、D-74 与 D-77 仅保留 2026-07-18 的历史决策链，均已被 D-80 superseded；
 > 其中的状态领取、lease、待交接、异常锁定和自动释放要求不得继续执行。
 
+| D-90 | 2026-07-27 | **Network Quick 1.2.0 的 UDP 应用探针升级为 `aneb-udp-echo-v2`，每个数据报冻结当前 run UUID、序号和单调发送时间；服务端 0.8.2 精确声明 v2，同时仅为旧客户端兼容继续回显合法 `ANEB1` 报文。** v2 布局固定为 `ANEB2`（5 bytes）+ RFC 4122 UUID（16 bytes）+ big-endian sequence（4 bytes）+ monotonic timestamp（8 bytes）+ 有界填充，最小 33 bytes、最大 512 bytes；服务端只原样回显且不放大。客户端必须拒绝非本 run UUID 的回包。该变更只增强 Network Quick 同-run 归属，不改变 NET-B10/NET-B11 的“应用数据报未返回/乱序”口径，不得写成 IP 层丢包。旧 Profile 评分、门限、权重和历史结果不重算。 | Product Owner 已授权按推荐方案自主推进各阶段；M0-EC3 scope；Network Quick 1.2.0 runtime/evidence contract；P1/P2 UDP packet tests |
+
+| D-91 | 2026-07-27 | **Network Quick 的 `aneb-udp-echo-v2` 服务端接收必须在回显前进入与 HTTP 相同的有界 request-entry 审计 FIFO；每条 UDP 审计冻结 `network_run`、规范 run UUID、数据报序号和字节数。** 独立 UDP 监听与 H3 共端口过滤路径使用同一进程 `instance_id/seq`；合法旧 `ANEB1` 只做无归属兼容回显，不得进入 Network Quick 同-run 计数。正向判定要求唯一 capability 在业务前、HTTP 至少 18 echo/4 download/2 upload、UDP 恰好 50 条且序号为 0..49、每条 256 bytes；负向允许 capability control，但所有 HTTP/UDP 业务均为零。任一 drop、序号缺口、进程实例变化、并发窗口、未归属业务、目标窗口外记录或合同摘要漂移均 fail closed。该证据只证明请求/数据报进入服务端审计边界，不证明回显已被客户端接收，也不把应用数据报未返回写成 IP 丢包；必须与同 run 的冻结 Room 结果及节点/APK provenance 联合。此项不改变 KPI、AQS、T4、门限、权重、Room schema 或 `null` 语义。 | D-81/D-90；`server/udp_echo.go`；`server/request_audit.go`；`scripts/verify_network_quick_run_audit.py`；UDP dedicated/shared integration tests |
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

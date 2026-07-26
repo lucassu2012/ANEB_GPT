@@ -44,6 +44,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -154,10 +157,74 @@ data class BasicSpeedResult(
     val gatewayDownlinkLossPct: Double? = null,
 )
 
+internal fun buildFailedNetworkComprehensiveResult(
+    runId: String,
+    startedAtEpochMs: Long,
+    serverBase: String,
+    variant: String,
+    reasonCode: String,
+    profile: ScenarioProfile? = null,
+): BasicSpeedResult = BasicSpeedResult(
+    runId = runId,
+    startedAtEpochMs = startedAtEpochMs,
+    serverBase = serverBase,
+    claimScope = profile?.claimScope ?: NetworkSpeedEngine.CLAIM_SCOPE,
+    profileId = profile?.profileId ?: "network_comprehensive_$variant",
+    profileVersion = profile?.version ?: "unknown",
+    variant = variant,
+    scorePolicyId = profile?.evaluation?.scorePolicyId ?: NetworkSpeedEngine.SCORE_POLICY,
+    scoreAnchorPolicyId = profile?.evaluation?.scoreAnchorPolicyId ?: NetworkSpeedEngine.SCORE_ANCHOR_POLICY,
+    conclusionPolicyId = profile?.evaluation?.conclusionPolicyId ?: NetworkSpeedEngine.CONCLUSION_POLICY,
+    status = "invalid",
+    totalScore = null,
+    grade = null,
+    verdict = TokenVerdict.INVALID,
+    confidence = TokenConfidence.INVALID,
+    downloadMbps = null,
+    uploadMbps = null,
+    pingMs = null,
+    loadedRttMs = null,
+    latencyDeltaMs = null,
+    jitterMs = null,
+    requestLossRate = null,
+    throughputRobustCv = null,
+    udpNonReturnRate = null,
+    postLoadPingMs = null,
+    downloadBytes = 0L,
+    uploadBytes = 0L,
+    transferErrors = listOf(reasonCode),
+    metrics = emptyMap(),
+    groupScores = emptyMap(),
+    conclusions = listOf("测试未完成：$reasonCode"),
+    conclusionItems = listOf(
+        AnebConclusionItem(
+            "network-invalid-evidence",
+            AnebConclusionSeverity.FAILURE,
+            "测试未完成：$reasonCode",
+            listOf("evidence:network-raw", "invalid_reason:$reasonCode"),
+        ),
+    ),
+    evidenceJson = buildJsonObject { put("invalid_reason", reasonCode) }.toString(),
+    notComputableReason = reasonCode,
+)
+
 private data class LoadedNetworkProfile(
     val profile: ScenarioProfile,
     val profileHash: String,
     val profileAssetUri: String,
+    val runtimeArtifactHash: String? = null,
+    val runtimeAssetUri: String? = null,
+)
+
+@Serializable
+private data class NetworkRuntimePlan(
+    @SerialName("contract_version") val contractVersion: String,
+    @SerialName("profile_id") val profileId: String,
+    @SerialName("profile_version") val profileVersion: String,
+    val seed: Long,
+    val phases: List<ProfilePhase>,
+    val claim: String,
+    val variant: String,
 )
 
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
@@ -165,7 +232,8 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery", "gateway_loss", "gateway_recovery")) {
             "unsupported_network_variant:$variant"
         }
-        val path = "published/network_comprehensive_$variant/profile.json"
+        val base = "published/network_comprehensive_$variant"
+        val path = "$base/profile.json"
         val text = context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
         val profile = ProfileParser.parseSingle(text)
         val assessment = ProfileCapability.assess(profile)
@@ -185,10 +253,36 @@ private class NetworkComprehensiveProfileRepository(private val context: Context
         require((profile.gatewayImpairment != null) == (variant in setOf("gateway_loss", "gateway_recovery"))) {
             "network_profile_gateway_mismatch"
         }
+        var runtimeArtifactHash: String? = null
+        var runtimeAssetUri: String? = null
+        profile.executionPlan?.let { execution ->
+            val runtimePath = "$base/runtime_plan.json"
+            val manifestPath = "$base/manifest.sha256"
+            val planText = context.assets.open(runtimePath).use { it.readBytes().toString(Charsets.UTF_8) }
+            val manifestText = context.assets.open(manifestPath).use { it.readBytes().toString(Charsets.UTF_8) }
+            val digests = TokenRuntimeManifestIntegrity.verify(manifestText, text, planText)
+            require(digests.runtimePlanSha256 == execution.artifactHash) { "network_runtime_hash_mismatch" }
+            val plan = Json.decodeFromString(NetworkRuntimePlan.serializer(), planText)
+            require(plan.contractVersion == execution.contractVersion) { "network_runtime_contract_mismatch" }
+            require(plan.profileId == profile.profileId && plan.profileVersion == profile.version) {
+                "network_runtime_profile_mismatch"
+            }
+            require(plan.seed == execution.seed && plan.variant == execution.variant) {
+                "network_runtime_seed_or_variant_mismatch"
+            }
+            require(plan.phases == profile.phases) { "network_runtime_phases_mismatch" }
+            require(plan.claim == "deterministic application-layer measurement plan to the ANEB probe node") {
+                "network_runtime_claim_mismatch"
+            }
+            runtimeArtifactHash = digests.runtimePlanSha256
+            runtimeAssetUri = "asset:///$runtimePath"
+        }
         LoadedNetworkProfile(
             profile = profile,
             profileHash = TokenRuntimeIntegrity.canonicalSha256(text),
             profileAssetUri = "asset:///$path",
+            runtimeArtifactHash = runtimeArtifactHash,
+            runtimeAssetUri = runtimeAssetUri,
         )
     }
 }
@@ -483,8 +577,20 @@ class NetworkSpeedEngine(private val context: Context) {
                 profile = profile,
                 profileHash = loadedProfile.profileHash,
                 profileUri = loadedProfile.profileAssetUri,
+                runtimeArtifactHash = loadedProfile.runtimeArtifactHash,
+                runtimeAssetUri = loadedProfile.runtimeAssetUri,
             )
             val client = AnebClient(bound)
+            val networkTraffic = NetworkExecutionContractGate.authorize(
+                serverBase = configuredBase,
+                profile = profile,
+                profileCanonicalSha256 = loadedProfile.profileHash,
+                transport = AnebNetworkExecutionTransport(
+                    client = client,
+                    udpProbe = NetworkUdpProbe(bound),
+                    runId = runId,
+                ),
+            )
             val gatewaySpec = profile.gatewayImpairment
             gatewaySpecForCleanup = gatewaySpec
             if (gatewaySpec != null) {
@@ -560,13 +666,13 @@ class NetworkSpeedEngine(private val context: Context) {
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.HANDSHAKE, progress = 0.02)
             gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
-            val handshakes = measureHandshakes(client, endpoints, acknowledgement, handshakePhase.attempts) { index ->
+            val handshakes = measureHandshakes(networkTraffic, endpoints, acknowledgement, handshakePhase.attempts) { index ->
                 _telemetry.value = _telemetry.value.copy(progress = 0.02 + 0.06 * index / handshakePhase.attempts.coerceAtLeast(1))
             }
             log("NET_V1_PHASE run_id=$runId phase=handshake attempts=${handshakes.size}")
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.LATENCY, progress = 0.09)
-            val idle = measureEcho(client, endpoints, acknowledgement, idlePhase.samples) { index, samples ->
+            val idle = measureEcho(networkTraffic, endpoints, acknowledgement, idlePhase.samples) { index, samples ->
                 val summary = BasicSpeedMath.summarizeEcho(samples)
                 _telemetry.value = _telemetry.value.copy(
                     pingMs = summary.rttP50Ms,
@@ -580,17 +686,17 @@ class NetworkSpeedEngine(private val context: Context) {
 
             log("NET_V1_PHASE run_id=$runId phase=download_loaded duration_ms=${downloadPhase.durationMs}")
             gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
-            val download = runTransferPhase(client, endpoints, acknowledgement, runId, downloadPhase, TransferDirection.DOWNLOAD, idleP50, 0.21, 0.48)
+            val download = runTransferPhase(networkTraffic, endpoints, acknowledgement, runId, downloadPhase, TransferDirection.DOWNLOAD, idleP50, 0.21, 0.48)
             _telemetry.value = _telemetry.value.copy(downloadMbps = download.averageMbps)
             log("NET_V1_PHASE run_id=$runId phase=upload_loaded duration_ms=${uploadPhase.durationMs}")
             gatewayEvidence?.let { ensureGatewayActive(checkNotNull(gatewayClient), it.experimentId, runId, checkNotNull(gatewaySpec)) }
-            val upload = runTransferPhase(client, endpoints, acknowledgement, runId, uploadPhase, TransferDirection.UPLOAD, idleP50, 0.49, 0.76)
+            val upload = runTransferPhase(networkTraffic, endpoints, acknowledgement, runId, uploadPhase, TransferDirection.UPLOAD, idleP50, 0.49, 0.76)
             _telemetry.value = _telemetry.value.copy(uploadMbps = upload.averageMbps)
 
             _telemetry.value = _telemetry.value.copy(
                 phase = BasicSpeedPhase.DATAGRAM, currentMbps = null, phaseAverageMbps = null, progress = 0.78,
             )
-            val udp = NetworkUdpProbe(bound).run(measureBase, udpPhase.packets, udpPhase.packetBytes, udpPhase.ratePerSecond)
+            val udp = networkTraffic.udpEcho(measureBase, udpPhase.packets, udpPhase.packetBytes, udpPhase.ratePerSecond)
             _telemetry.value = _telemetry.value.copy(
                 udpReturnRatio = udp.packetsSent.takeIf { it > 0 }?.let { udp.receivedSeqs.distinct().size.toDouble() / it },
                 progress = 0.91,
@@ -600,7 +706,7 @@ class NetworkSpeedEngine(private val context: Context) {
             val recovery = recoveryPhase?.let { phase ->
                 val observation = if (gatewaySpec != null) {
                     runGatewayRecoveryPhase(
-                        client = client,
+                        traffic = networkTraffic,
                         endpoints = endpoints,
                         gateway = checkNotNull(gatewayClient),
                         runId = runId,
@@ -621,7 +727,7 @@ class NetworkSpeedEngine(private val context: Context) {
                     }.second
                 } else {
                     runRecoveryPhase(
-                        client,
+                        networkTraffic,
                         endpoints,
                         acknowledgement,
                         phase,
@@ -644,7 +750,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 networkLayerOutage = false,
                 progress = postStart,
             )
-            val post = measureEcho(client, endpoints, acknowledgement, postPhase.samples) { index, _ ->
+            val post = measureEcho(networkTraffic, endpoints, acknowledgement, postPhase.samples) { index, _ ->
                 _telemetry.value = _telemetry.value.copy(progress = postStart + (0.99 - postStart) * index / postPhase.samples.coerceAtLeast(1))
             }
 
@@ -844,6 +950,36 @@ class NetworkSpeedEngine(private val context: Context) {
             throw e
         } catch (e: NetworkResultPersistenceException) {
             throw e
+        } catch (e: NetworkExecutionContractException) {
+            prepareGatewayFailureEvidence(
+                cleanup = { cleanupOwnedGateway("CONTRACT") },
+                freeze = { cleanupEvidenceFrozen = true },
+            )
+            _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.FAILED, currentMbps = null)
+            val failed = gatewayFailureResult(
+                buildFailedNetworkComprehensiveResult(
+                    runId = runId,
+                    startedAtEpochMs = startedAtEpochMs,
+                    serverBase = configuredBase,
+                    variant = config.variant,
+                    reasonCode = e.reasonCode,
+                    profile = envelopeSource.profile,
+                ),
+                gatewaySpecForCleanup,
+                gatewayOwnedExperiment,
+                gatewayActivationAcknowledged,
+                gatewayCleanupAcknowledged,
+                config.gatewayBase,
+            )
+            publishResult(
+                failed, envelopeSource, config.transport, guard, bound, radioCollector,
+                System.currentTimeMillis(), "failed", log,
+            )
+            log(
+                "NET_V1_CONTRACT run_id=$runId status=rejected reason=${e.reasonCode} " +
+                    "detail=${e.userMessage.replace(' ', '_')}",
+            )
+            log("NET_V1_END run_id=$runId status=contract_rejected")
         } catch (e: Exception) {
             prepareGatewayFailureEvidence(
                 cleanup = { cleanupOwnedGateway("ERROR") },
@@ -889,7 +1025,7 @@ class NetworkSpeedEngine(private val context: Context) {
     }
 
     private suspend fun measureHandshakes(
-        client: AnebClient,
+        traffic: AuthorizedNetworkTraffic,
         endpoints: NetworkEndpointContext,
         acknowledgement: SyntheticAcknowledgementTracker,
         attempts: Int,
@@ -897,8 +1033,8 @@ class NetworkSpeedEngine(private val context: Context) {
     ): List<NetworkHandshakeEvidence> {
         val values = ArrayList<NetworkHandshakeEvidence>()
         repeat(attempts.coerceAtLeast(1)) { index ->
-            client.evictConnections()
-            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            traffic.evictConnections()
+            val echo = traffic.echo(endpoints.url("/api/v1/echo"))
             acknowledgement.observe(echo.syntheticImpairment)
             values += handshakeEvidence(echo.timing, echo.error == null, echo.syntheticImpairment)
             onProgress(index + 1)
@@ -924,7 +1060,7 @@ class NetworkSpeedEngine(private val context: Context) {
     }
 
     private suspend fun measureEcho(
-        client: AnebClient,
+        traffic: AuthorizedNetworkTraffic,
         endpoints: NetworkEndpointContext,
         acknowledgement: SyntheticAcknowledgementTracker,
         samples: Int,
@@ -932,7 +1068,7 @@ class NetworkSpeedEngine(private val context: Context) {
     ): List<Double?> {
         val values = ArrayList<Double?>(samples)
         repeat(samples.coerceAtLeast(1)) { index ->
-            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            val echo = traffic.echo(endpoints.url("/api/v1/echo"))
             acknowledgement.observe(echo.syntheticImpairment)
             values += echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
             onProgress(index + 1, values)
@@ -1116,7 +1252,7 @@ class NetworkSpeedEngine(private val context: Context) {
     )
 
     private suspend fun runGatewayRecoveryPhase(
-        client: AnebClient,
+        traffic: AuthorizedNetworkTraffic,
         endpoints: NetworkEndpointContext,
         gateway: AnebGatewayClient,
         runId: String,
@@ -1158,7 +1294,7 @@ class NetworkSpeedEngine(private val context: Context) {
                     GatewayExperimentContract.requireSuccessfulTerminal(before, expected)
                 }
                 _telemetry.value = _telemetry.value.copy(networkLayerOutage = before.phase == "active")
-                val echo = client.echo(endpoints.url("/api/v1/echo"), GATEWAY_ECHO_TIMEOUT_MS)
+                val echo = traffic.echo(endpoints.url("/api/v1/echo"), GATEWAY_ECHO_TIMEOUT_MS)
                 val echoCompletedNanos = SystemClock.elapsedRealtimeNanos()
                 val after = gateway.get(active.experimentId)
                 validateGatewayExperiment(after, runId, spec)
@@ -1224,7 +1360,7 @@ class NetworkSpeedEngine(private val context: Context) {
     }
 
     private suspend fun runRecoveryPhase(
-        client: AnebClient,
+        traffic: AuthorizedNetworkTraffic,
         endpoints: NetworkEndpointContext,
         acknowledgement: SyntheticAcknowledgementTracker,
         phase: ProfilePhase,
@@ -1239,7 +1375,7 @@ class NetworkSpeedEngine(private val context: Context) {
             syntheticOutageActive = false,
             progress = 0.91,
         )
-        val trigger = client.triggerSyntheticOutage(endpoints.url("/api/v1/recovery"))
+        val trigger = traffic.triggerSyntheticOutage(endpoints.url("/api/v1/recovery"))
         acknowledgement.observe(trigger.syntheticImpairment)
         val triggerAcknowledged = trigger.accepted &&
             trigger.outageDurationMs == declaredOutageMs && declaredOutageMs > 0
@@ -1252,7 +1388,7 @@ class NetworkSpeedEngine(private val context: Context) {
         var recoveryTimeMs: Double? = null
         val attempts = phase.samples.coerceAtLeast(1)
         for (index in 0 until attempts) {
-            val echo = client.echo(endpoints.url("/api/v1/echo"))
+            val echo = traffic.echo(endpoints.url("/api/v1/echo"))
             acknowledgement.observe(echo.syntheticImpairment)
             val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNanos) / 1e6
             if (echo.error == null) {
@@ -1283,7 +1419,7 @@ class NetworkSpeedEngine(private val context: Context) {
     )
 
     private suspend fun runTransferPhase(
-        client: AnebClient,
+        traffic: AuthorizedNetworkTraffic,
         endpoints: NetworkEndpointContext,
         acknowledgement: SyntheticAcknowledgementTracker,
         runId: String,
@@ -1336,7 +1472,7 @@ class NetworkSpeedEngine(private val context: Context) {
         }
         val echoJob = launch(Dispatchers.IO) {
             while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
-                val echo = client.echo(endpoints.url("/api/v1/echo"))
+                val echo = traffic.echo(endpoints.url("/api/v1/echo"))
                 acknowledgement.observe(echo.syntheticImpairment)
                 val rtt = echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
                 loadedRtt.add(rtt)
@@ -1358,10 +1494,10 @@ class NetworkSpeedEngine(private val context: Context) {
             launch(Dispatchers.IO) {
                 while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
                     val transfer = when (direction) {
-                        TransferDirection.DOWNLOAD -> client.downloadThroughput(
+                        TransferDirection.DOWNLOAD -> traffic.downloadThroughput(
                             endpoints.url("/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}"),
                         ) { count, _ -> totalBytes.add(count.toLong()) }
-                        TransferDirection.UPLOAD -> client.uploadThroughput(
+                        TransferDirection.UPLOAD -> traffic.uploadThroughput(
                             endpoints.url("/api/v1/upload?run=$runId-net-$workerIndex"), transferBytes, chunkBytes,
                         ) { count, _ ->
                             // Impaired runs count only bytes acknowledged by the server. Local socket writes

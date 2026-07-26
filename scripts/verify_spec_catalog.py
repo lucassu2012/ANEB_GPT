@@ -40,6 +40,16 @@ EXECUTION_PROFILE_POLICIES = {
             "realtime_sim": "aneb-realtime-session-v1",
         },
     },
+    "network_comprehensive_quick": {
+        "mode_id": "network_comprehensive",
+        "client_engine": ("aneb-network-comprehensive-engine", "1.0.0"),
+        "primitives": {
+            "download": "aneb-download-v1",
+            "echo": "aneb-echo-v1",
+            "udp_echo": "aneb-udp-echo-v2",
+            "upload": "aneb-upload-v1",
+        },
+    },
 }
 MIGRATED_EXECUTION_PROFILES = set(EXECUTION_PROFILE_POLICIES)
 
@@ -511,6 +521,15 @@ def _validate_execution_evidence_document(
     label: str,
     errors: list[str],
 ) -> None:
+    if isinstance(document, dict) and document.get("schema") == "aneb-network-protocol-bounded-contract":
+        _validate_network_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label=label,
+            errors=errors,
+        )
+        return
     if isinstance(document, dict) and document.get("schema") == "aneb-realtime-protocol-bounded-contract":
         _validate_realtime_execution_evidence_document(
             document,
@@ -628,6 +647,168 @@ def _validate_execution_evidence_document(
     )
     if type(counts.get("download")) is int and counts["download"] != artifact_count:
         errors.append(f"{label}.exact_business_counts.download count does not match bound runtime")
+
+
+def _validate_network_execution_evidence_document(
+    document: dict[str, Any],
+    *,
+    profile: Any,
+    runtime: Any,
+    label: str,
+    errors: list[str],
+) -> None:
+    root_keys = {
+        "schema",
+        "contract_id",
+        "version",
+        "profile",
+        "client_engine",
+        "runtime",
+        "applies_to",
+        "required_business_primitives",
+        "udp_wire_contract",
+    }
+    if not _strict_keys(document, root_keys, set(), label, errors):
+        return
+    if document.get("contract_id") != "aneb-network-quick-protocol-bounds":
+        errors.append(f"{label}.contract_id: unsupported network evidence contract")
+    _semver(document.get("version"), f"{label}.version", errors)
+    if document.get("version") != "1.0.0":
+        errors.append(f"{label}.version: unsupported network evidence contract version")
+    if document.get("applies_to") != ["positive_completed"]:
+        errors.append(f"{label}.applies_to: expected only positive_completed")
+
+    profile_ref = document.get("profile")
+    if _strict_keys(
+        profile_ref,
+        {"id", "version", "canonical_sha256"},
+        set(),
+        f"{label}.profile",
+        errors,
+    ) and isinstance(profile, dict):
+        if (
+            profile_ref.get("id") != "network_comprehensive_quick"
+            or profile_ref.get("version") != "1.2.0"
+        ):
+            errors.append(f"{label}.profile: contract must bind Network Quick 1.2.0")
+        if profile_ref.get("id") != profile.get("profile_id"):
+            errors.append(f"{label}.profile.id: does not match bound profile")
+        if profile_ref.get("version") != profile.get("version"):
+            errors.append(f"{label}.profile.version: does not match bound profile")
+        expected_sha = f"sha256:{canonical_json_sha256(profile)}"
+        if profile_ref.get("canonical_sha256") != expected_sha:
+            errors.append(f"{label}.profile.canonical_sha256: does not match bound profile")
+
+    client_engine = document.get("client_engine")
+    if _strict_keys(
+        client_engine,
+        {"contract_id", "version"},
+        set(),
+        f"{label}.client_engine",
+        errors,
+    ):
+        actual = (client_engine.get("contract_id"), client_engine.get("version"))
+        if actual != ("aneb-network-comprehensive-engine", "1.0.0"):
+            errors.append(f"{label}.client_engine: unsupported contract id/version {actual!r}")
+
+    phases: list[dict[str, Any]] = []
+    if isinstance(runtime, dict) and isinstance(runtime.get("phases"), list):
+        phases = [phase for phase in runtime["phases"] if isinstance(phase, dict)]
+        if len(phases) != len(runtime["phases"]):
+            errors.append(f"{label}: bound runtime phases must contain only objects")
+    elif isinstance(runtime, dict):
+        errors.append(f"{label}: bound runtime phases must be an array")
+    phases_by_type = {
+        phase.get("type"): phase
+        for phase in phases
+        if isinstance(phase.get("type"), str)
+    }
+    if len(phases_by_type) != len(phases):
+        errors.append(f"{label}: bound runtime phase types must be unique strings")
+
+    runtime_ref = document.get("runtime")
+    runtime_keys = {
+        "canonical_sha256",
+        "phase_count",
+        "phase_types",
+        "path_setup_attempts",
+        "idle_rtt_samples",
+        "download_duration_ms",
+        "download_request_bytes",
+        "download_parallel",
+        "upload_duration_ms",
+        "upload_request_bytes",
+        "upload_parallel",
+        "udp_packets",
+        "udp_packet_bytes",
+        "udp_rate_per_second",
+        "post_load_rtt_samples",
+    }
+    if _strict_keys(
+        runtime_ref,
+        runtime_keys,
+        set(),
+        f"{label}.runtime",
+        errors,
+    ) and isinstance(runtime, dict):
+        def phase_value(phase_type: str, key: str) -> Any:
+            phase = phases_by_type.get(phase_type)
+            return phase.get(key) if isinstance(phase, dict) else None
+
+        expected = {
+            "canonical_sha256": f"sha256:{canonical_json_sha256(runtime)}",
+            "phase_count": len(phases),
+            "phase_types": [phase.get("type") for phase in phases],
+            "path_setup_attempts": phase_value("path_setup", "attempts"),
+            "idle_rtt_samples": phase_value("idle_latency", "samples"),
+            "download_duration_ms": phase_value("download_loaded", "duration_ms"),
+            "download_request_bytes": phase_value("download_loaded", "bytes"),
+            "download_parallel": phase_value("download_loaded", "parallel"),
+            "upload_duration_ms": phase_value("upload_loaded", "duration_ms"),
+            "upload_request_bytes": phase_value("upload_loaded", "bytes"),
+            "upload_parallel": phase_value("upload_loaded", "parallel"),
+            "udp_packets": phase_value("udp_sequence", "packets"),
+            "udp_packet_bytes": phase_value("udp_sequence", "packet_bytes"),
+            "udp_rate_per_second": phase_value("udp_sequence", "rate_per_second"),
+            "post_load_rtt_samples": phase_value("post_load_latency", "samples"),
+        }
+        for key, value in expected.items():
+            if runtime_ref.get(key) != value:
+                errors.append(f"{label}.runtime.{key}: does not match bound runtime")
+
+    primitives = document.get("required_business_primitives")
+    expected_primitives = ["download", "echo", "udp_echo", "upload"]
+    if primitives != expected_primitives:
+        errors.append(
+            f"{label}.required_business_primitives: expected exact sorted primitive list"
+        )
+    udp_wire = document.get("udp_wire_contract")
+    if _strict_keys(
+        udp_wire,
+        {
+            "contract_id",
+            "run_id_format",
+            "run_id_bytes",
+            "sequence_bytes",
+            "monotonic_send_timestamp_bytes",
+            "minimum_packet_bytes",
+            "server_behavior",
+        },
+        set(),
+        f"{label}.udp_wire_contract",
+        errors,
+    ):
+        expected_udp_wire = {
+            "contract_id": "aneb-udp-echo-v2",
+            "run_id_format": "uuid-rfc4122-canonical",
+            "run_id_bytes": 16,
+            "sequence_bytes": 4,
+            "monotonic_send_timestamp_bytes": 8,
+            "minimum_packet_bytes": 33,
+            "server_behavior": "echo_exact_bytes_no_amplification",
+        }
+        if udp_wire != expected_udp_wire:
+            errors.append(f"{label}.udp_wire_contract: unsupported run-bound UDP contract")
 
 
 def _validate_realtime_execution_evidence_document(
@@ -893,6 +1074,14 @@ def _validate_execution_evidence_contracts(
             }
             if any(entry.get(key) != value for key, value in expected_paths.items()):
                 errors.append(f"{label}: contract must bind AI Realtime Quick 1.1.1 paths")
+        elif identity == ("aneb-network-quick-protocol-bounds", "1.0.0"):
+            expected_paths = {
+                "path": "spec/execution-contracts/network_comprehensive_quick-1.2.0.protocol.json",
+                "profile_path": "profiles/published/network_comprehensive_quick/profile.json",
+                "runtime_plan_path": "profiles/published/network_comprehensive_quick/runtime_plan.json",
+            }
+            if any(entry.get(key) != value for key, value in expected_paths.items()):
+                errors.append(f"{label}: contract must bind Network Quick 1.2.0 paths")
         else:
             errors.append(f"{label}: unsupported execution evidence contract identity")
         if entry.get("hash_strategy_id") not in hash_strategy_ids:
@@ -1063,57 +1252,87 @@ def _validate_runtime_bundle(
     elif profile.get("mode_id") not in contract_entry.get("compatible_profile_modes", []):
         errors.append(f"{label}: runtime contract is incompatible with profile mode")
 
-    business = profile.get("business") if isinstance(profile.get("business"), dict) else {}
     execution = profile.get("execution_plan") if isinstance(profile.get("execution_plan"), dict) else {}
     phase_items = profile.get("phases") if isinstance(profile.get("phases"), list) else []
-    behavior_phases = [phase for phase in phase_items if isinstance(phase, dict) and phase.get("type") == "behavior_trace"]
-    if len(behavior_phases) != 1:
-        errors.append(f"{label}: runtime-bound profile must contain exactly one behavior_trace phase")
-        behavior_phase: dict[str, Any] = {}
-    else:
-        behavior_phase = behavior_phases[0]
     if not execution:
         errors.append(f"{label}: runtime-bound profile is missing execution_plan")
 
     runtime_digest = canonical_json_sha256(runtime)
     profile_digest = canonical_json_sha256(profile)
     expected_runtime_ref = f"sha256:{runtime_digest}"
-    pairs = [
-        (runtime.get("model_id"), business.get("behavior_model_id"), "model_id"),
-        (runtime.get("model_version"), business.get("behavior_model_version"), "model_version"),
-        (runtime.get("model_hash"), business.get("behavior_model_hash"), "model_hash"),
-        (runtime.get("calibration_status"), business.get("calibration_status"), "calibration_status"),
-        (runtime.get("contract_version"), execution.get("contract_version"), "execution contract"),
-        (runtime.get("seed"), execution.get("seed"), "seed"),
-        (runtime.get("variant"), execution.get("variant"), "variant"),
-        (runtime.get("model_id"), behavior_phase.get("model_id"), "phase model_id"),
-        (runtime.get("model_version"), behavior_phase.get("model_version"), "phase model_version"),
-        (runtime.get("model_hash"), behavior_phase.get("model_hash"), "phase model_hash"),
-        (runtime.get("seed"), behavior_phase.get("seed"), "phase seed"),
-    ]
-    for left, right, name in pairs:
-        if left != right:
-            errors.append(f"{label}: runtime/profile {name} mismatch")
-    if execution.get("artifact") != "runtime_plan.json" or behavior_phase.get("runtime_artifact") != "runtime_plan.json":
-        errors.append(f"{label}: runtime artifact name mismatch")
-    if execution.get("artifact_hash") != expected_runtime_ref or behavior_phase.get("runtime_artifact_hash") != expected_runtime_ref:
-        errors.append(f"{label}: runtime semantic hash is not bound by profile and phase")
-
-    model_key = (runtime.get("model_id"), runtime.get("model_version"))
-    model_digest = model_hashes.get(model_key)
-    if model_digest is None:
-        errors.append(f"{label}: runtime references an unindexed behavior model {model_key}")
-    elif runtime.get("model_hash") != f"sha256:{model_digest}":
-        errors.append(f"{label}: runtime behavior model hash mismatch")
-
-    if runtime_contract == "aneb-token-runtime-plan-v1":
-        items, count = runtime.get("tasks"), runtime.get("task_count")
-    elif runtime_contract == "aneb-realtime-runtime-plan-v1":
-        items, count = runtime.get("sessions"), runtime.get("session_count")
+    if runtime_contract == "aneb-network-runtime-plan-v1":
+        pairs = [
+            (runtime.get("profile_id"), profile.get("profile_id"), "profile_id"),
+            (runtime.get("profile_version"), profile.get("version"), "profile_version"),
+            (runtime.get("contract_version"), execution.get("contract_version"), "execution contract"),
+            (runtime.get("seed"), execution.get("seed"), "seed"),
+            (runtime.get("variant"), execution.get("variant"), "variant"),
+            (runtime.get("phases"), phase_items, "phases"),
+        ]
+        for left, right, name in pairs:
+            if left != right:
+                errors.append(f"{label}: runtime/profile {name} mismatch")
+        if execution.get("artifact") != "runtime_plan.json":
+            errors.append(f"{label}: runtime artifact name mismatch")
+        if execution.get("artifact_hash") != expected_runtime_ref:
+            errors.append(f"{label}: runtime semantic hash is not bound by profile")
+        runtime_phases = runtime.get("phases")
+        if not isinstance(runtime_phases, list) or not runtime_phases:
+            errors.append(f"{label}: network runtime phases are missing or empty")
     else:
-        items, count = None, None
-    if not isinstance(items, list) or not items or not isinstance(count, int) or count != len(items):
-        errors.append(f"{label}: runtime plan item count is missing or inconsistent")
+        business = profile.get("business") if isinstance(profile.get("business"), dict) else {}
+        behavior_phases = [
+            phase
+            for phase in phase_items
+            if isinstance(phase, dict) and phase.get("type") == "behavior_trace"
+        ]
+        if len(behavior_phases) != 1:
+            errors.append(f"{label}: runtime-bound profile must contain exactly one behavior_trace phase")
+            behavior_phase: dict[str, Any] = {}
+        else:
+            behavior_phase = behavior_phases[0]
+        pairs = [
+            (runtime.get("model_id"), business.get("behavior_model_id"), "model_id"),
+            (runtime.get("model_version"), business.get("behavior_model_version"), "model_version"),
+            (runtime.get("model_hash"), business.get("behavior_model_hash"), "model_hash"),
+            (runtime.get("calibration_status"), business.get("calibration_status"), "calibration_status"),
+            (runtime.get("contract_version"), execution.get("contract_version"), "execution contract"),
+            (runtime.get("seed"), execution.get("seed"), "seed"),
+            (runtime.get("variant"), execution.get("variant"), "variant"),
+            (runtime.get("model_id"), behavior_phase.get("model_id"), "phase model_id"),
+            (runtime.get("model_version"), behavior_phase.get("model_version"), "phase model_version"),
+            (runtime.get("model_hash"), behavior_phase.get("model_hash"), "phase model_hash"),
+            (runtime.get("seed"), behavior_phase.get("seed"), "phase seed"),
+        ]
+        for left, right, name in pairs:
+            if left != right:
+                errors.append(f"{label}: runtime/profile {name} mismatch")
+        if (
+            execution.get("artifact") != "runtime_plan.json"
+            or behavior_phase.get("runtime_artifact") != "runtime_plan.json"
+        ):
+            errors.append(f"{label}: runtime artifact name mismatch")
+        if (
+            execution.get("artifact_hash") != expected_runtime_ref
+            or behavior_phase.get("runtime_artifact_hash") != expected_runtime_ref
+        ):
+            errors.append(f"{label}: runtime semantic hash is not bound by profile and phase")
+
+        model_key = (runtime.get("model_id"), runtime.get("model_version"))
+        model_digest = model_hashes.get(model_key)
+        if model_digest is None:
+            errors.append(f"{label}: runtime references an unindexed behavior model {model_key}")
+        elif runtime.get("model_hash") != f"sha256:{model_digest}":
+            errors.append(f"{label}: runtime behavior model hash mismatch")
+
+        if runtime_contract == "aneb-token-runtime-plan-v1":
+            items, count = runtime.get("tasks"), runtime.get("task_count")
+        elif runtime_contract == "aneb-realtime-runtime-plan-v1":
+            items, count = runtime.get("sessions"), runtime.get("session_count")
+        else:
+            items, count = None, None
+        if not isinstance(items, list) or not items or not isinstance(count, int) or count != len(items):
+            errors.append(f"{label}: runtime plan item count is missing or inconsistent")
 
     manifest = _parse_manifest(manifest_path, manifest_ref, errors)
     expected_manifest = {"profile.json": profile_digest, "runtime_plan.json": runtime_digest}
@@ -1235,7 +1454,8 @@ def _validate_profiles(
             "published-profile-v2": {
                 "behavior_runtime_bound": (
                     "profile-runtime-manifest-canonical-hash-v1", "required",
-                    "canonical-json-sha256-v1", {"token_simulation", "ai_realtime_simulation"},
+                    "canonical-json-sha256-v1",
+                    {"token_simulation", "ai_realtime_simulation", "network_comprehensive"},
                 ),
                 "network_embedded_phases": (
                     "profile-v2-embedded-phases-v1", "forbidden", None,
@@ -1343,12 +1563,16 @@ def _validate_profiles(
         errors.append(f"profile families: expected exactly {sorted(expected_families)}")
     if group_counts[("server-root-inline-profile-v1", "server_root_inline_phases")] != 4:
         errors.append("server root validation group: expected 4 profiles")
-    if group_counts[("published-profile-v2", "behavior_runtime_bound")] != 6:
-        errors.append("runtime-bound validation group: expected 6 Token/AI realtime profiles")
-    if runtime_mode_counts != Counter({"token_simulation": 3, "ai_realtime_simulation": 3}):
-        errors.append("runtime-bound validation group: expected 3 Token and 3 AI realtime profiles")
-    if group_counts[("published-profile-v2", "network_embedded_phases")] != 6:
-        errors.append("embedded network validation group: expected 6 profiles")
+    if group_counts[("published-profile-v2", "behavior_runtime_bound")] != 7:
+        errors.append("runtime-bound validation group: expected 7 Token/AI realtime/Network profiles")
+    if runtime_mode_counts != Counter(
+        {"token_simulation": 3, "ai_realtime_simulation": 3, "network_comprehensive": 1}
+    ):
+        errors.append(
+            "runtime-bound validation group: expected 3 Token, 3 AI realtime and 1 Network profile"
+        )
+    if group_counts[("published-profile-v2", "network_embedded_phases")] != 5:
+        errors.append("embedded network validation group: expected 5 profiles")
 
     actual_root_profiles = _relative_set(root, (root / "profiles").glob("*.json"))
     actual_published_profiles = _relative_set(root, (root / "profiles/published").glob("*/profile.json"))
