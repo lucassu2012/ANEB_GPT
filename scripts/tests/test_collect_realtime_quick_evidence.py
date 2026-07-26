@@ -62,6 +62,33 @@ class PhoneSnapshotTests(unittest.TestCase):
         self.assertEqual("1", snapshot.wifi_on)
         self.assertEqual(collector.clean_snapshot_hash(snapshot), snapshot.canonical_sha256)
 
+    def test_huawei_empty_service_dump_is_not_an_active_service(self) -> None:
+        raw = clean_raw_snapshot()
+        raw["services"] = {
+            package: "ACTIVITY MANAGER SERVICES (dumpsys activity services)\n  (nothing)"
+            for package in collector.RELEVANT_PACKAGES
+        }
+
+        snapshot = collector.parse_phone_snapshot(raw)
+
+        self.assertEqual(CANONICAL_LAUNCHER, snapshot.focused_component)
+        self.assertTrue(all(not value for _, value in snapshot.processes))
+        self.assertTrue(
+            all("ServiceRecord{" not in value for _, value in snapshot.services)
+        )
+
+    def test_unknown_service_dump_still_fails_closed(self) -> None:
+        raw = clean_raw_snapshot()
+        raw["services"]["com.aneb.probe.codex"] = (  # type: ignore[index]
+            "ACTIVITY MANAGER SERVICES (dumpsys activity services)\nwarning: incomplete"
+        )
+
+        with self.assertRaisesRegex(
+            collector.CollectorError,
+            "phone_live_state_rejected reason=service_active",
+        ):
+            collector.parse_phone_snapshot(raw)
+
     def test_foreground_process_service_tunnel_and_vpn_each_fail_closed(self) -> None:
         mutations: dict[str, callable] = {
             "foreground": lambda raw: raw.__setitem__(

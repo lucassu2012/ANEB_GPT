@@ -696,15 +696,15 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 check=False,
-                text=True,
-                encoding="utf-8",
                 timeout=10,
             )
 
         self.assertEqual(1, completed.returncode)
-        self.assertEqual("", completed.stderr)
-        self.assertEqual(1, len(completed.stdout.splitlines()))
-        report = json.loads(completed.stdout)
+        self.assertEqual(b"", completed.stderr)
+        self.assertTrue(completed.stdout.endswith(b"\n"))
+        self.assertFalse(completed.stdout.endswith(b"\r\n"))
+        self.assertEqual(1, completed.stdout.count(b"\n"))
+        report = json.loads(completed.stdout.decode("ascii"))
         self.assertEqual(
             {
                 "schema": "aneb-ci-apk-provenance-report",

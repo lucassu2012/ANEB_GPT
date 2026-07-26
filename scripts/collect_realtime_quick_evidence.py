@@ -668,12 +668,20 @@ def parse_phone_snapshot(raw: dict[str, object]) -> PhoneSnapshot:
             raise CollectorError(
                 f"phone_live_state_rejected reason=process_active package={package}"
             )
-        if service not in {"", "(nothing)", "No services"}:
+        empty_service_dump = service in {"", "(nothing)", "No services"} or (
+            re.fullmatch(
+                r"ACTIVITY MANAGER SERVICES \(dumpsys activity services\)\r?\n"
+                r"[ \t]*\(nothing\)",
+                service,
+            )
+            is not None
+        )
+        if not empty_service_dump:
             raise CollectorError(
                 f"phone_live_state_rejected reason=service_active package={package}"
             )
         processes.append((package, process))
-        services.append((package, service))
+        services.append((package, ""))
 
     accessibility = raw["enabled_accessibility"]
     if not isinstance(accessibility, str):

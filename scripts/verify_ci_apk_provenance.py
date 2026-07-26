@@ -718,7 +718,12 @@ def main() -> int:
     except Exception:
         report = _failure_report("internal_verification_error")
         return_code = 1
-    print(json.dumps(report, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    payload = (
+        json.dumps(report, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("ascii")
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
     return return_code
 
 
