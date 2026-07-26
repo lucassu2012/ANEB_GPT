@@ -1097,16 +1097,12 @@ def verify_positive_protocol(
             else planned.get("planned_downlink_frames")
         )
         if (
-            not isinstance(expected, int)
+            type(expected) is not int
             or expected <= 0
             or turn.get("expected_frames") != expected
             or turn.get("unique_frames") != expected
             or turn.get("interrupted") is not interrupted
             or turn.get("success") is not True
-            or turn.get("max_missing_run_frames") != 0
-            or turn.get("stall_frames") != 0
-            or turn.get("conceal_frames") != 0
-            or turn.get("on_time_frames") != expected
             or (
                 index == 0
                 and turn.get("unplanned_overlap") is not None
@@ -1117,6 +1113,21 @@ def verify_positive_protocol(
             )
         ):
             fail("turn_runtime_contract_mismatch")
+        on_time_frames = turn.get("on_time_frames")
+        stall_frames = turn.get("stall_frames")
+        conceal_frames = turn.get("conceal_frames")
+        if (
+            type(on_time_frames) is not int
+            or type(stall_frames) is not int
+            or type(conceal_frames) is not int
+            or turn.get("max_missing_run_frames") != 0
+            or not 0 <= on_time_frames <= expected
+            or not 0 <= conceal_frames <= expected
+            or on_time_frames + conceal_frames != expected
+            or not 0 <= stall_frames <= conceal_frames
+            or 0 < stall_frames < 3
+        ):
+            fail("turn_quality_accounting_mismatch")
         for field in (
             "response_excess_ms",
             "response_ms",

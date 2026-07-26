@@ -79,3 +79,46 @@ must be an integer inside the derived inclusive bound; 675 and 692 are rejected.
    publish READY only under the negative contract.
 
 Until both formal collections pass, M0-EC2 remains incomplete.
+
+## Positive playout-quality verifier correction
+
+- ［KNOWN｜HIGH］The next exact-CI positive run
+  `019f9e53-4125-7bb7-8c9b-c039d24cd1f0` completed the frozen protocol with
+  676 expected and 676 unique client frames. The server retained 678 emitted
+  frames, inside the inclusive `[676, 691]` bound.
+- ［KNOWN｜HIGH］Turn 1 measured 336 on-time frames, 14 conceal frames and 14
+  stall frames out of 350. The previous client verifier incorrectly required
+  every completed positive turn to have zero measured playout degradation.
+- ［INFERRED｜HIGH］That condition confused evidence validity with measured
+  quality. A completed, hash-bound protocol run may legitimately score below
+  perfect quality; rejecting it would erase the network behavior ANEB is meant
+  to measure.
+
+The corrected verifier keeps the protocol identity gates exact and separately
+checks playout-quality accounting:
+
+- `expected_frames == unique_frames ==` the frozen runtime value;
+- `success=true`, the interrupted flag and overlap semantics match the runtime;
+- `max_missing_run_frames=0` when every expected sequence is present;
+- `on_time_frames + conceal_frames == expected_frames`;
+- `0 <= stall_frames <= conceal_frames`, and a non-zero stall contains at least
+  the engine's frozen three-frame minimum.
+
+Impossible accounting still fails closed with
+`turn_quality_accounting_mismatch`. Real late/concealed/stalled frames remain in
+the retained evidence and are independently recomputed into LIVE-B05/B06/B07,
+group scores and the final score.
+
+### Frozen-run replay after the correction
+
+- ［KNOWN｜HIGH］Client DB verification passed with Room v19, 21 typed metrics,
+  immutable DB/WAL/SHM hashes, exact Profile/runtime digests and 676/676 frames.
+- ［KNOWN｜HIGH］Server audit passed with one realtime business entry, 78 echo
+  entries, one protocol summary and 678 emitted frames.
+- ［KNOWN｜HIGH］Cross-bundle verification re-read the frozen Room database,
+  journal, serverinfo and both reports, then returned `cross_bound=true`.
+- ［KNOWN｜HIGH］The seven direct Realtime Quick consumer modules passed 102/102
+  tests, including valid degradation and impossible-accounting counterexamples.
+
+This remains a diagnostic replay. A new clean commit, green CI provenance and
+new formal positive and negative collections are still required before READY.

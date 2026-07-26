@@ -429,14 +429,25 @@ def with_collected_radio(body: dict[str, object]) -> dict[str, object]:
     return body
 
 
-def typed_metrics(body: dict[str, object]) -> dict[str, object]:
+def typed_metrics(
+    body: dict[str, object],
+    overrides: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
     result: dict[str, object] = {}
     definitions = {
         str(definition["metric_id"]): definition
         for definition in PROFILE["measurements"]
     }
     for metric_id, metric in body["evaluation"]["metrics"].items():
-        value, compliance, sample_count, score, components = SCORER_METRICS[metric_id]
+        if overrides is None or metric_id not in overrides:
+            value, compliance, sample_count, score, components = SCORER_METRICS[metric_id]
+        else:
+            projection = overrides[metric_id]
+            value = projection["value"]
+            compliance = projection["compliance_ratio"]
+            sample_count = projection["sample_count"]
+            score = projection["score"]
+            components = projection["component_values"]
         result[metric_id] = {
             "value": value,
             "compliance_ratio": compliance,
@@ -449,6 +460,40 @@ def typed_metrics(body: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def apply_recomputed_positive(
+    body: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        from verify_realtime_quick_client_db import recompute_positive
+    finally:
+        sys.path.pop(0)
+
+    metrics, groups, score = recompute_positive(
+        body["category_payload"]["raw_evidence"]
+    )
+    for metric_id, projection in metrics.items():
+        body["evaluation"]["metrics"][metric_id].update(
+            value=projection["value"],
+            compliance_ratio=projection["compliance_ratio"],
+            sample_count=projection["sample_count"],
+            score=projection["score"],
+            components=projection["component_values"],
+        )
+    body["evaluation"]["group_scores"] = groups
+    body["evaluation"]["score"].update(
+        state=score["state"],
+        value=score["value"],
+        grade=score["grade"],
+        verdict=score["verdict"],
+        confidence=score["confidence"],
+        confidence_basis=score["confidence_basis"],
+        cap_reason=None,
+        not_computable_reason=score["not_computable_reason"],
+    )
+    return metrics
+
+
 def typed_evidence(body: dict[str, object]) -> dict[str, object]:
     return {
         "contract_version": "aneb-realtime-run-evidence-v1",
@@ -457,7 +502,12 @@ def typed_evidence(body: dict[str, object]) -> dict[str, object]:
     }
 
 
-def write_database(path: Path, body: dict[str, object]) -> None:
+def write_database(
+    path: Path,
+    body: dict[str, object],
+    *,
+    typed_metric_overrides: dict[str, dict[str, object]] | None = None,
+) -> None:
     serialized = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     score = body["evaluation"]["score"]
     algorithms = body["evaluation"]["algorithm_versions"]
@@ -498,7 +548,7 @@ def write_database(path: Path, body: dict[str, object]) -> None:
                 score["cap_reason"],
                 json.dumps(
                     (
-                        typed_metrics(body)
+                        typed_metrics(body, typed_metric_overrides)
                         if body["run"]["validity"] == "valid"
                         else {}
                     ),
@@ -585,6 +635,54 @@ class RealtimeQuickClientDbVerifierTests(unittest.TestCase):
         self.assertEqual(f"sha256:{RUNTIME_SHA}", report["runtime_plan_sha256"])
         self.assertTrue(report["frozen_source_unchanged"])
         self.assertTrue(report["analysis_copy_used"])
+
+    def test_accepts_completed_positive_with_measured_playout_degradation(self) -> None:
+        body = valid_body()
+        turn = body["category_payload"]["raw_evidence"]["sessions"][0]["turns"][0]
+        turn.update(
+            on_time_frames=336,
+            stall_frames=14,
+            conceal_frames=14,
+        )
+        typed_metric_overrides = apply_recomputed_positive(body)
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "aneb-probe.db"
+            write_database(
+                database,
+                body,
+                typed_metric_overrides=typed_metric_overrides,
+            )
+            completed = self.run_verifier(database)
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual("pass", report["status"])
+        self.assertEqual(676, report["expected_downlink_frames"])
+        self.assertEqual(676, report["unique_downlink_frames"])
+
+    def test_rejects_impossible_playout_quality_accounting(self) -> None:
+        body = valid_body()
+        turn = body["category_payload"]["raw_evidence"]["sessions"][0]["turns"][0]
+        turn.update(
+            on_time_frames=336,
+            stall_frames=15,
+            conceal_frames=14,
+        )
+        typed_metric_overrides = apply_recomputed_positive(body)
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "aneb-probe.db"
+            write_database(
+                database,
+                body,
+                typed_metric_overrides=typed_metric_overrides,
+            )
+            completed = self.run_verifier(database)
+
+        self.assertEqual(1, completed.returncode)
+        self.assertEqual(
+            "turn_quality_accounting_mismatch",
+            json.loads(completed.stdout)["reason_code"],
+        )
 
     def test_accepts_exact_receipt_missing_negative_without_business_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
