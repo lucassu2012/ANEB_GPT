@@ -1322,6 +1322,8 @@ function Invoke-CiProvenanceVerification {
             $script:CiProvenanceVerifierPath,
             $Directory,
             '--source-commit', [string]$script:ResolvedTools.ToolingProvenance.source_commit,
+            '--expected-version-name', $ExpectedVersionName,
+            '--expected-version-code', [string]$ExpectedVersionCode,
             '--gh-path', [string]$script:ResolvedTools.Gh,
             '--timeout-seconds', [string]$innerTimeout
         ) `

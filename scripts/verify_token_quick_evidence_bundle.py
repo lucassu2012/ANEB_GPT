@@ -1305,6 +1305,8 @@ def verify_candidate_binding(
         report = ci_provenance_verifier.verify_candidate(
             bundle / "ci-candidate",
             expected_source_commit=source_commit,
+            expected_version_name=EXPECTED_CLIENT_VERSION_NAME,
+            expected_version_code=EXPECTED_CLIENT_VERSION_CODE,
             gh_command=(str(gh_path),),
             timeout_seconds=30,
         )

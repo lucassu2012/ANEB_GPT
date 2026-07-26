@@ -25,8 +25,6 @@ EXPECTED_REPOSITORY_URI = f"https://github.com/{EXPECTED_REPOSITORY}"
 EXPECTED_WORKFLOW = "lucassu2012/ANEB_GPT/.github/workflows/ci.yml"
 EXPECTED_PREDICATE_TYPE = "https://slsa.dev/provenance/v1"
 EXPECTED_PACKAGE = "com.aneb.probe.codex"
-EXPECTED_VERSION_NAME = "0.5.12-codex"
-EXPECTED_VERSION_CODE = 44
 EXPECTED_CONTRACT = "aneb-debug-candidate-v1"
 EXPECTED_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 INSTALL_NOTES_NAME = "ANEB-安装说明.txt"
@@ -39,6 +37,7 @@ MAX_GH_STDOUT_BYTES = 8 * 1024 * 1024
 MAX_GH_STDERR_BYTES = 512 * 1024
 MAX_GH_VERSION_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+EXPECTED_VERSION_NAME_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+-codex$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REF_RE = re.compile(
     r"^refs/heads/(?:main|codex/[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,198}[A-Za-z0-9])?)$"
@@ -187,7 +186,12 @@ def _validate_apk_archive(path: Path) -> None:
         fail("apk_archive_invalid")
 
 
-def _load_manifest(candidate: Path, expected_source_commit: str) -> tuple[dict[str, Any], bytes]:
+def _load_manifest(
+    candidate: Path,
+    expected_source_commit: str,
+    expected_version_name: str,
+    expected_version_code: int,
+) -> tuple[dict[str, Any], bytes]:
     raw = _regular_file(
         candidate / "build-manifest.json",
         maximum=MAX_MANIFEST_BYTES,
@@ -244,8 +248,8 @@ def _load_manifest(candidate: Path, expected_source_commit: str) -> tuple[dict[s
         or type(apk.get("size_bytes")) is not int
         or not 0 < apk["size_bytes"] <= MAX_APK_BYTES
         or apk.get("package_id") != EXPECTED_PACKAGE
-        or apk.get("version_name") != EXPECTED_VERSION_NAME
-        or apk.get("version_code") != EXPECTED_VERSION_CODE
+        or not isinstance(apk.get("version_name"), str)
+        or type(apk.get("version_code")) is not int
         or type(apk.get("min_sdk")) is not int
         or type(apk.get("target_sdk")) is not int
         or not isinstance(apk.get("signer_dn"), str)
@@ -261,6 +265,11 @@ def _load_manifest(candidate: Path, expected_source_commit: str) -> tuple[dict[s
         or set(verification.values()) != {"pass"}
     ):
         fail("build_manifest_invalid")
+    if (
+        apk["version_name"] != expected_version_name
+        or apk["version_code"] != expected_version_code
+    ):
+        fail("apk_version_mismatch")
     return manifest, raw
 
 
@@ -495,6 +504,8 @@ def verify_candidate(
     candidate_directory: Path,
     *,
     expected_source_commit: str,
+    expected_version_name: str,
+    expected_version_code: int,
     gh_command: Sequence[str],
     timeout_seconds: int = 30,
 ) -> dict[str, Any]:
@@ -504,6 +515,13 @@ def verify_candidate(
         expected_source_commit
     ) is None:
         fail("source_commit_invalid")
+    if (
+        not isinstance(expected_version_name, str)
+        or EXPECTED_VERSION_NAME_RE.fullmatch(expected_version_name) is None
+        or type(expected_version_code) is not int
+        or expected_version_code <= 0
+    ):
+        fail("expected_apk_identity_invalid")
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 120:
         fail("timeout_invalid")
     candidate_lexical = _nonreparse_lexical_path(
@@ -530,7 +548,12 @@ def verify_candidate(
         fail("gh_executable_invalid")
     executable_sha256 = _sha256_file(gh_executable)
 
-    manifest, manifest_raw = _load_manifest(candidate, expected_source_commit)
+    manifest, manifest_raw = _load_manifest(
+        candidate,
+        expected_source_commit,
+        expected_version_name,
+        expected_version_code,
+    )
     checksums_raw, checksum_entries = _verify_checksum_inventory(candidate)
     apk_metadata = _dict(manifest["apk"], "build_manifest_invalid")
     source = _dict(manifest["source"], "build_manifest_invalid")
@@ -674,6 +697,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate_directory", type=Path)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--expected-version-name", required=True)
+    parser.add_argument("--expected-version-code", type=int, required=True)
     parser.add_argument("--gh-path", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args()
@@ -681,6 +706,8 @@ def main() -> int:
         report = verify_candidate(
             args.candidate_directory,
             expected_source_commit=args.source_commit.lower(),
+            expected_version_name=args.expected_version_name,
+            expected_version_code=args.expected_version_code,
             gh_command=(str(args.gh_path),),
             timeout_seconds=args.timeout_seconds,
         )

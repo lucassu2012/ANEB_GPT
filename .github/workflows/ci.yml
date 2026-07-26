@@ -111,6 +111,8 @@ jobs:
           python scripts/verify_ci_apk_provenance.py \
             dist/aneb-probe-debug \
             --source-commit "${{ github.sha }}" \
+            --expected-version-name "0.5.13-codex" \
+            --expected-version-code "45" \
             --gh-path "$GH_PATH"
       - name: Upload verified Debug candidate
         if: github.event_name != 'pull_request'

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -429,6 +430,29 @@ class DebugCandidatePackagingTest(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("subject-path: dist/aneb-probe-debug/*.apk", workflow)
+
+    def test_ci_provenance_verifier_receives_current_android_identity(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        build = (WORKFLOW.parents[2] / "app" / "probe" / "build.gradle.kts").read_text(
+            encoding="utf-8"
+        )
+
+        version_code = re.search(r"(?m)^\s*versionCode\s*=\s*([0-9]+)\s*$", build)
+        version_name = re.search(r'(?m)^\s*versionName\s*=\s*"([^"]+)"\s*$', build)
+        suffix = re.search(r'(?m)^\s*versionNameSuffix\s*=\s*"([^"]+)"\s*$', build)
+        self.assertIsNotNone(version_code)
+        self.assertIsNotNone(version_name)
+        self.assertIsNotNone(suffix)
+        assert version_code is not None and version_name is not None and suffix is not None
+
+        self.assertIn(
+            f'--expected-version-name "{version_name.group(1)}{suffix.group(1)}"',
+            workflow,
+        )
+        self.assertIn(
+            f'--expected-version-code "{version_code.group(1)}"',
+            workflow,
+        )
 
     def test_ci_pr_path_is_explicitly_review_unattested(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")

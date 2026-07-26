@@ -19,6 +19,8 @@ from scripts.verify_ci_apk_provenance import (
 
 
 SOURCE_COMMIT = "a" * 40
+EXPECTED_VERSION_NAME = "0.5.12-codex"
+EXPECTED_VERSION_CODE = 44
 SOURCE_REF = "refs/heads/codex/d82-ci-provenance"
 REPOSITORY = "lucassu2012/ANEB_GPT"
 WORKFLOW = "lucassu2012/ANEB_GPT/.github/workflows/ci.yml"
@@ -192,6 +194,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
             verify_candidate(
                 fixture.candidate,
                 expected_source_commit=SOURCE_COMMIT,
+                expected_version_name=EXPECTED_VERSION_NAME,
+                expected_version_code=EXPECTED_VERSION_CODE,
                 gh_command=fixture.gh_command,
                 timeout_seconds=2,
             )
@@ -204,6 +208,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
             report = verify_candidate(
                 fixture.candidate,
                 expected_source_commit=SOURCE_COMMIT,
+                expected_version_name=EXPECTED_VERSION_NAME,
+                expected_version_code=EXPECTED_VERSION_CODE,
                 gh_command=fixture.gh_command,
                 timeout_seconds=5,
             )
@@ -252,6 +258,46 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
             invoked_arguments,
         )
 
+    def test_expected_version_mismatch_has_a_specific_machine_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            fixture = CandidateFixture(Path(raw))
+            with self.assertRaises(ProvenanceVerificationFailure) as caught:
+                verify_candidate(
+                    fixture.candidate,
+                    expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name="0.5.13-codex",
+                    expected_version_code=45,
+                    gh_command=fixture.gh_command,
+                    timeout_seconds=5,
+                )
+
+        self.assertEqual("apk_version_mismatch", caught.exception.reason_code)
+
+    def test_expected_version_input_is_strict(self) -> None:
+        cases = (
+            ("0.5.13", 45),
+            (EXPECTED_VERSION_NAME, True),
+            (EXPECTED_VERSION_NAME, 0),
+        )
+        for version_name, version_code in cases:
+            with self.subTest(
+                version_name=version_name, version_code=version_code
+            ), tempfile.TemporaryDirectory() as raw:
+                fixture = CandidateFixture(Path(raw))
+                with self.assertRaises(ProvenanceVerificationFailure) as caught:
+                    verify_candidate(
+                        fixture.candidate,
+                        expected_source_commit=SOURCE_COMMIT,
+                        expected_version_name=version_name,
+                        expected_version_code=version_code,
+                        gh_command=fixture.gh_command,
+                        timeout_seconds=5,
+                    )
+
+                self.assertEqual(
+                    "expected_apk_identity_invalid", caught.exception.reason_code
+                )
+
     def test_candidate_beneath_an_ancestor_junction_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -283,6 +329,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 verify_candidate(
                     linked_parent / "candidate",
                     expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name=EXPECTED_VERSION_NAME,
+                    expected_version_code=EXPECTED_VERSION_CODE,
                     gh_command=fixture.gh_command,
                     timeout_seconds=5,
                 )
@@ -321,6 +369,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 verify_candidate(
                     candidate_link,
                     expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name=EXPECTED_VERSION_NAME,
+                    expected_version_code=EXPECTED_VERSION_CODE,
                     gh_command=fixture.gh_command,
                     timeout_seconds=5,
                 )
@@ -360,6 +410,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 verify_candidate(
                     fixture.candidate,
                     expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name=EXPECTED_VERSION_NAME,
+                    expected_version_code=EXPECTED_VERSION_CODE,
                     gh_command=(
                         str(linked_parent / executable.name),
                         str(fixture.gh),
@@ -383,6 +435,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 verify_candidate(
                     fixture.candidate,
                     expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name=EXPECTED_VERSION_NAME,
+                    expected_version_code=EXPECTED_VERSION_CODE,
                     gh_command=(str(gh_link), str(fixture.gh)),
                     timeout_seconds=5,
                 )
@@ -459,6 +513,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                 verify_candidate(
                     fixture.candidate,
                     expected_source_commit=SOURCE_COMMIT,
+                    expected_version_name=EXPECTED_VERSION_NAME,
+                    expected_version_code=EXPECTED_VERSION_CODE,
                     gh_command=fixture.gh_command,
                     timeout_seconds=1,
                 )
@@ -528,6 +584,8 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
             report = verify_candidate(
                 fixture.candidate,
                 expected_source_commit=SOURCE_COMMIT,
+                expected_version_name=EXPECTED_VERSION_NAME,
+                expected_version_code=EXPECTED_VERSION_CODE,
                 gh_command=fixture.gh_command,
                 timeout_seconds=5,
             )
@@ -629,6 +687,10 @@ class CiApkProvenanceVerifierTests(unittest.TestCase):
                     str(fixture.candidate),
                     "--source-commit",
                     "not-a-commit",
+                    "--expected-version-name",
+                    EXPECTED_VERSION_NAME,
+                    "--expected-version-code",
+                    str(EXPECTED_VERSION_CODE),
                     "--gh-path",
                     str(Path(sys.executable).resolve(strict=True)),
                 ],
