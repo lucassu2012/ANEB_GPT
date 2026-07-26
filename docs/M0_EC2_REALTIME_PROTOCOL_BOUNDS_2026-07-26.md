@@ -243,3 +243,35 @@ Regression evidence for this correction:
 - ［KNOWN｜HIGH］Android unit/lint/debug assemble, release boundary, secret scan,
   debug-candidate packaging, spec/result schemas, server Go and gateway Go all
   passed in the complete repository quality gate.
+
+## Negative terminal-marker correction
+
+- ［KNOWN｜HIGH］Commit `44049ed00f4d3367b171fbf75cf53be327747ea8`
+  produced a formal positive READY, but its formal negative run timed out before
+  publication with `realtime_marker_chain_invalid`; cleanup completed with zero
+  failures and no READY was created.
+- ［KNOWN｜HIGH］The real App log proved a durable zero-business rejection in
+  this order: `START`, `PROFILE`, `RADIO`, `DB_WRITE ok=true`, `CONTRACT
+  status=rejected reason=receipt_missing detail=...`, and `END
+  status=contract_rejected`.
+- ［KNOWN｜HIGH］The collector's synthetic fixture instead required
+  `persisted=true` inside the CONTRACT marker. The Android implementation has
+  never emitted that field, so the host consumer rejected the real chain until
+  its 900-second timeout even though DB persistence had already succeeded.
+
+The corrected host contract accepts the App's actual marker shape and keeps the
+durability boundary explicit:
+
+1. exactly one same-run `DB_WRITE ok=true` marker is required;
+2. the negative CONTRACT field set must be exactly
+   `run_id,status,reason,detail`;
+3. status must be `rejected`, reason must be `receipt_missing`, and detail must
+   be non-empty;
+4. no result marker may exist and END must be `contract_rejected`;
+5. the independent Room verifier must still prove one INVALID, null-score,
+   zero-business retained result before READY publication.
+
+The timed-out negative collection remains diagnostic only. The existing
+positive READY is valid for commit `44049ed`, but a new clean commit, green CI
+candidate, and same-candidate positive/negative pair are still required for the
+final M0-EC2 gate.

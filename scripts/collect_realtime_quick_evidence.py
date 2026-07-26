@@ -2077,9 +2077,10 @@ def parse_realtime_terminal_markers(
             )
         if (
             results
+            or set(contracts[0]) != {"run_id", "status", "reason", "detail"}
             or contracts[0].get("status") != "rejected"
             or contracts[0].get("reason") != "receipt_missing"
-            or contracts[0].get("persisted") != "true"
+            or not contracts[0].get("detail")
             or ends[0].get("status") != "contract_rejected"
         ):
             raise ValueError("negative")

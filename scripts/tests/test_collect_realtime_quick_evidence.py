@@ -171,7 +171,7 @@ class RealtimeMarkerTests(unittest.TestCase):
             (
                 f"REALTIME_V1_START run_id={RUN_ID} variant=quick server=http://127.0.0.1:18765",
                 f"REALTIME_V1_DB_WRITE run_id={RUN_ID} ok=true",
-                f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing persisted=true",
+                f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing detail=node_receipt_missing",
                 f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
             )
         )
@@ -187,7 +187,7 @@ class RealtimeMarkerTests(unittest.TestCase):
                 (
                     f"REALTIME_V1_START run_id={RUN_ID}",
                     "REALTIME_V1_DB_WRITE run_id=019fa000-1111-7222-8333-444455556667 ok=true",
-                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing persisted=true",
+                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing detail=x",
                     f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
                 )
             ),
@@ -195,7 +195,7 @@ class RealtimeMarkerTests(unittest.TestCase):
                 (
                     f"REALTIME_V1_START run_id={RUN_ID}",
                     f"REALTIME_V1_DB_WRITE run_id={RUN_ID} ok=true",
-                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing persisted=true",
+                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing detail=x",
                     f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
                     f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
                 )
@@ -204,7 +204,15 @@ class RealtimeMarkerTests(unittest.TestCase):
                 (
                     f"REALTIME_V1_START run_id={RUN_ID}",
                     f"REALTIME_V1_DB_WRITE run_id={RUN_ID} ok=true",
-                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=profile_hash_mismatch persisted=true",
+                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=profile_hash_mismatch detail=x",
+                    f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
+                )
+            ),
+            "\n".join(
+                (
+                    f"REALTIME_V1_START run_id={RUN_ID}",
+                    f"REALTIME_V1_DB_WRITE run_id={RUN_ID} ok=true",
+                    f"REALTIME_V1_CONTRACT run_id={RUN_ID} status=rejected reason=receipt_missing",
                     f"REALTIME_V1_END run_id={RUN_ID} status=contract_rejected",
                 )
             ),
