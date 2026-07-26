@@ -56,7 +56,7 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
     def test_execution_evidence_contracts_are_cataloged_and_source_bound(self):
-        self.assertEqual("1.6.0", self.catalog["catalog_version"])
+        self.assertEqual("1.7.0", self.catalog["catalog_version"])
         self.assertEqual(2, len(self.catalog["execution_evidence_contracts"]))
         by_id = {
             entry["contract_id"]: entry
@@ -90,7 +90,7 @@ class SpecCatalogTest(unittest.TestCase):
         )
         self.assertEqual([], errors)
 
-        realtime_entry = by_id["aneb-realtime-quick-protocol-signature"]
+        realtime_entry = by_id["aneb-realtime-quick-protocol-bounds"]
         realtime_document = json.loads(
             (REPO_ROOT / realtime_entry["path"]).read_text(encoding="utf-8")
         )
@@ -183,7 +183,7 @@ class SpecCatalogTest(unittest.TestCase):
     def test_realtime_execution_evidence_rejects_frame_count_drift(self):
         entry = next(
             item for item in self.catalog["execution_evidence_contracts"]
-            if item["contract_id"] == "aneb-realtime-quick-protocol-signature"
+            if item["contract_id"] == "aneb-realtime-quick-protocol-bounds"
         )
         document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
         profile = json.loads(
@@ -202,6 +202,20 @@ class SpecCatalogTest(unittest.TestCase):
             errors=errors,
         )
         self.assertTrue(any("uplink_frames" in error for error in errors), errors)
+
+        document = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+        document["runtime"]["max_emitted_downlink_frames"] += 1
+        errors = []
+        VERIFY._validate_execution_evidence_document(
+            document,
+            profile=profile,
+            runtime=runtime,
+            label="realtime-protocol-contract",
+            errors=errors,
+        )
+        self.assertTrue(
+            any("max_emitted_downlink_frames" in error for error in errors), errors
+        )
 
     def test_runtime_bound_and_embedded_network_profiles_use_distinct_policies(self):
         published = next(

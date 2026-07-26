@@ -1,7 +1,7 @@
 {
-  "schema": "aneb-realtime-protocol-exact-contract",
-  "contract_id": "aneb-realtime-quick-protocol-signature",
-  "version": "1.0.0",
+  "schema": "aneb-realtime-protocol-bounded-contract",
+  "contract_id": "aneb-realtime-quick-protocol-bounds",
+  "version": "1.1.0",
   "profile": {
     "id": "ai_realtime_voice_quick",
     "version": "1.1.1",
@@ -22,6 +22,8 @@
     "planned_downlink_payload_bytes": 768000,
     "effective_downlink_frames": 676,
     "effective_downlink_payload_bytes": 648960,
+    "max_emitted_downlink_frames": 691,
+    "max_emitted_downlink_payload_bytes": 663360,
     "interrupted_turns": 1,
     "max_stop_within_ms": 300
   },

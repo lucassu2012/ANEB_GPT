@@ -49,7 +49,7 @@ MAX_UINT64 = (1 << 64) - 1
 MAX_PROTOCOL_COUNT = 10_000
 MAX_CONTRACT_INTEGER = 1 << 30
 REPORT_SCHEMA = "aneb-realtime-request-entry-audit-report"
-REPORT_SCHEMA_VERSION = "1.0.0"
+REPORT_SCHEMA_VERSION = "1.1.0"
 PROFILE_CONTRACT = "ai_realtime_voice_quick@1.1.1"
 CONTRACT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -126,11 +126,11 @@ def _load_contract() -> tuple[dict[str, int], dict[str, object], str]:
             "exact_business_counts",
         },
     )
-    if root["schema"] != "aneb-realtime-protocol-exact-contract":
+    if root["schema"] != "aneb-realtime-protocol-bounded-contract":
         raise ValueError("contract_schema_invalid")
-    if root["contract_id"] != "aneb-realtime-quick-protocol-signature":
+    if root["contract_id"] != "aneb-realtime-quick-protocol-bounds":
         raise ValueError("contract_id_invalid")
-    if root["version"] != "1.0.0":
+    if root["version"] != "1.1.0":
         raise ValueError("contract_version_invalid")
     if root["applies_to"] != ["positive_completed"]:
         raise ValueError("contract_scope_invalid")
@@ -169,6 +169,8 @@ def _load_contract() -> tuple[dict[str, int], dict[str, object], str]:
             "planned_downlink_payload_bytes",
             "effective_downlink_frames",
             "effective_downlink_payload_bytes",
+            "max_emitted_downlink_frames",
+            "max_emitted_downlink_payload_bytes",
             "interrupted_turns",
             "max_stop_within_ms",
         },
@@ -191,6 +193,18 @@ def _load_contract() -> tuple[dict[str, int], dict[str, object], str]:
         "planned_downlink_frames"
     ]:
         raise ValueError("contract_effective_frames_invalid")
+    if not (
+        integer_runtime["effective_downlink_frames"]
+        <= integer_runtime["max_emitted_downlink_frames"]
+        <= integer_runtime["planned_downlink_frames"]
+    ):
+        raise ValueError("contract_emitted_frame_bounds_invalid")
+    if not (
+        integer_runtime["effective_downlink_payload_bytes"]
+        <= integer_runtime["max_emitted_downlink_payload_bytes"]
+        <= integer_runtime["planned_downlink_payload_bytes"]
+    ):
+        raise ValueError("contract_emitted_payload_bounds_invalid")
 
     raw_counts = _require_exact_keys(root["exact_business_counts"], {"realtime_sim"})
     counts = {
@@ -206,7 +220,8 @@ def _load_contract() -> tuple[dict[str, int], dict[str, object], str]:
         "sessions": integer_runtime["session_count"],
         "turns": integer_runtime["turn_count"],
         "uplink_frames": integer_runtime["uplink_frames"],
-        "downlink_frames": integer_runtime["effective_downlink_frames"],
+        "downlink_frames_minimum": integer_runtime["effective_downlink_frames"],
+        "downlink_frames_maximum": integer_runtime["max_emitted_downlink_frames"],
         "interrupted_turns": integer_runtime["interrupted_turns"],
         "protocol_ok": True,
     }
@@ -240,7 +255,7 @@ def _profile_enforcement(value: object, mode: object) -> str:
     if value != PROFILE_CONTRACT or mode not in {"positive", "negative"}:
         return "not_evaluated"
     return (
-        "positive_exact_protocol_signature"
+        "positive_bounded_protocol_signature"
         if mode == "positive"
         else "negative_zero_business"
     )
@@ -365,6 +380,29 @@ def _summary_values(match: re.Match[str]) -> dict[str, object]:
     ):
         raise ValueError("summary_count_invalid")
     return values
+
+
+def _summary_matches_contract(
+    summary: dict[str, object],
+    expected: dict[str, object],
+) -> bool:
+    exact_fields = (
+        "sessions",
+        "turns",
+        "uplink_frames",
+        "interrupted_turns",
+        "protocol_ok",
+    )
+    downlink_frames = summary.get("downlink_frames")
+    minimum = expected.get("downlink_frames_minimum")
+    maximum = expected.get("downlink_frames_maximum")
+    return (
+        all(summary.get(field) == expected.get(field) for field in exact_fields)
+        and type(downlink_frames) is int
+        and type(minimum) is int
+        and type(maximum) is int
+        and minimum <= downlink_frames <= maximum
+    )
 
 
 def verify_journal(
@@ -761,7 +799,7 @@ def verify_journal(
         status, reason = "fail", "realtime_summary_duplicate"
     elif protocol_summary is None:
         status, reason = "fail", "realtime_summary_identity_mismatch"
-    elif protocol_summary != expected_signature:
+    elif not _summary_matches_contract(protocol_summary, expected_signature):
         status, reason = "fail", "realtime_summary_mismatch"
     else:
         status, reason = "pass", "ok"

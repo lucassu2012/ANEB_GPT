@@ -511,7 +511,7 @@ def _validate_execution_evidence_document(
     label: str,
     errors: list[str],
 ) -> None:
-    if isinstance(document, dict) and document.get("schema") == "aneb-realtime-protocol-exact-contract":
+    if isinstance(document, dict) and document.get("schema") == "aneb-realtime-protocol-bounded-contract":
         _validate_realtime_execution_evidence_document(
             document,
             profile=profile,
@@ -650,10 +650,10 @@ def _validate_realtime_execution_evidence_document(
     }
     if not _strict_keys(document, root_keys, set(), label, errors):
         return
-    if document.get("contract_id") != "aneb-realtime-quick-protocol-signature":
+    if document.get("contract_id") != "aneb-realtime-quick-protocol-bounds":
         errors.append(f"{label}.contract_id: unsupported realtime evidence contract")
     _semver(document.get("version"), f"{label}.version", errors)
-    if document.get("version") != "1.0.0":
+    if document.get("version") != "1.1.0":
         errors.append(f"{label}.version: unsupported realtime evidence contract version")
     if document.get("applies_to") != ["positive_completed"]:
         errors.append(f"{label}.applies_to: expected only positive_completed")
@@ -723,6 +723,8 @@ def _validate_realtime_execution_evidence_document(
         "planned_downlink_payload_bytes",
         "effective_downlink_frames",
         "effective_downlink_payload_bytes",
+        "max_emitted_downlink_frames",
+        "max_emitted_downlink_payload_bytes",
         "interrupted_turns",
         "max_stop_within_ms",
     }
@@ -741,6 +743,32 @@ def _validate_realtime_execution_evidence_document(
             for session in sessions
             if type(session.get("frame_ms")) is int
         }
+        emitted_bounds: list[tuple[int, int]] = []
+        for session in sessions:
+            frame_ms = session.get("frame_ms")
+            for turn in session.get("turns", []):
+                if not isinstance(turn, dict):
+                    continue
+                planned = turn.get("planned_downlink_frames")
+                frame_bytes = turn.get("downlink_frame_bytes")
+                if type(planned) is not int or type(frame_bytes) is not int:
+                    continue
+                emitted = planned
+                if turn.get("interrupted") is True:
+                    before_stop = turn.get("downlink_frames_before_stop")
+                    stop_within_ms = turn.get("expected_stop_within_ms")
+                    if (
+                        type(before_stop) is not int
+                        or type(stop_within_ms) is not int
+                        or type(frame_ms) is not int
+                        or frame_ms <= 0
+                    ):
+                        continue
+                    emitted = min(
+                        planned,
+                        before_stop + (stop_within_ms + frame_ms - 1) // frame_ms,
+                    )
+                emitted_bounds.append((emitted, emitted * frame_bytes))
         expected = {
             "session_count": len(sessions),
             "turn_count": len(turns),
@@ -777,6 +805,10 @@ def _validate_realtime_execution_evidence_document(
                 for turn in turns
                 if type(turn.get("downlink_frames_before_stop")) is int
                 and type(turn.get("downlink_frame_bytes")) is int
+            ),
+            "max_emitted_downlink_frames": sum(item[0] for item in emitted_bounds),
+            "max_emitted_downlink_payload_bytes": sum(
+                item[1] for item in emitted_bounds
             ),
             "interrupted_turns": sum(turn.get("interrupted") is True for turn in turns),
             "max_stop_within_ms": max(
@@ -853,7 +885,7 @@ def _validate_execution_evidence_contracts(
             }
             if any(entry.get(key) != value for key, value in expected_paths.items()):
                 errors.append(f"{label}: contract must bind Token Quick 1.2.1 paths")
-        elif identity == ("aneb-realtime-quick-protocol-signature", "1.0.0"):
+        elif identity == ("aneb-realtime-quick-protocol-bounds", "1.1.0"):
             expected_paths = {
                 "path": "spec/execution-contracts/ai_realtime_voice_quick-1.1.1.protocol.json",
                 "profile_path": "profiles/published/ai_realtime_voice_quick/profile.json",

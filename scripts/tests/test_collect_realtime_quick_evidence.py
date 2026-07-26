@@ -545,6 +545,35 @@ class CommandContractTests(unittest.TestCase):
                 ):
                     collector.run_as_shell_tail(script)
 
+    def test_strict_json_line_accepts_one_windows_crlf_record(self) -> None:
+        self.assertEqual(
+            {"reason_code": "ok", "status": "pass"},
+            collector._strict_json_line(
+                b'{"reason_code":"ok","status":"pass"}\r\n',
+                code="verifier_output_invalid",
+            ),
+        )
+
+    def test_strict_json_line_rejects_embedded_or_unterminated_records(self) -> None:
+        invalid = (
+            b'{"status":"pass"}',
+            b'{"status":"pass"}\r',
+            b'{"status":"pass"}\n\n',
+            b'{"status":"pass"}\r\n\r\n',
+            b'{"status":\r\n"pass"}\r\n',
+            b' {"status":"pass"}\r\n',
+        )
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(
+                    collector.CollectorError,
+                    "verifier_output_invalid",
+                ):
+                    collector._strict_json_line(
+                        payload,
+                        code="verifier_output_invalid",
+                    )
+
     def test_serverinfo_requires_081_realtime_receipt_and_exact_profile(self) -> None:
         body = self._valid_serverinfo()
         collector.validate_serverinfo(body)

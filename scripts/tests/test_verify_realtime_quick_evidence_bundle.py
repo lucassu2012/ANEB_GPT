@@ -70,7 +70,7 @@ def positive_journal(echo_count: int = 3) -> str:
         )
     lines.append(
         f"ANEB_REALTIME_SUMMARY instance_id={INSTANCE} run_id={RUN_ID} "
-        "sessions=1 turns=3 uplink_frames=400 downlink_frames=676 "
+        "sessions=1 turns=3 uplink_frames=400 downlink_frames=678 "
         "interrupted_turns=1 protocol_ok=true"
     )
     lines.append(audit_line(103 + echo_count, role="window_end", run_id=END))

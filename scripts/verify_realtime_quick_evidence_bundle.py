@@ -271,7 +271,7 @@ def verify_audit(
 ) -> int:
     if (
         report.get("schema") != "aneb-realtime-request-entry-audit-report"
-        or report.get("schema_version") != "1.0.0"
+        or report.get("schema_version") != "1.1.0"
         or report.get("status") != "pass"
         or report.get("reason_code") != "ok"
         or report.get("run_id") != run_id
@@ -293,6 +293,11 @@ def verify_audit(
         summary = require_dict(
             report.get("protocol_summary"), "audit_protocol_summary_missing"
         )
+        expected = require_dict(
+            report.get("expected_protocol_signature"),
+            "audit_protocol_signature_missing",
+        )
+        maximum = expected.get("downlink_frames_maximum")
         if (
             business.get("realtime_sim") != 1
             or business.get("unexpected") != 0
@@ -300,15 +305,38 @@ def verify_audit(
             or counts.get("unattributed_business") != 0
             or counts.get("unexpected_control") != 0
             or echo != client_counts["loaded_rtt_attempts"]
-            or summary
+            or set(expected)
             != {
-                "sessions": client_counts["session_count"],
-                "turns": client_counts["turn_count"],
-                "uplink_frames": 400,
-                "downlink_frames": client_counts["unique_downlink_frames"],
-                "interrupted_turns": client_counts["interrupted_turns"],
-                "protocol_ok": True,
+                "sessions",
+                "turns",
+                "uplink_frames",
+                "downlink_frames_minimum",
+                "downlink_frames_maximum",
+                "interrupted_turns",
+                "protocol_ok",
             }
+            or expected.get("sessions") != client_counts["session_count"]
+            or expected.get("turns") != client_counts["turn_count"]
+            or expected.get("uplink_frames") != 400
+            or expected.get("downlink_frames_minimum")
+            != client_counts["unique_downlink_frames"]
+            or type(maximum) is not int
+            or maximum < client_counts["unique_downlink_frames"]
+            or expected.get("interrupted_turns")
+            != client_counts["interrupted_turns"]
+            or expected.get("protocol_ok") is not True
+            or summary.get("sessions") != client_counts["session_count"]
+            or summary.get("turns") != client_counts["turn_count"]
+            or summary.get("uplink_frames") != 400
+            or type(summary.get("downlink_frames")) is not int
+            or not (
+                client_counts["unique_downlink_frames"]
+                <= summary["downlink_frames"]
+                <= maximum
+            )
+            or summary.get("interrupted_turns")
+            != client_counts["interrupted_turns"]
+            or summary.get("protocol_ok") is not True
         ):
             fail("cross_bound_protocol_mismatch")
     elif (

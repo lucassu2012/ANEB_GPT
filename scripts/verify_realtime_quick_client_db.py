@@ -164,8 +164,9 @@ def verify_published_assets(
         protocol.get("runtime"), "protocol_contract_invalid"
     )
     if (
-        protocol.get("schema") != "aneb-realtime-protocol-exact-contract"
-        or protocol.get("version") != "1.0.0"
+        protocol.get("schema") != "aneb-realtime-protocol-bounded-contract"
+        or protocol.get("contract_id") != "aneb-realtime-quick-protocol-bounds"
+        or protocol.get("version") != "1.1.0"
         or protocol_profile
         != {
             "id": PROFILE_ID,
@@ -198,6 +199,23 @@ def verify_published_assets(
         else int(turn["planned_downlink_frames"])
         for turn in runtime_turns
     )
+    maximum_emitted_downlink_frames = sum(
+        min(
+            int(turn["planned_downlink_frames"]),
+            int(turn["downlink_frames_before_stop"])
+            + math.ceil(
+                int(turn["expected_stop_within_ms"])
+                / int(session["frame_ms"])
+            ),
+        )
+        if turn.get("interrupted") is True
+        else int(turn["planned_downlink_frames"])
+        for session in runtime_sessions
+        for turn in require_list(
+            require_dict(session, "runtime_session_invalid").get("turns"),
+            "runtime_turns_invalid",
+        )
+    )
     expected_runtime = {
         "canonical_sha256": runtime_digest,
         "session_count": len(runtime_sessions),
@@ -225,6 +243,27 @@ def verify_published_assets(
             )
             * int(turn["downlink_frame_bytes"])
             for turn in runtime_turns
+        ),
+        "max_emitted_downlink_frames": maximum_emitted_downlink_frames,
+        "max_emitted_downlink_payload_bytes": sum(
+            (
+                min(
+                    int(turn["planned_downlink_frames"]),
+                    int(turn["downlink_frames_before_stop"])
+                    + math.ceil(
+                        int(turn["expected_stop_within_ms"])
+                        / int(session["frame_ms"])
+                    ),
+                )
+                if turn.get("interrupted") is True
+                else int(turn["planned_downlink_frames"])
+            )
+            * int(turn["downlink_frame_bytes"])
+            for session in runtime_sessions
+            for turn in require_list(
+                require_dict(session, "runtime_session_invalid").get("turns"),
+                "runtime_turns_invalid",
+            )
         ),
         "interrupted_turns": sum(
             turn.get("interrupted") is True for turn in runtime_turns

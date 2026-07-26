@@ -44,7 +44,7 @@ class RealtimeQuickRunAuditCliTest(unittest.TestCase):
         sessions: int = 1,
         turns: int = 3,
         uplink_frames: int = 400,
-        downlink_frames: int = 676,
+        downlink_frames: int = 678,
         interrupted_turns: int = 1,
         protocol_ok: str = "true",
         run_id: str = RUN,
@@ -173,7 +173,7 @@ class RealtimeQuickRunAuditCliTest(unittest.TestCase):
             summaries=[self.summary()],
         )
 
-    def test_positive_exact_protocol_signature_passes(self) -> None:
+    def test_positive_bounded_protocol_signature_passes(self) -> None:
         completed = self.run_audit(self.positive_journal())
 
         self.assertEqual(0, completed.returncode, completed.stderr)
@@ -184,7 +184,7 @@ class RealtimeQuickRunAuditCliTest(unittest.TestCase):
             "aneb-realtime-request-entry-audit-report",
             report["schema"],
         )
-        self.assertEqual("1.0.0", report["schema_version"])
+        self.assertEqual("1.1.0", report["schema_version"])
         self.assertEqual(PROFILE_CONTRACT, report["profile_contract"])
         self.assertRegex(
             report["profile_contract_definition_sha256"],
@@ -203,12 +203,46 @@ class RealtimeQuickRunAuditCliTest(unittest.TestCase):
                 "sessions": 1,
                 "turns": 3,
                 "uplink_frames": 400,
-                "downlink_frames": 676,
+                "downlink_frames": 678,
                 "interrupted_turns": 1,
                 "protocol_ok": True,
             },
             report["protocol_summary"],
         )
+        self.assertEqual(
+            {
+                "sessions": 1,
+                "turns": 3,
+                "uplink_frames": 400,
+                "downlink_frames_minimum": 676,
+                "downlink_frames_maximum": 691,
+                "interrupted_turns": 1,
+                "protocol_ok": True,
+            },
+            report["expected_protocol_signature"],
+        )
+
+    def test_server_emission_accepts_the_derived_inclusive_bounds(self) -> None:
+        for value in (676, 691):
+            with self.subTest(downlink_frames=value):
+                completed = self.run_audit(
+                    self.window(
+                        [self.capability(), self.realtime()],
+                        summaries=[self.summary(downlink_frames=value)],
+                    )
+                )
+                self.assertEqual(0, completed.returncode, completed.stdout)
+
+    def test_server_emission_rejects_values_outside_the_derived_bounds(self) -> None:
+        for value in (675, 692):
+            with self.subTest(downlink_frames=value):
+                completed = self.run_audit(
+                    self.window(
+                        [self.capability(), self.realtime()],
+                        summaries=[self.summary(downlink_frames=value)],
+                    )
+                )
+                self.assert_reason(completed, "realtime_summary_mismatch")
 
     def test_negative_capability_only_window_passes(self) -> None:
         completed = self.run_audit(
@@ -257,7 +291,6 @@ class RealtimeQuickRunAuditCliTest(unittest.TestCase):
             ("sessions", 2),
             ("turns", 4),
             ("uplink_frames", 399),
-            ("downlink_frames", 675),
             ("interrupted_turns", 0),
             ("protocol_ok", "false"),
         )

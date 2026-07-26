@@ -653,6 +653,33 @@ class RealtimeQuickClientDbVerifierTests(unittest.TestCase):
             json.loads(completed.stdout)["reason_code"],
         )
 
+    def test_rejects_protocol_contract_with_rewritten_maximum_emission(self) -> None:
+        protocol = json.loads(
+            (
+                ROOT
+                / "spec"
+                / "execution-contracts"
+                / "ai_realtime_voice_quick-1.1.1.protocol.json"
+            ).read_text(encoding="utf-8")
+        )
+        protocol["runtime"]["max_emitted_downlink_frames"] = 692
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = root / "aneb-probe.db"
+            protocol_path = root / "protocol.json"
+            protocol_path.write_text(
+                json.dumps(protocol, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            write_database(database, valid_body())
+            completed = self.run_verifier(database, protocol=protocol_path)
+
+        self.assertEqual(1, completed.returncode)
+        self.assertEqual(
+            "protocol_runtime_derivation_mismatch",
+            json.loads(completed.stdout)["reason_code"],
+        )
+
     def test_rejects_self_consistent_fabricated_score(self) -> None:
         body = valid_body()
         body["evaluation"]["score"].update(value=99.0, grade="B")

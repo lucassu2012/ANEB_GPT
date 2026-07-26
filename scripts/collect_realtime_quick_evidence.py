@@ -1891,14 +1891,21 @@ def write_http_capture(
 def _strict_json_line(payload: bytes, *, code: str) -> dict[str, object]:
     try:
         text = payload.decode("utf-8", errors="strict")
+        if text.endswith("\r\n"):
+            body = text[:-2]
+        elif text.endswith("\n"):
+            body = text[:-1]
+        else:
+            raise ValueError("line")
         if (
-            not text.endswith("\n")
-            or text.count("\n") != 1
-            or text[:-1] != text[:-1].strip()
+            not body
+            or "\r" in body
+            or "\n" in body
+            or body != body.strip()
         ):
             raise ValueError("line")
         value = json.loads(
-            text,
+            body,
             object_pairs_hook=_unique_json_object,
             parse_constant=lambda item: (_ for _ in ()).throw(ValueError(item)),
         )
