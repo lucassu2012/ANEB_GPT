@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -607,6 +608,68 @@ class CommandContractTests(unittest.TestCase):
                         code="verifier_output_invalid",
                     )
 
+    def test_negative_proxy_rejects_request_timeout_outside_child_contract(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                collector.CollectorError,
+                "negative_proxy_request_timeout_invalid",
+            ):
+                collector.NegativeProxyProcess(
+                    python_path=Path("python"),
+                    server_base="https://203.0.113.10:8443",
+                    ca_path=Path("ca.pem"),
+                    evidence_directory=Path(temporary),
+                    request_timeout_seconds=900,
+                )
+
+    def test_negative_proxy_persists_child_startup_failure_evidence(self) -> None:
+        class FailedProcess:
+            def __init__(self) -> None:
+                self.stdout = io.BytesIO(b"")
+                self.stderr = io.BytesIO(
+                    b'{"reason_code":"config_invalid","status":"fail"}\r\n'
+                )
+
+            @staticmethod
+            def poll() -> int:
+                return 2
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            process = collector.NegativeProxyProcess(
+                python_path=Path("python"),
+                server_base="https://203.0.113.10:8443",
+                ca_path=Path("ca.pem"),
+                evidence_directory=root,
+                request_timeout_seconds=120,
+            )
+            with (
+                mock.patch.object(
+                    collector.subprocess,
+                    "Popen",
+                    return_value=FailedProcess(),
+                ),
+                self.assertRaisesRegex(
+                    collector.CollectorError,
+                    "negative_proxy_ready_invalid",
+                ),
+            ):
+                process.start()
+
+            self.assertEqual(b"", process.output_path.read_bytes())
+            expected_stderr = (
+                b'{"reason_code":"config_invalid","status":"fail"}\r\n'
+            )
+            self.assertEqual(expected_stderr, process.stderr_path.read_bytes())
+            report = json.loads(process.startup_failure_path.read_text("utf-8"))
+            self.assertEqual(2, report["returncode"])
+            self.assertEqual(
+                hashlib.sha256(expected_stderr).hexdigest(),
+                report["stderr_sha256"],
+            )
+
     def test_serverinfo_requires_081_realtime_receipt_and_exact_profile(self) -> None:
         body = self._valid_serverinfo()
         collector.validate_serverinfo(body)
@@ -1212,8 +1275,12 @@ class EvidencePublicationTests(unittest.TestCase):
                 collector,
                 "NegativeProxyProcess",
                 return_value=proxy,
-            ):
+            ) as proxy_factory:
                 backend._start_negative_proxy()
+            self.assertEqual(
+                backend.config.command_timeout_seconds,
+                proxy_factory.call_args.kwargs["request_timeout_seconds"],
+            )
             backend._remove_reverse()
 
             expected = {

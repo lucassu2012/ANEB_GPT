@@ -2600,8 +2600,14 @@ class NegativeProxyProcess:
         server_base: str,
         ca_path: Path,
         evidence_directory: Path,
-        timeout_seconds: int,
+        request_timeout_seconds: int,
     ) -> None:
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not isinstance(request_timeout_seconds, int)
+            or not 1 <= request_timeout_seconds <= 300
+        ):
+            raise CollectorError("negative_proxy_request_timeout_invalid")
         parsed = urllib.parse.urlsplit(server_base)
         port = parsed.port or 443
         self.arguments = [
@@ -2618,14 +2624,48 @@ class NegativeProxyProcess:
             "--listen-port",
             str(NEGATIVE_DEVICE_PORT),
             "--request-timeout-seconds",
-            str(timeout_seconds),
+            str(request_timeout_seconds),
             "--upstream-timeout-seconds",
             "20",
         ]
         self.output_path = evidence_directory / "negative-proxy.stdout.jsonl"
         self.stderr_path = evidence_directory / "negative-proxy.stderr.txt"
+        self.startup_failure_path = (
+            evidence_directory / "negative-proxy-startup-failure.json"
+        )
         self.process: subprocess.Popen[bytes] | None = None
         self._first_line = b""
+
+    def _persist_startup_failure(self) -> None:
+        process = self.process
+        if process is None:
+            return
+        self.stop()
+        stdout_remainder = (
+            b""
+            if process.stdout is None
+            else process.stdout.read(2 * 1024 * 1024 + 1)
+        )
+        stderr = (
+            b""
+            if process.stderr is None
+            else process.stderr.read(2 * 1024 * 1024 + 1)
+        )
+        stdout = self._first_line + stdout_remainder
+        stdout_truncated = len(stdout) > 2 * 1024 * 1024
+        stderr_truncated = len(stderr) > 2 * 1024 * 1024
+        _write_exclusive_bytes(self.output_path, stdout[: 2 * 1024 * 1024])
+        _write_exclusive_bytes(self.stderr_path, stderr[: 2 * 1024 * 1024])
+        _write_exclusive_json(
+            self.startup_failure_path,
+            {
+                "returncode": process.poll(),
+                "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+                "stderr_truncated": stderr_truncated,
+                "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+                "stdout_truncated": stdout_truncated,
+            },
+        )
 
     def start(self) -> None:
         try:
@@ -2642,21 +2682,24 @@ class NegativeProxyProcess:
         if self.process.stdout is None:
             self.stop()
             raise CollectorError("negative_proxy_stdout_unavailable")
-        self._first_line = _readline_with_timeout(
-            self.process.stdout,
-            timeout_seconds=15,
-        )
-        ready = _strict_json_line(
-            self._first_line,
-            code="negative_proxy_ready_invalid",
-        )
-        if ready != {
-            "listen_host": "127.0.0.1",
-            "listen_port": NEGATIVE_DEVICE_PORT,
-            "status": "ready",
-        }:
-            self.stop()
-            raise CollectorError("negative_proxy_ready_invalid")
+        try:
+            self._first_line = _readline_with_timeout(
+                self.process.stdout,
+                timeout_seconds=15,
+            )
+            ready = _strict_json_line(
+                self._first_line,
+                code="negative_proxy_ready_invalid",
+            )
+            if ready != {
+                "listen_host": "127.0.0.1",
+                "listen_port": NEGATIVE_DEVICE_PORT,
+                "status": "ready",
+            }:
+                raise CollectorError("negative_proxy_ready_invalid")
+        except CollectorError:
+            self._persist_startup_failure()
+            raise
 
     def wait(self, *, expected_run_id: str, timeout_seconds: int) -> None:
         if (
@@ -3665,7 +3708,7 @@ class LiveCollectorBackend:
             server_base=self.config.server_base,
             ca_path=self.config.server_ca_path,
             evidence_directory=self.partial,
-            timeout_seconds=self.config.run_timeout_seconds,
+            request_timeout_seconds=self.config.command_timeout_seconds,
         )
         self.proxy.start()
         self.adb.text(

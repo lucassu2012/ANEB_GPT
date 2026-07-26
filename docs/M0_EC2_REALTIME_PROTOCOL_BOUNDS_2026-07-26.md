@@ -175,3 +175,27 @@ including manifest, candidate, phone, remote, lock and recomputed cross-bound
 evidence. Only the temporary parent-directory ACL binding was deliberately
 substituted during that replay; the original failed collection remains
 diagnostic and is not promoted to READY.
+
+## Negative-proxy timeout-contract correction
+
+- ［KNOWN｜HIGH］Two formal negative attempts stopped before App launch and
+  published no READY. Both retained clean phone/remote cleanup evidence and the
+  machine failure `negative_proxy_ready_invalid`.
+- ［COMPUTED｜HIGH］The collector passed its 900-second whole-run timeout to the
+  single-request negative proxy. The proxy contract permits only 1–300 seconds,
+  so the child deterministically exited with `config_invalid` and return code 2.
+- ［KNOWN｜HIGH］The parent discarded startup stderr and exit status, collapsing
+  that precise child failure into the generic ready-line error.
+
+The collector now passes the separately validated command timeout (120 seconds
+for the formal plan) to the proxy and rejects any out-of-range value before
+launch. A startup failure also persists bounded stdout/stderr plus their full
+SHA-256 values, truncation flags and the child return code in the diagnostic
+partial collection. These diagnostics do not relax the ready record, one-shot
+proxy, reverse ownership, zero-business, cleanup, independent verification or
+READY publication gates.
+
+The real child-process feedback loop completed 50/50 loopback starts with the
+corrected timeout. Ready latency was 0.358 seconds median and 0.604 seconds max.
+The failed live attempts remain diagnostic only and will not be repaired into
+READY.
