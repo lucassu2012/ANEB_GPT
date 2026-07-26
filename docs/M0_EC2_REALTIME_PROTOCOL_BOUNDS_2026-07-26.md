@@ -145,3 +145,33 @@ test proves the persisted report is exact canonical LF JSON.
 
 The failed partial collection remains diagnostic only and is not repaired into
 READY. A clean commit, green CI candidate and a new collection are required.
+
+## Independent collection-consumer corrections
+
+- ［KNOWN｜HIGH］Formal positive run
+  `019f9ec4-df1c-73eb-891d-c0bc8535e1df` completed its business protocol and
+  all phone/remote cleanup gates, but publication failed closed with
+  `candidate_file_set_invalid`.
+- ［KNOWN｜HIGH］The frozen candidate contained the exact five verified CI files,
+  including `ANEB-安装说明.txt`. The collector and provenance verifier used that
+  real packaged name, while the independent collection verifier and its
+  synthetic fixture shared the same mojibake filename. Their mutual agreement
+  hid the production incompatibility.
+- ［KNOWN｜HIGH］After correcting that filename contract, a complete offline
+  replay exposed a second independent-consumer drift: Android `dumpsys package`
+  and empty `dumpsys activity services <package>` records use CRLF/header forms,
+  while the verifier fixtures only exercised simplified LF and `(nothing)`
+  forms.
+
+The collection verifier now requires the real five-file Unicode set, accepts
+only LF/CRLF for the exact installed version line, and recognizes only the
+bounded Android empty-service representations already accepted by the
+collector. It still rejects additional candidate files, non-empty service
+dumps, invalid versions and non-canonical evidence JSON.
+
+Seventeen focused verifier tests pass. A diagnostic reconstruction of the
+frozen publication snapshot also passes the complete independent consumer,
+including manifest, candidate, phone, remote, lock and recomputed cross-bound
+evidence. Only the temporary parent-directory ACL binding was deliberately
+substituted during that replay; the original failed collection remains
+diagnostic and is not promoted to READY.

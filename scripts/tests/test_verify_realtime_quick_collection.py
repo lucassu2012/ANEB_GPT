@@ -341,7 +341,7 @@ class CollectionFixture:
         (candidate / "build-manifest.json").write_bytes(b"manifest")
         (candidate / "checksums.sha256").write_bytes(b"checksums")
         (candidate / "provenance.sigstore.json").write_bytes(b"sigstore")
-        (candidate / "ANEB-瀹夎璇存槑.txt").write_bytes(b"instructions")
+        (candidate / "ANEB-安装说明.txt").write_bytes(b"instructions")
         (self.bundle / "installed-base.apk").write_bytes(APK_BYTES)
         (self.bundle / "installed-package.txt").write_bytes(
             b"versionCode=45 minSdk=31\nversionName=0.5.13-codex\n",
@@ -455,6 +455,18 @@ class CollectionFixture:
 
 
 class RealtimeQuickCollectionVerifierTests(unittest.TestCase):
+    def test_candidate_file_set_uses_packaged_unicode_name(self) -> None:
+        self.assertEqual(
+            {
+                "ANEB-Probe-0.5.13-codex-debug.apk",
+                "ANEB-安装说明.txt",
+                "build-manifest.json",
+                "checksums.sha256",
+                "provenance.sigstore.json",
+            },
+            verifier.CI_CANDIDATE_NAMES,
+        )
+
     def verify(self, fixture: CollectionFixture) -> dict[str, object]:
         with mock.patch.object(
             verifier,
@@ -478,6 +490,46 @@ class RealtimeQuickCollectionVerifierTests(unittest.TestCase):
         self.assertTrue(report["phone_state_reverified"])
         self.assertTrue(report["remote_state_reverified"])
         self.assertTrue(report["candidate_provenance_reverified"])
+
+    def test_accepts_android_crlf_installed_package_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = CollectionFixture(Path(temporary))
+            (fixture.bundle / "installed-package.txt").write_bytes(
+                b"versionCode=45 minSdk=31\r\n"
+                b"versionName=0.5.13-codex\r\n",
+            )
+            fixture.rebuild_manifest()
+            report = self.verify(fixture)
+
+        self.assertEqual("pass", report["status"])
+
+    def test_accepts_android_empty_service_dump_with_header(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = CollectionFixture(Path(temporary))
+            raw = phone_raw()
+            raw["services"] = {
+                package: (
+                    "ACTIVITY MANAGER SERVICES (dumpsys activity services)\r\n"
+                    "  (nothing)"
+                )
+                for package in verifier.RELEVANT_PACKAGES
+            }
+            phone_hash = verifier.phone_state_sha256(raw)
+            for prefix in ("phone-preflight", "phone-postflight"):
+                write_json(fixture.bundle / f"{prefix}-t0-raw.json", raw)
+                write_json(fixture.bundle / f"{prefix}-t2-raw.json", raw)
+                receipt = json.loads(
+                    (fixture.bundle / f"{prefix}-receipt.json").read_text(
+                        encoding="utf-8",
+                    )
+                )
+                receipt["t0_sha256"] = phone_hash
+                receipt["t2_sha256"] = phone_hash
+                write_json(fixture.bundle / f"{prefix}-receipt.json", receipt)
+            fixture.rebuild_manifest()
+            report = self.verify(fixture)
+
+        self.assertEqual("pass", report["status"])
 
     def test_rejects_missing_evidence_root_security_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

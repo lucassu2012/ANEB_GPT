@@ -149,7 +149,7 @@ CI_CANDIDATE_NAMES = frozenset(
         "build-manifest.json",
         "checksums.sha256",
         "provenance.sigstore.json",
-        "ANEB-瀹夎璇存槑.txt",
+        "ANEB-安装说明.txt",
     }
 )
 PLAN_KEYS = frozenset(
@@ -758,7 +758,10 @@ def _verify_candidate(bundle: Path, plan: dict[str, Any]) -> None:
     except UnicodeError:
         fail("installed_package_invalid")
     version_codes = re.findall(r"(?m)^\s*versionCode=([0-9]+)\b", package_text)
-    version_names = re.findall(r"(?m)^\s*versionName=([^\r\n]+)$", package_text)
+    version_names = re.findall(
+        r"(?m)^\s*versionName=([^\r\n]+)\r?$",
+        package_text,
+    )
     if (
         not version_codes
         or any(int(value) != EXPECTED_VERSION_CODE for value in version_codes)
@@ -812,6 +815,18 @@ def _active_vpn(connectivity: str) -> bool:
         if active is not None and disconnected is None:
             return True
     return False
+
+
+def _is_empty_service_dump(value: str) -> bool:
+    normalized = value.strip()
+    return normalized in {"", "(nothing)", "No services"} or (
+        re.fullmatch(
+            r"ACTIVITY MANAGER SERVICES \(dumpsys activity services\)\r?\n"
+            r"[ \t]*\(nothing\)",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _phone_state(raw: dict[str, Any]) -> dict[str, object]:
@@ -872,11 +887,10 @@ def _phone_state(raw: dict[str, Any]) -> dict[str, object]:
         if not isinstance(process, str) or not isinstance(service, str):
             fail("phone_state_invalid")
         process = process.strip()
-        service = service.strip()
-        if process or service not in {"", "(nothing)", "No services"}:
+        if process or not _is_empty_service_dump(service):
             fail("phone_state_invalid")
         processes.append([package, process])
-        services.append([package, service])
+        services.append([package, ""])
 
     accessibility = raw.get("enabled_accessibility")
     accessibility_dump = raw.get("accessibility_dump")
