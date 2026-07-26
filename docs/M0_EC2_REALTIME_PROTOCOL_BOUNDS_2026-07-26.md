@@ -122,3 +122,26 @@ group scores and the final score.
 
 This remains a diagnostic replay. A new clean commit, green CI provenance and
 new formal positive and negative collections are still required before READY.
+
+## Windows verifier-report persistence correction
+
+- ［KNOWN｜HIGH］Formal positive run
+  `019f9e80-8841-75b5-b4c7-98010e68b407` completed its business protocol and
+  all finally cleanup gates. PhoneGuard returned the exact frozen Launcher
+  state, the E-01 lock was released, and the remote fingerprints remained
+  stable.
+- ［KNOWN｜HIGH］Publication correctly failed closed before READY with
+  `cross_report_invalid_noncanonical`.
+- ［KNOWN｜HIGH］The cross verifier emitted one valid JSON record terminated by
+  Windows CRLF (`0D 0A`). `_run_json_verifier` validated that record but then
+  persisted the original platform newline bytes. The final collection consumer
+  requires canonical JSON terminated by one LF (`0A`).
+
+The collector now persists the already-validated report by canonical JSON
+serialization instead of copying child-process stdout bytes. Parsing remains
+strict: unterminated, multi-record, embedded-newline, leading-whitespace,
+duplicate-key and non-JSON outputs are still rejected. A Windows CRLF regression
+test proves the persisted report is exact canonical LF JSON.
+
+The failed partial collection remains diagnostic only and is not repaired into
+READY. A clean commit, green CI candidate and a new collection are required.

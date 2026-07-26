@@ -554,6 +554,39 @@ class CommandContractTests(unittest.TestCase):
             ),
         )
 
+    def test_json_verifier_report_is_persisted_as_canonical_lf_json(self) -> None:
+        class WindowsRunner:
+            def run(
+                self,
+                arguments: list[str],
+                *,
+                timeout_seconds: float,
+                max_output_bytes: int,
+                stdin: bytes | None = None,
+            ) -> collector.ProcessResult:
+                del arguments, timeout_seconds, max_output_bytes, stdin
+                return collector.ProcessResult(
+                    returncode=0,
+                    stdout=b'{"reason_code":"ok","status":"pass"}\r\n',
+                    stderr=b"",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "report.json"
+            report = collector._run_json_verifier(
+                runner=WindowsRunner(),
+                arguments=["verifier"],
+                output=output,
+                code="test_verifier",
+                timeout_seconds=5,
+            )
+
+            self.assertEqual({"reason_code": "ok", "status": "pass"}, report)
+            self.assertEqual(
+                b'{"reason_code":"ok","status":"pass"}\n',
+                output.read_bytes(),
+            )
+
     def test_strict_json_line_rejects_embedded_or_unterminated_records(self) -> None:
         invalid = (
             b'{"status":"pass"}',

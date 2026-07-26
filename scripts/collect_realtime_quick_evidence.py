@@ -2950,7 +2950,7 @@ def _run_json_verifier(
     report = _strict_json_line(result.stdout, code=f"{code}_output_invalid")
     if report.get("status") != "pass" or report.get("reason_code") != "ok":
         raise CollectorError(f"{code}_report_not_pass")
-    _write_exclusive_bytes(output, result.stdout)
+    _write_exclusive_bytes(output, _canonical_json_bytes(report))
     return report
 
 
