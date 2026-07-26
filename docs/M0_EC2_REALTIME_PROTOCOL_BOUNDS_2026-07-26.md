@@ -275,3 +275,24 @@ The timed-out negative collection remains diagnostic only. The existing
 positive READY is valid for commit `44049ed`, but a new clean commit, green CI
 candidate, and same-candidate positive/negative pair are still required for the
 final M0-EC2 gate.
+
+## Final same-candidate closure
+
+- ［KNOWN｜HIGH］Commit `fe60c1cc044a19ae2109847226a35d2326ada54e`
+  passed the complete local quality gate and GitHub Actions run `30215857444`
+  (7/7 jobs). Independent provenance verification bound APK SHA-256
+  `3855b972d66597f4c9b15a0a5532696f5eab9a4b32397d322a648446efab4664`
+  to that source and workflow run.
+- ［KNOWN｜HIGH］The same candidate produced positive READY SHA-256
+  `20486929a27f2b0e6efb1097312b0e1ab58dd6eb224dc0c4176c7f6d76e8c4ad`
+  and negative READY SHA-256
+  `e48fa31ec66c6a09a3f15d923da9898575b413b60f5dda763f856e09317e979f`;
+  both independent release verifiers passed.
+- ［KNOWN｜HIGH］The negative run proved control count 1, realtime business
+  count 0, one retained `receipt_missing` invalid result, null score/grade and
+  zero session/turn/frame KPI output.
+- ［KNOWN｜HIGH］Final PhoneGuard, ADB reverse, remote-lock and shared-host
+  fingerprint checks passed. M0-EC2 is therefore closed only for the frozen AI
+  Realtime Quick slice; Standard/Recovery and formal experience baselines remain
+  outside this claim. Full evidence is recorded in
+  `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`.

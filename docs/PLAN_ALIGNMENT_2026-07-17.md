@@ -186,3 +186,13 @@
 - ［KNOWN｜HIGH］两侧都按 P1a/P1b/P2/P3/Profile/M0–M4 更新进展，版本、测试数字、真机 run 和部署状态必须能回指仓库或原始证据。
 - ［KNOWN｜HIGH］“已实现”“已部署”“已真机验证”“已达到目标”是四个不同状态，后续报告不得混写。
 - ［INFERRED｜HIGH］两套客户端的价值是互相复核测量语义与结果，而不是靠功能数量竞赛；发现分歧时先对齐 spec，再比较实现。
+
+## 11. 2026-07-27：M0-EC2 AI 实时 Quick 结案
+
+- ［KNOWN｜HIGH］App `0.5.13-codex` / server `0.8.1` / AI 实时 Quick `1.1.1` 已在 source `fe60c1c`、CI run `30215857444` 的 exact APK 上完成 P40 正负 READY；正向 run `019fa00a-3e17-7c9d-959b-50aab47c1b91`，负向 run `019fa00d-17f3-71d3-b2d9-af2e9271c96d`。
+- ［KNOWN｜HIGH］正向业务真实完成；负向在能力 receipt 缺失时业务前拒绝，服务端 realtime business count=0，客户端 score/grade=null、业务产物为零。两个 READY 均由独立 release verifier 重算通过。
+- ［KNOWN｜HIGH］最终 P40 回到 Huawei Launcher，相关 PID/service/accessibility/VPN/tun=0，ADB reverse empty，Wi-Fi on，stayon=7；E-01 锁释放，PID/二进制/Docker/eth0/firewall 指纹与进入前一致。
+- ［KNOWN｜HIGH］正向 `100/A` 只对应一次 Quick，最终 verdict 仍为 `INCONCLUSIVE/LOW`、coverage 0.1；不得冒充正式无线体验基线。
+- ［INFERRED｜HIGH］计划架构的下一最小闭环为 M0-EC3 网络综合 Quick，复用 EC1/EC2 已验证的 provenance、正负 READY、同-run 审计和精确清理机制。
+
+完整证据见 `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`。

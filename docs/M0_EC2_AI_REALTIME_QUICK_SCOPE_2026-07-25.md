@@ -113,11 +113,11 @@
 | EC2-03 P2 审计 | 精确实时路由、`realtime_run` scope、有界会话摘要及隐私/污染门 | ［KNOWN｜HIGH］本地完成；并发、缺号、未归因流量、摘要不一致与日志隐私均 fail closed | 真机同-run 原始 journal 重算 |
 | EC2-04 P1 能力门 | Quick 在首个 WebSocket 前验证本地/节点/Profile/原语合同 | ［KNOWN｜HIGH］本地完成；能力缺失/冲突在业务前拒绝，Standard/Recovery 保持兼容 | CI APK + P40 正负请求计数 |
 | EC2-05 P1 持久化 | 固定机器 reason、零业务产物、null score/grade、单次 Room 终态 | ［KNOWN｜HIGH］本地完成；Room v19、结果信封、日志顺序和二次插入防护均有正反例 | 真机冻结 DB/WAL/SHM 独立复算 |
-| EC2-06 采集/复核 | 实时 collector、DB/audit/协议摘要/cross-bundle verifier 与 D-87 READY | ［KNOWN｜HIGH］本地完成；正/负模式库存分离、私有根 ACL、manifest、独立 report 与 READY 最终消费者已闭合 | 两次真实 collection 各自发布 READY |
-| EC2-07 离线门 | Kotlin/Go/Python 正反例、全仓质量门、凭据扫描与 clean commit | ［KNOWN｜HIGH］本地门禁完成；Realtime 定向 100 项通过（1 项设计跳过），最终全仓 719 项 Python 通过（16 项设计跳过）、behavior model 43/43、Android/Go/发布边界全绿，651 个跟踪文件及 13 个 staged 路径密钥扫描通过 | 提交本候选并进入 CI provenance |
-| EC2-08 云端门 | 同提交 0.5.13/0.8.1 provenance | ［KNOWN｜HIGH］未执行 | push 后等待 GitHub CI 全绿并独立复核四项候选 |
-| EC2-09 真机正负 | P40 正向 exact signature 与负向 `receipt_missing` zero-business | ［KNOWN｜HIGH］未执行；当前没有 M0-EC2 READY | 受保护部署 0.8.1 后分别短租用 P40 |
-| EC2-10 收尾 | 精确清理 P40/E-01、独立复核两个 READY 并回填账本 | ［KNOWN｜HIGH］未执行 | EC2-09 后执行 |
+| EC2-06 采集/复核 | 实时 collector、DB/audit/协议摘要/cross-bundle verifier 与 D-87 READY | ［KNOWN｜HIGH］完成；正/负模式库存分离、私有根 ACL、manifest、独立 report 与 READY 最终消费者已闭合；两次真实 collection 均发布 READY | 已结案；两个 READY 均由独立 consumer 重算通过 |
+| EC2-07 离线门 | Kotlin/Go/Python 正反例、全仓质量门、凭据扫描与 clean commit | ［KNOWN｜HIGH］完成；最终 source `fe60c1c` 的完整 quality gate 为主 Python 747 项通过（16 项设计跳过）、behavior model 43/43、Android/Lint/供应链/server+gateway Go 全绿；随后 GitHub CI 7/7 全绿 | 已结案；不以更早候选的局部门替代最终候选证据 |
+| EC2-08 云端门 | 同提交 0.5.13/0.8.1 provenance | ［KNOWN｜HIGH］完成；source `fe60c1c`、CI `30215857444` 7/7 全绿，APK `3855b972…4664` 与 E-01 binary `43e7dc16…5197` 独立复核通过 | 已结案；精确身份见 `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md` |
+| EC2-09 真机正负 | P40 正向 exact signature 与负向 `receipt_missing` zero-business | ［KNOWN｜HIGH］完成；正向 run `019fa00a-3e17-7c9d-959b-50aab47c1b91`，负向 run `019fa00d-17f3-71d3-b2d9-af2e9271c96d`，两个 READY 均由独立 release verifier 通过 | 已结案；Quick 正向仍为 `INCONCLUSIVE/LOW`，不得扩写为正式基线 |
+| EC2-10 收尾 | 精确清理 P40/E-01、独立复核两个 READY 并回填账本 | ［KNOWN｜HIGH］完成；最终 PhoneGuard `16ac15ca…95d5`、reverse empty、E-01 lock released 且共享主机指纹与进入前一致 | 已结案；完整证据见 `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md` |
 
 ### 7.1 本地候选已形成的执行链
 
