@@ -477,6 +477,19 @@ class CommandContractTests(unittest.TestCase):
                 expected_binary_sha256="c" * 64,
             )
 
+    def test_remote_snapshot_canonicalizes_only_iptables_wall_clock_wrappers(
+        self,
+    ) -> None:
+        script = collector.remote_snapshot_script()
+
+        self.assertIn("canonicalize_iptables_save()", script)
+        self.assertIn("malformed iptables-save Generated header", script)
+        self.assertIn("malformed iptables-save Completed footer", script)
+        self.assertIn('v4_snapshot="$(iptables-save |', script)
+        self.assertIn('v6_snapshot="$(ip6tables-save |', script)
+        self.assertNotIn('v4="$(iptables-save | hash_stream)"', script)
+        self.assertNotIn('v6="$(ip6tables-save | hash_stream)"', script)
+
     def test_serverinfo_requires_081_realtime_receipt_and_exact_profile(self) -> None:
         body = self._valid_serverinfo()
         collector.validate_serverinfo(body)
@@ -685,6 +698,73 @@ class EvidencePublicationTests(unittest.TestCase):
         backend.cleanup_phone_complete = True
         backend.cleanup_remote_complete = True
         return backend
+
+    def test_install_signature_mismatch_is_persisted_and_machine_readable(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b"candidate-apk\n"
+            apk = root / "ANEB-Probe-0.5.13-codex-debug.apk"
+            apk.write_bytes(payload)
+
+            class FailedInstallRunner:
+                def run(
+                    self,
+                    arguments: list[str],
+                    *,
+                    timeout_seconds: float,
+                    max_output_bytes: int = collector.MAX_COMMAND_OUTPUT_BYTES,
+                    stdin: bytes | None = None,
+                ) -> collector.ProcessResult:
+                    del timeout_seconds, max_output_bytes, stdin
+                    self.arguments = arguments
+                    return collector.ProcessResult(
+                        returncode=1,
+                        stdout=(
+                            b"Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: "
+                            b"Package com.aneb.probe.codex signatures do not match]\r\n"
+                        ),
+                        stderr=b"",
+                    )
+
+            runner = FailedInstallRunner()
+            adb = collector.AdbClient(
+                runner=runner,
+                executable=Path("adb"),
+                serial="SERIAL",
+                timeout_seconds=30,
+            )
+            identity = collector.CiCandidateIdentity(
+                apk_file_name=apk.name,
+                apk_sha256=hashlib.sha256(payload).hexdigest(),
+                apk_size_bytes=len(payload),
+                signer_sha256="a" * 64,
+                workflow_run_id=1,
+                workflow_run_url=(
+                    "https://github.com/lucassu2012/ANEB_GPT/actions/runs/1"
+                ),
+            )
+
+            with self.assertRaisesRegex(
+                collector.CollectorError,
+                "adb_install_candidate_signature_mismatch",
+            ):
+                collector.verify_or_install_candidate(
+                    adb,
+                    candidate_directory=root,
+                    identity=identity,
+                    evidence_directory=root,
+                    install=True,
+                )
+
+            self.assertEqual(
+                (
+                    b"Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: "
+                    b"Package com.aneb.probe.codex signatures do not match]\n"
+                ),
+                (root / "adb-install.txt").read_bytes(),
+            )
 
     def test_stop_target_accepts_huawei_empty_service_dump(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
