@@ -1218,6 +1218,27 @@ def _remote_sha256(
     return match.group(1)
 
 
+def parse_installed_package_identity(package_dump: str) -> tuple[int, str]:
+    if not isinstance(package_dump, str) or "\x00" in package_dump:
+        raise CollectorError("installed_package_identity_invalid")
+    version_codes = re.findall(
+        r"(?m)^\s*versionCode=([0-9]+)\b",
+        package_dump,
+    )
+    version_names = re.findall(
+        r"(?m)^\s*versionName=([^\r\n]+)\r?$",
+        package_dump,
+    )
+    if (
+        not version_codes
+        or len({int(value) for value in version_codes}) != 1
+        or not version_names
+        or len({value.strip() for value in version_names}) != 1
+    ):
+        raise CollectorError("installed_package_identity_invalid")
+    return int(version_codes[0]), version_names[0].strip()
+
+
 def verify_or_install_candidate(
     adb: AdbClient,
     *,
@@ -1259,19 +1280,10 @@ def verify_or_install_candidate(
         ["shell", "dumpsys", "package", PACKAGE_NAME],
         code="adb_package_identity",
     )
-    version_code = re.findall(
-        r"(?m)^\s*versionCode=([0-9]+)\b",
-        package_dump,
-    )
-    version_name = re.findall(
-        r"(?m)^\s*versionName=([^\r\n]+)$",
-        package_dump,
-    )
+    version_code, version_name = parse_installed_package_identity(package_dump)
     if (
-        not version_code
-        or any(int(value) != EXPECTED_VERSION_CODE for value in version_code)
-        or not version_name
-        or any(value.strip() != EXPECTED_VERSION_NAME for value in version_name)
+        version_code != EXPECTED_VERSION_CODE
+        or version_name != EXPECTED_VERSION_NAME
     ):
         raise CollectorError("installed_package_identity_mismatch")
     package_path = adb.text(

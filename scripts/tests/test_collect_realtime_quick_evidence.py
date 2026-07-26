@@ -490,6 +490,34 @@ class CommandContractTests(unittest.TestCase):
         self.assertNotIn('v4="$(iptables-save | hash_stream)"', script)
         self.assertNotIn('v6="$(ip6tables-save | hash_stream)"', script)
 
+    def test_installed_package_identity_accepts_real_adb_crlf(self) -> None:
+        package_dump = (
+            "Packages:\r\n"
+            "  Package [com.aneb.probe.codex] (d82eb88):\r\n"
+            "    versionCode=45 minSdk=29 targetSdk=35\r\n"
+            "    versionName=0.5.13-codex\r\n"
+            "    splits=[base]\r\n"
+        )
+
+        self.assertEqual(
+            (45, "0.5.13-codex"),
+            collector.parse_installed_package_identity(package_dump),
+        )
+
+    def test_installed_package_identity_rejects_conflicting_history(self) -> None:
+        package_dump = (
+            "    versionCode=45 minSdk=29 targetSdk=35\n"
+            "    versionName=0.5.13-codex\n"
+            "    versionCode=44 minSdk=29 targetSdk=35\n"
+            "    versionName=0.5.12-codex\n"
+        )
+
+        with self.assertRaisesRegex(
+            collector.CollectorError,
+            "installed_package_identity_invalid",
+        ):
+            collector.parse_installed_package_identity(package_dump)
+
     def test_serverinfo_requires_081_realtime_receipt_and_exact_profile(self) -> None:
         body = self._valid_serverinfo()
         collector.validate_serverinfo(body)
