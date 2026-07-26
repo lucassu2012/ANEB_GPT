@@ -60,6 +60,15 @@ ARTIFACT_PATHS = {
     "execution-profiles/ai_realtime_voice_quick/manifest.sha256": (
         "profiles/published/ai_realtime_voice_quick/manifest.sha256"
     ),
+    "execution-profiles/network_comprehensive_quick/profile.json": (
+        "profiles/published/network_comprehensive_quick/profile.json"
+    ),
+    "execution-profiles/network_comprehensive_quick/runtime_plan.json": (
+        "profiles/published/network_comprehensive_quick/runtime_plan.json"
+    ),
+    "execution-profiles/network_comprehensive_quick/manifest.sha256": (
+        "profiles/published/network_comprehensive_quick/manifest.sha256"
+    ),
 }
 
 

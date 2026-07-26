@@ -66,6 +66,15 @@ ARTIFACT_ALLOWLIST = {
     "execution-profiles/ai_realtime_voice_quick/manifest.sha256": (
         "profiles/published/ai_realtime_voice_quick/manifest.sha256"
     ),
+    "execution-profiles/network_comprehensive_quick/profile.json": (
+        "profiles/published/network_comprehensive_quick/profile.json"
+    ),
+    "execution-profiles/network_comprehensive_quick/runtime_plan.json": (
+        "profiles/published/network_comprehensive_quick/runtime_plan.json"
+    ),
+    "execution-profiles/network_comprehensive_quick/manifest.sha256": (
+        "profiles/published/network_comprehensive_quick/manifest.sha256"
+    ),
     "tls/ip-cert.pem": "server/tls/ip/aneb_ip_cert.pem",
 }
 OPTIONAL_ARTIFACTS = frozenset({"tls/ip-cert.pem"})
