@@ -199,3 +199,47 @@ The real child-process feedback loop completed 50/50 loopback starts with the
 corrected timeout. Ready latency was 0.358 seconds median and 0.604 seconds max.
 The failed live attempts remain diagnostic only and will not be repaired into
 READY.
+
+## Huawei/Windows ADB reverse transport-label correction
+
+- ［KNOWN｜HIGH］The first negative attempt after the proxy-timeout correction
+  reached reverse creation but stopped before App launch. The scoped command
+  `adb -s <exact-device-serial> reverse --list` returned the single mapping
+  `UsbFfs tcp:18765 tcp:18765`.
+- ［KNOWN｜HIGH］The collector incorrectly required the first column to equal the
+  device serial. Android platform-tools exposes that column as an ADB transport
+  label; the already-independent negative evidence verifier correctly treats
+  it as `adb_transport_label_sha256`.
+- ［KNOWN｜HIGH］The failed partial collection contains no run ID or READY and
+  remains diagnostic only. Its one mapping was attributable because the
+  preflight inventory was empty and the active inventory contained only the
+  exact collector-created endpoint; cleanup removed only `tcp:18765`, then
+  independently verified an empty final inventory and clean phone/server state.
+
+The collector now preserves the strict ownership boundary without equating the
+transport label with device identity:
+
+1. preflight and final reverse inventories must be globally empty;
+2. after `--no-rebind`, the inventory must contain exactly one expected
+   device/host endpoint pair;
+3. the bounded transport label is captured from that active mapping;
+4. before removal, label and endpoint pair must exactly match the captured
+   mapping, with no additional entries;
+5. any label drift, endpoint drift or inventory pollution fails closed before
+   deletion.
+
+Device identity remains independently bound by the exact `adb -s` serial,
+device policy, PhoneGuard preflight and installed-package identity. The raw
+active/before-remove records remain independently checked by the existing
+negative evidence verifier, including an exact transport-label match.
+
+Regression evidence for this correction:
+
+- ［KNOWN｜HIGH］Collector plus independent negative/cross-bundle verifier
+  regression: 86/86 passed, including real `UsbFfs`, inventory pollution and
+  transport-label drift cases.
+- ［KNOWN｜HIGH］Repository main tests: 747 passed, 16 skipped by design;
+  behavior-model tests: 43/43 passed.
+- ［KNOWN｜HIGH］Android unit/lint/debug assemble, release boundary, secret scan,
+  debug-candidate packaging, spec/result schemas, server Go and gateway Go all
+  passed in the complete repository quality gate.

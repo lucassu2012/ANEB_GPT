@@ -356,7 +356,7 @@ def parse_reverse_inventory(text: str) -> tuple[tuple[str, str, str], ...]:
         parts = line.split()
         if (
             len(parts) != 3
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", parts[0])
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{3,127}", parts[0])
             is None
             or re.fullmatch(r"tcp:[1-9][0-9]{0,4}", parts[1]) is None
             or re.fullmatch(r"tcp:[1-9][0-9]{0,4}", parts[2]) is None
@@ -373,39 +373,39 @@ def parse_reverse_inventory(text: str) -> tuple[tuple[str, str, str], ...]:
 def _owned_reverse(
     inventory: tuple[tuple[str, str, str], ...],
     *,
-    serial: str,
+    transport_label: str,
     device_port: int,
 ) -> tuple[tuple[str, str, str], ...]:
     local = f"tcp:{device_port}"
     return tuple(
         entry
         for entry in inventory
-        if entry[0] == serial and entry[1] == local
+        if entry[0] == transport_label and entry[1] == local
     )
 
 
 def assert_reverse_absent(
     inventory: tuple[tuple[str, str, str], ...],
     *,
-    serial: str,
     device_port: int,
 ) -> None:
-    if _owned_reverse(inventory, serial=serial, device_port=device_port):
+    endpoint = f"tcp:{device_port}"
+    if any(entry[1] == endpoint for entry in inventory):
         raise CollectorError("negative_reverse_preexisting")
 
 
 def assert_owned_reverse(
     inventory: tuple[tuple[str, str, str], ...],
     *,
-    serial: str,
+    transport_label: str,
     device_port: int,
 ) -> None:
     endpoint = f"tcp:{device_port}"
     if _owned_reverse(
         inventory,
-        serial=serial,
+        transport_label=transport_label,
         device_port=device_port,
-    ) != ((serial, endpoint, endpoint),):
+    ) != ((transport_label, endpoint, endpoint),) or len(inventory) != 1:
         raise CollectorError("negative_reverse_ownership_invalid")
 
 
@@ -3405,6 +3405,7 @@ class LiveCollectorBackend:
         self.logcat: LogcatCapture | None = None
         self.proxy: NegativeProxyProcess | None = None
         self.reverse_owned = False
+        self.reverse_transport_label: str | None = None
         self.app_launch_attempted = False
         self.settings_started = False
         self.stayon_mutation_attempted = False
@@ -3700,7 +3701,6 @@ class LiveCollectorBackend:
             raise CollectorError("negative_reverse_inventory_not_empty")
         assert_reverse_absent(
             inventory,
-            serial=self.config.adb_serial,
             device_port=NEGATIVE_DEVICE_PORT,
         )
         self.proxy = NegativeProxyProcess(
@@ -3729,31 +3729,32 @@ class LiveCollectorBackend:
             self.partial / "adb-reverse-active.txt",
             (current_text + "\n").encode("utf-8"),
         )
-        expected_mapping = (
-            (
-                self.config.adb_serial,
-                f"tcp:{NEGATIVE_DEVICE_PORT}",
-                f"tcp:{NEGATIVE_DEVICE_PORT}",
-            ),
-        )
-        if parse_reverse_inventory(current_text) != expected_mapping:
+        current_inventory = parse_reverse_inventory(current_text)
+        endpoint = f"tcp:{NEGATIVE_DEVICE_PORT}"
+        if (
+            len(current_inventory) != 1
+            or current_inventory[0][1:] != (endpoint, endpoint)
+        ):
             raise CollectorError("negative_reverse_inventory_polluted")
+        self.reverse_transport_label = current_inventory[0][0]
         assert_owned_reverse(
-            expected_mapping,
-            serial=self.config.adb_serial,
+            current_inventory,
+            transport_label=self.reverse_transport_label,
             device_port=NEGATIVE_DEVICE_PORT,
         )
 
     def _remove_reverse(self) -> None:
         if not self.reverse_owned:
             return
+        if self.reverse_transport_label is None:
+            raise CollectorError("negative_reverse_ownership_lost")
         current = parse_reverse_inventory(
             self.adb.text(["reverse", "--list"], code="adb_reverse_before_remove")
         )
         before_remove_path = self.partial / "adb-reverse-before-remove.txt"
         owned = _owned_reverse(
             current,
-            serial=self.config.adb_serial,
+            transport_label=self.reverse_transport_label,
             device_port=NEGATIVE_DEVICE_PORT,
         )
         if owned:
@@ -3761,7 +3762,7 @@ class LiveCollectorBackend:
                 raise CollectorError("negative_reverse_inventory_polluted")
             assert_owned_reverse(
                 current,
-                serial=self.config.adb_serial,
+                transport_label=self.reverse_transport_label,
                 device_port=NEGATIVE_DEVICE_PORT,
             )
             before_remove_payload = (
@@ -3781,6 +3782,8 @@ class LiveCollectorBackend:
                 ["reverse", "--remove", f"tcp:{NEGATIVE_DEVICE_PORT}"],
                 code="adb_reverse_remove",
             )
+        elif current:
+            raise CollectorError("negative_reverse_inventory_polluted")
         elif not before_remove_path.is_file():
             raise CollectorError("negative_reverse_ownership_lost")
         final_text = self.adb.text(
@@ -3789,7 +3792,6 @@ class LiveCollectorBackend:
         )
         assert_reverse_absent(
             parse_reverse_inventory(final_text),
-            serial=self.config.adb_serial,
             device_port=NEGATIVE_DEVICE_PORT,
         )
         if parse_reverse_inventory(final_text):
@@ -3800,6 +3802,7 @@ class LiveCollectorBackend:
                 (final_text + "\n").encode("utf-8"),
             )
         self.reverse_owned = False
+        self.reverse_transport_label = None
 
     def _stop_target(self) -> None:
         if not self.app_launch_attempted:

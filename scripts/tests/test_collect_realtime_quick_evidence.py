@@ -299,24 +299,33 @@ class CommandContractTests(unittest.TestCase):
                 role="capability",
             )
 
-    def test_reverse_inventory_requires_exact_owned_mapping(self) -> None:
+    def test_reverse_inventory_binds_transport_label_not_device_serial(self) -> None:
         text = "\n".join(
             (
-                "ABC123 tcp:18765 tcp:18765",
+                "UsbFfs tcp:18765 tcp:18765",
                 "OTHER tcp:9000 tcp:9000",
             )
         )
         inventory = collector.parse_reverse_inventory(text)
         self.assertEqual(
             (
-                ("ABC123", "tcp:18765", "tcp:18765"),
+                ("UsbFfs", "tcp:18765", "tcp:18765"),
                 ("OTHER", "tcp:9000", "tcp:9000"),
             ),
             inventory,
         )
+        with self.assertRaisesRegex(
+            collector.CollectorError,
+            "negative_reverse_ownership_invalid",
+        ):
+            collector.assert_owned_reverse(
+                inventory,
+                transport_label="UsbFfs",
+                device_port=18765,
+            )
         collector.assert_owned_reverse(
-            inventory,
-            serial="ABC123",
+            (inventory[0],),
+            transport_label="UsbFfs",
             device_port=18765,
         )
         with self.assertRaisesRegex(
@@ -325,9 +334,15 @@ class CommandContractTests(unittest.TestCase):
         ):
             collector.assert_reverse_absent(
                 inventory,
-                serial="ABC123",
                 device_port=18765,
             )
+
+    def test_reverse_inventory_rejects_label_verifier_would_reject(self) -> None:
+        with self.assertRaisesRegex(
+            collector.CollectorError,
+            "adb_reverse_inventory_invalid",
+        ):
+            collector.parse_reverse_inventory("X tcp:18765 tcp:18765")
 
     def test_ci_provenance_report_is_bound_to_exact_candidate_identity(self) -> None:
         commit = "a" * 40
@@ -1247,7 +1262,7 @@ class EvidencePublicationTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             backend = self.backend_for_publication(Path(temporary))
-            mapping = "SERIAL tcp:18765 tcp:18765"
+            mapping = "UsbFfs tcp:18765 tcp:18765"
 
             class FakeAdb:
                 def __init__(self) -> None:
@@ -1299,6 +1314,46 @@ class EvidencePublicationTests(unittest.TestCase):
                 },
             )
             self.assertFalse(backend.reverse_owned)
+
+    def test_negative_reverse_refuses_transport_label_drift_before_remove(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backend = self.backend_for_publication(Path(temporary))
+            active = "UsbFfs tcp:18765 tcp:18765"
+            drifted = "UsbFfs2 tcp:18765 tcp:18765"
+
+            class FakeAdb:
+                def __init__(self) -> None:
+                    self.inventories = ["", active, drifted]
+
+                def text(self, tail: list[str], *, code: str) -> str:
+                    del code
+                    if tail == ["reverse", "--list"]:
+                        return self.inventories.pop(0)
+                    if tail == [
+                        "reverse",
+                        "--no-rebind",
+                        "tcp:18765",
+                        "tcp:18765",
+                    ]:
+                        return ""
+                    if tail == ["reverse", "--remove", "tcp:18765"]:
+                        raise AssertionError("drifted mapping must not be removed")
+                    raise AssertionError(tail)
+
+            backend.adb = FakeAdb()
+            with mock.patch.object(
+                collector,
+                "NegativeProxyProcess",
+                return_value=SimpleNamespace(start=lambda: None),
+            ):
+                backend._start_negative_proxy()
+            with self.assertRaisesRegex(
+                collector.CollectorError,
+                "negative_reverse_inventory_polluted",
+            ):
+                backend._remove_reverse()
 
     def test_negative_proxy_refuses_any_preexisting_reverse_session(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
