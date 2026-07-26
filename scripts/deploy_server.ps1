@@ -1526,7 +1526,7 @@ freeze_live_baseline() {
     local sample2_full sample2_v4 sample2_v6 sample2_nft sample2_docker sample2_extra
     local digest verify_docker_sha
     validate_server_identity 'aneb-server/0.8.1' pre-switch
-    validate_legacy_surface pre-switch-0.8
+    validate_legacy_surface pre-switch-0.8 aneb1
     BASE_BINARY_SHA="$(file_sha256 /opt/aneb/bin/aneb-server)"
     BASE_ROOT_PROFILES_SHA="$(path_fingerprint /opt/aneb/profiles)"
     BASE_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_quick)"
@@ -1719,8 +1719,10 @@ assert_restored_aneb_baseline() {
 
 validate_legacy_surface() {
     local label="$1"
+    local udp_wire="$2"
     local prefix="$STAGE/$label"
     [[ "$label" =~ ^[a-z0-9.-]+$ ]]
+    [[ "$udp_wire" == "aneb1" || "$udp_wire" == "aneb2" ]]
 
     curl -fksS --connect-timeout 2 --max-time 10 \
         https://127.0.0.1:8443/api/v1/profiles -o "$prefix-profiles.json"
@@ -1844,15 +1846,22 @@ PY
         -X POST --data '{}' "$recovery_base/api/v1/echo?$recovery_query")"
     [[ "$recovered_code" -eq 200 ]]
 
-    python3 - <<'PY'
+    python3 - "$udp_wire" <<'PY'
 import socket
 import struct
+import sys
 import time
 import uuid
 
+wire = sys.argv[1]
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
     sock.settimeout(2)
-    packet = b'ANEB2' + uuid.UUID('00000000-0000-4000-8000-000000000003').bytes + struct.pack('>Iq', 7, time.monotonic_ns()) + bytes(31)
+    if wire == 'aneb1':
+        packet = b'ANEB1' + struct.pack('>Iq', 7, time.monotonic_ns())
+    elif wire == 'aneb2':
+        packet = b'ANEB2' + uuid.UUID('00000000-0000-4000-8000-000000000003').bytes + struct.pack('>Iq', 7, time.monotonic_ns()) + bytes(31)
+    else:
+        raise SystemExit('unsupported UDP smoke wire')
     sock.sendto(packet, ('127.0.0.1', 8443))
     reply, _ = sock.recvfrom(512)
     if reply != packet:
@@ -1939,7 +1948,7 @@ rollback_live() {
         validate_server_identity 'aneb-server/0.8.1' rollback || rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
-        ( set -Eeuo pipefail; validate_legacy_surface rollback-0.8 )
+        ( set -Eeuo pipefail; validate_legacy_surface rollback-0.8 aneb1 )
         local legacy_smoke_rc=$?
         if [[ $legacy_smoke_rc -ne 0 ]]; then
             rollback_rc=1
@@ -3153,7 +3162,7 @@ PY
 # Reuse the exact rollback smoke on the accepted candidate as well. The earlier
 # focused checks make diagnostics local; this shared gate prevents the success
 # and rollback contracts from drifting apart (including the full 1 MiB download).
-validate_legacy_surface live-0.8
+validate_legacy_surface live-0.8 aneb2
 # This is the final deployment acceptance boundary. A shared-host mismatch is
 # treated as a deployment failure while rollback is still armed.
 assert_shared_host_baseline live

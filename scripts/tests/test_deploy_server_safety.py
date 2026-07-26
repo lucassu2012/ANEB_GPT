@@ -268,7 +268,7 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         self.assertIn("validate_server_identity 'aneb-server/0.8.1' pre-switch", self.remote)
         freeze_body = self.remote.split("freeze_live_baseline() {", 1)[1].split("\n}", 1)[0]
         identity = freeze_body.index("validate_server_identity 'aneb-server/0.8.1' pre-switch")
-        legacy = freeze_body.index("validate_legacy_surface pre-switch-0.8")
+        legacy = freeze_body.index("validate_legacy_surface pre-switch-0.8 aneb1")
         binary = freeze_body.index("BASE_BINARY_SHA=")
         self.assertLess(identity, legacy)
         self.assertLess(legacy, binary)
@@ -687,7 +687,7 @@ COMMIT
         self.assertIn("ROLLBACK_OK", self.remote)
         self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", self.remote)
         self.assertIn("validate_server_identity 'aneb-server/0.8.1' rollback", self.remote)
-        self.assertIn("validate_legacy_surface rollback-0.8", self.remote)
+        self.assertIn("validate_legacy_surface rollback-0.8 aneb1", self.remote)
         self.assertIn("assert_restored_aneb_baseline", self.remote)
         self.assertIn("assert_shared_host_baseline rollback", self.remote)
         self.assertIn("ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97", self.remote)
@@ -758,8 +758,23 @@ COMMIT
         self.assertIn("for index in (4, 8)", self.remote)
         self.assertIn("phase.get('bytes') != 12582912", self.remote)
         self.assertIn("phase.get('chunk_kb') != 256", self.remote)
-        self.assertIn("validate_legacy_surface live-0.8", self.remote)
+        self.assertIn("validate_legacy_surface live-0.8 aneb2", self.remote)
         self.assertIn("download?bytes=1048576", self.remote)
+
+    def test_udp_smoke_is_explicitly_versioned_across_upgrade_boundary(self) -> None:
+        function = self.remote.split("validate_legacy_surface() {", 1)[1].split(
+            "\n}\n\nrestore_item()", 1
+        )[0]
+        self.assertIn('local udp_wire="$2"', function)
+        self.assertIn('[[ "$udp_wire" == "aneb1" || "$udp_wire" == "aneb2" ]]', function)
+        self.assertIn("python3 - \"$udp_wire\" <<'PY'", function)
+        self.assertIn("if wire == 'aneb1':", function)
+        self.assertIn("packet = b'ANEB1' + struct.pack('>Iq', 7, time.monotonic_ns())", function)
+        self.assertIn("elif wire == 'aneb2':", function)
+        self.assertIn("packet = b'ANEB2' + uuid.UUID", function)
+        self.assertIn("validate_legacy_surface pre-switch-0.8 aneb1", self.remote)
+        self.assertIn("validate_legacy_surface rollback-0.8 aneb1", self.remote)
+        self.assertIn("validate_legacy_surface live-0.8 aneb2", self.remote)
 
     def test_staged_uploads_are_digest_bound_and_build_identity_is_reverified(self) -> None:
         for name in (
