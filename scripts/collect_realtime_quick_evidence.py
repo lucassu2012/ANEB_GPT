@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -1344,6 +1345,26 @@ ROOM_FILES = (
 )
 
 
+def run_as_shell_tail(script: str) -> list[str]:
+    if (
+        not isinstance(script, str)
+        or not script
+        or "\x00" in script
+        or "\r" in script
+        or "\n" in script
+        or len(script.encode("utf-8")) > 4096
+    ):
+        raise CollectorError("run_as_shell_script_invalid")
+    return [
+        "shell",
+        "run-as",
+        PACKAGE_NAME,
+        "sh",
+        "-c",
+        shlex.quote(script),
+    ]
+
+
 def copy_frozen_room_database(
     adb: AdbClient,
     *,
@@ -1356,7 +1377,7 @@ def copy_frozen_room_database(
             "else printf absent; fi"
         )
         state = adb.text(
-            ["shell", "run-as", PACKAGE_NAME, "sh", "-c", script],
+            run_as_shell_tail(script),
             code=f"room_state_{name}",
         )
         if state not in {"present", "absent"}:

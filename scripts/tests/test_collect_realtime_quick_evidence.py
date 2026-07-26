@@ -518,6 +518,33 @@ class CommandContractTests(unittest.TestCase):
         ):
             collector.parse_installed_package_identity(package_dump)
 
+    def test_run_as_shell_script_is_one_remote_quoted_argument(self) -> None:
+        script = (
+            'if [ -r "databases/aneb-probe.db" ]; then printf present; '
+            "else printf absent; fi"
+        )
+
+        self.assertEqual(
+            [
+                "shell",
+                "run-as",
+                "com.aneb.probe.codex",
+                "sh",
+                "-c",
+                "'" + script + "'",
+            ],
+            collector.run_as_shell_tail(script),
+        )
+
+    def test_run_as_shell_script_rejects_multiline_or_nul(self) -> None:
+        for script in ("", "printf ok\n", "printf ok\r", "printf\x00ok"):
+            with self.subTest(script=repr(script)):
+                with self.assertRaisesRegex(
+                    collector.CollectorError,
+                    "run_as_shell_script_invalid",
+                ):
+                    collector.run_as_shell_tail(script)
+
     def test_serverinfo_requires_081_realtime_receipt_and_exact_profile(self) -> None:
         body = self._valid_serverinfo()
         collector.validate_serverinfo(body)
