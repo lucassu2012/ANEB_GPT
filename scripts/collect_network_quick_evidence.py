@@ -15,24 +15,46 @@ from typing import Literal, Mapping
 import uuid
 
 try:
+    from scripts.quick_collection_workflow import (
+        WorkflowBackend,
+        WorkflowResult,
+        run_workflow,
+    )
+    from scripts.quick_collection_contract import network_quick_contract
     from scripts.verify_network_quick_client_db import verify_database
     from scripts.verify_network_quick_run_audit import verify_journal
 except ModuleNotFoundError:  # Direct script execution from scripts/.
+    from quick_collection_contract import network_quick_contract
+    from quick_collection_workflow import WorkflowBackend, WorkflowResult, run_workflow
     from verify_network_quick_client_db import verify_database
     from verify_network_quick_run_audit import verify_journal
 
 
-PACKAGE_NAME = "com.aneb.probe.codex"
-ACTIVITY_COMPONENT = "com.aneb.probe.codex/com.aneb.probe.ui.MainActivity"
-PROFILE_CONTRACT = "network_comprehensive_quick@1.2.0"
+CONTRACT = network_quick_contract()
+PACKAGE_NAME = CONTRACT.package_name
+ACTIVITY_COMPONENT = CONTRACT.activity_component
+PROFILE_CONTRACT = CONTRACT.profile_contract
 PROFILE_ID = "network_comprehensive_quick"
 PROFILE_VERSION = "1.2.0"
+EXPECTED_VERSION_NAME = CONTRACT.expected_version_name
+EXPECTED_VERSION_CODE = CONTRACT.expected_version_code
+EXPECTED_SERVER_VERSION = CONTRACT.expected_server_version
+CANDIDATE_APK_NAME = CONTRACT.candidate_apk_name
 NEGATIVE_DEVICE_PORT = 18765
 RUN_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>[^\s]+)")
+NETWORK_PROFILE_SHA256 = (
+    "15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc"
+)
+REALTIME_PROFILE_SHA256 = (
+    "701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7"
+)
+TOKEN_PROFILE_SHA256 = (
+    "caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773"
+)
 
 
 class CollectorError(RuntimeError):
@@ -45,6 +67,173 @@ class NetworkTerminalMarkers:
     contract_status: Literal["authorized", "rejected"]
     terminal_status: Literal["completed", "contract_rejected"]
     reason_code: str | None
+
+
+def validate_network_serverinfo(body: object) -> None:
+    """Reject any E-01 identity that is not the frozen Network Quick host."""
+
+    try:
+        if not isinstance(body, dict) or set(body) != {
+            "version",
+            "srv_ts_us",
+            "anchor_wall_unix_ns",
+            "uptime_s",
+            "goos",
+            "goarch",
+            "h3_enabled",
+            "tcp_slow_start_after_idle",
+            "congestion_control",
+            "execution_capabilities",
+        }:
+            raise ValueError("root")
+        if (
+            body.get("version") != EXPECTED_SERVER_VERSION
+            or body.get("h3_enabled") is not True
+            or body.get("goos") != "linux"
+            or body.get("goarch") != "amd64"
+            or body.get("tcp_slow_start_after_idle") != "0"
+            or body.get("congestion_control") != "cubic"
+            or type(body.get("srv_ts_us")) is not int
+            or int(body["srv_ts_us"]) <= 0
+            or type(body.get("anchor_wall_unix_ns")) is not int
+            or int(body["anchor_wall_unix_ns"]) <= 0
+            or type(body.get("uptime_s")) is not int
+            or int(body["uptime_s"]) <= 0
+        ):
+            raise ValueError("identity")
+        receipt = body.get("execution_capabilities")
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt)
+            != {
+                "contract_id",
+                "contract_version",
+                "primitives",
+                "validated_profiles",
+            }
+            or receipt.get("contract_id")
+            != "aneb-server-capability-receipt"
+            or receipt.get("contract_version") != "1.0.0"
+        ):
+            raise ValueError("receipt")
+        primitives = receipt.get("primitives")
+        if not isinstance(primitives, list) or len(primitives) != 6:
+            raise ValueError("primitives")
+        primitive_map: dict[str, str] = {}
+        for primitive in primitives:
+            if (
+                not isinstance(primitive, dict)
+                or set(primitive) != {"primitive_id", "wire_contract_id"}
+                or not isinstance(primitive.get("primitive_id"), str)
+                or not isinstance(primitive.get("wire_contract_id"), str)
+                or primitive["primitive_id"] in primitive_map
+            ):
+                raise ValueError("primitive")
+            primitive_map[primitive["primitive_id"]] = primitive[
+                "wire_contract_id"
+            ]
+        if primitive_map != {
+            "download": "aneb-download-v1",
+            "echo": "aneb-echo-v1",
+            "realtime_sim": "aneb-realtime-session-v1",
+            "token_sim": "aneb-token-task-v1",
+            "udp_echo": "aneb-udp-echo-v2",
+            "upload": "aneb-upload-v1",
+        }:
+            raise ValueError("primitive contract")
+        profiles = receipt.get("validated_profiles")
+        if not isinstance(profiles, list) or len(profiles) != 3:
+            raise ValueError("profiles")
+        profile_map: dict[str, tuple[str, str]] = {}
+        for profile in profiles:
+            if (
+                not isinstance(profile, dict)
+                or set(profile)
+                != {"profile_id", "profile_version", "profile_sha256"}
+                or not isinstance(profile.get("profile_id"), str)
+                or profile["profile_id"] in profile_map
+                or not isinstance(profile.get("profile_version"), str)
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(profile.get("profile_sha256")),
+                )
+                is None
+            ):
+                raise ValueError("profile")
+            profile_map[profile["profile_id"]] = (
+                profile["profile_version"],
+                profile["profile_sha256"],
+            )
+        if profile_map != {
+            "ai_realtime_voice_quick": (
+                "1.1.1",
+                f"sha256:{REALTIME_PROFILE_SHA256}",
+            ),
+            "network_comprehensive_quick": (
+                "1.2.0",
+                f"sha256:{NETWORK_PROFILE_SHA256}",
+            ),
+            "token_multimodal_quick": (
+                "1.2.1",
+                f"sha256:{TOKEN_PROFILE_SHA256}",
+            ),
+        }:
+            raise ValueError("profile contract")
+    except (KeyError, TypeError, ValueError) as error:
+        raise CollectorError("network_serverinfo_contract_invalid") from error
+
+
+def assert_network_serverinfo_sequence(
+    identity: object,
+    start: object,
+    end: object,
+) -> None:
+    """Bind three captures to one stable E-01 identity and time window."""
+
+    try:
+        for item in (identity, start, end):
+            validate_network_serverinfo(item)
+        if not all(isinstance(item, dict) for item in (identity, start, end)):
+            raise ValueError("shape")
+        identity_document = identity
+        start_document = start
+        end_document = end
+        assert isinstance(identity_document, dict)
+        assert isinstance(start_document, dict)
+        assert isinstance(end_document, dict)
+        stable_keys = (
+            "version",
+            "anchor_wall_unix_ns",
+            "goos",
+            "goarch",
+            "h3_enabled",
+            "tcp_slow_start_after_idle",
+            "congestion_control",
+            "execution_capabilities",
+        )
+        if any(
+            identity_document[key] != candidate[key]
+            for candidate in (start_document, end_document)
+            for key in stable_keys
+        ):
+            raise ValueError("stable identity")
+        if not (
+            int(identity_document["srv_ts_us"])
+            < int(start_document["srv_ts_us"])
+            < int(end_document["srv_ts_us"])
+            and int(identity_document["uptime_s"])
+            <= int(start_document["uptime_s"])
+            <= int(end_document["uptime_s"])
+        ):
+            raise ValueError("chronology")
+    except (
+        AssertionError,
+        CollectorError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise CollectorError("network_serverinfo_sequence_invalid") from error
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -332,5 +521,5 @@ def build_network_audit_headers(
     return {
         "X-Aneb-Run-Id": run_id,
         "X-Aneb-Audit-Role": role,
-        "X-Aneb-Audit-Scope": "network_run",
+        "X-Aneb-Audit-Scope": CONTRACT.audit_scope,
     }

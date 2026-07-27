@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -7,10 +8,12 @@ from unittest import mock
 from scripts.collect_network_quick_evidence import (
     CollectorError,
     PROFILE_CONTRACT,
+    assert_network_serverinfo_sequence,
     bind_network_verifier_reports,
     build_network_audit_headers,
     build_network_launch_arguments,
     parse_network_terminal_markers,
+    validate_network_serverinfo,
     verify_collected_network_evidence,
 )
 
@@ -19,6 +22,70 @@ RUN_ID = "019fa111-1111-7111-8111-111111111111"
 
 
 class NetworkQuickCollectorContractTest(unittest.TestCase):
+    @staticmethod
+    def network_serverinfo() -> dict[str, object]:
+        return {
+            "version": "aneb-server/0.8.2",
+            "srv_ts_us": 1_000_000,
+            "anchor_wall_unix_ns": 2_000_000_000,
+            "uptime_s": 100,
+            "goos": "linux",
+            "goarch": "amd64",
+            "h3_enabled": True,
+            "tcp_slow_start_after_idle": "0",
+            "congestion_control": "cubic",
+            "execution_capabilities": {
+                "contract_id": "aneb-server-capability-receipt",
+                "contract_version": "1.0.0",
+                "primitives": [
+                    {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+                    {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+                    {"primitive_id": "realtime_sim", "wire_contract_id": "aneb-realtime-session-v1"},
+                    {"primitive_id": "token_sim", "wire_contract_id": "aneb-token-task-v1"},
+                    {"primitive_id": "udp_echo", "wire_contract_id": "aneb-udp-echo-v2"},
+                    {"primitive_id": "upload", "wire_contract_id": "aneb-upload-v1"},
+                ],
+                "validated_profiles": [
+                    {
+                        "profile_id": "ai_realtime_voice_quick",
+                        "profile_version": "1.1.1",
+                        "profile_sha256": "sha256:701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7",
+                    },
+                    {
+                        "profile_id": "network_comprehensive_quick",
+                        "profile_version": "1.2.0",
+                        "profile_sha256": "sha256:15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc",
+                    },
+                    {
+                        "profile_id": "token_multimodal_quick",
+                        "profile_version": "1.2.1",
+                        "profile_sha256": "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773",
+                    },
+                ],
+            },
+        }
+
+    def test_network_serverinfo_requires_082_six_primitive_receipt(self) -> None:
+        validate_network_serverinfo(self.network_serverinfo())
+
+    def test_network_serverinfo_sequence_is_stable_and_chronological(self) -> None:
+        identity = self.network_serverinfo()
+        start = json.loads(json.dumps(identity))
+        end = json.loads(json.dumps(identity))
+        start["srv_ts_us"] = 2_000_000
+        start["uptime_s"] = 101
+        end["srv_ts_us"] = 3_000_000
+        end["uptime_s"] = 102
+
+        assert_network_serverinfo_sequence(identity, start, end)
+
+        end["version"] = "aneb-server/0.8.1"
+        with self.assertRaisesRegex(
+            CollectorError,
+            "network_serverinfo_sequence_invalid",
+        ):
+            assert_network_serverinfo_sequence(identity, start, end)
+
     def test_positive_terminal_chain_is_exact(self) -> None:
         markers = parse_network_terminal_markers(
             "\n".join(

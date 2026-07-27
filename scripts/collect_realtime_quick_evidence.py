@@ -40,24 +40,37 @@ if __package__:
         verify_realtime_quick_collection as collection_verifier,
         verify_realtime_quick_release as release_verifier,
     )
+    from scripts.quick_collection_workflow import (
+        WorkflowBackend,
+        WorkflowResult,
+        run_workflow,
+    )
+    from scripts.quick_collection_contract import (
+        QuickCollectionContract,
+        realtime_quick_contract,
+    )
 else:
     import publish_realtime_quick_ready as ready_publisher
     import verify_realtime_evidence_security as evidence_security
     import verify_realtime_quick_collection as collection_verifier
     import verify_realtime_quick_release as release_verifier
+    from quick_collection_contract import (
+        QuickCollectionContract,
+        realtime_quick_contract,
+    )
+    from quick_collection_workflow import WorkflowBackend, WorkflowResult, run_workflow
 
 
-PACKAGE_NAME = "com.aneb.probe.codex"
-ACTIVITY_COMPONENT = (
-    "com.aneb.probe.codex/com.aneb.probe.ui.MainActivity"
-)
+CONTRACT = realtime_quick_contract()
+PACKAGE_NAME = CONTRACT.package_name
+ACTIVITY_COMPONENT = CONTRACT.activity_component
 LAUNCHER_COMPONENT = "com.huawei.android.launcher/.unihome.UniHomeLauncher"
 REMOTE_LOCK_PATH = "/run/lock/aneb-deploy.lock"
-PROFILE_CONTRACT = "ai_realtime_voice_quick@1.1.1"
+PROFILE_CONTRACT = CONTRACT.profile_contract
 NEGATIVE_DEVICE_PORT = 18765
-EXPECTED_VERSION_NAME = "0.5.13-codex"
-EXPECTED_VERSION_CODE = 45
-EXPECTED_SERVER_VERSION = "aneb-server/0.8.1"
+EXPECTED_VERSION_NAME = CONTRACT.expected_version_name
+EXPECTED_VERSION_CODE = CONTRACT.expected_version_code
+EXPECTED_SERVER_VERSION = CONTRACT.expected_server_version
 REALTIME_PROFILE_SHA256 = (
     "701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7"
 )
@@ -68,7 +81,7 @@ MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_APK_BYTES = 256 * 1024 * 1024
 CI_CANDIDATE_NAMES = frozenset(
     {
-        "ANEB-Probe-0.5.13-codex-debug.apk",
+        CONTRACT.candidate_apk_name,
         "build-manifest.json",
         "checksums.sha256",
         "provenance.sigstore.json",
@@ -246,14 +259,6 @@ class RealtimeTerminalMarkers:
 
 
 @dataclass(frozen=True)
-class WorkflowResult:
-    success: bool
-    primary_failure: str | None
-    cleanup_failures: tuple[str, ...]
-    publish_failure: str | None
-
-
-@dataclass(frozen=True)
 class CollectorConfig:
     adb_serial: str
     server_base: str
@@ -310,20 +315,6 @@ class HttpCapture:
     json_body: dict[str, object]
 
 
-class WorkflowBackend(Protocol):
-    def preflight(self) -> None: ...
-
-    def acquire(self) -> None: ...
-
-    def collect(self) -> None: ...
-
-    def cleanup_phone(self) -> None: ...
-
-    def cleanup_remote(self) -> None: ...
-
-    def publish(self) -> None: ...
-
-
 def build_audit_headers(
     *,
     run_id: str,
@@ -343,7 +334,7 @@ def build_audit_headers(
     return {
         "X-Aneb-Run-Id": run_id,
         "X-Aneb-Audit-Role": role,
-        "X-Aneb-Audit-Scope": "realtime_run",
+        "X-Aneb-Audit-Scope": CONTRACT.audit_scope,
     }
 
 
@@ -420,6 +411,7 @@ def validate_ci_provenance_report(
     report: object,
     *,
     source_commit: str,
+    contract: QuickCollectionContract = CONTRACT,
 ) -> CiCandidateIdentity:
     try:
         if not _exact_keys(
@@ -508,11 +500,11 @@ def validate_ci_provenance_report(
         assert isinstance(files, dict)
         assert isinstance(gh, dict)
         if (
-            apk["file_name"] != "ANEB-Probe-0.5.13-codex-debug.apk"
-            or apk["package_name"] != PACKAGE_NAME
-            or apk["version_name"] != EXPECTED_VERSION_NAME
+            apk["file_name"] != contract.candidate_apk_name
+            or apk["package_name"] != contract.package_name
+            or apk["version_name"] != contract.expected_version_name
             or type(apk["version_code"]) is not int
-            or apk["version_code"] != EXPECTED_VERSION_CODE
+            or apk["version_code"] != contract.expected_version_code
             or type(apk["size_bytes"]) is not int
             or not 0 < apk["size_bytes"] <= MAX_APK_BYTES
             or re.fullmatch(r"[0-9a-f]{64}", str(apk["sha256"])) is None
@@ -3290,45 +3282,6 @@ def verify_before_atomic_publish(
 def _error_text(error: BaseException) -> str:
     text = str(error).strip()
     return text if text else error.__class__.__name__
-
-
-def run_workflow(backend: WorkflowBackend) -> WorkflowResult:
-    primary_failure: str | None = None
-    cleanup_failures: list[str] = []
-    publish_failure: str | None = None
-    collected = False
-    preflighted = False
-    try:
-        backend.preflight()
-        preflighted = True
-        backend.acquire()
-        backend.collect()
-        collected = True
-    except BaseException as error:
-        primary_failure = _error_text(error)
-    finally:
-        if preflighted:
-            for cleanup in (backend.cleanup_phone, backend.cleanup_remote):
-                try:
-                    cleanup()
-                except BaseException as error:
-                    cleanup_failures.append(_error_text(error))
-    if collected and primary_failure is None and not cleanup_failures:
-        try:
-            backend.publish()
-        except BaseException as error:
-            publish_failure = _error_text(error)
-    return WorkflowResult(
-        success=(
-            collected
-            and primary_failure is None
-            and not cleanup_failures
-            and publish_failure is None
-        ),
-        primary_failure=primary_failure,
-        cleanup_failures=tuple(cleanup_failures),
-        publish_failure=publish_failure,
-    )
 
 
 def _remote_snapshot_document(snapshot: RemoteSnapshot) -> dict[str, str]:
