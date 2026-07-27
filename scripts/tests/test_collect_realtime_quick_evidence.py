@@ -576,6 +576,22 @@ class CommandContractTests(unittest.TestCase):
             collector.run_as_shell_tail(script),
         )
 
+    def test_run_as_shell_script_uses_explicit_contract_package(self) -> None:
+        self.assertEqual(
+            [
+                "shell",
+                "run-as",
+                "com.example.networkprobe",
+                "sh",
+                "-c",
+                "'printf present'",
+            ],
+            collector.run_as_shell_tail(
+                "printf present",
+                package_name="com.example.networkprobe",
+            ),
+        )
+
     def test_run_as_shell_script_rejects_multiline_or_nul(self) -> None:
         for script in ("", "printf ok\n", "printf ok\r", "printf\x00ok"):
             with self.subTest(script=repr(script)):

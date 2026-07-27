@@ -1338,7 +1338,11 @@ ROOM_FILES = (
 )
 
 
-def run_as_shell_tail(script: str) -> list[str]:
+def run_as_shell_tail(
+    script: str,
+    *,
+    package_name: str = PACKAGE_NAME,
+) -> list[str]:
     if (
         not isinstance(script, str)
         or not script
@@ -1348,10 +1352,19 @@ def run_as_shell_tail(script: str) -> list[str]:
         or len(script.encode("utf-8")) > 4096
     ):
         raise CollectorError("run_as_shell_script_invalid")
+    if (
+        not isinstance(package_name, str)
+        or re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+",
+            package_name,
+        )
+        is None
+    ):
+        raise CollectorError("run_as_package_invalid")
     return [
         "shell",
         "run-as",
-        PACKAGE_NAME,
+        package_name,
         "sh",
         "-c",
         shlex.quote(script),
@@ -1362,6 +1375,7 @@ def copy_frozen_room_database(
     adb: AdbClient,
     *,
     evidence_directory: Path,
+    package_name: str = PACKAGE_NAME,
 ) -> dict[str, object]:
     states: dict[str, str] = {}
     for name, remote_path in ROOM_FILES:
@@ -1370,7 +1384,7 @@ def copy_frozen_room_database(
             "else printf absent; fi"
         )
         state = adb.text(
-            run_as_shell_tail(script),
+            run_as_shell_tail(script, package_name=package_name),
             code=f"room_state_{name}",
         )
         if state not in {"present", "absent"}:
@@ -1387,12 +1401,12 @@ def copy_frozen_room_database(
             continue
         before = _remote_sha256(
             adb,
-            package=PACKAGE_NAME,
+            package=package_name,
             path=remote_path,
             code=f"room_digest_before_{name}",
         )
         result = adb.run(
-            ["exec-out", "run-as", PACKAGE_NAME, "cat", remote_path],
+            ["exec-out", "run-as", package_name, "cat", remote_path],
             code=f"room_copy_{name}",
             max_output_bytes=256 * 1024 * 1024,
         )
@@ -1400,7 +1414,7 @@ def copy_frozen_room_database(
             raise CollectorError(f"room_copy_invalid file={name}")
         after = _remote_sha256(
             adb,
-            package=PACKAGE_NAME,
+            package=package_name,
             path=remote_path,
             code=f"room_digest_after_{name}",
         )
@@ -4004,6 +4018,7 @@ class LiveCollectorBackend:
         copy_frozen_room_database(
             self.adb,
             evidence_directory=self.partial,
+            package_name=self.contract.package_name,
         )
         export_locked_journal(
             ssh=self.ssh,
