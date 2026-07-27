@@ -17,7 +17,7 @@ import urllib.parse
 if __package__:
     from scripts import quick_collection_verifier as verifier_core
     from scripts import quick_collection_verifier_adapter as verifier_adapter
-    from scripts import verify_realtime_evidence_security as evidence_security
+    from scripts import quick_evidence_security as evidence_security
     from scripts.collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,
@@ -29,7 +29,7 @@ if __package__:
 else:
     import quick_collection_verifier as verifier_core
     import quick_collection_verifier_adapter as verifier_adapter
-    import verify_realtime_evidence_security as evidence_security
+    import quick_evidence_security as evidence_security
     from collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,

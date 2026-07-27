@@ -7,6 +7,7 @@ import unittest
 
 from scripts import quick_collection_verifier_adapter as adapter_module
 from scripts import verify_network_quick_collection as network_verifier
+from scripts import verify_realtime_quick_collection as realtime_verifier
 
 
 class QuickCollectionVerifierAdapterTests(unittest.TestCase):
@@ -26,6 +27,23 @@ class QuickCollectionVerifierAdapterTests(unittest.TestCase):
         source = inspect.getsource(network_verifier)
         self.assertNotIn("verify_realtime_quick_collection", source)
         self.assertNotIn("collect_realtime_quick_evidence", source)
+
+    def test_realtime_verifier_uses_adapter_without_duplicate_mechanics(self) -> None:
+        source = inspect.getsource(realtime_verifier)
+        self.assertIn("quick_collection_verifier_adapter", source)
+        for duplicate in (
+            "_verify_manifest",
+            "_verify_candidate",
+            "_verify_phone_pair",
+            "_verify_device_identity",
+            "_verify_remote",
+            "_verify_lock",
+            "_verify_serverinfo",
+            "_verify_mode_inventory",
+            "_verify_evidence_root_security",
+            "_verify_complete",
+        ):
+            self.assertNotIn(f"def {duplicate}(", source)
 
     def test_complete_marker_is_contract_driven(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

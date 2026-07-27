@@ -14,12 +14,12 @@ from typing import NoReturn
 if __package__:
     from scripts import (
         quick_ready_transaction as transaction,
-        verify_realtime_evidence_security as evidence_security,
+        quick_evidence_security as evidence_security,
         verify_realtime_quick_collection as collection_verifier,
     )
 else:
     import quick_ready_transaction as transaction
-    import verify_realtime_evidence_security as evidence_security
+    import quick_evidence_security as evidence_security
     import verify_realtime_quick_collection as collection_verifier
 
 

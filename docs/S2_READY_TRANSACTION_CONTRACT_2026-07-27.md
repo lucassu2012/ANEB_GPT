@@ -72,3 +72,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］S2-V2 RED 是 adapter 模块不存在的唯一 ImportError；GREEN 后 adapter 合同 3/3、Network 6/6、primitives/adapter/Realtime/Network 同进程 29/29、Realtime/Network release 12/12 PASS，终态残留进程均为 0。
 - ［KNOWN｜HIGH］Network 仍导入历史命名的 `verify_realtime_evidence_security`，Realtime 自身也尚未改由 Adapter 驱动；所以 S2-V2 只关闭 Network→Realtime collector/verifier 的反向依赖，不等于 verifier 全部收敛。
 - ［INFERRED｜HIGH］下一切片固定为：先把 evidence security 改为中立模块并保留兼容入口，再让 Realtime 使用同一 Adapter、删除重复高层算法；之后才设计 Token compatibility adapter。
+
+### S2-V3 中间里程碑：中立证据安全与双族 adapter 收敛
+
+- ［KNOWN｜HIGH］证据根安全实现已迁至不带业务族名称的 `scripts/quick_evidence_security.py`；Realtime collector、Realtime/Network publisher、collection verifier 与 release consumer 均直接导入该中立模块。历史 `verify_realtime_evidence_security` 仅保留同一模块身份的兼容入口，避免旧调用方与 monkeypatch 形成两份状态。
+- ［KNOWN｜HIGH］Realtime collection verifier 已改由与 Network 相同的 `QuickCollectionVerifierAdapter` 驱动，删除 manifest、candidate、phone、device identity、remote、lock、serverinfo、mode inventory、evidence-root 与 COMPLETE 的重复实现；Realtime 只保留自身 plan/status/run、serverinfo 业务约束与 cross-evidence 重算。
+- ［KNOWN｜HIGH］TDD 证据为：neutral security RED 仅因模块不存在；compatibility 3/3、legacy+neutral security 9/9、adapter 结构 4/4、共享 core+adapter+Realtime/Network collection 30/30 PASS；最终 security/collector/双族 collection/release 生产链组合 97/97 PASS。所有执行窗口结束后匹配测试残留进程均为 0。
+- ［KNOWN｜HIGH］本里程碑没有修改冻结证据、Profile、KPI、评分、门限或真机/服务器状态，也没有把 Realtime/Network 的业务判定器并入共享模块。
+- ［INFERRED｜HIGH］下一切片是 Token compatibility fixture 与 Token Adapter；在 Token 迁移和三族完整门禁/CI 通过前，仍不得宣称 S2 三族 verifier 全部收敛。

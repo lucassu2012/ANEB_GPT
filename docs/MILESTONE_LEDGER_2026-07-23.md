@@ -30,7 +30,7 @@
 |---|---|---|---|---|---|
 | S0 契约单元 | 每个测试族先实现业务前能力门、单次终态、Room/strict-v2 与动态指标数据源 | 注册精确 Profile/原语、运行配置和 request-entry 审计 | 发布版本化 Profile/runtime/model，保留来源与校准状态 | 冻结业务类型、全量指标、目标、主动态指标、评分、结论和网络建议 | 正向 exact signature + 负向固定机器原因和零业务产物；本地/CI 全绿 |
 | S1 跨端 Quick | 安装精确 CI APK，在 P40 跑一次正向与一次受控负向 | 受锁部署精确 server binary，冻结同-run 窗口与共享指纹 | 提供同 SHA 的运行包，不把 hypothesis 冒充 calibrated | 独立 DB/audit/bundle/release consumer 重算，最后原子提交 READY | 同一 run/APK/server/Profile；正负 READY；PhoneGuard 与远端验后清理 |
-| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］READY 机械事务第一切片已抽取：Realtime/Network 使用共用深模块、Token 保持兼容对照；下一门为中立 collector/provenance mechanics 与 Token Adapter | EC1、EC2、EC3 全部结案；通用 collector/READY contract 通过故障注入 |
+| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］S2-V3 已完成 Realtime/Network READY、verifier 高层机械和 evidence security 的中立收敛；Token 保持兼容对照。下一门为 Token compatibility fixture/Adapter，再收敛 collector/provenance mechanics | EC1、EC2、EC3 全部结案；通用 collector/READY contract 通过故障注入 |
 | S3 M1 可重复核心 | 非开发者可连续执行三类测试；无线证据、1Hz 动态刷新、历史/报告可复算 | 单节点稳定运行、合成弱网和恢复可重复 | hypothesis 参数与确定性轨迹版本化 | 同条件重复性、样本有效性和置信度门 | P40 重复样本；关键指标 CV/完整性门；导出后独立复算一致 |
 | S4 M2 外场 MVP | 点位、运营商、忙闲、网络制式矩阵采集与地图/报告 | 当前单节点参考端保持稳定；若 PO 恢复多级节点再扩展 | 冻结外场采样计划和对照元数据 | 报告只陈述采样覆盖内结论，不把单点扩写为城市基线 | 6–8 点位×忙闲×运营商有效样本矩阵与可审计热力卡 |
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
@@ -99,6 +99,7 @@
     `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`。
 11. ［KNOWN｜HIGH］D-90～D-95：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，audit scope、busy-sentinel schema、启动码、远端 marker 与证据 schema 不得隐式继承。最终正负 READY 已实证该边界。
 12. ［KNOWN｜HIGH］M0-EC3 最终 CI 候选为 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6` / run `30266912724` / artifact `8653462642` / APK `e1af670c…db0e` / signer `0936cdcf…f1f3`；同候选正负 READY、独立 verifier 与最终清理均通过。
+13. ［KNOWN｜HIGH］D-98～D-101：Realtime/Network 的 READY 事务、collection verifier 原语、高层 Adapter 与证据根安全已迁入业务族中立模块；两族业务 plan/status/run 与 cross-evidence 判定仍隔离。Token 尚未接入 Adapter，S2 不得标记完成。
 
 ## 5. 本轮完成顺序与下一阶段
 
