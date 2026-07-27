@@ -63,6 +63,40 @@ class QuickReadyDirectCliTests(unittest.TestCase):
                     self.assertEqual(verification_schema, verification["schema"])
                     self.assertEqual("release_ready_invalid", verification["reason_code"])
 
+    def test_token_preverified_wrapper_has_canonical_failure_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            completed = subprocess.run(
+                (
+                    sys.executable,
+                    str(ROOT / "scripts" / "publish_token_quick_ready.py"),
+                    str(root / "invalid.complete"),
+                    str(root / "invalid.verification.json"),
+                ),
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+
+        expected = json.dumps(
+            {
+                "reason_code": "release_bundle_leaf_invalid",
+                "schema": "aneb-d82-evidence-ready-publication",
+                "schema_version": "1.0.0",
+                "status": "fail",
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ) + "\n"
+        self.assertEqual(1, completed.returncode)
+        self.assertEqual("", completed.stdout)
+        self.assertEqual(expected, completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

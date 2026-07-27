@@ -122,3 +122,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据：Adapter RED 唯一为模块不存在；首次 GREEN 精确暴露历史键序；修复后 Adapter 端到端 1/1，默认严格性与 Token 合同护栏 2/2，共享 core + 完整 Token release 38/38（4 项平台相关跳过）。每轮 fresh pre/post 匹配残留均为 0。
 - ［KNOWN｜HIGH］当前只建立 Python 调用面；Token PowerShell `Publish-EvidenceReleaseReady`、CLI 机器输出、工具 provenance/identity closure 尚未迁移。因此不得把 S2-V4e 扩写为 Token publisher 全量迁移或 S2 完成。
 - ［INFERRED｜HIGH］下一切片先冻结 CLI 的成功/失败机器字节与 reason code，再把 PowerShell 收敛为薄壳并补齐工具闭包；之后才进入三族完整质量门和 clean CI。
+
+### S2-V4f 中间里程碑：Token publisher CLI 机器合同
+
+- ［KNOWN｜HIGH］Token publisher 现有直接执行入口，位置参数固定为 `bundle report`。成功时 exit `0` 且只向 stdout 输出 sorted-key canonical JSON；事务失败时 exit `1`、stdout 为空，只向 stderr 输出 `aneb-d82-evidence-ready-publication@1.0.0` canonical JSON 和单个换行。
+- ［KNOWN｜HIGH］CLI 不自行重写事务或 reason code；它只把 `QuickReadyFailure.reason_code` 映射为稳定的 family publication failure，并继续调用 S2-V4e 的 Token Adapter。
+- ［KNOWN｜HIGH］TDD 证据：RED 精确表现为脚本无 `main`、错误输入仍 exit `0`；GREEN 1/1；完整 Realtime/Network/Token direct CLI + Token Adapter E2E 3/3。每轮 fresh pre/post 匹配残留均为 0。
+- ［KNOWN｜HIGH］Token PowerShell collector 仍使用旧 `Publish-EvidenceReleaseReady` 实现，tooling closure 仍未包含新 publisher 与 release verifier；因此 CLI 完成不等于 collector 迁移，S2 仍未完成。
+- ［INFERRED｜HIGH］下一切片是先以 PowerShell 合同测试锁定 CLI 参数、失败传播、report 原字节保留与 READY 最后提交顺序，再替换重复 PowerShell marker 逻辑并扩充工具 provenance。
