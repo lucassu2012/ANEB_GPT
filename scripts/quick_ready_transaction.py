@@ -81,6 +81,57 @@ class QuickReadyContract:
             raise ValueError("quick_ready_mode_contract_invalid")
 
 
+def ready_keys(contract: QuickReadyContract) -> frozenset[str]:
+    """Return the exact READY key set for one immutable family contract."""
+
+    return frozenset((*READY_BASE_KEYS, contract.mode_field))
+
+
+def ready_marker_failure(
+    marker: object,
+    collection: str,
+    *,
+    contract: QuickReadyContract,
+) -> str | None:
+    """Classify family-neutral READY failures without choosing reason codes."""
+
+    if not isinstance(marker, dict) or set(marker) != set(ready_keys(contract)):
+        return "keys"
+    if (
+        marker.get("schema") != contract.release_schema
+        or marker.get("schema_version") != contract.release_version
+        or marker.get("status") != "ready"
+        or marker.get("reason_code") != "ok"
+    ):
+        return "contract"
+    if (
+        marker.get("collection_id") != collection
+        or contract.collection_pattern.fullmatch(f"{collection}.complete") is None
+        or not isinstance(marker.get("run_id"), str)
+        or RUN_ID_RE.fullmatch(str(marker["run_id"])) is None
+        or marker.get(contract.mode_field) not in contract.mode_values
+    ):
+        return "identity"
+    if (
+        marker.get("bundle_leaf") != f"{collection}.complete"
+        or marker.get("verification_report_leaf")
+        != f"{collection}.verification.json"
+        or not isinstance(marker.get("manifest_sha256"), str)
+        or SHA256_RE.fullmatch(str(marker["manifest_sha256"])) is None
+        or not isinstance(marker.get("verification_report_sha256"), str)
+        or SHA256_RE.fullmatch(str(marker["verification_report_sha256"])) is None
+    ):
+        return "binding"
+    timestamp = marker.get("committed_at_utc")
+    if not isinstance(timestamp, str) or UTC_RE.fullmatch(timestamp) is None:
+        return "timestamp"
+    try:
+        datetime.strptime(timestamp[:26] + "Z", "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        return "timestamp"
+    return None
+
+
 class QuickReadyAdapter(Protocol):
     def verify_private_root(self, bundle: Path) -> None: ...
 
@@ -278,32 +329,11 @@ def verify_release(
         ready, maximum=64 * 1024, reason="release_ready_invalid"
     )
     collection = leaf_match.group("collection")
-    if (
-        set(marker) != {*READY_BASE_KEYS, contract.mode_field}
-        or marker.get("schema") != contract.release_schema
-        or marker.get("schema_version") != contract.release_version
-        or marker.get("status") != "ready"
-        or marker.get("reason_code") != "ok"
-        or marker.get("collection_id") != collection
-        or marker.get(contract.mode_field) not in contract.mode_values
-        or not isinstance(marker.get("run_id"), str)
-        or RUN_ID_RE.fullmatch(str(marker["run_id"])) is None
-        or marker.get("bundle_leaf") != f"{collection}.complete"
-        or marker.get("verification_report_leaf")
-        != f"{collection}.verification.json"
-        or not isinstance(marker.get("manifest_sha256"), str)
-        or SHA256_RE.fullmatch(str(marker["manifest_sha256"])) is None
-        or not isinstance(marker.get("verification_report_sha256"), str)
-        or SHA256_RE.fullmatch(str(marker["verification_report_sha256"])) is None
-    ):
+    marker_failure = ready_marker_failure(marker, collection, contract=contract)
+    if marker_failure == "timestamp":
+        fail("release_ready_timestamp_invalid")
+    if marker_failure is not None:
         fail("release_ready_contract_invalid")
-    timestamp = marker.get("committed_at_utc")
-    if not isinstance(timestamp, str) or UTC_RE.fullmatch(timestamp) is None:
-        fail("release_ready_timestamp_invalid")
-    try:
-        datetime.strptime(timestamp[:26] + "Z", "%Y-%m-%dT%H:%M:%S.%fZ")
-    except ValueError:
-        fail("release_ready_timestamp_invalid")
 
     bundle = ready.parent / str(marker["bundle_leaf"])
     report_path = ready.parent / str(marker["verification_report_leaf"])
@@ -453,5 +483,7 @@ __all__ = (
     "QuickReadyFailure",
     "CollectionModuleAdapter",
     "publish_ready",
+    "ready_keys",
+    "ready_marker_failure",
     "verify_release",
 )

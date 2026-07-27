@@ -88,3 +88,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据：RED 唯一错误为构造器尚不接受 Token mode 合同；GREEN/安全用例 6/6 PASS。首次双族回归在加载期发现公开 `READY_KEYS` 兼容常量被改名，未执行测试逻辑；恢复默认兼容面后 core + Realtime/Network release 18/18 PASS，前后测试残留为 0。
 - ［KNOWN｜HIGH］本切口只证明共享 READY 事务能无损表达 Token 的 mode 方言；Token publisher/consumer 仍未接入共享事务，不能标记 Token Adapter 或 S2 完成。
 - ［INFERRED｜HIGH］下一步以现有 Token release 故障注入套件作等价性夹具，抽取可配置的 READY/digest/COMPLETE 机械层；必须保留 Token 的精确 reason code、外部工具闭包和正负业务重算，不得用无操作 adapter 冒充迁移。
+
+### S2-V4b 中间里程碑：Token READY marker consumer 接入
+
+- ［KNOWN｜HIGH］Token release consumer 已声明不可变 `TOKEN_READY_CONTRACT`；历史 `execution_mode` 两值域和 READY 精确 key 集由共享合同派生，不再在 Token 模块复制 marker key/schema/run/mode/binding/timestamp 算法。
+- ［KNOWN｜HIGH］共享 `ready_marker_failure` 只分类 `keys/contract/identity/binding/timestamp`，不选择业务族 reason code。Token 将分类机械映射回既有 `release_ready_*_invalid`，Realtime/Network 仍维持原有 contract/timestamp 失败面。
+- ［KNOWN｜HIGH］Token 自身仍额外验证 collection stamp 的真实日历合法性；manifest、verification report、COMPLETE、文件摘要、外部工具闭包、正负业务语义和 publisher 均未迁入共享层。
+- ［KNOWN｜HIGH］TDD 证据：结构 RED 唯一为 `TOKEN_READY_CONTRACT` 缺失；GREEN 1/1。共享 core + Token/Realtime/Network release 回归 46/46（另有 4 项平台相关 skip），删除两条已无引用的 Token 重复正则后同一套件再次 46/46；每次测试前后匹配残留进程均为 0。
+- ［INFERRED｜HIGH］下一切片只抽取 digest/COMPLETE 纯机械分类，并继续用 Token 故障注入套件锁定历史失败码；在 publisher 与完整 consumer 等价迁移、三族完整门禁和 CI 全绿前，S2 仍不得标记完成。

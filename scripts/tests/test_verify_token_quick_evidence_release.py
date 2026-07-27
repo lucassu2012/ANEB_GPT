@@ -287,6 +287,18 @@ class TokenQuickEvidenceReleaseVerifierTests(unittest.TestCase):
             self.assertEqual(reason, failure["reason_code"])
         return failure
 
+    def test_declares_family_neutral_token_ready_contract(self) -> None:
+        from scripts import quick_ready_transaction as transaction
+        from scripts import verify_token_quick_evidence_release as verifier
+
+        contract = verifier.TOKEN_READY_CONTRACT
+        self.assertEqual("execution_mode", contract.mode_field)
+        self.assertEqual(
+            frozenset({"positive", "negative_receipt_missing"}),
+            contract.mode_values,
+        )
+        self.assertEqual(transaction.ready_keys(contract), verifier.READY_KEYS)
+
     def test_accepts_digest_bound_ready_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = ReleaseFixture(Path(temporary))
