@@ -3231,7 +3231,7 @@ def write_evidence_manifest(
     return output
 
 
-def _verify_evidence_manifest_once(
+def verify_evidence_manifest(
     root: Path,
     *,
     schema: str = CONTRACT.manifest_schema,
@@ -3285,6 +3285,7 @@ def _verify_evidence_manifest_once(
             raise ValueError("coverage")
     except (
         KeyError,
+        OSError,
         TypeError,
         UnicodeError,
         ValueError,
@@ -3293,22 +3294,12 @@ def _verify_evidence_manifest_once(
         raise CollectorError("evidence_manifest_invalid") from error
 
 
-def verify_evidence_manifest(
-    root: Path,
+def atomic_publish(
+    partial: Path,
+    complete: Path,
     *,
     schema: str = CONTRACT.manifest_schema,
 ) -> None:
-    for attempt in range(3):
-        try:
-            _verify_evidence_manifest_once(root, schema=schema)
-            return
-        except OSError as error:
-            if attempt == 2:
-                raise CollectorError("evidence_manifest_invalid") from error
-            time.sleep(0.25)
-
-
-def atomic_publish(partial: Path, complete: Path) -> None:
     status_path = partial / "collector-status.json"
     try:
         status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -3322,7 +3313,7 @@ def atomic_publish(partial: Path, complete: Path) -> None:
         partial / "COMPLETE"
     ).is_file():
         raise CollectorError("publish_not_ready")
-    verify_evidence_manifest(partial)
+    verify_evidence_manifest(partial, schema=schema)
     os.replace(partial, complete)
 
 
@@ -4255,7 +4246,11 @@ class LiveCollectorBackend:
             ).encode("utf-8"),
         )
         self._verify_before_atomic_publish()
-        atomic_publish(self.partial, self.complete)
+        atomic_publish(
+            self.partial,
+            self.complete,
+            schema=self.contract.manifest_schema,
+        )
         publication_succeeded = False
         try:
             publication = self._publish_ready()

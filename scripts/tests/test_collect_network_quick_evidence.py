@@ -154,6 +154,31 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
             allow_partial=True,
         )
 
+    def test_atomic_publish_revalidates_the_network_manifest_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            partial = root / "network.partial"
+            complete = root / "network.complete"
+            partial.mkdir()
+            (partial / "collector-status.json").write_bytes(
+                mechanics._canonical_json_bytes({"status": "pass"})
+            )
+            (partial / "payload.txt").write_bytes(b"network evidence\n")
+            mechanics.write_evidence_manifest(
+                partial,
+                schema=CONTRACT.manifest_schema,
+            )
+            (partial / "COMPLETE").write_text("complete\n", encoding="utf-8")
+
+            mechanics.atomic_publish(
+                partial,
+                complete,
+                schema=CONTRACT.manifest_schema,
+            )
+
+            self.assertFalse(partial.exists())
+            self.assertTrue(complete.is_dir())
+
     def test_cli_preflight_is_network_specific_and_external_call_free(self) -> None:
         placeholder = "placeholder"
         argv = [

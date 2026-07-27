@@ -1135,69 +1135,6 @@ class EvidencePublicationTests(unittest.TestCase):
             self.assertTrue((complete / "COMPLETE").is_file())
             self.assertTrue((complete / "evidence-manifest.json").is_file())
 
-    def test_atomic_publish_retries_one_transient_manifest_read_error(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            partial = root / "run.partial"
-            complete = root / "run.complete"
-            partial.mkdir()
-            (partial / "collector-status.json").write_bytes(
-                collector._canonical_json_bytes({"status": "pass"})
-            )
-            (partial / "payload.txt").write_bytes(b"evidence\n")
-            collector.write_evidence_manifest(partial)
-            (partial / "COMPLETE").write_text("complete\n", encoding="utf-8")
-            real_sha256 = collector._sha256_file
-            attempts = 0
-
-            def transient_read(path: Path) -> str:
-                nonlocal attempts
-                attempts += 1
-                if attempts == 1:
-                    raise PermissionError("transient scanner lock")
-                return real_sha256(path)
-
-            with (
-                mock.patch.object(collector, "_sha256_file", side_effect=transient_read),
-                mock.patch.object(collector.time, "sleep") as sleep,
-            ):
-                collector.atomic_publish(partial, complete)
-
-            self.assertGreaterEqual(attempts, 2)
-            sleep.assert_called_once_with(0.25)
-            self.assertTrue(complete.is_dir())
-
-    def test_atomic_publish_bounds_persistent_manifest_read_errors(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            partial = root / "run.partial"
-            complete = root / "run.complete"
-            partial.mkdir()
-            (partial / "collector-status.json").write_bytes(
-                collector._canonical_json_bytes({"status": "pass"})
-            )
-            (partial / "payload.txt").write_bytes(b"evidence\n")
-            collector.write_evidence_manifest(partial)
-            (partial / "COMPLETE").write_text("complete\n", encoding="utf-8")
-
-            with (
-                mock.patch.object(
-                    collector,
-                    "_sha256_file",
-                    side_effect=PermissionError("persistent scanner lock"),
-                ),
-                mock.patch.object(collector.time, "sleep") as sleep,
-            ):
-                with self.assertRaisesRegex(
-                    collector.CollectorError,
-                    "evidence_manifest_invalid",
-                ):
-                    collector.atomic_publish(partial, complete)
-
-            self.assertEqual([mock.call(0.25), mock.call(0.25)], sleep.call_args_list)
-            self.assertTrue(partial.is_dir())
-            self.assertFalse(complete.exists())
-
     def test_atomic_publish_revalidates_manifest_before_move(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
