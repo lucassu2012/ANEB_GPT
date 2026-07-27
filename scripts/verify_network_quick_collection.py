@@ -16,8 +16,8 @@ import urllib.parse
 
 if __package__:
     from scripts import quick_collection_verifier as verifier_core
-    from scripts import verify_realtime_quick_collection as mechanics
-    from scripts import collect_realtime_quick_evidence as collector_mechanics
+    from scripts import quick_collection_verifier_adapter as verifier_adapter
+    from scripts import verify_realtime_evidence_security as evidence_security
     from scripts.collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,
@@ -28,8 +28,8 @@ if __package__:
     from scripts.quick_collection_contract import network_quick_contract
 else:
     import quick_collection_verifier as verifier_core
-    import verify_realtime_quick_collection as mechanics
-    import collect_realtime_quick_evidence as collector_mechanics
+    import quick_collection_verifier_adapter as verifier_adapter
+    import verify_realtime_evidence_security as evidence_security
     from collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,
@@ -44,8 +44,8 @@ CONTRACT = network_quick_contract()
 REPORT_SCHEMA = "aneb-network-quick-collection-verification"
 REPORT_VERSION = "1.0.0"
 NEGATIVE_DEVICE_PORT = 18765
-MAX_TEXT_BYTES = mechanics.MAX_TEXT_BYTES
-MAX_JSON_BYTES = mechanics.MAX_JSON_BYTES
+MAX_TEXT_BYTES = verifier_adapter.MAX_TEXT_BYTES
+MAX_JSON_BYTES = verifier_adapter.MAX_JSON_BYTES
 COLLECTION_RE = re.compile(
     r"^(?P<collection>m0-ec3-network-quick-"
     r"(?P<stamp>[0-9]{8}T[0-9]{6}Z)-[0-9a-f]{32})\.complete$"
@@ -56,9 +56,9 @@ COLLECTION_ID_RE = re.compile(
 RUN_ID_RE = verifier_core.RUN_ID_RE
 SHA256_RE = verifier_core.SHA256_RE
 COMMIT_RE = verifier_core.COMMIT_RE
-PLAN_KEYS = mechanics.PLAN_KEYS
-STATUS_KEYS = mechanics.STATUS_KEYS
-RUN_RECEIPT_KEYS = mechanics.RUN_RECEIPT_KEYS
+PLAN_KEYS = verifier_adapter.PLAN_KEYS
+STATUS_KEYS = verifier_adapter.STATUS_KEYS
+RUN_RECEIPT_KEYS = verifier_adapter.RUN_RECEIPT_KEYS
 CollectionVerificationFailure = verifier_core.CollectionVerificationFailure
 
 _assert_directory = verifier_core.assert_directory
@@ -216,6 +216,49 @@ def _network_serverinfo_sequence(bodies: list[dict[str, Any]]) -> None:
         fail("serverinfo_sequence_invalid")
 
 
+def _validate_evidence_root_security(
+    root: Path,
+    report: dict[str, Any],
+) -> None:
+    try:
+        evidence_security.validate_report(root, report)
+    except evidence_security.EvidenceSecurityFailure:
+        fail("evidence_root_security_invalid")
+
+
+def _mechanics_adapter() -> verifier_adapter.QuickCollectionVerifierAdapter:
+    return verifier_adapter.QuickCollectionVerifierAdapter(
+        manifest_schema=CONTRACT.manifest_schema,
+        complete_marker=CONTRACT.complete_marker,
+        remote_marker_prefix=CONTRACT.remote_marker_prefix,
+        candidate=verifier_adapter.CandidateContract(
+            apk_name=CONTRACT.candidate_apk_name,
+            files=CONTRACT.candidate_files,
+            package_name=CONTRACT.package_name,
+            version_name=CONTRACT.expected_version_name,
+            version_code=CONTRACT.expected_version_code,
+        ),
+        phone=verifier_adapter.PhoneStateContract(
+            receipt_schema=CONTRACT.phone_receipt_schema,
+            launcher_component=verifier_adapter.DEFAULT_LAUNCHER_COMPONENT,
+            relevant_packages=verifier_adapter.DEFAULT_RELEVANT_PACKAGES,
+        ),
+        device_identity=verifier_adapter.DeviceIdentityContract(
+            identity_schema=CONTRACT.device_identity_schema,
+            property_keys=verifier_adapter.DEFAULT_DEVICE_PROPERTY_KEYS,
+            optional_property_keys=(
+                verifier_adapter.DEFAULT_OPTIONAL_DEVICE_PROPERTY_KEYS
+            ),
+        ),
+        evidence_root_validator=_validate_evidence_root_security,
+        serverinfo_body_validator=_network_serverinfo_body,
+        serverinfo_sequence_validator=_network_serverinfo_sequence,
+        negative_required_paths=(
+            verifier_adapter.DEFAULT_NEGATIVE_REQUIRED_PATHS
+        ),
+    )
+
+
 def _read_utf8(path: Path, reason: str) -> str:
     raw = _read_regular(path, maximum=MAX_TEXT_BYTES, reason=reason)
     try:
@@ -225,16 +268,13 @@ def _read_utf8(path: Path, reason: str) -> str:
 
 
 def _post_capture_marker_log(text: str) -> str:
-    matches = re.findall(
-        r"(?m)^[^\r\n]*D82_CAPTURE_MARKER nonce=([0-9a-f]{32})\s*$",
-        text,
+    pattern = re.compile(
+        r"(?m)^[^\r\n]*D82_CAPTURE_MARKER nonce=([0-9a-f]{32})\s*$"
     )
+    matches = list(pattern.finditer(text))
     if len(matches) != 1:
         fail("network_logcat_capture_marker_invalid")
-    try:
-        return collector_mechanics.post_marker_log(text, nonce=matches[0])
-    except CollectorError:
-        fail("network_logcat_capture_marker_invalid")
+    return text[matches[0].end() :]
 
 
 def _verify_busy_sentinels(bundle: Path) -> None:
@@ -359,14 +399,13 @@ def verify_collection(
     else:
         fail("collection_leaf_invalid")
     _assert_directory(bundle, "collection_directory_invalid")
+    mechanics = _mechanics_adapter()
 
-    manifest, manifest_sha = mechanics._verify_manifest(
-        bundle, expected_schema=CONTRACT.manifest_schema
-    )
-    root_security_sha = mechanics._verify_evidence_root_security(bundle)
+    manifest, manifest_sha = mechanics.verify_manifest(bundle)
+    root_security_sha = mechanics.verify_evidence_root_security(bundle)
     plan, _ = _load_json(bundle / "collector-plan.json", "collector_plan_invalid")
     _validate_plan(plan, collection)
-    mechanics._verify_mode_inventory(manifest, mode=str(plan["evidence_mode"]))
+    mechanics.verify_mode_inventory(manifest, mode=str(plan["evidence_mode"]))
     status, _ = _load_json(bundle / "collector-status.json", "collector_status_invalid")
     run_receipt, _ = _load_json(bundle / "run-receipt.json", "run_receipt_invalid")
     cross_report, cross_raw = _load_json(
@@ -379,44 +418,23 @@ def verify_collection(
         plan=plan,
         cross_raw=cross_raw,
     )
-    mechanics._verify_complete(
+    mechanics.verify_complete(
         bundle,
         collection=collection,
         run_id=run_id,
         manifest_sha256=manifest_sha,
-        marker=CONTRACT.complete_marker,
     )
-    mechanics._verify_candidate(
-        bundle,
-        plan,
-        candidate_apk_name=CONTRACT.candidate_apk_name,
-        candidate_names=CONTRACT.candidate_files,
-        expected_package=CONTRACT.package_name,
-        expected_version_name=CONTRACT.expected_version_name,
-        expected_version_code=CONTRACT.expected_version_code,
-    )
-    mechanics._verify_device_identity(
-        bundle, plan, identity_schema=CONTRACT.device_identity_schema
-    )
+    mechanics.verify_candidate(bundle, plan)
+    mechanics.verify_device_identity(bundle, plan)
     _verify_busy_sentinels(bundle)
     _verify_logcat_stderr(bundle)
-    preflight_hash = mechanics._verify_phone_pair(
-        bundle, "phone-preflight", receipt_schema=CONTRACT.phone_receipt_schema
-    )
-    postflight_hash = mechanics._verify_phone_pair(
-        bundle, "phone-postflight", receipt_schema=CONTRACT.phone_receipt_schema
-    )
+    preflight_hash = mechanics.verify_phone_pair(bundle, "phone-preflight")
+    postflight_hash = mechanics.verify_phone_pair(bundle, "phone-postflight")
     if preflight_hash != postflight_hash:
         fail("phone_baseline_not_restored")
-    journal_cursor = mechanics._verify_remote(bundle, plan)
-    lock_nonce = mechanics._verify_lock(
-        bundle, marker_prefix=CONTRACT.remote_marker_prefix
-    )
-    server_version = mechanics._verify_serverinfo(
-        bundle,
-        body_validator=_network_serverinfo_body,
-        sequence_validator=_network_serverinfo_sequence,
-    )
+    journal_cursor = mechanics.verify_remote(bundle, plan)
+    lock_nonce = mechanics.verify_lock(bundle)
+    server_version = mechanics.verify_serverinfo(bundle)
     recomputed_cross = revalidate_cross_evidence(bundle, plan=plan, run_id=run_id)
     if recomputed_cross != cross_report:
         fail("cross_report_revalidation_mismatch")

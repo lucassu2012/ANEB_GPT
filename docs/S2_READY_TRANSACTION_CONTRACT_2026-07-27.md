@@ -64,3 +64,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］release 与跨族补跑再验 16/16 PASS，合计聚焦/跨族 42/42 PASS。当前快照的完整质量门运行 807 项：790 PASS、16 SKIP、唯一 ERROR 是既有 Token evidence verifier 子进程超过固定 120 秒；该唯一测试随后单独复现 1/1 PASS（13.924 秒）。因此本轮完整门禁不得记为 PASS，也没有证据把超时归因于 S2-V1。
 - ［KNOWN｜HIGH］Network 仍从 Realtime 取得 candidate、manifest、phone、remote、lock、serverinfo 与 COMPLETE 等高层机械函数；因此 S2-V1 只是可审计的依赖切口，不等于第 1 步“中立 collector/verifier mechanics”完成。
 - ［INFERRED｜HIGH］下一提交应把这些高层函数改为由显式 `QuickCollectionVerifierAdapter` 配置合同驱动；只有 Network 文件不再 import Realtime verifier 之后，才关闭 verifier 半边的反向依赖。
+
+### S2-V2 中间里程碑：显式高层 verifier adapter
+
+- ［KNOWN｜HIGH］`scripts/quick_collection_verifier_adapter.py` 以不可变合同承载 manifest、candidate provenance、phone pair、device identity、remote snapshot、lock、serverinfo、mode inventory、evidence-root 与 COMPLETE 的共享验证算法；模块自身零 Token/Realtime/Network collector/verifier import。
+- ［KNOWN｜HIGH］Network verifier 已不再导入 `verify_realtime_quick_collection` 或 `collect_realtime_quick_evidence`；Network 自身只提供 schema、候选身份、手机/设备合同、远端 marker、serverinfo 与 evidence-root 回调，Network cross-evidence 业务重算没有进入共享模块。
+- ［KNOWN｜HIGH］S2-V2 RED 是 adapter 模块不存在的唯一 ImportError；GREEN 后 adapter 合同 3/3、Network 6/6、primitives/adapter/Realtime/Network 同进程 29/29、Realtime/Network release 12/12 PASS，终态残留进程均为 0。
+- ［KNOWN｜HIGH］Network 仍导入历史命名的 `verify_realtime_evidence_security`，Realtime 自身也尚未改由 Adapter 驱动；所以 S2-V2 只关闭 Network→Realtime collector/verifier 的反向依赖，不等于 verifier 全部收敛。
+- ［INFERRED｜HIGH］下一切片固定为：先把 evidence security 改为中立模块并保留兼容入口，再让 Realtime 使用同一 Adapter、删除重复高层算法；之后才设计 Token compatibility adapter。
