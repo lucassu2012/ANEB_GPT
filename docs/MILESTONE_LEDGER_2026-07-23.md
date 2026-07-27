@@ -74,7 +74,7 @@
 | EC3-01 Profile/runtime | 冻结 Network Quick 1.2.0、四原语、运行顺序、manifest 与 catalog 1.8.0 | ［KNOWN｜HIGH］完成；Profile SHA=`15ae5187…82cc`，runtime SHA=`89812670…2603` |
 | EC3-02～03 P2 | 精确能力白名单、upload、ANEB2 同-run UDP、同端口运行配置和连续 request-entry 审计 | ［KNOWN｜HIGH］完成；E-01 已受保护部署 `aneb-server/0.8.2`，source `33434dc`，binary `62ff966b…c96e` |
 | EC3-04～06 P1 | 首业务包前能力门、授权传输、固定 `receipt_missing`、零业务产物、null score/grade 和单次 Room 终态 | ［KNOWN｜HIGH］离线实现完成；Android/Go/Python 回归和 full quality gate 通过 |
-| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］判定器与绑定适配层完成；commit `5ca1bad`。D-93 已抽出 fail-closed workflow，并冻结 Realtime/Network 不可混用的身份合同及 Network 0.8.2 serverinfo 序列门；完整设备机械适配、bundle/READY publisher/consumer 仍未完成 |
+| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］判定器与绑定适配层完成；commit `5ca1bad`。D-93 已抽出 fail-closed workflow，并冻结 Realtime/Network 不可混用的身份合同及 Network 0.8.2 serverinfo 序列门；Network 已接入共用设备机械后端并独立落盘三份判定报告。bundle verifier、READY publisher/consumer 仍未完成，当前后端会在发布前明确拒绝 |
 | EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；GitHub run `30229781268` 全绿，artifact `8639826211`，APK `f66c13dc…881f`，signer `65c7a527…06e5`，0.5.14-codex/code46 |
 | EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］未完成；Windows 当前只枚举 P40 的 WPD/存储接口，没有 ADB interface。首次换装在 Room 备份前 fail closed，卸载/安装/启动/数据库修改均为零 |
 | EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］待 EC3-09；服务器部署阶段自身已残留 0 且 flock 释放，但不能代替 P40 运行后的最终收尾 |

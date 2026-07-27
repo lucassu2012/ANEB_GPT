@@ -12,6 +12,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class CollectorError(RuntimeError):
+    """A bounded Quick collection contract rejected the current state."""
+
+
 @dataclass(frozen=True)
 class WorkflowResult:
     success: bool
@@ -80,4 +84,9 @@ def run_workflow(backend: WorkflowBackend) -> WorkflowResult:
     )
 
 
-__all__ = ("WorkflowBackend", "WorkflowResult", "run_workflow")
+__all__ = (
+    "CollectorError",
+    "WorkflowBackend",
+    "WorkflowResult",
+    "run_workflow",
+)

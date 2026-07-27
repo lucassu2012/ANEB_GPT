@@ -21,6 +21,7 @@ class QuickCollectionContract:
     expected_version_code: int
     expected_server_version: str
     candidate_apk_name: str
+    candidate_files: frozenset[str]
     audit_scope: str
     collection_prefix: str
     plan_schema: str
@@ -44,6 +45,15 @@ def network_quick_contract() -> QuickCollectionContract:
         expected_version_code=46,
         expected_server_version="aneb-server/0.8.2",
         candidate_apk_name="ANEB-Probe-0.5.14-codex-debug.apk",
+        candidate_files=frozenset(
+            {
+                "ANEB-Probe-0.5.14-codex-debug.apk",
+                "build-manifest.json",
+                "checksums.sha256",
+                "provenance.sigstore.json",
+                "ANEB-安装说明.txt",
+            }
+        ),
         audit_scope="network_run",
         collection_prefix="m0-ec3-network-quick",
         plan_schema="aneb-network-quick-collector-plan",
@@ -68,8 +78,17 @@ def realtime_quick_contract() -> QuickCollectionContract:
         expected_version_code=45,
         expected_server_version="aneb-server/0.8.1",
         candidate_apk_name="ANEB-Probe-0.5.13-codex-debug.apk",
+        candidate_files=frozenset(
+            {
+                "ANEB-Probe-0.5.13-codex-debug.apk",
+                "build-manifest.json",
+                "checksums.sha256",
+                "provenance.sigstore.json",
+                "ANEB-安装说明.txt",
+            }
+        ),
         audit_scope="realtime_run",
-        collection_prefix="m0-ec2-realtime-quick",
+        collection_prefix="m0-ec2-realtime",
         plan_schema="aneb-realtime-quick-collector-plan",
         status_schema="aneb-realtime-quick-collector-status",
         run_receipt_schema="aneb-realtime-quick-run-receipt",

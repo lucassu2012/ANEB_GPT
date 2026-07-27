@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
+import os
 import re
 from typing import Literal, Mapping
 import uuid
 
 try:
+    from scripts import collect_realtime_quick_evidence as mechanics
     from scripts.quick_collection_workflow import (
+        CollectorError,
         WorkflowBackend,
         WorkflowResult,
         run_workflow,
@@ -24,8 +28,14 @@ try:
     from scripts.verify_network_quick_client_db import verify_database
     from scripts.verify_network_quick_run_audit import verify_journal
 except ModuleNotFoundError:  # Direct script execution from scripts/.
+    import collect_realtime_quick_evidence as mechanics
     from quick_collection_contract import network_quick_contract
-    from quick_collection_workflow import WorkflowBackend, WorkflowResult, run_workflow
+    from quick_collection_workflow import (
+        CollectorError,
+        WorkflowBackend,
+        WorkflowResult,
+        run_workflow,
+    )
     from verify_network_quick_client_db import verify_database
     from verify_network_quick_run_audit import verify_journal
 
@@ -55,10 +65,6 @@ REALTIME_PROFILE_SHA256 = (
 TOKEN_PROFILE_SHA256 = (
     "caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773"
 )
-
-
-class CollectorError(RuntimeError):
-    """A frozen Network Quick collection contract was rejected."""
 
 
 @dataclass(frozen=True)
@@ -347,6 +353,99 @@ def verify_collected_network_evidence(
     )
 
 
+def _write_exclusive_json(path: Path, value: object) -> None:
+    payload = (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as error:
+        raise CollectorError("network_verifier_report_write_failed") from error
+
+
+def run_network_verifiers(
+    *,
+    evidence_directory: Path,
+    markers: NetworkTerminalMarkers,
+    mode: Literal["positive", "negative"],
+    database: Path,
+    journal_path: Path,
+    profile_path: Path,
+    runtime_path: Path,
+    manifest_path: Path,
+    expected_server_base: str | None,
+    start_barrier_id: str,
+    end_barrier_id: str,
+) -> dict[str, object]:
+    """Recompute and persist both independent reports before binding them."""
+
+    try:
+        if (
+            not evidence_directory.is_dir()
+            or evidence_directory.is_symlink()
+            or not journal_path.is_file()
+            or journal_path.is_symlink()
+        ):
+            raise ValueError("paths")
+        journal_text = journal_path.read_text(encoding="utf-8", errors="strict")
+        client_report = verify_database(
+            database,
+            markers.run_id,
+            mode,
+            profile_path,
+            runtime_path,
+            manifest_path,
+            expected_server_base,
+        )
+        audit_report = verify_journal(
+            journal_text,
+            run_id=markers.run_id,
+            start_barrier_id=start_barrier_id,
+            barrier_id=end_barrier_id,
+            mode=mode,
+            profile_contract=PROFILE_CONTRACT,
+        )
+        binding = bind_network_verifier_reports(
+            markers=markers,
+            mode=mode,
+            client_report=client_report,
+            audit_report=audit_report,
+        )
+        _write_exclusive_json(
+            evidence_directory / "client-db-verification.json",
+            client_report,
+        )
+        _write_exclusive_json(
+            evidence_directory / "server-audit-verification.json",
+            audit_report,
+        )
+        _write_exclusive_json(
+            evidence_directory / "cross-bound-report.json",
+            binding,
+        )
+        return binding
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CollectorError("network_verifier_execution_failed") from error
+
+
 def validate_run_id(value: str) -> None:
     if RUN_ID_RE.fullmatch(value) is None:
         raise CollectorError("run_id_invalid")
@@ -523,3 +622,95 @@ def build_network_audit_headers(
         "X-Aneb-Audit-Role": role,
         "X-Aneb-Audit-Scope": CONTRACT.audit_scope,
     }
+
+
+class NetworkLiveCollectorBackend(mechanics.LiveCollectorBackend):
+    """Network semantics over the shared, already-proven live mechanics."""
+
+    def __init__(
+        self,
+        config: mechanics.CollectorConfig,
+        *,
+        install_candidate: bool,
+        runner: mechanics.CommandRunner | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            install_candidate=install_candidate,
+            runner=runner,
+            contract=CONTRACT,
+        )
+
+    def _validate_serverinfo(self, body: object) -> None:
+        validate_network_serverinfo(body)
+
+    def _assert_serverinfo_sequence(
+        self,
+        identity: object,
+        start: object,
+        end: object,
+    ) -> None:
+        assert_network_serverinfo_sequence(identity, start, end)
+
+    def _audit_headers(
+        self,
+        *,
+        run_id: str,
+        role: Literal["window_start", "window_end"],
+    ) -> dict[str, str]:
+        return build_network_audit_headers(run_id=run_id, role=role)
+
+    def _build_launch_arguments(self) -> list[str]:
+        return build_network_launch_arguments(
+            serial=self.config.adb_serial,
+            server_base=self.client_server_base,
+            transport=self.config.transport,
+            adb_path=self.adb.executable,
+        )
+
+    def _parse_terminal_markers(
+        self,
+        text: str,
+        *,
+        mode: Literal["positive", "negative"],
+    ) -> object:
+        return parse_network_terminal_markers(text, mode=mode)
+
+    def _run_category_verifiers(
+        self,
+        *,
+        run_id: str,
+        serverinfo_path: Path,
+    ) -> dict[str, object]:
+        del serverinfo_path
+        if self.run_markers is None or self.run_markers.run_id != run_id:
+            raise CollectorError("network_verifier_binding_invalid")
+        profile_directory = (
+            Path(__file__).resolve().parents[1]
+            / "profiles"
+            / "published"
+            / PROFILE_ID
+        )
+        return run_network_verifiers(
+            evidence_directory=self.partial,
+            markers=self.run_markers,
+            mode=self.config.evidence_mode,
+            database=self.partial / "aneb-probe.db",
+            journal_path=self.partial / "journal.raw.log",
+            profile_path=profile_directory / "profile.json",
+            runtime_path=profile_directory / "runtime_plan.json",
+            manifest_path=profile_directory / "manifest.sha256",
+            expected_server_base=self.client_server_base,
+            start_barrier_id=self.start_barrier_id,
+            end_barrier_id=self.end_barrier_id,
+        )
+
+    def _verify_before_atomic_publish(self) -> dict[str, object]:
+        raise CollectorError("network_collection_verifier_not_implemented")
+
+    def _publish_ready(self) -> dict[str, object]:
+        raise CollectorError("network_ready_publisher_not_implemented")
+
+    def _verify_release(self, ready_path: Path) -> dict[str, object]:
+        del ready_path
+        raise CollectorError("network_release_verifier_not_implemented")

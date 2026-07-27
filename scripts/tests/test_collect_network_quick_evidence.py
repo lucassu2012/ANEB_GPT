@@ -3,16 +3,21 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+import tempfile
 from unittest import mock
 
+from scripts import collect_realtime_quick_evidence as mechanics
 from scripts.collect_network_quick_evidence import (
     CollectorError,
+    NetworkTerminalMarkers,
+    NetworkLiveCollectorBackend,
     PROFILE_CONTRACT,
     assert_network_serverinfo_sequence,
     bind_network_verifier_reports,
     build_network_audit_headers,
     build_network_launch_arguments,
     parse_network_terminal_markers,
+    run_network_verifiers,
     validate_network_serverinfo,
     verify_collected_network_evidence,
 )
@@ -67,6 +72,48 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
 
     def test_network_serverinfo_requires_082_six_primitive_receipt(self) -> None:
         validate_network_serverinfo(self.network_serverinfo())
+
+    def test_live_backend_uses_network_identity_and_blocks_realtime_publish(self) -> None:
+        placeholder = Path("placeholder")
+        config = mechanics.CollectorConfig(
+            adb_serial="SERIAL",
+            server_base="https://203.0.113.10:8443",
+            remote="root@203.0.113.10",
+            ssh_key=placeholder,
+            known_hosts=placeholder,
+            device_policy=placeholder,
+            candidate_directory=placeholder,
+            gh_path=placeholder,
+            expected_server_binary_sha256="a" * 64,
+            evidence_mode="positive",
+            transport="wifi",
+            evidence_root=placeholder,
+            adb_path=placeholder,
+            ssh_path=placeholder,
+            python_path=placeholder,
+            server_ca_path=placeholder,
+            source_commit="b" * 40,
+            run_timeout_seconds=900,
+            lock_ttl_seconds=1800,
+            command_timeout_seconds=120,
+        )
+        backend = NetworkLiveCollectorBackend(
+            config,
+            install_candidate=True,
+            runner=mock.Mock(),
+        )
+
+        self.assertTrue(backend.collection_id.startswith("m0-ec3-network-quick-"))
+        self.assertEqual("aneb-server/0.8.2", backend.contract.expected_server_version)
+        self.assertEqual(
+            ["--es", "test_mode", "network_basic"],
+            backend._build_launch_arguments()[-3:],
+        )
+        with self.assertRaisesRegex(
+            CollectorError,
+            "network_collection_verifier_not_implemented",
+        ):
+            backend._verify_before_atomic_publish()
 
     def test_network_serverinfo_sequence_is_stable_and_chronological(self) -> None:
         identity = self.network_serverinfo()
@@ -288,6 +335,63 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
                     "counts": {"business_total": 55},
                 },
             )
+
+    @mock.patch("scripts.collect_network_quick_evidence.verify_journal")
+    @mock.patch("scripts.collect_network_quick_evidence.verify_database")
+    def test_network_verifier_runner_persists_each_independent_report(
+        self,
+        client_verifier: mock.Mock,
+        audit_verifier: mock.Mock,
+    ) -> None:
+        client_verifier.return_value = {
+            "schema": "aneb-network-quick-client-db-verification",
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "mode": "positive",
+            "run_id": RUN_ID,
+            "reason_code": None,
+        }
+        audit_verifier.return_value = {
+            "schema": "aneb-network-request-entry-audit-report",
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "mode": "positive",
+            "run_id": RUN_ID,
+            "profile_contract": PROFILE_CONTRACT,
+            "reason_code": "ok",
+            "counts": {"business_total": 74},
+        }
+        markers = NetworkTerminalMarkers(
+            run_id=RUN_ID,
+            contract_status="authorized",
+            terminal_status="completed",
+            reason_code=None,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "journal.raw.log"
+            journal.write_text("frozen\n", encoding="utf-8")
+            report = run_network_verifiers(
+                evidence_directory=root,
+                markers=markers,
+                mode="positive",
+                database=root / "aneb-probe.db",
+                journal_path=journal,
+                profile_path=root / "profile.json",
+                runtime_path=root / "runtime.json",
+                manifest_path=root / "manifest.sha256",
+                expected_server_base="https://120.79.148.0:8443",
+                start_barrier_id="11111111-1111-4111-8111-111111111111",
+                end_barrier_id="22222222-2222-4222-8222-222222222222",
+            )
+
+            self.assertEqual("pass", report["status"])
+            for name in (
+                "client-db-verification.json",
+                "server-audit-verification.json",
+                "cross-bound-report.json",
+            ):
+                self.assertTrue((root / name).is_file(), name)
 
     @mock.patch("scripts.collect_network_quick_evidence.verify_journal")
     @mock.patch("scripts.collect_network_quick_evidence.verify_database")

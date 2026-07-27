@@ -24,6 +24,16 @@ class QuickCollectionContractTest(unittest.TestCase):
             "ANEB-Probe-0.5.14-codex-debug.apk",
             contract.candidate_apk_name,
         )
+        self.assertEqual(
+            {
+                "ANEB-Probe-0.5.14-codex-debug.apk",
+                "build-manifest.json",
+                "checksums.sha256",
+                "provenance.sigstore.json",
+                "ANEB-安装说明.txt",
+            },
+            set(contract.candidate_files),
+        )
         self.assertEqual("network_run", contract.audit_scope)
         self.assertEqual(
             "aneb-network-quick-collector-plan",

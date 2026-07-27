@@ -31,7 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from typing import Any, BinaryIO, Literal, Mapping, Protocol, Sequence
+from typing import Any, BinaryIO, Callable, Literal, Mapping, Protocol, Sequence
 
 if __package__:
     from scripts import (
@@ -41,6 +41,7 @@ if __package__:
         verify_realtime_quick_release as release_verifier,
     )
     from scripts.quick_collection_workflow import (
+        CollectorError,
         WorkflowBackend,
         WorkflowResult,
         run_workflow,
@@ -58,7 +59,12 @@ else:
         QuickCollectionContract,
         realtime_quick_contract,
     )
-    from quick_collection_workflow import WorkflowBackend, WorkflowResult, run_workflow
+    from quick_collection_workflow import (
+        CollectorError,
+        WorkflowBackend,
+        WorkflowResult,
+        run_workflow,
+    )
 
 
 CONTRACT = realtime_quick_contract()
@@ -79,15 +85,7 @@ TOKEN_PROFILE_SHA256 = (
 )
 MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_APK_BYTES = 256 * 1024 * 1024
-CI_CANDIDATE_NAMES = frozenset(
-    {
-        CONTRACT.candidate_apk_name,
-        "build-manifest.json",
-        "checksums.sha256",
-        "provenance.sigstore.json",
-        "ANEB-安装说明.txt",
-    }
-)
+CI_CANDIDATE_NAMES = CONTRACT.candidate_files
 
 RELEVANT_PACKAGES = (
     "com.aneb.probe.codex",
@@ -141,10 +139,6 @@ OPTIONAL_DEVICE_PROPERTY_KEYS = frozenset(
         "ro.boot.veritymode",
     }
 )
-
-
-class CollectorError(RuntimeError):
-    """A bounded collector contract rejected the current state."""
 
 
 @dataclass(frozen=True)
@@ -820,7 +814,11 @@ def _regular_directory(path: Path, code: str) -> Path:
     return resolved
 
 
-def validate_config(config: CollectorConfig) -> None:
+def validate_config(
+    config: CollectorConfig,
+    *,
+    contract: QuickCollectionContract = CONTRACT,
+) -> None:
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", config.adb_serial) is None:
         raise CollectorError("adb_serial_invalid")
     parsed = urllib.parse.urlsplit(config.server_base)
@@ -899,7 +897,7 @@ def validate_config(config: CollectorConfig) -> None:
         config.candidate_directory,
         "candidate_directory_invalid",
     )
-    if {path.name for path in candidate.iterdir()} != CI_CANDIDATE_NAMES or any(
+    if {path.name for path in candidate.iterdir()} != contract.candidate_files or any(
         not path.is_file() or path.is_symlink() or path.stat().st_size <= 0
         for path in candidate.iterdir()
     ):
@@ -1061,6 +1059,7 @@ def capture_stable_phone_evidence(
     directory: Path,
     prefix: str,
     interval_seconds: float = 2.0,
+    receipt_schema: str = CONTRACT.phone_receipt_schema,
 ) -> tuple[PhoneSnapshot, PhoneSnapshot]:
     if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", prefix) is None:
         raise CollectorError("phone_evidence_prefix_invalid")
@@ -1075,7 +1074,7 @@ def capture_stable_phone_evidence(
     _write_exclusive_json(
         directory / f"{prefix}-receipt.json",
         {
-            "schema": "aneb-realtime-phone-live-state-receipt",
+            "schema": receipt_schema,
             "schema_version": "1.0.0",
             "status": "pass",
             "reason_code": "ok",
@@ -1150,6 +1149,7 @@ def verify_device_policy_live(
     *,
     policy: dict[str, object],
     directory: Path,
+    identity_schema: str = CONTRACT.device_identity_schema,
 ) -> None:
     serial = adb.text(["get-serialno"], code="adb_get_serialno")
     expected_serial = policy.get("adb_serial_sha256")
@@ -1183,7 +1183,7 @@ def verify_device_policy_live(
     _write_exclusive_json(
         directory / "device-identity.json",
         {
-            "schema": "aneb-realtime-device-identity",
+            "schema": identity_schema,
             "schema_version": "1.0.0",
             "status": "pass",
             "adb_serial_sha256": expected_serial,
@@ -1239,6 +1239,7 @@ def verify_or_install_candidate(
     identity: CiCandidateIdentity,
     evidence_directory: Path,
     install: bool,
+    contract: QuickCollectionContract = CONTRACT,
 ) -> None:
     candidate_apk = candidate_directory / identity.apk_file_name
     if (
@@ -1270,17 +1271,17 @@ def verify_or_install_candidate(
         if "Success" not in output.splitlines():
             raise CollectorError("adb_install_candidate_receipt_invalid")
     package_dump = adb.text(
-        ["shell", "dumpsys", "package", PACKAGE_NAME],
+        ["shell", "dumpsys", "package", contract.package_name],
         code="adb_package_identity",
     )
     version_code, version_name = parse_installed_package_identity(package_dump)
     if (
-        version_code != EXPECTED_VERSION_CODE
-        or version_name != EXPECTED_VERSION_NAME
+        version_code != contract.expected_version_code
+        or version_name != contract.expected_version_name
     ):
         raise CollectorError("installed_package_identity_mismatch")
     package_path = adb.text(
-        ["shell", "pm", "path", PACKAGE_NAME],
+        ["shell", "pm", "path", contract.package_name],
         code="adb_pm_path",
     )
     match = re.fullmatch(r"package:(/[^\r\n ]+/base\.apk)", package_path)
@@ -1323,7 +1324,7 @@ def verify_or_install_candidate(
         (package_dump + "\n").encode("utf-8"),
     )
     run_as = adb.text(
-        ["shell", "run-as", PACKAGE_NAME, "id"],
+        ["shell", "run-as", contract.package_name, "id"],
         code="adb_run_as",
     )
     if re.fullmatch(r"uid=[0-9]+\([^)]*\).*", run_as) is None:
@@ -1542,6 +1543,7 @@ def validate_http_capture(
     status: int,
     headers: tuple[tuple[str, str], ...],
     body: bytes,
+    serverinfo_validator: Callable[[object], None] | None = None,
 ) -> HttpCapture:
     try:
         if type(status) is not int or status != 200:
@@ -1580,7 +1582,7 @@ def validate_http_capture(
         )
         if not isinstance(parsed, dict):
             raise ValueError("body")
-        validate_serverinfo(parsed)
+        (serverinfo_validator or validate_serverinfo)(parsed)
         return HttpCapture(
             status=status,
             headers=headers,
@@ -1765,6 +1767,7 @@ def fetch_serverinfo(
     ca_path: Path,
     timeout_seconds: float,
     headers: Mapping[str, str] | None = None,
+    serverinfo_validator: Callable[[object], None] = validate_serverinfo,
 ) -> HttpCapture:
     if timeout_seconds <= 0 or timeout_seconds > 120:
         raise CollectorError("serverinfo_http_contract_invalid")
@@ -1799,6 +1802,7 @@ def fetch_serverinfo(
                 status=int(response.status),
                 headers=response_headers,
                 body=body,
+                serverinfo_validator=serverinfo_validator,
             )
     except CollectorError:
         raise
@@ -1908,11 +1912,15 @@ def _strict_json_line(payload: bytes, *, code: str) -> dict[str, object]:
         raise CollectorError(code) from error
 
 
-def _candidate_snapshot(directory: Path) -> dict[str, tuple[int, str]]:
-    if {path.name for path in directory.iterdir()} != CI_CANDIDATE_NAMES:
+def _candidate_snapshot(
+    directory: Path,
+    *,
+    contract: QuickCollectionContract = CONTRACT,
+) -> dict[str, tuple[int, str]]:
+    if {path.name for path in directory.iterdir()} != contract.candidate_files:
         raise CollectorError("candidate_file_set_invalid")
     result: dict[str, tuple[int, str]] = {}
-    for name in sorted(CI_CANDIDATE_NAMES):
+    for name in sorted(contract.candidate_files):
         path = _regular_file(directory / name, "candidate_payload_invalid")
         size = path.stat().st_size
         if size > (MAX_APK_BYTES if name.endswith(".apk") else 16 * 1024 * 1024):
@@ -1926,12 +1934,13 @@ def _copy_candidate(
     destination: Path,
     *,
     expected: dict[str, tuple[int, str]],
+    contract: QuickCollectionContract = CONTRACT,
 ) -> None:
     try:
         destination.mkdir(mode=0o700)
     except OSError as error:
         raise CollectorError("candidate_copy_directory_failed") from error
-    for name in sorted(CI_CANDIDATE_NAMES):
+    for name in sorted(contract.candidate_files):
         source_path = source / name
         target = destination / name
         try:
@@ -1963,6 +1972,7 @@ def verify_ci_candidate(
     source_commit: str,
     report_output: Path,
     timeout_seconds: int,
+    contract: QuickCollectionContract = CONTRACT,
 ) -> tuple[dict[str, object], CiCandidateIdentity]:
     verifier = Path(__file__).resolve().with_name("verify_ci_apk_provenance.py")
     result = runner.run(
@@ -1973,9 +1983,9 @@ def verify_ci_candidate(
             "--source-commit",
             source_commit,
             "--expected-version-name",
-            EXPECTED_VERSION_NAME,
+            contract.expected_version_name,
             "--expected-version-code",
-            str(EXPECTED_VERSION_CODE),
+            str(contract.expected_version_code),
             "--gh-path",
             str(gh_path),
             "--timeout-seconds",
@@ -1993,6 +2003,7 @@ def verify_ci_candidate(
     identity = validate_ci_provenance_report(
         report,
         source_commit=source_commit,
+        contract=contract,
     )
     _write_exclusive_bytes(report_output, result.stdout)
     return report, identity
@@ -2464,10 +2475,14 @@ class LogcatCapture:
         adb: AdbClient,
         output_path: Path,
         stderr_path: Path,
+        terminal_parser: Callable[..., object] = parse_realtime_terminal_markers,
+        terminal_timeout_code: str = "realtime_terminal_timeout",
     ) -> None:
         self.adb = adb
         self.output_path = output_path
         self.stderr_path = stderr_path
+        self.terminal_parser = terminal_parser
+        self.terminal_timeout_code = terminal_timeout_code
         self.process: subprocess.Popen[bytes] | None = None
         self._stdout: BinaryIO | None = None
         self._stderr: BinaryIO | None = None
@@ -2534,7 +2549,7 @@ class LogcatCapture:
         *,
         mode: Literal["positive", "negative"],
         timeout_seconds: int,
-    ) -> RealtimeTerminalMarkers:
+    ) -> object:
         if self.process is None:
             raise CollectorError("logcat_not_started")
         deadline = time.monotonic() + timeout_seconds
@@ -2545,7 +2560,7 @@ class LogcatCapture:
             try:
                 text = self.output_path.read_text(encoding="utf-8")
                 current = post_marker_log(text, nonce=self.marker_nonce)
-                return parse_realtime_terminal_markers(current, mode=mode)
+                return self.terminal_parser(current, mode=mode)
             except (OSError, UnicodeError):
                 last_error = CollectorError("logcat_read_failed")
             except CollectorError as error:
@@ -2553,9 +2568,9 @@ class LogcatCapture:
             time.sleep(0.25)
         if last_error is not None:
             raise CollectorError(
-                f"realtime_terminal_timeout last={_error_text(last_error)}"
+                f"{self.terminal_timeout_code} last={_error_text(last_error)}"
             )
-        raise CollectorError("realtime_terminal_timeout")
+        raise CollectorError(self.terminal_timeout_code)
 
     def stop(self, *, allow_missing: bool = False) -> None:
         process = self.process
@@ -3145,7 +3160,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_evidence_manifest(root: Path) -> Path:
+def write_evidence_manifest(
+    root: Path,
+    *,
+    schema: str = CONTRACT.manifest_schema,
+) -> Path:
     if not root.is_dir() or root.is_symlink():
         raise CollectorError("evidence_root_invalid")
     output = root / "evidence-manifest.json"
@@ -3166,7 +3185,7 @@ def write_evidence_manifest(root: Path) -> Path:
             }
         )
     payload = {
-        "schema": "aneb-realtime-quick-evidence-manifest",
+        "schema": schema,
         "schema_version": "1.0.0",
         "files": files,
     }
@@ -3181,7 +3200,11 @@ def write_evidence_manifest(root: Path) -> Path:
     return output
 
 
-def verify_evidence_manifest(root: Path) -> None:
+def verify_evidence_manifest(
+    root: Path,
+    *,
+    schema: str = CONTRACT.manifest_schema,
+) -> None:
     try:
         manifest_path = root / "evidence-manifest.json"
         raw = manifest_path.read_bytes()
@@ -3192,7 +3215,7 @@ def verify_evidence_manifest(root: Path) -> None:
         )
         if (
             not _exact_keys(manifest, {"schema", "schema_version", "files"})
-            or manifest["schema"] != "aneb-realtime-quick-evidence-manifest"
+            or manifest["schema"] != schema
             or manifest["schema_version"] != "1.0.0"
             or not isinstance(manifest["files"], list)
         ):
@@ -3291,14 +3314,18 @@ def _remote_snapshot_document(snapshot: RemoteSnapshot) -> dict[str, str]:
     }
 
 
-def _serverinfo_from_bytes(payload: bytes) -> dict[str, object]:
+def _serverinfo_from_bytes(
+    payload: bytes,
+    *,
+    validator: Callable[[object], None] = validate_serverinfo,
+) -> dict[str, object]:
     try:
         value = json.loads(
             payload.decode("utf-8", errors="strict"),
             object_pairs_hook=_unique_json_object,
             parse_constant=lambda item: (_ for _ in ()).throw(ValueError(item)),
         )
-        validate_serverinfo(value)
+        validator(value)
         if not isinstance(value, dict):
             raise ValueError("shape")
         return value
@@ -3315,9 +3342,11 @@ class LiveCollectorBackend:
         *,
         install_candidate: bool,
         runner: CommandRunner | None = None,
+        contract: QuickCollectionContract = CONTRACT,
     ) -> None:
         self.config = config
         self.install_candidate = install_candidate
+        self.contract = contract
         self.runner = runner or SubprocessRunner()
         self.adb = AdbClient(
             runner=self.runner,
@@ -3334,7 +3363,8 @@ class LiveCollectorBackend:
             timeout_seconds=config.command_timeout_seconds,
         )
         self.collection_id = (
-            "m0-ec2-realtime-"
+            self.contract.collection_prefix
+            + "-"
             + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             + "-"
             + uuid.uuid4().hex
@@ -3355,7 +3385,7 @@ class LiveCollectorBackend:
         self.end_barrier_id = str(uuid.uuid4())
         self.start_barrier_attempted = False
         self.end_barrier_attempted = False
-        self.run_markers: RealtimeTerminalMarkers | None = None
+        self.run_markers: Any | None = None
         self.logcat: LogcatCapture | None = None
         self.proxy: NegativeProxyProcess | None = None
         self.reverse_owned = False
@@ -3385,26 +3415,96 @@ class LiveCollectorBackend:
             "/api/v1/serverinfo"
         )
 
+    def _validate_serverinfo(self, body: object) -> None:
+        validate_serverinfo(body)
+
+    def _assert_serverinfo_sequence(
+        self,
+        identity: object,
+        start: object,
+        end: object,
+    ) -> None:
+        assert_serverinfo_sequence(identity, start, end)
+
+    def _audit_headers(
+        self,
+        *,
+        run_id: str,
+        role: Literal["window_start", "window_end"],
+    ) -> dict[str, str]:
+        return build_audit_headers(run_id=run_id, role=role)
+
+    def _build_launch_arguments(self) -> list[str]:
+        return build_realtime_launch_arguments(
+            serial=self.config.adb_serial,
+            server_base=self.client_server_base,
+            transport=self.config.transport,
+            adb_path=self.adb.executable,
+        )
+
+    def _parse_terminal_markers(
+        self,
+        text: str,
+        *,
+        mode: Literal["positive", "negative"],
+    ) -> object:
+        return parse_realtime_terminal_markers(text, mode=mode)
+
+    def _run_category_verifiers(
+        self,
+        *,
+        run_id: str,
+        serverinfo_path: Path,
+    ) -> dict[str, object]:
+        return run_realtime_verifiers(
+            runner=self.runner,
+            python_path=self.config.python_path,
+            evidence_directory=self.partial,
+            run_id=run_id,
+            mode=self.config.evidence_mode,
+            expected_server_base=self.client_server_base,
+            start_barrier_id=self.start_barrier_id,
+            end_barrier_id=self.end_barrier_id,
+            serverinfo_path=serverinfo_path,
+            ca_file_sha256=_sha256_file(self.config.server_ca_path),
+            negative_upstream_url=self.negative_upstream_url,
+            timeout_seconds=self.config.command_timeout_seconds,
+        )
+
+    def _verify_before_atomic_publish(self) -> dict[str, object]:
+        return verify_before_atomic_publish(
+            self.partial,
+            collection_id=self.collection_id,
+        )
+
+    def _publish_ready(self) -> dict[str, object]:
+        return ready_publisher.publish_ready(self.complete)
+
+    def _verify_release(self, ready_path: Path) -> dict[str, object]:
+        return release_verifier.verify_release(ready_path)
+
     def _write_plan(self) -> None:
         if self.candidate_identity is None:
             raise CollectorError("candidate_identity_missing")
         _write_exclusive_json(
             self.partial / "collector-plan.json",
             {
-                "schema": "aneb-realtime-quick-collector-plan",
+                "schema": self.contract.plan_schema,
                 "schema_version": "1.0.0",
                 "collection_id": self.collection_id,
-                "profile_contract": PROFILE_CONTRACT,
+                "profile_contract": self.contract.profile_contract,
                 "evidence_mode": self.config.evidence_mode,
                 "transport": self.config.transport,
-                "package_name": PACKAGE_NAME,
-                "version_name": EXPECTED_VERSION_NAME,
-                "version_code": EXPECTED_VERSION_CODE,
+                "package_name": self.contract.package_name,
+                "version_name": self.contract.expected_version_name,
+                "version_code": self.contract.expected_version_code,
                 "server_base": self.config.server_base.rstrip("/"),
                 "client_server_base": self.client_server_base,
                 "negative_upstream_url": self.negative_upstream_url,
                 "remote_host": self.config.remote.split("@", 1)[1],
-                "expected_server_version": EXPECTED_SERVER_VERSION,
+                "expected_server_version": (
+                    self.contract.expected_server_version
+                ),
                 "expected_server_binary_sha256": (
                     self.config.expected_server_binary_sha256.lower()
                 ),
@@ -3456,14 +3556,17 @@ class LiveCollectorBackend:
             raise CollectorError("repository_not_frozen_at_source_commit")
 
     def preflight(self) -> None:
-        validate_config(self.config)
+        validate_config(self.config, contract=self.contract)
         self._assert_repository_frozen()
         prepare_evidence_staging(self.config.evidence_root, self.partial)
         self.policy = load_device_policy(
             self.config.device_policy,
             adb_serial=self.config.adb_serial,
         )
-        source_before = _candidate_snapshot(self.config.candidate_directory)
+        source_before = _candidate_snapshot(
+            self.config.candidate_directory,
+            contract=self.contract,
+        )
         source_report, source_identity = verify_ci_candidate(
             runner=self.runner,
             python_path=self.config.python_path,
@@ -3472,12 +3575,14 @@ class LiveCollectorBackend:
             source_commit=self.config.source_commit,
             report_output=self.partial / "ci-source-before.json",
             timeout_seconds=self.config.command_timeout_seconds,
+            contract=self.contract,
         )
         bundled_directory = self.partial / "ci-candidate"
         _copy_candidate(
             self.config.candidate_directory,
             bundled_directory,
             expected=source_before,
+            contract=self.contract,
         )
         bundled_report, bundled_identity = verify_ci_candidate(
             runner=self.runner,
@@ -3487,6 +3592,7 @@ class LiveCollectorBackend:
             source_commit=self.config.source_commit,
             report_output=self.partial / "ci-candidate-verification.json",
             timeout_seconds=self.config.command_timeout_seconds,
+            contract=self.contract,
         )
         source_after_report, source_after_identity = verify_ci_candidate(
             runner=self.runner,
@@ -3496,9 +3602,14 @@ class LiveCollectorBackend:
             source_commit=self.config.source_commit,
             report_output=self.partial / "ci-source-after.json",
             timeout_seconds=self.config.command_timeout_seconds,
+            contract=self.contract,
         )
         if (
-            source_before != _candidate_snapshot(self.config.candidate_directory)
+            source_before
+            != _candidate_snapshot(
+                self.config.candidate_directory,
+                contract=self.contract,
+            )
             or source_report != bundled_report
             or source_report != source_after_report
             or source_identity != bundled_identity
@@ -3515,6 +3626,7 @@ class LiveCollectorBackend:
             self.adb,
             directory=self.partial,
             prefix="phone-preflight",
+            receipt_schema=self.contract.phone_receipt_schema,
         )
         self.original_stayon = second.stayon
         assert self.policy is not None
@@ -3522,6 +3634,7 @@ class LiveCollectorBackend:
             self.adb,
             policy=self.policy,
             directory=self.partial,
+            identity_schema=self.contract.device_identity_schema,
         )
         self.live_preflight_complete = True
         self._write_plan()
@@ -3555,6 +3668,7 @@ class LiveCollectorBackend:
             server_base=self.config.server_base,
             ca_path=self.config.server_ca_path,
             timeout_seconds=self.config.command_timeout_seconds,
+            serverinfo_validator=self._validate_serverinfo,
         )
         write_http_capture(
             self.partial,
@@ -3569,6 +3683,7 @@ class LiveCollectorBackend:
             identity=self.candidate_identity,
             evidence_directory=self.partial,
             install=self.install_candidate,
+            contract=self.contract,
         )
         self.settings_started = True
         start_busy_sentinel(
@@ -3612,6 +3727,10 @@ class LiveCollectorBackend:
             adb=self.adb,
             output_path=self.partial / "app-logcat.txt",
             stderr_path=self.partial / "app-logcat.stderr.txt",
+            terminal_parser=self._parse_terminal_markers,
+            terminal_timeout_code=(
+                f"{self.contract.category}_terminal_timeout"
+            ),
         )
         self.logcat.start()
 
@@ -3636,7 +3755,8 @@ class LiveCollectorBackend:
             server_base=self.config.server_base,
             ca_path=self.config.server_ca_path,
             timeout_seconds=self.config.command_timeout_seconds,
-            headers=build_audit_headers(run_id=barrier_id, role=role),
+            headers=self._audit_headers(run_id=barrier_id, role=role),
+            serverinfo_validator=self._validate_serverinfo,
         )
         write_http_capture(self.partial, name=name, capture=capture)
         return capture
@@ -3762,16 +3882,22 @@ class LiveCollectorBackend:
         if not self.app_launch_attempted:
             return
         self.adb.text(
-            ["shell", "am", "force-stop", PACKAGE_NAME],
+            ["shell", "am", "force-stop", self.contract.package_name],
             code="force_stop_target",
         )
         pid = self.adb.text(
-            ["shell", "pidof", PACKAGE_NAME],
+            ["shell", "pidof", self.contract.package_name],
             code="target_pid_after_stop",
             allowed_returncodes=frozenset({0, 1}),
         )
         services = self.adb.text(
-            ["shell", "dumpsys", "activity", "services", PACKAGE_NAME],
+            [
+                "shell",
+                "dumpsys",
+                "activity",
+                "services",
+                self.contract.package_name,
+            ],
             code="target_services_after_stop",
         )
         if pid or not _is_empty_service_dump(services):
@@ -3795,12 +3921,7 @@ class LiveCollectorBackend:
             evidence_directory=self.partial,
             stage="before-target",
         )
-        command = build_realtime_launch_arguments(
-            serial=self.config.adb_serial,
-            server_base=self.client_server_base,
-            transport=self.config.transport,
-            adb_path=self.adb.executable,
-        )
+        command = self._build_launch_arguments()
         self.app_launch_attempted = True
         launch = self.adb.run(
             command[3:],
@@ -3868,7 +3989,7 @@ class LiveCollectorBackend:
         )
         assert self.start_capture is not None
         assert self.end_capture is not None
-        assert_serverinfo_sequence(
+        self._assert_serverinfo_sequence(
             self.identity_capture.json_body,
             self.start_capture.json_body,
             self.end_capture.json_body,
@@ -3879,27 +4000,20 @@ class LiveCollectorBackend:
                 / "negative-proxy"
                 / "upstream-serverinfo.raw"
             )
-            _serverinfo_from_bytes(serverinfo_path.read_bytes())
+            _serverinfo_from_bytes(
+                serverinfo_path.read_bytes(),
+                validator=self._validate_serverinfo,
+            )
         else:
             serverinfo_path = self.partial / "identity-serverinfo.json"
-        cross = run_realtime_verifiers(
-            runner=self.runner,
-            python_path=self.config.python_path,
-            evidence_directory=self.partial,
+        cross = self._run_category_verifiers(
             run_id=self.run_markers.run_id,
-            mode=self.config.evidence_mode,
-            expected_server_base=self.client_server_base,
-            start_barrier_id=self.start_barrier_id,
-            end_barrier_id=self.end_barrier_id,
             serverinfo_path=serverinfo_path,
-            ca_file_sha256=_sha256_file(self.config.server_ca_path),
-            negative_upstream_url=self.negative_upstream_url,
-            timeout_seconds=self.config.command_timeout_seconds,
         )
         _write_exclusive_json(
             self.partial / "run-receipt.json",
             {
-                "schema": "aneb-realtime-quick-run-receipt",
+                "schema": self.contract.run_receipt_schema,
                 "schema_version": "1.0.0",
                 "status": "pass",
                 "reason_code": "ok",
@@ -3986,6 +4100,7 @@ class LiveCollectorBackend:
                     self.adb,
                     directory=self.partial,
                     prefix="phone-postflight",
+                    receipt_schema=self.contract.phone_receipt_schema,
                 )
             )
         self.cleanup_phone_complete = not failures
@@ -4062,7 +4177,7 @@ class LiveCollectorBackend:
         _write_exclusive_json(
             self.partial / "collector-status.json",
             {
-                "schema": "aneb-realtime-quick-collector-status",
+                "schema": self.contract.status_schema,
                 "schema_version": "1.0.0",
                 "status": "pass",
                 "reason_code": "ok",
@@ -4073,23 +4188,24 @@ class LiveCollectorBackend:
                 "cleanup_remote": "pass",
             },
         )
-        manifest = write_evidence_manifest(self.partial)
+        manifest = write_evidence_manifest(
+            self.partial,
+            schema=self.contract.manifest_schema,
+        )
         _write_exclusive_bytes(
             self.partial / "COMPLETE",
             (
-                f"ANEB_REALTIME_QUICK_COMPLETE collection_id={self.collection_id} "
+                f"{self.contract.complete_marker} "
+                f"collection_id={self.collection_id} "
                 f"run_id={self.run_markers.run_id} "
                 f"manifest_sha256={_sha256_file(manifest)}\n"
             ).encode("utf-8"),
         )
-        verify_before_atomic_publish(
-            self.partial,
-            collection_id=self.collection_id,
-        )
+        self._verify_before_atomic_publish()
         atomic_publish(self.partial, self.complete)
         publication_succeeded = False
         try:
-            publication = ready_publisher.publish_ready(self.complete)
+            publication = self._publish_ready()
             publication_succeeded = True
             ready_path = Path(str(publication.get("ready_path", "")))
             expected_ready = (
@@ -4104,7 +4220,7 @@ class LiveCollectorBackend:
                 or ready_path != expected_ready
             ):
                 raise CollectorError("ready_publication_report_invalid")
-            release = release_verifier.verify_release(ready_path)
+            release = self._verify_release(ready_path)
             if (
                 release.get("status") != "pass"
                 or release.get("collection_id") != self.collection_id
@@ -4156,7 +4272,7 @@ class LiveCollectorBackend:
         temporary = self.partial / ".collector-status.failure.tmp"
         payload = _canonical_json_bytes(
             {
-                "schema": "aneb-realtime-quick-collector-status",
+                "schema": self.contract.status_schema,
                 "schema_version": "1.0.0",
                 "status": "fail",
                 "reason_code": "collector_or_cleanup_failed",
