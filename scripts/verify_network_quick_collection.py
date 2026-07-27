@@ -16,6 +16,7 @@ import urllib.parse
 
 if __package__:
     from scripts import verify_realtime_quick_collection as mechanics
+    from scripts import collect_realtime_quick_evidence as collector_mechanics
     from scripts.collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,
@@ -26,6 +27,7 @@ if __package__:
     from scripts.quick_collection_contract import network_quick_contract
 else:
     import verify_realtime_quick_collection as mechanics
+    import collect_realtime_quick_evidence as collector_mechanics
     from collect_network_quick_evidence import (
         CollectorError,
         assert_network_serverinfo_sequence,
@@ -216,6 +218,68 @@ def _read_utf8(path: Path, reason: str) -> str:
         fail(reason)
 
 
+def _post_capture_marker_log(text: str) -> str:
+    matches = re.findall(
+        r"(?m)^[^\r\n]*D82_CAPTURE_MARKER nonce=([0-9a-f]{32})\s*$",
+        text,
+    )
+    if len(matches) != 1:
+        fail("network_logcat_capture_marker_invalid")
+    try:
+        return collector_mechanics.post_marker_log(text, nonce=matches[0])
+    except CollectorError:
+        fail("network_logcat_capture_marker_invalid")
+
+
+def _verify_busy_sentinels(bundle: Path) -> None:
+    expected_keys = {
+        "schema",
+        "schema_version",
+        "stage",
+        "observed_components",
+        "matched",
+    }
+    for stage in ("acquired", "before-target", "before-end-barrier"):
+        value, _ = _load_json(
+            bundle / f"busy-sentinel-{stage}.json",
+            "busy_sentinel_invalid",
+        )
+        components = value.get("observed_components")
+        if (
+            set(value) != expected_keys
+            or value.get("schema") != CONTRACT.busy_sentinel_schema
+            or value.get("schema_version") != "1.0.0"
+            or value.get("stage") != stage
+            or value.get("matched") is not True
+            or not isinstance(components, list)
+            or not components
+            or not all(isinstance(item, str) for item in components)
+        ):
+            fail("busy_sentinel_invalid")
+        try:
+            canonical = [
+                mechanics._canonical_component(item) for item in components
+            ]
+        except CollectionVerificationFailure:
+            fail("busy_sentinel_invalid")
+        if any(
+            not item.startswith("com.android.settings/")
+            for item in canonical
+        ):
+            fail("busy_sentinel_invalid")
+
+
+def _verify_logcat_stderr(bundle: Path) -> None:
+    raw = mechanics._read_regular(
+        bundle / "app-logcat.stderr.txt",
+        maximum=MAX_TEXT_BYTES,
+        reason="network_logcat_stderr_invalid",
+        allow_empty=True,
+    )
+    if raw:
+        fail("network_logcat_stderr_not_empty")
+
+
 def revalidate_cross_evidence(
     bundle: Path,
     *,
@@ -225,7 +289,11 @@ def revalidate_cross_evidence(
     mode = str(plan["evidence_mode"])
     try:
         markers = parse_network_terminal_markers(
-            _read_utf8(bundle / "app-logcat.txt", "network_logcat_invalid"),
+            _post_capture_marker_log(
+                _read_utf8(
+                    bundle / "app-logcat.txt", "network_logcat_invalid"
+                )
+            ),
             mode=mode,
         )
         if markers.run_id != run_id:
@@ -321,6 +389,8 @@ def verify_collection(
     mechanics._verify_device_identity(
         bundle, plan, identity_schema=CONTRACT.device_identity_schema
     )
+    _verify_busy_sentinels(bundle)
+    _verify_logcat_stderr(bundle)
     preflight_hash = mechanics._verify_phone_pair(
         bundle, "phone-preflight", receipt_schema=CONTRACT.phone_receipt_schema
     )

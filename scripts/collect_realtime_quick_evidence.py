@@ -2773,9 +2773,12 @@ def start_busy_sentinel(
     *,
     evidence_directory: Path,
     stage: str,
+    schema: str = CONTRACT.busy_sentinel_schema,
 ) -> None:
     if re.fullmatch(r"[a-z0-9_-]{1,64}", stage) is None:
         raise CollectorError("busy_sentinel_stage_invalid")
+    if re.fullmatch(r"aneb-[a-z0-9-]{1,96}", schema) is None:
+        raise CollectorError("busy_sentinel_schema_invalid")
     adb.text(
         [
             "shell",
@@ -2798,7 +2801,7 @@ def start_busy_sentinel(
     _write_exclusive_json(
         evidence_directory / f"busy-sentinel-{stage}.json",
         {
-            "schema": "aneb-realtime-busy-sentinel",
+            "schema": schema,
             "schema_version": "1.0.0",
             "stage": stage,
             "observed_components": list(observed),
@@ -2826,6 +2829,7 @@ def wait_for_end_barrier(
     lock: PersistentRemoteLock,
     cursor: str,
     barrier_id: str,
+    audit_scope: str = CONTRACT.audit_scope,
     timeout_seconds: int = 20,
 ) -> None:
     try:
@@ -2834,13 +2838,15 @@ def wait_for_end_barrier(
         raise CollectorError("barrier_id_invalid") from error
     if parsed.version != 4 or str(parsed) != barrier_id:
         raise CollectorError("barrier_id_invalid")
+    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", audit_scope) is None:
+        raise CollectorError("audit_scope_invalid")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         lock.assert_healthy("wait_end_barrier")
         command = (
             "set -Eeuo pipefail; "
             f"if {journal_export_command(cursor).removeprefix('set -Eeuo pipefail; ')} "
-            f"| grep -F -- 'role=window_end scope=realtime_run "
+            f"| grep -F -- 'role=window_end scope={audit_scope} "
             f"run_id={barrier_id}' >/dev/null; "
             "then printf 'SEEN\\n'; else printf 'WAIT\\n'; fi"
         )
@@ -3702,6 +3708,7 @@ class LiveCollectorBackend:
             self.adb,
             evidence_directory=self.partial,
             stage="acquired",
+            schema=self.contract.busy_sentinel_schema,
         )
         if self.original_stayon is None:
             raise CollectorError("original_stayon_unknown")
@@ -3932,16 +3939,19 @@ class LiveCollectorBackend:
             self.adb,
             evidence_directory=self.partial,
             stage="before-target",
+            schema=self.contract.busy_sentinel_schema,
         )
         command = self._build_launch_arguments()
         self.app_launch_attempted = True
         launch = self.adb.run(
             command[3:],
-            code="start_realtime_quick",
+            code=self.contract.launch_operation_code,
             max_output_bytes=1024 * 1024,
         )
         if launch.stderr:
-            raise CollectorError("start_realtime_quick_stderr")
+            raise CollectorError(
+                f"{self.contract.launch_operation_code}_stderr"
+            )
         _write_exclusive_bytes(
             self.partial / "app-launch.txt",
             launch.stdout,
@@ -3963,6 +3973,7 @@ class LiveCollectorBackend:
             self.adb,
             evidence_directory=self.partial,
             stage="before-end-barrier",
+            schema=self.contract.busy_sentinel_schema,
         )
         self.lock.assert_healthy("before_end_barrier")
         self.end_capture = self._barrier(role="window_end")
@@ -3971,6 +3982,7 @@ class LiveCollectorBackend:
             lock=self.lock,
             cursor=self.remote_before.journal_cursor,
             barrier_id=self.end_barrier_id,
+            audit_scope=self.contract.audit_scope,
         )
         remote_mid = capture_remote_snapshot(
             ssh=self.ssh,

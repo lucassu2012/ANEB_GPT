@@ -37,6 +37,11 @@ class QuickCollectionContractTest(unittest.TestCase):
         self.assertEqual("network_run", contract.audit_scope)
         self.assertEqual("aneb-network-audit", contract.remote_marker_prefix)
         self.assertEqual(
+            "aneb-network-busy-sentinel",
+            contract.busy_sentinel_schema,
+        )
+        self.assertEqual("start_network_quick", contract.launch_operation_code)
+        self.assertEqual(
             "aneb-network-quick-collector-plan",
             contract.plan_schema,
         )
@@ -63,6 +68,11 @@ class QuickCollectionContractTest(unittest.TestCase):
         )
         self.assertEqual("realtime_run", contract.audit_scope)
         self.assertEqual("aneb-realtime-audit", contract.remote_marker_prefix)
+        self.assertEqual(
+            "aneb-realtime-busy-sentinel",
+            contract.busy_sentinel_schema,
+        )
+        self.assertEqual("start_realtime_quick", contract.launch_operation_code)
         self.assertEqual(
             "aneb-realtime-quick-collector-plan",
             contract.plan_schema,

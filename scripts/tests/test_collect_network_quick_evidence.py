@@ -186,6 +186,50 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
         ):
             assert_network_serverinfo_sequence(identity, start, end)
 
+    def test_end_barrier_wait_uses_network_audit_scope(self) -> None:
+        ssh = mock.Mock()
+        ssh.text.return_value = "SEEN"
+        lock = mock.Mock()
+        lock.assert_healthy = mock.Mock()
+
+        mechanics.wait_for_end_barrier(
+            ssh=ssh,
+            lock=lock,
+            cursor="s=0123456789abcdef",
+            barrier_id="12345678-1234-4234-8234-123456789abc",
+            audit_scope=CONTRACT.audit_scope,
+            timeout_seconds=1,
+        )
+
+        command = ssh.text.call_args.args[0]
+        self.assertIn("scope=network_run", command)
+        self.assertNotIn("scope=realtime_run", command)
+
+    def test_busy_sentinel_records_network_schema(self) -> None:
+        adb = mock.Mock()
+        adb.text.side_effect = (
+            "Starting: Intent { act=android.settings.SETTINGS }",
+            (
+                "mFocusedApp=ActivityRecord{1 u0 "
+                "com.android.settings/.HWSettings t9}\n"
+                "topResumedActivity=ActivityRecord{1 u0 "
+                "com.android.settings/.HWSettings t9}"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mechanics.start_busy_sentinel(
+                adb,
+                evidence_directory=root,
+                stage="acquired",
+                schema=CONTRACT.busy_sentinel_schema,
+            )
+            report = json.loads(
+                (root / "busy-sentinel-acquired.json").read_text("utf-8")
+            )
+
+        self.assertEqual("aneb-network-busy-sentinel", report["schema"])
+
     def test_positive_terminal_chain_is_exact(self) -> None:
         markers = parse_network_terminal_markers(
             "\n".join(

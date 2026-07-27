@@ -24,6 +24,8 @@ class QuickCollectionContract:
     candidate_files: frozenset[str]
     audit_scope: str
     remote_marker_prefix: str
+    busy_sentinel_schema: str
+    launch_operation_code: str
     collection_prefix: str
     plan_schema: str
     status_schema: str
@@ -57,6 +59,8 @@ def network_quick_contract() -> QuickCollectionContract:
         ),
         audit_scope="network_run",
         remote_marker_prefix="aneb-network-audit",
+        busy_sentinel_schema="aneb-network-busy-sentinel",
+        launch_operation_code="start_network_quick",
         collection_prefix="m0-ec3-network-quick",
         plan_schema="aneb-network-quick-collector-plan",
         status_schema="aneb-network-quick-collector-status",
@@ -91,6 +95,8 @@ def realtime_quick_contract() -> QuickCollectionContract:
         ),
         audit_scope="realtime_run",
         remote_marker_prefix="aneb-realtime-audit",
+        busy_sentinel_schema="aneb-realtime-busy-sentinel",
+        launch_operation_code="start_realtime_quick",
         collection_prefix="m0-ec2-realtime",
         plan_schema="aneb-realtime-quick-collector-plan",
         status_schema="aneb-realtime-quick-collector-status",

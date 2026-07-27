@@ -152,6 +152,19 @@ class NetworkCollectionFixture:
             value = json.loads(path.read_text("utf-8"))
             value["schema"] = "aneb-network-phone-live-state-receipt"
             write_json(path, value)
+        for stage in ("acquired", "before-target", "before-end-barrier"):
+            write_json(
+                self.bundle / f"busy-sentinel-{stage}.json",
+                {
+                    "schema": "aneb-network-busy-sentinel",
+                    "schema_version": "1.0.0",
+                    "stage": stage,
+                    "observed_components": [
+                        "com.android.settings/com.android.settings.HWSettings"
+                    ],
+                    "matched": True,
+                },
+            )
 
         nonce = "e" * 32
         (self.bundle / "lock-acquired.txt").write_bytes(
@@ -191,7 +204,11 @@ class NetworkCollectionFixture:
                 "counts": {"business_total": 74},
             },
         )
-        (self.bundle / "app-logcat.txt").write_text("synthetic\n", encoding="utf-8")
+        (self.bundle / "app-logcat.txt").write_text(
+            "D82_CAPTURE_MARKER nonce=" + "f" * 32 + "\nsynthetic\n",
+            encoding="utf-8",
+        )
+        (self.bundle / "app-logcat.stderr.txt").write_bytes(b"")
         (self.bundle / "journal.raw.log").write_text(
             "synthetic\n", encoding="utf-8"
         )
@@ -270,6 +287,34 @@ class NetworkQuickCollectionVerifierTests(unittest.TestCase):
             ):
                 self.verify(fixture)
 
+    def test_rejects_realtime_busy_sentinel_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = NetworkCollectionFixture(Path(temporary))
+            path = fixture.bundle / "busy-sentinel-before-target.json"
+            value = json.loads(path.read_text("utf-8"))
+            value["schema"] = "aneb-realtime-busy-sentinel"
+            write_json(path, value)
+            fixture.rebuild_manifest()
+            with self.assertRaisesRegex(
+                verifier.CollectionVerificationFailure,
+                "busy_sentinel_invalid",
+            ):
+                self.verify(fixture)
+
+    def test_rejects_nonempty_logcat_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = NetworkCollectionFixture(Path(temporary))
+            (fixture.bundle / "app-logcat.stderr.txt").write_text(
+                "adb transport error\n",
+                encoding="utf-8",
+            )
+            fixture.rebuild_manifest()
+            with self.assertRaisesRegex(
+                verifier.CollectionVerificationFailure,
+                "network_logcat_stderr_not_empty",
+            ):
+                self.verify(fixture)
+
     def test_cross_revalidation_compares_all_three_persisted_reports(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = NetworkCollectionFixture(Path(temporary))
@@ -326,6 +371,56 @@ class NetworkQuickCollectionVerifierTests(unittest.TestCase):
                             plan=plan,
                             run_id=RUN_ID,
                         )
+
+    def test_cross_revalidation_ignores_all_pre_capture_logcat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = NetworkCollectionFixture(Path(temporary))
+            nonce = "f" * 32
+            (fixture.bundle / "app-logcat.txt").write_text(
+                "STALE_NET_V1_END\n"
+                f"01-01 D82_CAPTURE_MARKER nonce={nonce}\n"
+                "CURRENT_NET_V1_START\n",
+                encoding="utf-8",
+            )
+            plan = json.loads(
+                (fixture.bundle / "collector-plan.json").read_text("utf-8")
+            )
+            reports = {
+                "client": json.loads(
+                    (fixture.bundle / "client-db-verification.json").read_text(
+                        "utf-8"
+                    )
+                ),
+                "audit": json.loads(
+                    (fixture.bundle / "server-audit-verification.json").read_text(
+                        "utf-8"
+                    )
+                ),
+                "binding": copy.deepcopy(fixture.cross_report),
+            }
+            markers = mock.Mock(run_id=RUN_ID)
+            with (
+                mock.patch.object(
+                    verifier,
+                    "parse_network_terminal_markers",
+                    return_value=markers,
+                ) as parse,
+                mock.patch.object(
+                    verifier,
+                    "compute_network_verifier_reports",
+                    return_value=reports,
+                ),
+            ):
+                verifier.revalidate_cross_evidence(
+                    fixture.bundle,
+                    plan=plan,
+                    run_id=RUN_ID,
+                )
+
+        self.assertEqual(
+            "\nCURRENT_NET_V1_START\n",
+            parse.call_args.args[0].replace("\r\n", "\n"),
+        )
 
 
 if __name__ == "__main__":
