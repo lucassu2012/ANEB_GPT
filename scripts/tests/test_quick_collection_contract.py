@@ -35,6 +35,7 @@ class QuickCollectionContractTest(unittest.TestCase):
             set(contract.candidate_files),
         )
         self.assertEqual("network_run", contract.audit_scope)
+        self.assertEqual("aneb-network-audit", contract.remote_marker_prefix)
         self.assertEqual(
             "aneb-network-quick-collector-plan",
             contract.plan_schema,
@@ -61,6 +62,7 @@ class QuickCollectionContractTest(unittest.TestCase):
             contract.candidate_apk_name,
         )
         self.assertEqual("realtime_run", contract.audit_scope)
+        self.assertEqual("aneb-realtime-audit", contract.remote_marker_prefix)
         self.assertEqual(
             "aneb-realtime-quick-collector-plan",
             contract.plan_schema,

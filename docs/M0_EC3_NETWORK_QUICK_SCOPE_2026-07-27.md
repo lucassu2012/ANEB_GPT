@@ -82,7 +82,7 @@
 | EC3-04 P1 能力门 | 首个 Network 业务包前完成能力核验 | 离线实现完成，聚焦门禁通过 | receipt 缺失/冲突时业务 transport 计数为零 |
 | EC3-05 P1 授权边界 | 只有授权对象能发 echo/download/upload/UDP | 离线实现完成，Legacy/Quick 兼容回归通过 | 绕过/重用/异常路径 fail closed |
 | EC3-06 持久化 | 固定 reason、零业务产物、null score/grade、单次终态 | 离线实现完成，聚焦门禁通过 | Room 正反例与 DB 冻结重算 |
-| EC3-07 同-run 审计 | HTTP 分类、UDP 序列、原始窗口与 Profile/runtime 交叉绑定 | P1/P2 审计、独立 DB/请求入口判定器及 Network 专用终态/跨判定器绑定适配层已实现；Network 已接入共用设备机械生命周期后端，并会独立落盘客户端、服务端与交叉绑定三份报告；bundle verifier、READY publisher/consumer 尚未完成，发布路径保持 fail closed | 污染、缺号、摘要不一致均拒绝 |
+| EC3-07 同-run 审计 | HTTP 分类、UDP 序列、原始窗口与 Profile/runtime 交叉绑定 | 离线实现完成：Network 已接入共用设备机械生命周期后端，冻结独立远端 marker 与 Profile 三文件，独立落盘并重算客户端、服务端、交叉绑定三份报告；collection verifier、原子 READY publisher 与独立 release consumer 已通过完整质量门 789+44 | 污染、缺号、摘要不一致均拒绝 |
 | EC3-08 离线门 | Kotlin/Go/Python、全仓门禁、secret scan、clean commit | 完成；source `33434dc`、GitHub run `30226164933` 全绿 | 本地门禁与 GitHub CI 全绿 |
 | EC3-09 真机正负 | P40 正向 exact signature、负向 `receipt_missing` zero-business | 进行中；CI provenance 已复核，首次换装前因 ADB 断开 fail closed，手机未发生卸载/安装/启动 | 两个独立 READY consumer 重算通过 |
 | EC3-10 收尾 | P40/E-01 精确清理与计划账本回填 | E-01 0.8.2 受保护部署与锁内验后完成；P40 收尾待 EC3-09 | Launcher/进程/服务/VPN/tun、远端锁及六指纹复核 |

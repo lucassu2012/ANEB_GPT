@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""Independently revalidate one Network Quick collection without live I/O."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import sys
+from typing import Any, NoReturn
+import urllib.parse
+
+if __package__:
+    from scripts import verify_realtime_quick_collection as mechanics
+    from scripts.collect_network_quick_evidence import (
+        CollectorError,
+        assert_network_serverinfo_sequence,
+        compute_network_verifier_reports,
+        parse_network_terminal_markers,
+        validate_network_serverinfo,
+    )
+    from scripts.quick_collection_contract import network_quick_contract
+else:
+    import verify_realtime_quick_collection as mechanics
+    from collect_network_quick_evidence import (
+        CollectorError,
+        assert_network_serverinfo_sequence,
+        compute_network_verifier_reports,
+        parse_network_terminal_markers,
+        validate_network_serverinfo,
+    )
+    from quick_collection_contract import network_quick_contract
+
+
+CONTRACT = network_quick_contract()
+REPORT_SCHEMA = "aneb-network-quick-collection-verification"
+REPORT_VERSION = "1.0.0"
+NEGATIVE_DEVICE_PORT = 18765
+MAX_TEXT_BYTES = mechanics.MAX_TEXT_BYTES
+MAX_JSON_BYTES = mechanics.MAX_JSON_BYTES
+COLLECTION_RE = re.compile(
+    r"^(?P<collection>m0-ec3-network-quick-"
+    r"(?P<stamp>[0-9]{8}T[0-9]{6}Z)-[0-9a-f]{32})\.complete$"
+)
+COLLECTION_ID_RE = re.compile(
+    r"^m0-ec3-network-quick-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}$"
+)
+RUN_ID_RE = mechanics.RUN_ID_RE
+SHA256_RE = mechanics.SHA256_RE
+COMMIT_RE = mechanics.COMMIT_RE
+PLAN_KEYS = mechanics.PLAN_KEYS
+STATUS_KEYS = mechanics.STATUS_KEYS
+RUN_RECEIPT_KEYS = mechanics.RUN_RECEIPT_KEYS
+CollectionVerificationFailure = mechanics.CollectionVerificationFailure
+
+_assert_directory = mechanics._assert_directory
+_canonical_json = mechanics._canonical_json
+_load_json = mechanics._load_json
+_sha256 = mechanics._sha256
+
+
+def fail(reason_code: str) -> NoReturn:
+    raise CollectionVerificationFailure(reason_code)
+
+
+def _same_host(left: str, right: str) -> bool:
+    try:
+        return ipaddress.ip_address(left) == ipaddress.ip_address(right)
+    except ValueError:
+        return left.casefold() == right.casefold()
+
+
+def _validate_plan(plan: dict[str, Any], collection: str) -> None:
+    if (
+        not mechanics._exact(plan, PLAN_KEYS)
+        or plan.get("schema") != CONTRACT.plan_schema
+        or plan.get("schema_version") != "1.0.0"
+        or plan.get("collection_id") != collection
+        or plan.get("profile_contract") != CONTRACT.profile_contract
+        or plan.get("evidence_mode") not in {"positive", "negative"}
+        or plan.get("transport") not in {"auto", "wifi", "cellular"}
+        or plan.get("package_name") != CONTRACT.package_name
+        or plan.get("version_name") != CONTRACT.expected_version_name
+        or plan.get("version_code") != CONTRACT.expected_version_code
+        or plan.get("expected_server_version") != CONTRACT.expected_server_version
+        or not isinstance(plan.get("expected_server_binary_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["expected_server_binary_sha256"])) is None
+        or not isinstance(plan.get("expected_apk_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["expected_apk_sha256"])) is None
+        or not isinstance(plan.get("expected_signer_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["expected_signer_sha256"])) is None
+        or not isinstance(plan.get("source_commit"), str)
+        or COMMIT_RE.fullmatch(str(plan["source_commit"])) is None
+        or type(plan.get("workflow_run_id")) is not int
+        or int(plan["workflow_run_id"]) <= 0
+        or not isinstance(plan.get("server_ca_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["server_ca_sha256"])) is None
+        or not isinstance(plan.get("device_policy_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["device_policy_sha256"])) is None
+        or not isinstance(plan.get("adb_serial_sha256"), str)
+        or SHA256_RE.fullmatch(str(plan["adb_serial_sha256"])) is None
+        or type(plan.get("run_timeout_seconds")) is not int
+        or not 60 <= int(plan["run_timeout_seconds"]) <= 1800
+        or type(plan.get("lock_ttl_seconds")) is not int
+        or not 120 <= int(plan["lock_ttl_seconds"]) <= 3600
+        or int(plan["lock_ttl_seconds"]) <= int(plan["run_timeout_seconds"])
+        or type(plan.get("install_candidate")) is not bool
+    ):
+        fail("collector_plan_invalid")
+    mechanics._validate_uuid(
+        plan.get("start_barrier_id"), version=4, reason="collector_plan_invalid"
+    )
+    mechanics._validate_uuid(
+        plan.get("end_barrier_id"), version=4, reason="collector_plan_invalid"
+    )
+    server = mechanics._validate_server_base(
+        plan.get("server_base"), "collector_plan_invalid"
+    )
+    remote_host = plan.get("remote_host")
+    if (
+        not isinstance(remote_host, str)
+        or not remote_host
+        or not _same_host(str(server.hostname), remote_host)
+    ):
+        fail("collector_plan_invalid")
+    if plan["evidence_mode"] == "positive":
+        if (
+            plan.get("client_server_base") != plan["server_base"]
+            or plan.get("negative_upstream_url") is not None
+        ):
+            fail("collector_plan_invalid")
+    else:
+        expected_client = f"http://127.0.0.1:{NEGATIVE_DEVICE_PORT}"
+        expected_upstream = (
+            f"https://{server.hostname}:{server.port or 443}/api/v1/serverinfo"
+        )
+        if (
+            plan.get("client_server_base") != expected_client
+            or plan.get("negative_upstream_url") != expected_upstream
+        ):
+            fail("collector_plan_invalid")
+
+
+def _validate_status_and_run(
+    status: dict[str, Any],
+    receipt: dict[str, Any],
+    *,
+    collection: str,
+    plan: dict[str, Any],
+    cross_raw: bytes,
+) -> str:
+    if (
+        not mechanics._exact(status, STATUS_KEYS)
+        or status.get("schema") != CONTRACT.status_schema
+        or status.get("schema_version") != "1.0.0"
+        or status.get("status") != "pass"
+        or status.get("reason_code") != "ok"
+        or status.get("collection_id") != collection
+        or status.get("mode") != plan["evidence_mode"]
+        or status.get("cleanup_phone") != "pass"
+        or status.get("cleanup_remote") != "pass"
+    ):
+        fail("collector_status_invalid")
+    run_id = mechanics._validate_uuid(
+        status.get("run_id"), version=7, reason="collector_status_invalid"
+    )
+    if (
+        not mechanics._exact(receipt, RUN_RECEIPT_KEYS)
+        or receipt.get("schema") != CONTRACT.run_receipt_schema
+        or receipt.get("schema_version") != "1.0.0"
+        or receipt.get("status") != "pass"
+        or receipt.get("reason_code") != "ok"
+        or receipt.get("collection_id") != collection
+        or receipt.get("run_id") != run_id
+        or receipt.get("mode") != plan["evidence_mode"]
+        or receipt.get("cross_bound") is not True
+        or receipt.get("cross_bound_report_sha256") != _sha256(cross_raw)
+    ):
+        fail("run_receipt_invalid")
+    expected = (
+        ("authorized", "completed")
+        if plan["evidence_mode"] == "positive"
+        else ("rejected", "contract_rejected")
+    )
+    if (
+        receipt.get("contract_status") != expected[0]
+        or receipt.get("terminal_status") != expected[1]
+    ):
+        fail("run_receipt_invalid")
+    return run_id
+
+
+def _network_serverinfo_body(body: object) -> None:
+    try:
+        validate_network_serverinfo(body)
+    except CollectorError:
+        fail("serverinfo_invalid")
+
+
+def _network_serverinfo_sequence(bodies: list[dict[str, Any]]) -> None:
+    try:
+        assert_network_serverinfo_sequence(bodies[0], bodies[1], bodies[2])
+    except (CollectorError, IndexError):
+        fail("serverinfo_sequence_invalid")
+
+
+def _read_utf8(path: Path, reason: str) -> str:
+    raw = mechanics._read_regular(path, maximum=MAX_TEXT_BYTES, reason=reason)
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeError:
+        fail(reason)
+
+
+def revalidate_cross_evidence(
+    bundle: Path,
+    *,
+    plan: dict[str, Any],
+    run_id: str,
+) -> dict[str, object]:
+    mode = str(plan["evidence_mode"])
+    try:
+        markers = parse_network_terminal_markers(
+            _read_utf8(bundle / "app-logcat.txt", "network_logcat_invalid"),
+            mode=mode,
+        )
+        if markers.run_id != run_id:
+            fail("cross_evidence_revalidation_failed")
+        reports = compute_network_verifier_reports(
+            markers=markers,
+            journal_text=_read_utf8(
+                bundle / "journal.raw.log", "network_journal_invalid"
+            ),
+            database=bundle / "aneb-probe.db",
+            start_barrier_id=str(plan["start_barrier_id"]),
+            barrier_id=str(plan["end_barrier_id"]),
+            mode=mode,
+            profile_path=bundle / "network-profile" / "profile.json",
+            runtime_path=bundle / "network-profile" / "runtime_plan.json",
+            manifest_path=bundle / "network-profile" / "manifest.sha256",
+            expected_server_base=str(plan["client_server_base"]),
+        )
+    except (CollectorError, OSError, UnicodeError, ValueError):
+        fail("cross_evidence_revalidation_failed")
+    stored = {
+        "client": _load_json(
+            bundle / "client-db-verification.json", "client_report_invalid"
+        )[0],
+        "audit": _load_json(
+            bundle / "server-audit-verification.json", "audit_report_invalid"
+        )[0],
+        "binding": _load_json(
+            bundle / "cross-bound-report.json", "cross_report_invalid"
+        )[0],
+    }
+    if reports != stored:
+        fail("cross_report_revalidation_mismatch")
+    return reports["binding"]
+
+
+def verify_collection(
+    bundle_path: str | os.PathLike[str],
+    *,
+    expected_collection: str | None = None,
+    allow_partial: bool = False,
+) -> dict[str, object]:
+    bundle = Path(os.path.abspath(os.fspath(bundle_path)))
+    match = COLLECTION_RE.fullmatch(bundle.name)
+    if match is not None:
+        collection = match.group("collection")
+    elif (
+        allow_partial
+        and isinstance(expected_collection, str)
+        and COLLECTION_ID_RE.fullmatch(expected_collection) is not None
+        and bundle.name == f"{expected_collection}.partial"
+    ):
+        collection = expected_collection
+    else:
+        fail("collection_leaf_invalid")
+    _assert_directory(bundle, "collection_directory_invalid")
+
+    manifest, manifest_sha = mechanics._verify_manifest(
+        bundle, expected_schema=CONTRACT.manifest_schema
+    )
+    root_security_sha = mechanics._verify_evidence_root_security(bundle)
+    plan, _ = _load_json(bundle / "collector-plan.json", "collector_plan_invalid")
+    _validate_plan(plan, collection)
+    mechanics._verify_mode_inventory(manifest, mode=str(plan["evidence_mode"]))
+    status, _ = _load_json(bundle / "collector-status.json", "collector_status_invalid")
+    run_receipt, _ = _load_json(bundle / "run-receipt.json", "run_receipt_invalid")
+    cross_report, cross_raw = _load_json(
+        bundle / "cross-bound-report.json", "cross_report_invalid"
+    )
+    run_id = _validate_status_and_run(
+        status,
+        run_receipt,
+        collection=collection,
+        plan=plan,
+        cross_raw=cross_raw,
+    )
+    mechanics._verify_complete(
+        bundle,
+        collection=collection,
+        run_id=run_id,
+        manifest_sha256=manifest_sha,
+        marker=CONTRACT.complete_marker,
+    )
+    mechanics._verify_candidate(
+        bundle,
+        plan,
+        candidate_apk_name=CONTRACT.candidate_apk_name,
+        candidate_names=CONTRACT.candidate_files,
+        expected_package=CONTRACT.package_name,
+        expected_version_name=CONTRACT.expected_version_name,
+        expected_version_code=CONTRACT.expected_version_code,
+    )
+    mechanics._verify_device_identity(
+        bundle, plan, identity_schema=CONTRACT.device_identity_schema
+    )
+    preflight_hash = mechanics._verify_phone_pair(
+        bundle, "phone-preflight", receipt_schema=CONTRACT.phone_receipt_schema
+    )
+    postflight_hash = mechanics._verify_phone_pair(
+        bundle, "phone-postflight", receipt_schema=CONTRACT.phone_receipt_schema
+    )
+    if preflight_hash != postflight_hash:
+        fail("phone_baseline_not_restored")
+    journal_cursor = mechanics._verify_remote(bundle, plan)
+    lock_nonce = mechanics._verify_lock(
+        bundle, marker_prefix=CONTRACT.remote_marker_prefix
+    )
+    server_version = mechanics._verify_serverinfo(
+        bundle,
+        body_validator=_network_serverinfo_body,
+        sequence_validator=_network_serverinfo_sequence,
+    )
+    recomputed_cross = revalidate_cross_evidence(bundle, plan=plan, run_id=run_id)
+    if recomputed_cross != cross_report:
+        fail("cross_report_revalidation_mismatch")
+
+    return {
+        "schema": REPORT_SCHEMA,
+        "schema_version": REPORT_VERSION,
+        "status": "pass",
+        "reason_code": "ok",
+        "collection_id": collection,
+        "run_id": run_id,
+        "mode": plan["evidence_mode"],
+        "source_commit": plan["source_commit"],
+        "workflow_run_id": plan["workflow_run_id"],
+        "server_version": server_version,
+        "server_binary_sha256": plan["expected_server_binary_sha256"],
+        "apk_sha256": plan["expected_apk_sha256"],
+        "manifest_sha256": manifest_sha,
+        "manifest_file_count": len(manifest["files"]),
+        "journal_cursor": journal_cursor,
+        "lock_nonce_sha256": hashlib.sha256(lock_nonce.encode("ascii")).hexdigest(),
+        "phone_state_sha256": postflight_hash,
+        "manifest_reverified": True,
+        "cross_evidence_recomputed": True,
+        "phone_state_reverified": True,
+        "remote_state_reverified": True,
+        "candidate_provenance_reverified": True,
+        "evidence_root_security_sha256": root_security_sha,
+        "evidence_root_security_bound": True,
+    }
+
+
+def _emit(value: dict[str, object], *, stream: object) -> None:
+    print(
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+        file=stream,
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Verify one Network Quick collection", allow_abbrev=False
+    )
+    parser.add_argument("bundle", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        report = verify_collection(args.bundle)
+    except CollectionVerificationFailure as error:
+        _emit(
+            {
+                "schema": REPORT_SCHEMA,
+                "schema_version": REPORT_VERSION,
+                "status": "fail",
+                "reason_code": error.reason_code,
+            },
+            stream=sys.stderr,
+        )
+        return 1
+    _emit(report, stream=sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

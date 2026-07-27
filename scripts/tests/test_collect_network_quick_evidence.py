@@ -73,7 +73,7 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
     def test_network_serverinfo_requires_082_six_primitive_receipt(self) -> None:
         validate_network_serverinfo(self.network_serverinfo())
 
-    def test_live_backend_uses_network_identity_and_blocks_realtime_publish(self) -> None:
+    def test_live_backend_uses_network_identity_and_network_release_chain(self) -> None:
         placeholder = Path("placeholder")
         config = mechanics.CollectorConfig(
             adb_serial="SERIAL",
@@ -105,15 +105,29 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
 
         self.assertTrue(backend.collection_id.startswith("m0-ec3-network-quick-"))
         self.assertEqual("aneb-server/0.8.2", backend.contract.expected_server_version)
+        self.assertEqual("aneb-network-audit", backend.contract.remote_marker_prefix)
+        script = mechanics.remote_lock_holder_script(
+            marker_prefix=backend.contract.remote_marker_prefix,
+        )
+        self.assertIn('MARKER="/run/aneb-network-audit-$NONCE.lock"', script)
+        self.assertNotIn("aneb-realtime-audit", script)
         self.assertEqual(
             ["--es", "test_mode", "network_basic"],
             backend._build_launch_arguments()[-3:],
         )
-        with self.assertRaisesRegex(
-            CollectorError,
-            "network_collection_verifier_not_implemented",
-        ):
-            backend._verify_before_atomic_publish()
+        with mock.patch(
+            "scripts.verify_network_quick_collection.verify_collection",
+            return_value={"status": "pass"},
+        ) as collection_verify:
+            self.assertEqual(
+                {"status": "pass"},
+                backend._verify_before_atomic_publish(),
+            )
+        collection_verify.assert_called_once_with(
+            backend.partial,
+            expected_collection=backend.collection_id,
+            allow_partial=True,
+        )
 
     def test_network_serverinfo_sequence_is_stable_and_chronological(self) -> None:
         identity = self.network_serverinfo()

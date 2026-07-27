@@ -16,7 +16,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
 import urllib.parse
 import uuid
 
@@ -353,7 +353,11 @@ def _safe_relative(value: object) -> str:
     return value
 
 
-def _verify_manifest(bundle: Path) -> tuple[dict[str, Any], str]:
+def _verify_manifest(
+    bundle: Path,
+    *,
+    expected_schema: str = "aneb-realtime-quick-evidence-manifest",
+) -> tuple[dict[str, Any], str]:
     manifest, raw = _load_json(
         bundle / "evidence-manifest.json",
         "manifest_invalid",
@@ -361,7 +365,7 @@ def _verify_manifest(bundle: Path) -> tuple[dict[str, Any], str]:
     )
     if (
         not _exact(manifest, {"schema", "schema_version", "files"})
-        or manifest.get("schema") != "aneb-realtime-quick-evidence-manifest"
+        or manifest.get("schema") != expected_schema
         or manifest.get("schema_version") != "1.0.0"
         or not isinstance(manifest.get("files"), list)
     ):
@@ -586,6 +590,10 @@ def _validate_candidate_report(
     report: dict[str, Any],
     *,
     source_commit: str,
+    candidate_apk_name: str = "ANEB-Probe-0.5.13-codex-debug.apk",
+    expected_package: str = EXPECTED_PACKAGE,
+    expected_version_name: str = EXPECTED_VERSION_NAME,
+    expected_version_code: int = EXPECTED_VERSION_CODE,
 ) -> tuple[str, int, str]:
     root_keys = {
         "schema",
@@ -668,10 +676,10 @@ def _validate_candidate_report(
     ):
         fail("candidate_report_invalid")
     if (
-        apk.get("file_name") != "ANEB-Probe-0.5.13-codex-debug.apk"
-        or apk.get("package_name") != EXPECTED_PACKAGE
-        or apk.get("version_name") != EXPECTED_VERSION_NAME
-        or apk.get("version_code") != EXPECTED_VERSION_CODE
+        apk.get("file_name") != candidate_apk_name
+        or apk.get("package_name") != expected_package
+        or apk.get("version_name") != expected_version_name
+        or apk.get("version_code") != expected_version_code
         or type(apk.get("size_bytes")) is not int
         or not 0 < int(apk["size_bytes"]) <= MAX_APK_BYTES
         or not isinstance(apk.get("sha256"), str)
@@ -695,7 +703,16 @@ def _validate_candidate_report(
     return str(apk["sha256"]), int(apk["size_bytes"]), str(apk["signer_sha256"])
 
 
-def _verify_candidate(bundle: Path, plan: dict[str, Any]) -> None:
+def _verify_candidate(
+    bundle: Path,
+    plan: dict[str, Any],
+    *,
+    candidate_apk_name: str = "ANEB-Probe-0.5.13-codex-debug.apk",
+    candidate_names: frozenset[str] = CI_CANDIDATE_NAMES,
+    expected_package: str = EXPECTED_PACKAGE,
+    expected_version_name: str = EXPECTED_VERSION_NAME,
+    expected_version_code: int = EXPECTED_VERSION_CODE,
+) -> None:
     reports = [
         _load_json(bundle / leaf, "candidate_report_invalid")[0]
         for leaf in (
@@ -709,6 +726,10 @@ def _verify_candidate(bundle: Path, plan: dict[str, Any]) -> None:
     apk_sha, apk_size, signer_sha = _validate_candidate_report(
         reports[0],
         source_commit=plan["source_commit"],
+        candidate_apk_name=candidate_apk_name,
+        expected_package=expected_package,
+        expected_version_name=expected_version_name,
+        expected_version_code=expected_version_code,
     )
     if (
         reports[0]["workflow_run_id"] != plan["workflow_run_id"]
@@ -723,9 +744,9 @@ def _verify_candidate(bundle: Path, plan: dict[str, Any]) -> None:
         names = {path.name for path in candidate.iterdir()}
     except OSError:
         fail("candidate_directory_invalid")
-    if names != CI_CANDIDATE_NAMES:
+    if names != candidate_names:
         fail("candidate_file_set_invalid")
-    candidate_apk = candidate / "ANEB-Probe-0.5.13-codex-debug.apk"
+    candidate_apk = candidate / candidate_apk_name
     if (
         candidate_apk.stat().st_size != apk_size
         or _sha256_file(candidate_apk) != apk_sha
@@ -764,9 +785,9 @@ def _verify_candidate(bundle: Path, plan: dict[str, Any]) -> None:
     )
     if (
         not version_codes
-        or any(int(value) != EXPECTED_VERSION_CODE for value in version_codes)
+        or any(int(value) != expected_version_code for value in version_codes)
         or not version_names
-        or any(value.strip() != EXPECTED_VERSION_NAME for value in version_names)
+        or any(value.strip() != expected_version_name for value in version_names)
     ):
         fail("installed_package_invalid")
     install_path = bundle / "adb-install.txt"
@@ -958,7 +979,12 @@ def phone_state_sha256(raw: dict[str, Any]) -> str:
     return _sha256(_canonical_json(_phone_state(raw)))
 
 
-def _verify_phone_pair(bundle: Path, prefix: str) -> str:
+def _verify_phone_pair(
+    bundle: Path,
+    prefix: str,
+    *,
+    receipt_schema: str = "aneb-realtime-phone-live-state-receipt",
+) -> str:
     first, _ = _load_json(bundle / f"{prefix}-t0-raw.json", "phone_state_invalid")
     second, _ = _load_json(bundle / f"{prefix}-t2-raw.json", "phone_state_invalid")
     receipt, _ = _load_json(
@@ -987,7 +1013,7 @@ def _verify_phone_pair(bundle: Path, prefix: str) -> str:
                 "wifi_on",
             },
         )
-        or receipt.get("schema") != "aneb-realtime-phone-live-state-receipt"
+        or receipt.get("schema") != receipt_schema
         or receipt.get("schema_version") != "1.0.0"
         or receipt.get("status") != "pass"
         or receipt.get("reason_code") != "ok"
@@ -1002,7 +1028,12 @@ def _verify_phone_pair(bundle: Path, prefix: str) -> str:
     return first_hash
 
 
-def _verify_device_identity(bundle: Path, plan: dict[str, Any]) -> None:
+def _verify_device_identity(
+    bundle: Path,
+    plan: dict[str, Any],
+    *,
+    identity_schema: str = "aneb-realtime-device-identity",
+) -> None:
     policy, policy_raw = _load_json(
         bundle / "device-policy.json",
         "device_policy_invalid",
@@ -1055,7 +1086,7 @@ def _verify_device_identity(bundle: Path, plan: dict[str, Any]) -> None:
                 "properties",
             },
         )
-        or identity.get("schema") != "aneb-realtime-device-identity"
+        or identity.get("schema") != identity_schema
         or identity.get("schema_version") != "1.0.0"
         or identity.get("status") != "pass"
         or identity.get("adb_serial_sha256") != policy["adb_serial_sha256"]
@@ -1114,7 +1145,13 @@ def _verify_remote(bundle: Path, plan: dict[str, Any]) -> str:
     return snapshots[0]["journal_cursor"]
 
 
-def _verify_lock(bundle: Path) -> str:
+def _verify_lock(
+    bundle: Path,
+    *,
+    marker_prefix: str = "aneb-realtime-audit",
+) -> str:
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", marker_prefix) is None:
+        fail("lock_receipt_invalid")
     acquired = _read_regular(
         bundle / "lock-acquired.txt",
         maximum=4096,
@@ -1132,7 +1169,7 @@ def _verify_lock(bundle: Path) -> str:
         fail("lock_receipt_invalid")
     match = re.fullmatch(
         r"LOCK_ACQUIRED nonce=([0-9a-f]{32}) pid=([1-9][0-9]*) "
-        r"marker=/run/aneb-realtime-audit-\1\.lock\n",
+        rf"marker=/run/{re.escape(marker_prefix)}-\1\.lock\n",
         acquired_text,
     )
     if match is None:
@@ -1163,24 +1200,14 @@ def _validate_http_headers(value: dict[str, Any]) -> None:
         fail("serverinfo_http_capture_invalid")
 
 
-def _verify_serverinfo(bundle: Path) -> str:
-    bodies: list[dict[str, Any]] = []
-    for name in ("identity-serverinfo", "start-barrier", "end-barrier"):
-        body, _ = _load_json(
-            bundle / f"{name}.json",
-            "serverinfo_invalid",
-            require_canonical=False,
-        )
-        headers, _ = _load_json(
-            bundle / f"{name}.headers.json",
-            "serverinfo_http_capture_invalid",
-        )
-        _validate_http_headers(headers)
-        try:
-            cross_verifier.verify_serverinfo(body)
-        except cross_verifier.VerificationFailure:
-            fail("serverinfo_invalid")
-        bodies.append(body)
+def _verify_realtime_serverinfo_body(body: object) -> None:
+    try:
+        cross_verifier.verify_serverinfo(body)
+    except cross_verifier.VerificationFailure:
+        fail("serverinfo_invalid")
+
+
+def _verify_realtime_serverinfo_sequence(bodies: list[dict[str, Any]]) -> None:
     stable_keys = (
         "version",
         "anchor_wall_unix_ns",
@@ -1206,6 +1233,31 @@ def _verify_serverinfo(bundle: Path) -> str:
         <= int(bodies[2]["uptime_s"])
     ):
         fail("serverinfo_sequence_invalid")
+
+
+def _verify_serverinfo(
+    bundle: Path,
+    *,
+    body_validator: Callable[[object], None] = _verify_realtime_serverinfo_body,
+    sequence_validator: Callable[[list[dict[str, Any]]], None] = (
+        _verify_realtime_serverinfo_sequence
+    ),
+) -> str:
+    bodies: list[dict[str, Any]] = []
+    for name in ("identity-serverinfo", "start-barrier", "end-barrier"):
+        body, _ = _load_json(
+            bundle / f"{name}.json",
+            "serverinfo_invalid",
+            require_canonical=False,
+        )
+        headers, _ = _load_json(
+            bundle / f"{name}.headers.json",
+            "serverinfo_http_capture_invalid",
+        )
+        _validate_http_headers(headers)
+        body_validator(body)
+        bodies.append(body)
+    sequence_validator(bodies)
     return str(bodies[0]["version"])
 
 
@@ -1292,6 +1344,7 @@ def _verify_complete(
     collection: str,
     run_id: str,
     manifest_sha256: str,
+    marker: str = "ANEB_REALTIME_QUICK_COMPLETE",
 ) -> None:
     complete = _read_regular(
         bundle / "COMPLETE",
@@ -1299,7 +1352,7 @@ def _verify_complete(
         reason="complete_marker_invalid",
     )
     expected = (
-        f"ANEB_REALTIME_QUICK_COMPLETE collection_id={collection} "
+        f"{marker} collection_id={collection} "
         f"run_id={run_id} manifest_sha256={manifest_sha256}\n"
     ).encode("ascii")
     if complete != expected:

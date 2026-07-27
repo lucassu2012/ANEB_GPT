@@ -328,9 +328,38 @@ def verify_collected_network_evidence(
     markers = parse_network_terminal_markers(logcat_text, mode=mode)
     if markers.run_id != run_id:
         raise CollectorError("network_verifier_binding_invalid")
+    return compute_network_verifier_reports(
+        markers=markers,
+        journal_text=journal_text,
+        database=database,
+        start_barrier_id=start_barrier_id,
+        barrier_id=barrier_id,
+        mode=mode,
+        profile_path=profile_path,
+        runtime_path=runtime_path,
+        manifest_path=manifest_path,
+        expected_server_base=expected_server_base,
+    )["binding"]
+
+
+def compute_network_verifier_reports(
+    *,
+    markers: NetworkTerminalMarkers,
+    journal_text: str,
+    database: Path,
+    start_barrier_id: str,
+    barrier_id: str,
+    mode: Literal["positive", "negative"],
+    profile_path: Path,
+    runtime_path: Path,
+    manifest_path: Path,
+    expected_server_base: str | None,
+) -> dict[str, dict[str, object]]:
+    """Return all three reports so an independent consumer can compare each."""
+
     client_report = verify_database(
         database,
-        run_id,
+        markers.run_id,
         mode,
         profile_path,
         runtime_path,
@@ -339,18 +368,23 @@ def verify_collected_network_evidence(
     )
     audit_report = verify_journal(
         journal_text,
-        run_id=run_id,
+        run_id=markers.run_id,
         start_barrier_id=start_barrier_id,
         barrier_id=barrier_id,
         mode=mode,
         profile_contract=PROFILE_CONTRACT,
     )
-    return bind_network_verifier_reports(
+    binding = bind_network_verifier_reports(
         markers=markers,
         mode=mode,
         client_report=client_report,
         audit_report=audit_report,
     )
+    return {
+        "client": dict(client_report),
+        "audit": dict(audit_report),
+        "binding": binding,
+    }
 
 
 def _write_exclusive_json(path: Path, value: object) -> None:
@@ -406,42 +440,31 @@ def run_network_verifiers(
         ):
             raise ValueError("paths")
         journal_text = journal_path.read_text(encoding="utf-8", errors="strict")
-        client_report = verify_database(
-            database,
-            markers.run_id,
-            mode,
-            profile_path,
-            runtime_path,
-            manifest_path,
-            expected_server_base,
-        )
-        audit_report = verify_journal(
-            journal_text,
-            run_id=markers.run_id,
+        reports = compute_network_verifier_reports(
+            markers=markers,
+            journal_text=journal_text,
+            database=database,
             start_barrier_id=start_barrier_id,
             barrier_id=end_barrier_id,
             mode=mode,
-            profile_contract=PROFILE_CONTRACT,
-        )
-        binding = bind_network_verifier_reports(
-            markers=markers,
-            mode=mode,
-            client_report=client_report,
-            audit_report=audit_report,
+            profile_path=profile_path,
+            runtime_path=runtime_path,
+            manifest_path=manifest_path,
+            expected_server_base=expected_server_base,
         )
         _write_exclusive_json(
             evidence_directory / "client-db-verification.json",
-            client_report,
+            reports["client"],
         )
         _write_exclusive_json(
             evidence_directory / "server-audit-verification.json",
-            audit_report,
+            reports["audit"],
         )
         _write_exclusive_json(
             evidence_directory / "cross-bound-report.json",
-            binding,
+            reports["binding"],
         )
-        return binding
+        return reports["binding"]
     except (OSError, UnicodeError, ValueError) as error:
         raise CollectorError("network_verifier_execution_failed") from error
 
@@ -691,26 +714,54 @@ class NetworkLiveCollectorBackend(mechanics.LiveCollectorBackend):
             / "published"
             / PROFILE_ID
         )
+        frozen_profile = self.partial / "network-profile"
+        try:
+            frozen_profile.mkdir(mode=0o700)
+            for leaf in ("profile.json", "runtime_plan.json", "manifest.sha256"):
+                source = profile_directory / leaf
+                if not source.is_file() or source.is_symlink():
+                    raise OSError("profile source")
+                mechanics._write_exclusive_bytes(
+                    frozen_profile / leaf,
+                    source.read_bytes(),
+                )
+        except OSError as error:
+            raise CollectorError("network_profile_freeze_failed") from error
         return run_network_verifiers(
             evidence_directory=self.partial,
             markers=self.run_markers,
             mode=self.config.evidence_mode,
             database=self.partial / "aneb-probe.db",
             journal_path=self.partial / "journal.raw.log",
-            profile_path=profile_directory / "profile.json",
-            runtime_path=profile_directory / "runtime_plan.json",
-            manifest_path=profile_directory / "manifest.sha256",
+            profile_path=frozen_profile / "profile.json",
+            runtime_path=frozen_profile / "runtime_plan.json",
+            manifest_path=frozen_profile / "manifest.sha256",
             expected_server_base=self.client_server_base,
             start_barrier_id=self.start_barrier_id,
             end_barrier_id=self.end_barrier_id,
         )
 
     def _verify_before_atomic_publish(self) -> dict[str, object]:
-        raise CollectorError("network_collection_verifier_not_implemented")
+        if __package__:
+            from scripts import verify_network_quick_collection as verifier
+        else:
+            import verify_network_quick_collection as verifier
+        return verifier.verify_collection(
+            self.partial,
+            expected_collection=self.collection_id,
+            allow_partial=True,
+        )
 
     def _publish_ready(self) -> dict[str, object]:
-        raise CollectorError("network_ready_publisher_not_implemented")
+        if __package__:
+            from scripts import publish_network_quick_ready as publisher
+        else:
+            import publish_network_quick_ready as publisher
+        return publisher.publish_ready(self.complete)
 
     def _verify_release(self, ready_path: Path) -> dict[str, object]:
-        del ready_path
-        raise CollectorError("network_release_verifier_not_implemented")
+        if __package__:
+            from scripts import verify_network_quick_release as verifier
+        else:
+            import verify_network_quick_release as verifier
+        return verifier.verify_release(ready_path)

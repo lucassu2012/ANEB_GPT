@@ -12,7 +12,7 @@
 | P1 手机端 | ANEB App 以真实网络流量模拟 Token 多模态、AI 实时交互和网络综合业务；动态展示关键指标，冻结全量指标、评分、结论与可导出证据 | ［KNOWN｜HIGH］三类引擎、Compose 动态界面、Room v19、strict-v2 结果与导出主链已实现；M0-EC1 Token Quick 与 M0-EC2 AI 实时 Quick 的正负 READY 均已完成；Network Quick 1.2.0 的客户端能力门、ANEB2 同-run UDP 与持久化合同已实现，P40 正负 READY 尚未完成 |
 | P2 测试服务器 | 提供可审计的 echo、token-sim、download、实时交互、综合网络与受控故障原语；任何共享主机变更都可预检、互斥、回滚和验后复核 | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`，PID=`1295423`，InvocationID=`d975f7c374aa4ef3a490210d0a495e53`；受锁部署后六项共享指纹不变，owned/stage/watchdog 残留为 0，flock 已释放 |
 | P3 标准/业务模型 | 独立模拟 Kimi、DeepSeek、千问等 AI 业务行为，不调用真实 API；以版本化 Profile、模型摘要、校准状态和确定性轨迹供 P1/P2 执行 | ［KNOWN｜HIGH］本地候选为 behavior model 0.3.2、catalog 1.8.0、16 个 Profile、7 个运行包与 3 个 execution evidence contracts；没有真实授权数据时不得冒充 calibrated/validated |
-| Profile 横切机制 | 每类测试冻结业务类型、全量业务/网络指标、质量目标、动态关键指标、评分算法、结论与网络建议；P1/P2/P3 必须使用同一精确合同 | ［KNOWN｜HIGH］Token Quick 1.2.1 与 AI 实时 Quick 1.1.1 已分别完成跨端正负 READY；Network Quick 1.2.0 已完成离线跨端合同、E-01 部署和证据判定器，仍缺 P40 正负 READY 与完整设备生命周期采集/发布链，不能扩大为已结案 |
+| Profile 横切机制 | 每类测试冻结业务类型、全量业务/网络指标、质量目标、动态关键指标、评分算法、结论与网络建议；P1/P2/P3 必须使用同一精确合同 | ［KNOWN｜HIGH］Token Quick 1.2.1 与 AI 实时 Quick 1.1.1 已分别完成跨端正负 READY；Network Quick 1.2.0 已完成离线跨端合同、E-01 部署、设备机械 collector、三报告 bundle verifier 与独立 READY 发布/消费链，仍缺 P40 正负实测 READY，不能扩大为已结案 |
 
 ## 2. 总体阶段
 
@@ -36,7 +36,7 @@
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
 | S6 M4 发布产品 | 正式签名、安装升级、无 ADB 整链、隐私与友好错误、专业 UI/图标/分享 | 发布运维、监控、回滚、容量和安全手册 | 稳定 spec 发布节奏与兼容矩阵 | Release 包绑定版本、合同和报告格式 | 普通用户独立完成测试/查看/导出；公开 APK 与维护/恢复文档齐全 |
 
-［KNOWN｜HIGH］当前执行位置是 **S1 的第三族 M0-EC3**。S0 已完成，E-01 与 CI 候选已闭合；剩余硬门是 P40 正负 READY、完整设备生命周期采集/发布链和最终清理。未通过前不得跳写为 S2 完成。
+［KNOWN｜HIGH］当前执行位置是 **S1 的第三族 M0-EC3**。S0、E-01、CI 候选及 Network 专用 collector/bundle/READY 离线链已闭合；剩余硬门是 P40 正负 READY 与真机后的最终清理。未通过前不得跳写为 S2 完成。
 
 ## 3. 已结案切片：M0-EC1 Token Quick
 
@@ -74,7 +74,7 @@
 | EC3-01 Profile/runtime | 冻结 Network Quick 1.2.0、四原语、运行顺序、manifest 与 catalog 1.8.0 | ［KNOWN｜HIGH］完成；Profile SHA=`15ae5187…82cc`，runtime SHA=`89812670…2603` |
 | EC3-02～03 P2 | 精确能力白名单、upload、ANEB2 同-run UDP、同端口运行配置和连续 request-entry 审计 | ［KNOWN｜HIGH］完成；E-01 已受保护部署 `aneb-server/0.8.2`，source `33434dc`，binary `62ff966b…c96e` |
 | EC3-04～06 P1 | 首业务包前能力门、授权传输、固定 `receipt_missing`、零业务产物、null score/grade 和单次 Room 终态 | ［KNOWN｜HIGH］离线实现完成；Android/Go/Python 回归和 full quality gate 通过 |
-| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］判定器与绑定适配层完成；commit `5ca1bad`。D-93 已抽出 fail-closed workflow，并冻结 Realtime/Network 不可混用的身份合同及 Network 0.8.2 serverinfo 序列门；Network 已接入共用设备机械后端并独立落盘三份判定报告。bundle verifier、READY publisher/consumer 仍未完成，当前后端会在发布前明确拒绝 |
+| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］离线实现完成：Network 接入共用设备机械后端，冻结独立远端 marker 与 Profile 三文件，独立落盘并重算客户端、服务端、交叉绑定三报告；collection verifier、原子 READY publisher 与独立 release consumer 已通过完整质量门 789+44。此状态不等于 P40 READY |
 | EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；GitHub run `30229781268` 全绿，artifact `8639826211`，APK `f66c13dc…881f`，signer `65c7a527…06e5`，0.5.14-codex/code46 |
 | EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］未完成；Windows 当前只枚举 P40 的 WPD/存储接口，没有 ADB interface。首次换装在 Room 备份前 fail closed，卸载/安装/启动/数据库修改均为零 |
 | EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］待 EC3-09；服务器部署阶段自身已残留 0 且 flock 释放，但不能代替 P40 运行后的最终收尾 |
@@ -97,7 +97,7 @@
 10. ［KNOWN｜HIGH］M0-EC2 最终 source `fe60c1c` / CI `30215857444` / APK `3855b972…4664`
     的正向与负向 READY 均已由独立 release verifier 通过；完整事实和限制见
     `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`。
-11. ［KNOWN｜HIGH］D-90～D-93：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，业务身份与证据 schema 不得隐式继承。当前抽取仍不是完整 Network collector，也不是 READY。
+11. ［KNOWN｜HIGH］D-90～D-94：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，业务身份、远端 marker 与证据 schema 不得隐式继承。Network 离线 collector/bundle/READY 链已完成，但尚无 P40 正负 READY。
 12. ［KNOWN｜HIGH］M0-EC3 当前 source `5ca1bad` / CI `30229781268` / APK `f66c13dc…881f` 已完成 provenance；P40 因 ADB interface 未枚举而未产生任何手机变更，不能把 CI/E-01 成功折算为真机 READY。
 
 ## 5. 本轮完成顺序与下一阶段

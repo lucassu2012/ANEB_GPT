@@ -2146,7 +2146,12 @@ def build_realtime_launch_arguments(
     ]
 
 
-def remote_lock_holder_script() -> str:
+def remote_lock_holder_script(
+    *,
+    marker_prefix: str = CONTRACT.remote_marker_prefix,
+) -> str:
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", marker_prefix) is None:
+        raise CollectorError("lock_marker_prefix_invalid")
     return r"""set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
@@ -2156,7 +2161,7 @@ LOCK_PATH="${3:?lock path required}"
 [[ "$NONCE" =~ ^[0-9a-f]{32}$ ]] || exit 64
 [[ "$TTL_SECONDS" =~ ^[0-9]+$ ]] || exit 64
 [[ "$LOCK_PATH" == '/run/lock/aneb-deploy.lock' ]] || exit 64
-MARKER="/run/aneb-realtime-audit-$NONCE.lock"
+MARKER="/run/__ANEB_MARKER_PREFIX__-$NONCE.lock"
 cleanup() { rm -f -- "$MARKER"; }
 trap cleanup EXIT HUP INT TERM
 exec 9>"$LOCK_PATH"
@@ -2176,7 +2181,7 @@ if [[ "$command" == "RELEASE $NONCE" ]]; then
 fi
 printf 'LOCK_PROTOCOL_ERROR\n' >&2
 exit 64
-"""
+""".replace("__ANEB_MARKER_PREFIX__", marker_prefix)
 
 
 class SshClient:
@@ -2285,16 +2290,22 @@ class PersistentRemoteLock:
         *,
         ssh: SshClient,
         ttl_seconds: int,
+        marker_prefix: str = CONTRACT.remote_marker_prefix,
     ) -> None:
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", marker_prefix) is None:
+            raise CollectorError("lock_marker_prefix_invalid")
         self.ssh = ssh
         self.ttl_seconds = ttl_seconds
+        self.marker_prefix = marker_prefix
         self.nonce = uuid.uuid4().hex
-        self.marker = f"/run/aneb-realtime-audit-{self.nonce}.lock"
+        self.marker = f"/run/{marker_prefix}-{self.nonce}.lock"
         self.remote_pid: int | None = None
         self.process: subprocess.Popen[bytes] | None = None
 
     def acquire(self) -> str:
-        encoded = base64.b64encode(remote_lock_holder_script().encode("utf-8")).decode(
+        encoded = base64.b64encode(
+            remote_lock_holder_script(marker_prefix=self.marker_prefix).encode("utf-8")
+        ).decode(
             "ascii"
         )
         command = (
@@ -3643,6 +3654,7 @@ class LiveCollectorBackend:
         self.lock = PersistentRemoteLock(
             ssh=self.ssh,
             ttl_seconds=self.config.lock_ttl_seconds,
+            marker_prefix=self.contract.remote_marker_prefix,
         )
         receipt = self.lock.acquire()
         self.lock_acquired = True
