@@ -81,6 +81,11 @@ stay in the Token Adapter Implementation.
 - [KNOWN|HIGH] The full local quality gate passes: 846 main Python tests with
   16 platform skips, 44 additional Python tests, Android, Go, release/spec,
   packaging, and secret gates all pass; pre/post process scans are zero.
-- [KNOWN|HIGH] These results close implementation, focused regression, and the
-  full local gate. Clean commit CI and the final S2 closure audit remain
-  required.
+- [KNOWN|HIGH] Commit `95aaaf0dedbc580d8d7fb05cf519d231a4cc0390`
+  passed clean CI run `30313367261`: all seven jobs, including the downstream
+  Android candidate build, completed successfully.
+- [KNOWN|HIGH] The closure audit confirmed local/remote HEAD equality, a clean
+  worktree, a clean base diff, unchanged frozen EC1 evidence, and no migration
+  of Token business semantics or persistent handles into the shared Module.
+- [KNOWN|HIGH] S2-V5a and S2 are closed on 2026-07-28. A future internal split
+  of Token cleanup steps is optional refactoring, not a missing S2 gate.
