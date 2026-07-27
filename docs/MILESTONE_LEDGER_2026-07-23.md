@@ -75,8 +75,8 @@
 | EC3-02～03 P2 | 精确能力白名单、upload、ANEB2 同-run UDP、同端口运行配置和连续 request-entry 审计 | ［KNOWN｜HIGH］完成；E-01 已受保护部署 `aneb-server/0.8.2`，source `33434dc`，binary `62ff966b…c96e` |
 | EC3-04～06 P1 | 首业务包前能力门、授权传输、固定 `receipt_missing`、零业务产物、null score/grade 和单次 Room 终态 | ［KNOWN｜HIGH］离线实现完成；Android/Go/Python 回归和 full quality gate 通过 |
 | EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］离线实现完成：Network 接入共用设备机械后端与独立 CLI，冻结独立 audit scope、busy-sentinel schema、启动操作码、Room 合同包名、远端 marker 与 Profile 三文件；独立 consumer 强制三阶段 sentinel、唯一 D82 marker 后日志和空 logcat stderr，再落盘并重算客户端、服务端、交叉绑定三报告。Room 包名去耦后分段完整门 796+44 及 Android/Go/发布门全部 PASS；直接 CLI 子进程与 14 模块交叉回归 159/159 PASS。此状态不等于 P40 READY |
-| EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］最近独立验证完成于 source `1dd6bc9ed764c43870f64a2cb9945ff465bd81c3`；GitHub run `30239585679` 全绿，artifact `8642938682`，APK `55df3be8…05ab`，signer `b217bfb2…f316`，0.5.14-codex/code46；Room 包名去耦提交待自己的 CI provenance |
-| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］未完成；Windows 当前只枚举 P40 的 WPD/存储接口，没有 ADB interface。首次换装在 Room 备份前 fail closed，卸载/安装/启动/数据库修改均为零 |
+| EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；当前可执行候选 source `7ac8b9d57e03898fde67f4ca64d3b29e41cf158f`，GitHub run `30247477658` 7/7 全绿，artifact `8645841632`，APK `fc981c4c…3f22`，signer `d810a4be…e8ad`，0.5.14-codex/code46，独立 provenance reason=`ok` |
+| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］未完成；同一候选的 positive/negative 离线 preflight 均返回 0、`external_calls=0`，候选/P40 策略/E-01/binary/固定 CA/工具路径已绑定。当前 `adb devices -l` 为空；换装前 fail closed，卸载/安装/启动/数据库修改均为零 |
 | EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］待 EC3-09；服务器部署阶段自身已残留 0 且 flock 释放，但不能代替 P40 运行后的最终收尾 |
 
 ## 4. 已冻结的关键节点
@@ -98,7 +98,7 @@
     的正向与负向 READY 均已由独立 release verifier 通过；完整事实和限制见
     `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`。
 11. ［KNOWN｜HIGH］D-90～D-95：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，audit scope、busy-sentinel schema、启动码、远端 marker 与证据 schema 不得隐式继承。Network 独立 consumer 还会拒绝旧日志和非空 logcat stderr。离线 collector/bundle/READY 链已完成，但尚无 P40 正负 READY。
-12. ［KNOWN｜HIGH］M0-EC3 最近独立验证的 CI 候选为 source `8fd4441d3206763c938c8fddcf9175340cb471af` / run `30237016719` / artifact `8642124934` / APK `435e91ba…ef9f` / signer `63f89375…2124`；P40 因 ADB interface 未枚举而未产生任何手机变更，不能把 CI/E-01 成功折算为真机 READY。
+12. ［KNOWN｜HIGH］M0-EC3 当前可执行 CI 候选为 source `7ac8b9d57e03898fde67f4ca64d3b29e41cf158f` / run `30247477658` / artifact `8645841632` / APK `fc981c4c…3f22` / signer `d810a4be…e8ad`；positive/negative 离线 preflight 均为 0 且零外部调用。P40 因 ADB 未枚举而未产生任何手机变更，不能把 CI/E-01/preflight 成功折算为真机 READY。
 
 ## 5. 本轮完成顺序与下一阶段
 

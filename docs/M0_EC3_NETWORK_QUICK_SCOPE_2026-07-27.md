@@ -83,8 +83,8 @@
 | EC3-05 P1 授权边界 | 只有授权对象能发 echo/download/upload/UDP | 离线实现完成，Legacy/Quick 兼容回归通过 | 绕过/重用/异常路径 fail closed |
 | EC3-06 持久化 | 固定 reason、零业务产物、null score/grade、单次终态 | 离线实现完成，聚焦门禁通过 | Room 正反例与 DB 冻结重算 |
 | EC3-07 同-run 审计 | HTTP 分类、UDP 序列、原始窗口与 Profile/runtime 交叉绑定 | 离线实现完成：Network 已接入共用设备机械生命周期后端与独立 CLI，冻结独立 audit scope、busy-sentinel schema、启动操作码、Room 合同包名、远端 marker 与 Profile 三文件；独立 consumer 只接受唯一 D82 marker 后日志及空 logcat stderr，并重算客户端、服务端、交叉绑定三份报告。Room 包名去耦后分段完整门 796+44 及 Android/Go/发布门全部 PASS；直接 CLI 子进程回归与 Network/Realtime 14 模块交叉回归 159/159 PASS | 污染、缺号、跨类别身份、旧日志、stderr、入口不可执行或摘要不一致均拒绝 |
-| EC3-08 离线门 | Kotlin/Go/Python、全仓门禁、secret scan、clean commit | ［KNOWN｜HIGH］最近独立验证候选为 source `1dd6bc9ed764c43870f64a2cb9945ff465bd81c3`、GitHub run `30239585679`（7/7）、artifact `8642938682`、APK `55df3be8…05ab`、signer `b217bfb2…f316`；Room 包名去耦提交仍需自己的 CI provenance | 本地门禁与 GitHub CI 全绿 |
-| EC3-09 真机正负 | P40 正向 exact signature、负向 `receipt_missing` zero-business | 进行中；CI provenance 已复核，首次换装前因 ADB 断开 fail closed，手机未发生卸载/安装/启动 | 两个独立 READY consumer 重算通过 |
+| EC3-08 离线门 | Kotlin/Go/Python、全仓门禁、secret scan、clean commit | ［KNOWN｜HIGH］当前可执行候选为 source `7ac8b9d57e03898fde67f4ca64d3b29e41cf158f`、GitHub run `30247477658`（7/7）、artifact `8645841632`、APK `fc981c4c…3f22`、signer `d810a4be…e8ad`；独立 provenance reason=`ok`。直接 CLI 子进程与 14 模块交叉回归 159/159 PASS | 本地门禁、GitHub CI、精确 artifact provenance 与直接 CLI 均通过 |
+| EC3-09 真机正负 | P40 正向 exact signature、负向 `receipt_missing` zero-business | 进行中；同一候选的 positive/negative `--preflight-only` 均返回 0 并声明 `external_calls=0`，已验证候选目录、P40 策略、E-01/binary、固定 CA 与工具路径。当前 `adb devices -l` 为空，换装前继续 fail closed，手机卸载/安装/启动为零 | 两个独立 READY consumer 重算通过 |
 | EC3-10 收尾 | P40/E-01 精确清理与计划账本回填 | E-01 0.8.2 受保护部署与锁内验后完成；P40 收尾待 EC3-09 | Launcher/进程/服务/VPN/tun、远端锁及六指纹复核 |
 
 ## 7. 停止条件
