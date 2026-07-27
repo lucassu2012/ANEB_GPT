@@ -3231,7 +3231,7 @@ def write_evidence_manifest(
     return output
 
 
-def verify_evidence_manifest(
+def _verify_evidence_manifest_once(
     root: Path,
     *,
     schema: str = CONTRACT.manifest_schema,
@@ -3285,13 +3285,27 @@ def verify_evidence_manifest(
             raise ValueError("coverage")
     except (
         KeyError,
-        OSError,
         TypeError,
         UnicodeError,
         ValueError,
         json.JSONDecodeError,
     ) as error:
         raise CollectorError("evidence_manifest_invalid") from error
+
+
+def verify_evidence_manifest(
+    root: Path,
+    *,
+    schema: str = CONTRACT.manifest_schema,
+) -> None:
+    for attempt in range(3):
+        try:
+            _verify_evidence_manifest_once(root, schema=schema)
+            return
+        except OSError as error:
+            if attempt == 2:
+                raise CollectorError("evidence_manifest_invalid") from error
+            time.sleep(0.25)
 
 
 def atomic_publish(partial: Path, complete: Path) -> None:
