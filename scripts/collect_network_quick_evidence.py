@@ -305,6 +305,7 @@ def bind_network_verifier_reports(
             "terminal_status": markers.terminal_status,
             "reason_code": expected_reason,
             "server_business_total": business_total,
+            "cross_bound": True,
         }
     except (CollectorError, TypeError, ValueError) as error:
         raise CollectorError("network_verifier_binding_invalid") from error

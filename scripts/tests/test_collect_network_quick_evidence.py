@@ -368,6 +368,7 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
         self.assertEqual("pass", report["status"])
         self.assertEqual(RUN_ID, report["run_id"])
         self.assertEqual("authorized", report["contract_status"])
+        self.assertIs(report["cross_bound"], True)
 
     def test_negative_verifier_reports_require_zero_server_business(self) -> None:
         markers = parse_network_terminal_markers(
