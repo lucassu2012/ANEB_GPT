@@ -126,6 +126,42 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
             fetcher.calls[0],
         )
 
+    def test_network_audit_scope_is_forwarded_exactly_when_present(self) -> None:
+        fetcher = RecordingFetcher(
+            UpstreamResponse(
+                200,
+                (("Content-Type", "application/json"),),
+                b'{"version":"aneb-server/0.8.2","execution_capabilities":{"ok":true}}',
+                b"peer",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            session = NegativeProxySession(
+                ProxyConfig.for_test(
+                    evidence_directory=Path(temporary) / "negative-proxy"
+                ),
+                fetcher=fetcher,
+            )
+
+            session.process(
+                method="GET",
+                path="/api/v1/serverinfo",
+                headers={
+                    "X-Aneb-Run-Id": [RUN_ID],
+                    "X-Aneb-Audit-Role": ["capability"],
+                    "X-Aneb-Audit-Scope": ["network_run"],
+                },
+            )
+
+        self.assertEqual(
+            {
+                "X-Aneb-Run-Id": RUN_ID,
+                "X-Aneb-Audit-Role": "capability",
+                "X-Aneb-Audit-Scope": "network_run",
+            },
+            fetcher.calls[0],
+        )
+
     def test_wrong_method_fails_before_upstream(self) -> None:
         fetcher = RecordingFetcher(
             UpstreamResponse(200, (), b'{"execution_capabilities":{"ok":true}}', b"peer"),

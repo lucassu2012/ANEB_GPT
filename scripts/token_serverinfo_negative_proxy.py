@@ -741,7 +741,11 @@ class NegativeProxySession:
             "X-Aneb-Audit-Scope",
             "request_audit_scope_invalid",
         )
-        if scope is not None and scope not in {"token_run", "realtime_run"}:
+        if scope is not None and scope not in {
+            "token_run",
+            "realtime_run",
+            "network_run",
+        }:
             raise NegativeProxyFailure("request_audit_scope_invalid")
         self._accepted_requests = 1
         forwarded = {
