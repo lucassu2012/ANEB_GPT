@@ -162,6 +162,34 @@ class TokenServerInfoNegativeProxyTest(unittest.TestCase):
             fetcher.calls[0],
         )
 
+    def test_https_fetcher_accepts_network_scope_before_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fetcher = object.__new__(HttpsUpstreamFetcher)
+            fetcher.config = ProxyConfig.for_test(
+                evidence_directory=Path(temporary) / "negative-proxy"
+            )
+            fetcher._parsed = type(
+                "ParsedUpstream",
+                (),
+                {"hostname": "127.0.0.1", "port": 8443},
+            )()
+            fetcher._context = object()
+
+            with patch(
+                "scripts.token_serverinfo_negative_proxy.http.client.HTTPSConnection",
+                side_effect=OSError("transport sentinel"),
+            ):
+                with self.assertRaises(NegativeProxyFailure) as raised:
+                    fetcher.fetch(
+                        {
+                            "X-Aneb-Run-Id": RUN_ID,
+                            "X-Aneb-Audit-Role": "capability",
+                            "X-Aneb-Audit-Scope": "network_run",
+                        },
+                    )
+
+        self.assertEqual("upstream_request_failed", raised.exception.reason_code)
+
     def test_wrong_method_fails_before_upstream(self) -> None:
         fetcher = RecordingFetcher(
             UpstreamResponse(200, (), b'{"execution_capabilities":{"ok":true}}', b"peer"),
