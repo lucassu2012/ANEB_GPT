@@ -9,11 +9,12 @@ side-effect free; it never contacts a phone or server.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import argparse
 from pathlib import Path
 import json
 import os
 import re
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Sequence
 import uuid
 
 try:
@@ -765,3 +766,110 @@ class NetworkLiveCollectorBackend(mechanics.LiveCollectorBackend):
         else:
             import verify_network_quick_release as verifier
         return verifier.verify_release(ready_path)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    return mechanics.build_parser(
+        description="Collect one bounded Network Quick evidence bundle"
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    config = mechanics.CollectorConfig(
+        adb_serial=args.adb_serial,
+        server_base=args.server_base.rstrip("/"),
+        remote=args.remote,
+        ssh_key=args.ssh_key,
+        known_hosts=args.known_hosts,
+        device_policy=args.device_policy,
+        candidate_directory=args.candidate_directory,
+        gh_path=args.gh_path,
+        expected_server_binary_sha256=(
+            args.expected_server_binary_sha256.lower()
+        ),
+        evidence_mode=args.evidence_mode,
+        transport=args.transport,
+        evidence_root=args.evidence_root,
+        adb_path=args.adb_path,
+        ssh_path=args.ssh_path,
+        python_path=args.python_path,
+        server_ca_path=args.server_ca,
+        source_commit=args.source_commit.lower(),
+        run_timeout_seconds=args.run_timeout_seconds,
+        lock_ttl_seconds=args.lock_ttl_seconds,
+        command_timeout_seconds=args.command_timeout_seconds,
+    )
+    if args.preflight_only:
+        mechanics.validate_config(config, contract=CONTRACT)
+        mechanics.load_device_policy(
+            config.device_policy,
+            adb_serial=config.adb_serial,
+        )
+        mechanics._candidate_snapshot(
+            config.candidate_directory,
+            contract=CONTRACT,
+        )
+        print(
+            "ANEB_NETWORK_QUICK_PREFLIGHT_OK "
+            "external_calls=0 expected_server=aneb-server/0.8.2 "
+            "expected_app=0.5.14-codex"
+        )
+        return 0
+    backend = NetworkLiveCollectorBackend(
+        config,
+        install_candidate=args.install_candidate,
+    )
+    result = run_workflow(backend)
+    if not result.success:
+        try:
+            backend.record_failure(result)
+        except BaseException as error:
+            print(
+                mechanics._canonical_json_bytes(
+                    {
+                        "status": "fail",
+                        "reason_code": "failure_evidence_publish_failed",
+                        "failure": mechanics._error_text(error),
+                        "workflow": result.__dict__,
+                    }
+                ).decode("utf-8"),
+                end="",
+            )
+            return 2
+    print(
+        mechanics._canonical_json_bytes(
+            {
+                "status": "pass" if result.success else "fail",
+                "reason_code": (
+                    "ok" if result.success else "collector_or_cleanup_failed"
+                ),
+                "collection_id": backend.collection_id,
+                "run_id": (
+                    backend.run_markers.run_id
+                    if backend.run_markers is not None
+                    else None
+                ),
+                "evidence_directory": str(
+                    backend.complete if result.success else backend.partial
+                ),
+                "ready_path": (
+                    str(backend.ready_path)
+                    if backend.ready_path is not None
+                    else None
+                ),
+                "workflow": result.__dict__,
+            }
+        ).decode("utf-8"),
+        end="",
+    )
+    return 0 if result.success else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except CollectorError as error:
+        print(f"ERROR code={error}", file=os.sys.stderr)
+        raise SystemExit(2)

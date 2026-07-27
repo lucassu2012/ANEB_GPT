@@ -4304,9 +4304,12 @@ class LiveCollectorBackend:
         os.replace(temporary, status_path)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    *,
+    description: str = "Collect one bounded AI Realtime Quick evidence bundle",
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect one bounded AI Realtime Quick evidence bundle",
+        description=description,
         allow_abbrev=False,
     )
     parser.add_argument("--adb-serial", required=True)

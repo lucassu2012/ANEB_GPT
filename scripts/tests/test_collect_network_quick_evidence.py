@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import io
 import unittest
 from pathlib import Path
 import tempfile
 from unittest import mock
+from contextlib import redirect_stdout
 
 from scripts import collect_realtime_quick_evidence as mechanics
 from scripts.collect_network_quick_evidence import (
+    CONTRACT,
     CollectorError,
     NetworkTerminalMarkers,
     NetworkLiveCollectorBackend,
@@ -18,6 +21,8 @@ from scripts.collect_network_quick_evidence import (
     build_network_launch_arguments,
     parse_network_terminal_markers,
     run_network_verifiers,
+    build_parser,
+    main,
     validate_network_serverinfo,
     verify_collected_network_evidence,
 )
@@ -128,6 +133,40 @@ class NetworkQuickCollectorContractTest(unittest.TestCase):
             expected_collection=backend.collection_id,
             allow_partial=True,
         )
+
+    def test_cli_preflight_is_network_specific_and_external_call_free(self) -> None:
+        placeholder = "placeholder"
+        argv = [
+            "--adb-serial", "SERIAL",
+            "--server-base", "https://203.0.113.10:8443",
+            "--remote", "root@203.0.113.10",
+            "--ssh-key", placeholder,
+            "--known-hosts", placeholder,
+            "--device-policy", placeholder,
+            "--candidate-directory", placeholder,
+            "--gh-path", placeholder,
+            "--expected-server-binary-sha256", "a" * 64,
+            "--evidence-root", placeholder,
+            "--adb-path", placeholder,
+            "--ssh-path", placeholder,
+            "--python-path", placeholder,
+            "--source-commit", "b" * 40,
+            "--preflight-only",
+        ]
+        output = io.StringIO()
+        with (
+            mock.patch.object(mechanics, "validate_config") as validate,
+            mock.patch.object(mechanics, "load_device_policy"),
+            mock.patch.object(mechanics, "_candidate_snapshot") as snapshot,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(0, main(argv))
+
+        self.assertIn("Network Quick", build_parser().description)
+        self.assertIn("ANEB_NETWORK_QUICK_PREFLIGHT_OK", output.getvalue())
+        validate.assert_called_once()
+        self.assertIs(validate.call_args.kwargs["contract"], CONTRACT)
+        self.assertIs(snapshot.call_args.kwargs["contract"], CONTRACT)
 
     def test_network_serverinfo_sequence_is_stable_and_chronological(self) -> None:
         identity = self.network_serverinfo()
