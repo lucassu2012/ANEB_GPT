@@ -3599,7 +3599,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 + "return [pscustomobject]@{ExitCode=0;Text=($value|ConvertTo-Json -Compress)} }\n"
                 + f"$result=Publish-EvidenceReleaseReady -CompleteDirectory '{bundle}' "
                 + f"-VerificationReportPath '{report}'\n"
-                + f"if ($result -cne '{ready}') {{ throw 'ready_path_invalid' }}\n"
+                + f"if (-not ([IO.Path]::GetFullPath([string]$result)).Equals([IO.Path]::GetFullPath('{ready}'), [StringComparison]::OrdinalIgnoreCase)) {{ throw 'ready_path_invalid' }}\n"
                 + "if ($script:stableCalls -ne 2) { throw 'tooling_stability_count_invalid' }\n"
                 + f"if (Test-Path -LiteralPath '{ready_temp}') {{ throw 'ready_temp_remained' }}\n",
                 encoding="utf-8",
