@@ -1,7 +1,9 @@
 # M0-EC3 网络综合 Quick 正负 READY 验收
 
-> 验收日期：2026-07-27（Asia/Shanghai）  
-> 验收范围：P40 Pro + ANEB Codex Debug + E-01 `aneb-server/0.8.2` 的单节点 Network Quick 窄切片。  
+> 验收日期：2026-07-27（Asia/Shanghai）
+>
+> 验收范围：P40 Pro + ANEB Codex Debug + E-01 `aneb-server/0.8.2` 的单节点 Network Quick 窄切片。
+>
 > 证据边界：这是 ANEB 到受控探针节点的一次应用层工程样本，不是运营商无线覆盖、IP 层丢包、第三方 AI 应用体验或正式 95% 网络质量基线。
 
 ## 1. 结案判断
