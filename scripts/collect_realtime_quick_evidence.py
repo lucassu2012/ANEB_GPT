@@ -36,7 +36,7 @@ from typing import Any, BinaryIO, Callable, Literal, Mapping, Protocol, Sequence
 if __package__:
     from scripts import (
         publish_realtime_quick_ready as ready_publisher,
-        verify_realtime_evidence_security as evidence_security,
+        quick_evidence_security as evidence_security,
         verify_realtime_quick_collection as collection_verifier,
         verify_realtime_quick_release as release_verifier,
     )
@@ -52,7 +52,7 @@ if __package__:
     )
 else:
     import publish_realtime_quick_ready as ready_publisher
-    import verify_realtime_evidence_security as evidence_security
+    import quick_evidence_security as evidence_security
     import verify_realtime_quick_collection as collection_verifier
     import verify_realtime_quick_release as release_verifier
     from quick_collection_contract import (

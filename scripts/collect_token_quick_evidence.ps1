@@ -561,8 +561,8 @@ function Assert-ToolingProvenanceStable {
     param(
         [Parameter(Mandatory = $true)]$ResolvedTools
     )
-    if ($script:ResolvedTools.ToolingFiles.Count -ne 25 -or
-        $script:ResolvedTools.ToolingProvenance.files.Count -ne 25) {
+    if ($script:ResolvedTools.ToolingFiles.Count -ne 33 -or
+        $script:ResolvedTools.ToolingProvenance.files.Count -ne 33) {
         throw 'tooling_closure_count_invalid'
     }
     foreach ($entry in $ResolvedTools.ToolingFiles.GetEnumerator()) {
@@ -822,6 +822,14 @@ function Assert-LocalPreflight {
     $negativeProxyEvidenceVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_token_quick_negative_proxy_evidence.py'
     $negativeClientDbVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_token_quick_negative_client_db.py'
     $bundleVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_token_quick_evidence_bundle.py'
+    $readyPublisherExpectedPath = Join-Path $repositoryRoot 'scripts\publish_token_quick_ready.py'
+    $readyTransactionExpectedPath = Join-Path $repositoryRoot 'scripts\quick_ready_transaction.py'
+    $quickEvidenceSecurityExpectedPath = Join-Path $repositoryRoot 'scripts\quick_evidence_security.py'
+    $tokenReleaseVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_token_quick_evidence_release.py'
+    $quickCollectionAdapterExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_verifier_adapter.py'
+    $quickCollectionCoreExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_verifier.py'
+    $workflowTraceCliExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_trace_cli.py'
+    $workflowTraceCoreExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_workflow.py'
     $ciProvenanceVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_ci_apk_provenance.py'
     $ciWorkflowExpectedPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
     $debugCandidatePackagerExpectedPath = Join-Path $repositoryRoot 'scripts\package_debug_candidate.py'
@@ -850,6 +858,14 @@ function Assert-LocalPreflight {
         negative_proxy_evidence_verifier = $NegativeProxyEvidenceVerifierPath
         negative_client_db_verifier = $NegativeClientDbVerifierPath
         bundle_verifier = $BundleVerifierPath
+        ready_publisher = $readyPublisherExpectedPath
+        ready_transaction = $readyTransactionExpectedPath
+        quick_evidence_security = $quickEvidenceSecurityExpectedPath
+        token_release_verifier = $tokenReleaseVerifierExpectedPath
+        quick_collection_adapter = $quickCollectionAdapterExpectedPath
+        quick_collection_core = $quickCollectionCoreExpectedPath
+        workflow_trace_cli = $workflowTraceCliExpectedPath
+        workflow_trace_core = $workflowTraceCoreExpectedPath
         ci_provenance_verifier = $CiProvenanceVerifierPath
         ci_workflow = $ciWorkflowExpectedPath
         debug_candidate_packager = $debugCandidatePackagerExpectedPath
@@ -877,6 +893,14 @@ function Assert-LocalPreflight {
         negative_proxy_evidence_verifier = $negativeProxyEvidenceVerifierExpectedPath
         negative_client_db_verifier = $negativeClientDbVerifierExpectedPath
         bundle_verifier = $bundleVerifierExpectedPath
+        ready_publisher = $readyPublisherExpectedPath
+        ready_transaction = $readyTransactionExpectedPath
+        quick_evidence_security = $quickEvidenceSecurityExpectedPath
+        token_release_verifier = $tokenReleaseVerifierExpectedPath
+        quick_collection_adapter = $quickCollectionAdapterExpectedPath
+        quick_collection_core = $quickCollectionCoreExpectedPath
+        workflow_trace_cli = $workflowTraceCliExpectedPath
+        workflow_trace_core = $workflowTraceCoreExpectedPath
         ci_provenance_verifier = $ciProvenanceVerifierExpectedPath
         ci_workflow = $ciWorkflowExpectedPath
         debug_candidate_packager = $debugCandidatePackagerExpectedPath
@@ -904,6 +928,14 @@ function Assert-LocalPreflight {
         negative_proxy_evidence_verifier = 'negative proxy evidence verifier'
         negative_client_db_verifier = 'negative client Room verifier'
         bundle_verifier = 'independent bundle verifier'
+        ready_publisher = 'Token READY publisher'
+        ready_transaction = 'family-neutral READY transaction'
+        quick_evidence_security = 'family-neutral evidence-root verifier'
+        token_release_verifier = 'Token READY release verifier'
+        quick_collection_adapter = 'family-neutral collection verifier adapter'
+        quick_collection_core = 'family-neutral collection verifier core'
+        workflow_trace_cli = 'family-neutral workflow trace CLI'
+        workflow_trace_core = 'family-neutral workflow trace core'
         ci_provenance_verifier = 'CI APK provenance verifier'
         ci_workflow = 'CI workflow'
         debug_candidate_packager = 'debug candidate packager'
@@ -930,7 +962,7 @@ function Assert-LocalPreflight {
             -RepositoryRoot $repositoryRoot `
             -Label ([string]$assetLabels[$assetName])
     }
-    if ($toolingFiles.Count -ne 25) {
+    if ($toolingFiles.Count -ne 33) {
         throw "tooling_closure_count_invalid count=$($toolingFiles.Count)"
     }
     $script:DeriveHelperPath = [string]$toolingFiles['derive_helper']
@@ -940,6 +972,8 @@ function Assert-LocalPreflight {
     $script:NegativeProxyEvidenceVerifierPath = [string]$toolingFiles['negative_proxy_evidence_verifier']
     $script:NegativeClientDbVerifierPath = [string]$toolingFiles['negative_client_db_verifier']
     $script:BundleVerifierPath = [string]$toolingFiles['bundle_verifier']
+    $script:ReadyPublisherPath = [string]$toolingFiles['ready_publisher']
+    $script:WorkflowTraceCliPath = [string]$toolingFiles['workflow_trace_cli']
     $script:CiProvenanceVerifierPath = [string]$toolingFiles['ci_provenance_verifier']
     $script:ResultJsonlVerifierPath = [string]$toolingFiles['result_jsonl_verifier']
     $script:DeviceIdentityVerifierPath = [string]$toolingFiles['device_identity_verifier']
@@ -4037,6 +4071,9 @@ function Wait-ForEndBarrierAudit {
 function Complete-CollectorCleanup {
     param([Parameter(Mandatory = $true)][string]$EvidenceDirectory)
     $errors = New-Object System.Collections.Generic.List[string]
+    $phoneErrors = New-Object System.Collections.Generic.List[string]
+    $remoteErrors = New-Object System.Collections.Generic.List[string]
+    $remoteSteps = @('end_barrier', 'lock_release', 'lock_postcheck')
     foreach ($cleanupStep in @(
         @{ Name = 'target_app'; Attempts = 3; Action = { Stop-TargetAppOnce } },
         @{ Name = 'negative_reverse'; Attempts = 3; Action = {
@@ -4103,14 +4140,22 @@ function Complete-CollectorCleanup {
             }
         }
         if (-not $completed) {
-            $errors.Add((
+            $cleanupError = (
                 "{0}:attempts={1}:{2}" -f
                 $cleanupStep.Name,
                 [int]$cleanupStep.Attempts,
                 [string]$lastError
-            ))
+            )
+            $errors.Add($cleanupError)
+            if ($remoteSteps -ccontains [string]$cleanupStep.Name) {
+                $remoteErrors.Add($cleanupError)
+            } else {
+                $phoneErrors.Add($cleanupError)
+            }
         }
     }
+    $script:PhoneCleanupFailures = @($phoneErrors | ForEach-Object { [string]$_ })
+    $script:RemoteCleanupFailures = @($remoteErrors | ForEach-Object { [string]$_ })
     $script:CleanupSucceeded = $errors.Count -eq 0
     Write-JsonNoBom -Path (Join-Path $EvidenceDirectory 'cleanup-report.json') -Value ([ordered]@{
         schema = 'aneb-d82-collector-cleanup'
@@ -4137,6 +4182,109 @@ function Complete-CollectorCleanup {
         stayon_restored = -not $script:StayonChanged
         lock_release_attempted = $script:LockReleaseAttempted
     })
+}
+
+function Assert-WorkflowTraceShadowGate {
+    param(
+        [Parameter(Mandatory = $true)][bool]$HistoricalPass,
+        [Parameter(Mandatory = $true)][bool]$TracePublishEligible
+    )
+    if ($HistoricalPass -ne $TracePublishEligible) {
+        throw 'workflow_trace_shadow_mismatch'
+    }
+    return $HistoricalPass
+}
+
+function Invoke-WorkflowTraceDecision {
+    param([Parameter(Mandatory = $true)][string]$EvidenceDirectory)
+
+    $failure = if ([string]::IsNullOrWhiteSpace([string]$script:PrimaryFailure)) {
+        'collector_failed_without_reason'
+    } else {
+        [string]$script:PrimaryFailure
+    }
+    $events = New-Object System.Collections.Generic.List[object]
+    if (-not $script:WorkflowTracePreflightSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'fail'; failure = $failure })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'skip' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'skip' })
+    } elseif (-not $script:WorkflowTraceAcquireSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'fail'; failure = $failure })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'skip' })
+    } elseif (-not $script:WorkflowSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'fail'; failure = $failure })
+    } else {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'pass' })
+    }
+
+    foreach ($cleanup in @(
+        @{ Phase = 'cleanup_phone'; Failures = @($script:PhoneCleanupFailures) },
+        @{ Phase = 'cleanup_remote'; Failures = @($script:RemoteCleanupFailures) }
+    )) {
+        $cleanupFailures = @($cleanup.Failures | ForEach-Object { [string]$_ })
+        if ($cleanupFailures.Count -eq 0) {
+            $events.Add([ordered]@{ phase = [string]$cleanup.Phase; outcome = 'pass' })
+        } else {
+            $events.Add([ordered]@{
+                phase = [string]$cleanup.Phase
+                outcome = 'fail'
+                failure = ($cleanupFailures -join ' | ')
+            })
+        }
+    }
+
+    $tracePath = Join-Path $EvidenceDirectory 'workflow-trace.json'
+    Write-JsonNoBom -Path $tracePath -Value ([ordered]@{
+        schema = 'aneb-quick-workflow-trace@1.0.0'
+        events = $events.ToArray()
+    })
+    Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+    $result = Invoke-BoundedNativeTextOnce `
+        -Command ([string]$script:ResolvedTools.Python) `
+        -Arguments @([string]$script:WorkflowTraceCliPath, $tracePath) `
+        -TimeoutSeconds $ToolCommandTimeoutSeconds `
+        -TimeoutReason 'workflow_trace_cli_timeout' `
+        -LaunchReason 'workflow_trace_cli_launch_failed'
+    if ($result.ExitCode -ne 0) {
+        throw "workflow_trace_cli_failed rc=$($result.ExitCode) output=$($result.Text -replace '\r?\n', '|')"
+    }
+    $output = ([string]$result.Text -replace "`r`n", "`n" -replace "`r", "`n")
+    if ([string]::IsNullOrWhiteSpace($output) -or $output.Contains("`n")) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    try {
+        $decision = $output | ConvertFrom-Json
+    } catch {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    if (-not (Test-ExactPropertyNames `
+        -Value $decision `
+        -Expected @('cleanup_failures', 'primary_failure', 'publish_eligible', 'schema')) -or
+        [string]$decision.schema -cne 'aneb-quick-workflow-decision@1.0.0' -or
+        $decision.publish_eligible -isnot [bool]) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    if ($null -ne $decision.primary_failure -and
+        ($decision.primary_failure -isnot [string] -or
+         [string]::IsNullOrWhiteSpace([string]$decision.primary_failure))) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    foreach ($cleanupFailure in @($decision.cleanup_failures)) {
+        if ($cleanupFailure -isnot [string] -or
+            [string]::IsNullOrWhiteSpace([string]$cleanupFailure)) {
+            throw 'workflow_trace_cli_output_invalid'
+        }
+    }
+    Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+    Write-NewTextNoBom `
+        -Path (Join-Path $EvidenceDirectory 'workflow-decision.json') `
+        -Text ($output + "`n")
+    return $decision
 }
 
 function Get-RelativeEvidencePath {
@@ -4651,132 +4799,110 @@ function Invoke-PublishedBundleVerification {
 
 function Publish-EvidenceReleaseReady {
     param(
-        [Parameter(Mandatory = $true)][string]$EvidenceRootPath,
-        [Parameter(Mandatory = $true)][string]$CollectionId,
-        [Parameter(Mandatory = $true)][string]$RunId,
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('positive', 'negative_receipt_missing')][string]$ExecutionMode,
         [Parameter(Mandatory = $true)][string]$CompleteDirectory,
-        [Parameter(Mandatory = $true)][string]$FinalManifestSha256,
         [Parameter(Mandatory = $true)][string]$VerificationReportPath
     )
-    if ($CollectionId -notmatch '^d82-token-quick-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}$' -or
-        $RunId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -or
-        $FinalManifestSha256 -notmatch '^[0-9a-f]{64}$') {
-        throw 'evidence_release_identity_invalid'
-    }
-    $root = Assert-NonReparseDirectoryChain `
-        -Path $EvidenceRootPath `
-        -ReasonPrefix 'evidence_root'
-    Assert-PrivateEvidenceRoot -Path $root
-    $expectedComplete = Join-Path $root ($CollectionId + '.complete')
-    $expectedReport = Join-Path $root ($CollectionId + '.verification.json')
-    if (-not ([IO.Path]::GetFullPath($CompleteDirectory)).Equals(
-            [IO.Path]::GetFullPath($expectedComplete),
-            [StringComparison]::OrdinalIgnoreCase
-        ) -or
-        -not ([IO.Path]::GetFullPath($VerificationReportPath)).Equals(
-            [IO.Path]::GetFullPath($expectedReport),
-            [StringComparison]::OrdinalIgnoreCase
+    Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+    $completeFull = [IO.Path]::GetFullPath($CompleteDirectory)
+    $reportFull = [IO.Path]::GetFullPath($VerificationReportPath)
+    $completeLeaf = [IO.Path]::GetFileName($completeFull)
+    $collectionId = if ($completeLeaf.EndsWith(
+            '.complete', [StringComparison]::Ordinal
         )) {
-        throw 'evidence_release_path_binding_invalid'
+        $completeLeaf.Substring(0, $completeLeaf.Length - '.complete'.Length)
+    } else {
+        ''
     }
-    $null = Assert-NonReparseDirectoryChain `
-        -Path $CompleteDirectory `
-        -ReasonPrefix 'evidence_complete'
-    $manifestPath = Join-Path $CompleteDirectory 'evidence-manifest.final.json'
-    Assert-NonEmptyFile -Path $manifestPath -Label 'release final manifest'
-    Assert-NonEmptyFile -Path $VerificationReportPath -Label 'release verification report'
-    foreach ($leaf in @($manifestPath, $VerificationReportPath)) {
-        if (((Get-Item -LiteralPath $leaf -Force).Attributes -band
-                [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'evidence_release_reparse_point_forbidden'
-        }
+    $root = [IO.Path]::GetDirectoryName($completeFull)
+    $readyPath = if ($collectionId.Length -gt 0) {
+        Join-Path $root ($collectionId + '.READY.json')
+    } else {
+        $null
     }
-    $actualManifestSha256 = (
-        Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
-    if ($actualManifestSha256 -cne $FinalManifestSha256) {
-        throw 'evidence_release_manifest_digest_mismatch'
+    $readyTempPath = if ($collectionId.Length -gt 0) {
+        Join-Path $root ($collectionId + '.ready.partial')
+    } else {
+        $null
     }
-    $reportSha256 = (
-        Get-FileHash -LiteralPath $VerificationReportPath -Algorithm SHA256
-    ).Hash.ToLowerInvariant()
-    $readyPath = Join-Path $root ($CollectionId + '.READY.json')
-    $readyTempPath = Join-Path $root ($CollectionId + '.ready.partial')
-    if ((Test-Path -LiteralPath $readyPath) -or
-        (Test-Path -LiteralPath $readyTempPath)) {
-        throw 'evidence_release_marker_collision'
-    }
-    $readyTempCreated = $false
+    $publisherSucceeded = $false
     try {
-        $marker = [ordered]@{
-            schema = 'aneb-d82-evidence-release'
-            schema_version = '1.0.0'
-            status = 'ready'
-            reason_code = 'ok'
-            collection_id = $CollectionId
-            run_id = $RunId
-            execution_mode = $ExecutionMode
-            bundle_leaf = Split-Path -Leaf $CompleteDirectory
-            manifest_sha256 = $actualManifestSha256
-            verification_report_leaf = Split-Path -Leaf $VerificationReportPath
-            verification_report_sha256 = $reportSha256
-            committed_at_utc = [DateTime]::UtcNow.ToString(
-                "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
-                [Globalization.CultureInfo]::InvariantCulture
-            )
+        $result = Invoke-BoundedNativeTextOnce `
+            -Command ([string]$script:ResolvedTools.Python) `
+            -Arguments @(
+                [string]$script:ReadyPublisherPath,
+                $completeFull,
+                $reportFull
+            ) `
+            -TimeoutSeconds $ToolCommandTimeoutSeconds `
+            -TimeoutReason 'tool_timeout stage=evidence_release_publisher' `
+            -LaunchReason 'tool_launch_failed stage=evidence_release_publisher'
+        $output = [string]$result.Text
+        if ([string]::IsNullOrWhiteSpace($output) -or $output -match "[`r`n]") {
+            throw 'evidence_release_publisher_output_invalid'
         }
-        Write-NewTextNoBom `
-            -Path $readyTempPath `
-            -Text (($marker | ConvertTo-Json -Compress) + "`n")
-        $readyTempCreated = $true
-        Assert-NonEmptyFile -Path $readyTempPath -Label 'evidence release marker draft'
-        $roundTrip = Get-Content -LiteralPath $readyTempPath -Raw -Encoding UTF8 |
-            ConvertFrom-Json
-        $expectedReadyProperties = @(
-            'bundle_leaf', 'collection_id', 'committed_at_utc', 'execution_mode',
-            'manifest_sha256', 'reason_code', 'run_id', 'schema', 'schema_version',
-            'status', 'verification_report_leaf', 'verification_report_sha256'
+        try {
+            $publication = $output | ConvertFrom-Json
+        } catch {
+            throw 'evidence_release_publisher_output_invalid'
+        }
+        if ($result.ExitCode -ne 0) {
+            $expectedFailureProperties = @(
+                'reason_code', 'schema', 'schema_version', 'status'
+            )
+            $reason = [string]$publication.reason_code
+            if (-not (Test-ExactPropertyNames `
+                    -Value $publication `
+                    -Expected $expectedFailureProperties) -or
+                [string]$publication.schema -cne 'aneb-d82-evidence-ready-publication' -or
+                [string]$publication.schema_version -cne '1.0.0' -or
+                [string]$publication.status -cne 'fail' -or
+                [string]::IsNullOrWhiteSpace($reason) -or
+                $reason.Length -gt 1024 -or
+                $reason -match "[`r`n`0]") {
+                throw 'evidence_release_publisher_failure_output_invalid'
+            }
+            throw "evidence_release_publisher_failed reason=$reason"
+        }
+        $publisherSucceeded = $true
+        $expectedSuccessProperties = @(
+            'collection_id', 'execution_mode', 'ready_path', 'ready_sha256',
+            'reason_code', 'run_id', 'schema', 'schema_version', 'status',
+            'verification_report_path', 'verification_report_sha256'
         )
-        $actualReadyProperties = @($roundTrip.PSObject.Properties.Name | Sort-Object)
-        $roundTripCommittedAt = if ($roundTrip.committed_at_utc -is [DateTime]) {
-            ([DateTime]$roundTrip.committed_at_utc).ToUniversalTime().ToString(
-                "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
-                [Globalization.CultureInfo]::InvariantCulture
-            )
-        } else {
-            [string]$roundTrip.committed_at_utc
+        if (-not (Test-ExactPropertyNames `
+                -Value $publication `
+                -Expected $expectedSuccessProperties) -or
+            [string]$publication.schema -cne 'aneb-d82-evidence-ready-publication' -or
+            [string]$publication.schema_version -cne '1.0.0' -or
+            [string]$publication.status -cne 'pass' -or
+            [string]$publication.reason_code -cne 'ok' -or
+            [string]$publication.collection_id -cne $collectionId -or
+            -not ([IO.Path]::GetFullPath(
+                [string]$publication.verification_report_path
+            )).Equals($reportFull, [StringComparison]::OrdinalIgnoreCase) -or
+            $null -eq $readyPath -or
+            -not ([IO.Path]::GetFullPath(
+                [string]$publication.ready_path
+            )).Equals($readyPath, [StringComparison]::OrdinalIgnoreCase) -or
+            [string]$publication.verification_report_sha256 -notmatch '^[0-9a-f]{64}$' -or
+            [string]$publication.ready_sha256 -notmatch '^[0-9a-f]{64}$' -or
+            -not (Test-Path -LiteralPath $readyPath -PathType Leaf) -or
+            (Test-Path -LiteralPath $readyTempPath)) {
+            throw 'evidence_release_publisher_output_invalid'
         }
-        if (($actualReadyProperties -join "`0") -cne
-                (($expectedReadyProperties | Sort-Object) -join "`0") -or
-            [string]$roundTrip.schema -cne 'aneb-d82-evidence-release' -or
-            [string]$roundTrip.schema_version -cne '1.0.0' -or
-            [string]$roundTrip.status -cne 'ready' -or
-            [string]$roundTrip.reason_code -cne 'ok' -or
-            [string]$roundTrip.collection_id -cne $CollectionId -or
-            [string]$roundTrip.run_id -cne $RunId -or
-            [string]$roundTrip.execution_mode -cne $ExecutionMode -or
-            [string]$roundTrip.bundle_leaf -cne (Split-Path -Leaf $CompleteDirectory) -or
-            [string]$roundTrip.manifest_sha256 -cne $actualManifestSha256 -or
-            [string]$roundTrip.verification_report_leaf -cne
-                (Split-Path -Leaf $VerificationReportPath) -or
-            [string]$roundTrip.verification_report_sha256 -cne $reportSha256 -or
-            $roundTripCommittedAt -cne [string]$marker.committed_at_utc -or
-            $roundTripCommittedAt -notmatch
-                '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$') {
-            throw 'evidence_release_marker_roundtrip_invalid'
-        }
-        [IO.File]::Move($readyTempPath, $readyPath)
-        $readyTempCreated = $false
+        Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+        return $readyPath
     } catch {
-        if ($readyTempCreated -and
-            (Test-Path -LiteralPath $readyTempPath -PathType Leaf)) {
-            Remove-Item -LiteralPath $readyTempPath -Force
+        if ($publisherSucceeded -and $null -ne $readyPath) {
+            if (Test-Path -LiteralPath $readyPath -PathType Leaf) {
+                Remove-Item -LiteralPath $readyPath -Force
+            }
+            if (Test-Path -LiteralPath $readyTempPath -PathType Leaf) {
+                Remove-Item -LiteralPath $readyTempPath -Force
+            }
         }
         throw
     }
-    return $readyPath
 }
 
 function Write-EvidenceManifestDraft {
@@ -5280,6 +5406,12 @@ if ([bool]$script:ResolvedTools.ToolingProvenance.source_dirty) {
 
 $script:WorkflowSucceeded = $false
 $script:CleanupSucceeded = $false
+$script:WorkflowTracePreflightSucceeded = $false
+$script:WorkflowTraceAcquireSucceeded = $false
+$script:WorkflowTracePublishEligible = $false
+$script:WorkflowTraceEvaluated = $false
+$script:PhoneCleanupFailures = @()
+$script:RemoteCleanupFailures = @()
 $script:Published = $false
 $script:ReadyPath = $null
 $script:PrimaryFailure = $null
@@ -5387,6 +5519,7 @@ Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-plan.json') -Value
 
 try {
     $devicePreflight = Assert-LiveDevicePreflight -EvidenceDirectory $PartialDirectory
+    $script:WorkflowTracePreflightSucceeded = $true
     $script:OriginalStayon = [string]$devicePreflight.stay_on_while_plugged_in
     Start-BusySentinel -EvidenceDirectory $PartialDirectory
 
@@ -5431,6 +5564,7 @@ try {
     $null = Assert-BusySentinelFocused `
         -EvidenceDirectory $PartialDirectory `
         -Stage 'before_target_handoff'
+    $script:WorkflowTraceAcquireSucceeded = $true
     $null = Start-TokenQuickRun
     $script:RunId = Wait-TokenQuickCompletion `
         -Logcat $script:Logcat `
@@ -5501,6 +5635,8 @@ try {
     } catch {
         $script:CleanupSucceeded = $false
         $cleanupFailure = "cleanup_orchestration_failure:$($_.Exception.Message)"
+        $script:PhoneCleanupFailures = @($cleanupFailure)
+        $script:RemoteCleanupFailures = @($cleanupFailure)
         if ([string]::IsNullOrWhiteSpace($script:PrimaryFailure)) {
             $script:PrimaryFailure = $cleanupFailure
         } else {
@@ -5508,7 +5644,27 @@ try {
         }
     }
 
-    $combinedPass = $script:WorkflowSucceeded -and $script:CleanupSucceeded
+    $historicalPass = $script:WorkflowSucceeded -and $script:CleanupSucceeded
+    try {
+        $traceDecision = Invoke-WorkflowTraceDecision -EvidenceDirectory $PartialDirectory
+        $script:WorkflowTraceEvaluated = $true
+        $script:WorkflowTracePublishEligible = Assert-WorkflowTraceShadowGate `
+            -HistoricalPass ([bool]$historicalPass) `
+            -TracePublishEligible ([bool]$traceDecision.publish_eligible)
+    } catch {
+        $traceFailure = $_.Exception.Message
+        $script:WorkflowTracePublishEligible = $false
+        if ([string]::IsNullOrWhiteSpace($script:PrimaryFailure)) {
+            $script:PrimaryFailure = $traceFailure
+        } else {
+            $script:PrimaryFailure = $script:PrimaryFailure + ' | ' + $traceFailure
+        }
+    }
+    $combinedPass = (
+        $historicalPass -and
+        $script:WorkflowTraceEvaluated -and
+        $script:WorkflowTracePublishEligible
+    )
     Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-status.json') -Value ([ordered]@{
         schema = 'aneb-d82-collector-status'
         schema_version = '1.0.0'
@@ -5526,7 +5682,9 @@ try {
         complete_directory = $CompleteDirectory
     })
 
-    if ($script:WorkflowSucceeded -and $script:CleanupSucceeded) {
+    if ($script:WorkflowSucceeded -and
+        $script:CleanupSucceeded -and
+        $script:WorkflowTracePublishEligible) {
         $verificationCandidateCreated = $false
         $verificationReportTempPath = $null
         $verificationReportPublished = $false
@@ -5598,12 +5756,7 @@ try {
             $verificationReportTempPath = $null
             $verificationReportPublished = $true
             $script:ReadyPath = Publish-EvidenceReleaseReady `
-                -EvidenceRootPath ([string]$paths.Root) `
-                -CollectionId $collectionId `
-                -RunId $script:RunId `
-                -ExecutionMode $script:ExecutionMode `
                 -CompleteDirectory $CompleteDirectory `
-                -FinalManifestSha256 $finalManifestSha256 `
                 -VerificationReportPath ([string]$verificationResult.Path)
             $script:Published = $true
         } catch {

@@ -13,6 +13,13 @@ import stat
 import sys
 from typing import Any, NoReturn
 
+if __package__:
+    from scripts import quick_collection_verifier_adapter as collection_adapter
+    from scripts import quick_ready_transaction as ready_transaction
+else:
+    import quick_collection_verifier_adapter as collection_adapter
+    import quick_ready_transaction as ready_transaction
+
 
 RELEASE_SCHEMA = "aneb-d82-evidence-release"
 RELEASE_VERSION = "1.0.0"
@@ -34,37 +41,31 @@ READY_LEAF_RE = re.compile(
     r"^(?P<collection>d82-token-quick-[0-9]{8}T[0-9]{6}Z-"
     r"[0-9a-f]{32})\.READY\.json$"
 )
-RUN_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-UTC_RE = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:"
-    r"[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$"
-)
 EXECUTION_MODES = frozenset({"positive", "negative_receipt_missing"})
 EVIDENCE_SCOPES = {
     "positive": "d82_token_quick_cross_bound_acceptance",
     "negative_receipt_missing": "d82_token_quick_contract_rejection_acceptance",
 }
-READY_KEYS = frozenset(
-    {
-        "schema",
-        "schema_version",
-        "status",
-        "reason_code",
-        "collection_id",
-        "run_id",
-        "execution_mode",
-        "bundle_leaf",
-        "manifest_sha256",
-        "verification_report_leaf",
-        "verification_report_sha256",
-        "committed_at_utc",
-    }
+TOKEN_READY_CONTRACT = ready_transaction.QuickReadyContract(
+    collection_pattern=re.compile(
+        r"^(?P<collection>d82-token-quick-[0-9]{8}T[0-9]{6}Z-"
+        r"[0-9a-f]{32})\.complete$"
+    ),
+    ready_pattern=READY_LEAF_RE,
+    release_schema=RELEASE_SCHEMA,
+    release_version=RELEASE_VERSION,
+    verification_schema=REPORT_SCHEMA,
+    verification_version=REPORT_VERSION,
+    publication_schema="aneb-d82-evidence-ready-publication",
+    collection_report_schema=BUNDLE_REPORT_SCHEMA,
+    collection_report_version=BUNDLE_REPORT_VERSION,
+    mode_field="execution_mode",
+    mode_values=EXECUTION_MODES,
+    preverified_report_canonical=False,
 )
+READY_KEYS = ready_transaction.ready_keys(TOKEN_READY_CONTRACT)
 FINAL_MANIFEST_KEYS = frozenset(
     {
         "schema",
@@ -324,51 +325,23 @@ def _load_ready(raw: bytes) -> dict[str, Any]:
 
 
 def _validate_ready(marker: dict[str, Any], collection_from_leaf: str) -> None:
-    if set(marker) != READY_KEYS:
-        fail("release_ready_keys_invalid")
-    if (
-        marker.get("schema") != RELEASE_SCHEMA
-        or marker.get("schema_version") != RELEASE_VERSION
-        or marker.get("status") != "ready"
-        or marker.get("reason_code") != "ok"
-    ):
-        fail("release_ready_contract_invalid")
+    failure = ready_transaction.ready_marker_failure(
+        marker,
+        collection_from_leaf,
+        contract=TOKEN_READY_CONTRACT,
+    )
+    if failure is not None:
+        fail(f"release_ready_{failure}_invalid")
     collection = marker.get("collection_id")
-    run_id = marker.get("run_id")
-    mode = marker.get("execution_mode")
     collection_match = (
         COLLECTION_RE.fullmatch(collection) if isinstance(collection, str) else None
     )
-    if (
-        collection_match is None
-        or collection != collection_from_leaf
-        or not isinstance(run_id, str)
-        or RUN_ID_RE.fullmatch(run_id) is None
-        or not isinstance(mode, str)
-        or mode not in EXECUTION_MODES
-    ):
+    if collection_match is None:
         fail("release_ready_identity_invalid")
     try:
         datetime.strptime(collection_match["stamp"], "%Y%m%dT%H%M%SZ")
     except ValueError:
         fail("release_ready_identity_invalid")
-    if (
-        marker.get("bundle_leaf") != f"{collection}.complete"
-        or marker.get("verification_report_leaf")
-        != f"{collection}.verification.json"
-        or not isinstance(marker.get("manifest_sha256"), str)
-        or SHA256_RE.fullmatch(marker["manifest_sha256"]) is None
-        or not isinstance(marker.get("verification_report_sha256"), str)
-        or SHA256_RE.fullmatch(marker["verification_report_sha256"]) is None
-    ):
-        fail("release_ready_binding_invalid")
-    timestamp = marker.get("committed_at_utc")
-    if not isinstance(timestamp, str) or UTC_RE.fullmatch(timestamp) is None:
-        fail("release_ready_timestamp_invalid")
-    try:
-        datetime.strptime(timestamp[:26] + "Z", "%Y-%m-%dT%H:%M:%S.%fZ")
-    except ValueError:
-        fail("release_ready_timestamp_invalid")
 
 
 def _validate_final_manifest(
@@ -612,16 +585,14 @@ def verify_release(ready_path: str | os.PathLike[str]) -> dict[str, object]:
     _validate_final_manifest(manifest, marker)
     _validate_bundle_report(report, marker, manifest_sha)
     _validate_identity_closure(manifest, report)
-    complete_re = re.compile(
-        rb"^ANEB_D82_COMPLETE collection_id="
-        + re.escape(collection.encode("ascii"))
-        + rb" run_id="
-        + re.escape(marker["run_id"].encode("ascii"))
-        + rb" manifest=evidence-manifest\.final\.json manifest_sha256="
-        + re.escape(manifest_sha.encode("ascii"))
-        + rb"\n$"
+    expected_complete = collection_adapter.build_complete_marker(
+        collection=collection,
+        run_id=marker["run_id"],
+        manifest_sha256=manifest_sha,
+        marker="ANEB_D82_COMPLETE",
+        manifest_leaf="evidence-manifest.final.json",
     )
-    if complete_re.fullmatch(complete_raw) is None:
+    if complete_raw != expected_complete:
         fail("release_complete_mismatch")
 
     return {

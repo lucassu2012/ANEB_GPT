@@ -169,7 +169,11 @@ jobs:
           scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_bounded_native_process_kills_hung_child_with_machine_reason
           scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_collector_empty_verified_boot_is_observed_but_not_claimed_secure
           scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_evidence_root_chain_rejects_an_ancestor_junction_before_writes
-          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_marker_is_digest_bound_and_is_the_last_release_commit
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_publication_is_a_thin_attested_token_cli_shell
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_cli_transitive_modules_are_inside_tooling_closure
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_shell_accepts_canonical_cli_success_as_last_release_commit
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_shell_propagates_canonical_cli_failure_without_deleting_report
+          scripts.tests.test_collect_token_quick_evidence.TokenQuickEvidenceCollectorTests.test_ready_shell_rolls_back_cli_ready_when_post_provenance_fails
 
   server:
     name: Go server tests

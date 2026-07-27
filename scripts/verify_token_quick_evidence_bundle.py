@@ -36,6 +36,7 @@ import verify_token_quick_raw_state as raw_state_verifier
 import verify_result_jsonl as result_jsonl_verifier
 import verify_token_run_audit as audit_verifier
 import verify_token_quick_time_chain as time_chain_verifier
+import quick_collection_trace_cli as workflow_trace_verifier
 
 
 REPORT_SCHEMA = "aneb-d82-bundle-verification-report"
@@ -118,6 +119,14 @@ TOOL_PATHS = {
     ),
     "result_jsonl_verifier": "scripts/verify_result_jsonl.py",
     "bundle_verifier": "scripts/verify_token_quick_evidence_bundle.py",
+    "ready_publisher": "scripts/publish_token_quick_ready.py",
+    "ready_transaction": "scripts/quick_ready_transaction.py",
+    "quick_evidence_security": "scripts/quick_evidence_security.py",
+    "token_release_verifier": "scripts/verify_token_quick_evidence_release.py",
+    "quick_collection_adapter": "scripts/quick_collection_verifier_adapter.py",
+    "quick_collection_core": "scripts/quick_collection_verifier.py",
+    "workflow_trace_cli": "scripts/quick_collection_trace_cli.py",
+    "workflow_trace_core": "scripts/quick_collection_workflow.py",
     "time_chain_verifier": "scripts/verify_token_quick_time_chain.py",
     "raw_state_verifier": "scripts/verify_token_quick_raw_state.py",
     "device_identity_verifier": "scripts/verify_token_quick_device_identity.py",
@@ -207,6 +216,8 @@ FINAL_KEYS = {
 COMMON_REQUIRED_PAYLOADS = {
     "collector-plan.json",
     "collector-status.json",
+    "workflow-trace.json",
+    "workflow-decision.json",
     "cleanup-report.json",
     "device-preflight.json",
     "device-final-clean.json",
@@ -576,6 +587,29 @@ def strict_json_bytes(raw: bytes, reason: str) -> Any:
 def strict_json_file(path: Path, reason: str) -> tuple[Any, bytes]:
     raw = read_regular(path, maximum=MAX_JSON_BYTES, reason=reason)
     return strict_json_bytes(raw, reason), raw
+
+
+def verify_workflow_trace_evidence(bundle: Path) -> dict[str, Any]:
+    reason = "workflow_trace_evidence_invalid"
+    trace_raw = read_regular(
+        bundle / "workflow-trace.json",
+        maximum=workflow_trace_verifier.MAX_TRACE_BYTES,
+        reason=reason,
+    )
+    decision_raw = read_regular(
+        bundle / "workflow-decision.json",
+        maximum=workflow_trace_verifier.MAX_TRACE_BYTES,
+        reason=reason,
+    )
+    try:
+        expected_decision_raw = workflow_trace_verifier.evaluate_trace_document(
+            trace_raw
+        )
+    except workflow_trace_verifier.CollectorError:
+        fail(reason)
+    if decision_raw != expected_decision_raw:
+        fail(reason)
+    return require_dict(strict_json_bytes(decision_raw, reason), reason)
 
 
 def require_dict(value: Any, reason: str) -> dict[str, Any]:
@@ -2155,6 +2189,13 @@ def verify_bundle(
     status, cleanup, apk_identity = verify_status_and_client_identity(
         bundle, final, android_build_tools_directory
     )
+    workflow_decision = verify_workflow_trace_evidence(bundle)
+    if (
+        workflow_decision.get("publish_eligible") is not True
+        or workflow_decision.get("primary_failure") is not None
+        or workflow_decision.get("cleanup_failures") != []
+    ):
+        fail("workflow_trace_evidence_invalid")
     device_identity = verify_device_identity_binding(
         bundle, final, device_policy_path=device_policy_path
     )

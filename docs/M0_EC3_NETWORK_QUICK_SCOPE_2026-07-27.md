@@ -84,8 +84,8 @@
 | EC3-06 持久化 | 固定 reason、零业务产物、null score/grade、单次终态 | 离线实现完成，聚焦门禁通过 | Room 正反例与 DB 冻结重算 |
 | EC3-07 同-run 审计 | HTTP 分类、UDP 序列、原始窗口与 Profile/runtime 交叉绑定 | 离线实现完成：Network 已接入共用设备机械生命周期后端与独立 CLI，冻结独立 audit scope、busy-sentinel schema、启动操作码、Room 合同包名、远端 marker 与 Profile 三文件；独立 consumer 只接受唯一 D82 marker 后日志及空 logcat stderr，并重算客户端、服务端、交叉绑定三份报告。Room 包名去耦后分段完整门 796+44 及 Android/Go/发布门全部 PASS；直接 CLI 子进程回归与 Network/Realtime 14 模块交叉回归 159/159 PASS | 污染、缺号、跨类别身份、旧日志、stderr、入口不可执行或摘要不一致均拒绝 |
 | EC3-08 离线门 | Kotlin/Go/Python、全仓门禁、secret scan、clean commit | ［KNOWN｜HIGH］最终真机候选为 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6`、GitHub run `30266912724`（7/7）、artifact `8653462642`、APK `e1af670c…db0e`、signer `0936cdcf…f1f3`；独立 provenance PASS，Network/Realtime 交叉回归 189 PASS（1 个既有平台 skip） | 本地门禁、GitHub CI、精确 artifact provenance 与直接 CLI 均通过 |
-| EC3-09 真机正负 | P40 正向 exact signature、负向 `receipt_missing` zero-business | ［KNOWN｜HIGH］完成；同一 `ea9de17` 候选的负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c`、READY `7fa7fb24…0878`，正向 run `019fa3aa-c0d5-7586-b736-ae2fe0a35c78`、READY `14ea8c7f…a83b`；两个独立 READY consumer 均重算通过 | 完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md` |
-| EC3-10 收尾 | P40/E-01 精确清理与计划账本回填 | ［KNOWN｜HIGH］完成；PhoneGuard receipt `a4cecc20…1789`，Launcher/相关 PID/service/accessibility/VPN/tun=0，reverse empty，stayon=7；两次远端锁均释放，共享主机身份/指纹不变 | Launcher/进程/服务/VPN/tun、远端锁及六指纹复核 |
+| EC3-09 真机正负 | P40 正向 exact signature、负向 `receipt_missing` zero-business | ［KNOWN｜HIGH］完成；同一 `ea9de17` 候选的负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c`、READY `7fa7fb24…0878`，权威正向 run `019fa3d7-8ab2-76eb-90bd-182a482b3c7f`、READY `e153ee46…c3837`；两个独立 READY consumer 均重算通过。旧正向本地 bundle 因事后 SQLite checkpoint 污染而废弃 | 完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md` |
+| EC3-10 收尾 | P40/E-01 精确清理与计划账本回填 | ［KNOWN｜HIGH］完成；权威 bundle phone postflight 文件 SHA `2efbbd94…7009`，独立 stable state `27782451…c21198`，Launcher/相关 PID/service/accessibility/VPN/tun=0，reverse empty，stayon=7；远端锁均释放，共享主机身份/指纹不变 | Launcher/进程/服务/VPN/tun、远端锁及六指纹复核 |
 
 ## 7. 停止条件
 

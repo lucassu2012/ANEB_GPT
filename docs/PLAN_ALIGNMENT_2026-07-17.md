@@ -200,8 +200,8 @@
 ## 12. 2026-07-27：M0-EC3 Network Quick 结案
 
 - ［KNOWN｜HIGH］App `0.5.14-codex` / server `0.8.2` / Network Quick `1.2.0` 已在 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6`、CI run `30266912724` 的同一 exact APK 上完成 P40 正负 READY。
-- ［KNOWN｜HIGH］负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c` / READY `7fa7fb24…0878` 在 `receipt_missing` 时业务前拒绝，客户端与服务端业务产物均为零；正向 run `019fa3aa-c0d5-7586-b736-ae2fe0a35c78` / READY `14ea8c7f…a83b` 完成 45/45 应用请求、50/50 UDP 返回，两个独立 release verifier 均 PASS。
-- ［KNOWN｜HIGH］正向 `77/B` 的最终 verdict 是 `INCONCLUSIVE/LOW`、coverage 0.5；容量达标但负载 RTT 和负载时延增量是主要瓶颈，只能形成当前路径的方向性工程结论。
+- ［KNOWN｜HIGH］负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c` / READY `7fa7fb24…0878` 在 `receipt_missing` 时业务前拒绝，客户端与服务端业务产物均为零；权威正向 run `019fa3d7-8ab2-76eb-90bd-182a482b3c7f` / READY `e153ee46…c3837` 完成 44/44 应用请求、50/50 UDP 返回，两个独立 release verifier 均 PASS。首份正向本地 bundle 因事后 SQLite checkpoint 污染而废弃，不再用于验收。
+- ［KNOWN｜HIGH］权威正向 `79/B` 的最终 verdict 是 `INCONCLUSIVE/LOW`、coverage 0.5；容量达标但负载 RTT 和负载时延增量是主要瓶颈，只能形成当前路径的方向性工程结论。
 - ［KNOWN｜HIGH］最终 PhoneGuard、ADB reverse、采集器/代理进程与远端锁均清理；P40 回到 Huawei Launcher，相关 PID/service/accessibility/VPN/tun=0，stayon=7，E-01 身份和共享指纹稳定。
 - ［INFERRED｜HIGH］下一最小阶段为 S2 三族 M0 收敛：通过等价性与故障注入抽取共用机械组件，不重跑或改写三族已经冻结的真机业务证据。
 
