@@ -9,17 +9,17 @@
 
 | 轨道 | 最终应实现的内容 | 当前边界 |
 |---|---|---|
-| P1 手机端 | ANEB App 以真实网络流量模拟 Token 多模态、AI 实时交互和网络综合业务；动态展示关键指标，冻结全量指标、评分、结论与可导出证据 | ［KNOWN｜HIGH］三类引擎、Compose 动态界面、Room v19、strict-v2 结果与导出主链已实现；M0-EC1 Token Quick 与 M0-EC2 AI 实时 Quick 的正负 READY 均已完成；Network Quick 1.2.0 的客户端能力门、ANEB2 同-run UDP 与持久化合同已实现，P40 正负 READY 尚未完成 |
+| P1 手机端 | ANEB App 以真实网络流量模拟 Token 多模态、AI 实时交互和网络综合业务；动态展示关键指标，冻结全量指标、评分、结论与可导出证据 | ［KNOWN｜HIGH］三类引擎、Compose 动态界面、Room v19、strict-v2 结果与导出主链已实现；M0-EC1 Token Quick、M0-EC2 AI 实时 Quick 与 M0-EC3 Network Quick 均已完成正负 READY；三族 Quick 的跨端执行合同已闭环，但正式重复性矩阵尚未完成 |
 | P2 测试服务器 | 提供可审计的 echo、token-sim、download、实时交互、综合网络与受控故障原语；任何共享主机变更都可预检、互斥、回滚和验后复核 | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`，PID=`1295423`，InvocationID=`d975f7c374aa4ef3a490210d0a495e53`；受锁部署后六项共享指纹不变，owned/stage/watchdog 残留为 0，flock 已释放 |
 | P3 标准/业务模型 | 独立模拟 Kimi、DeepSeek、千问等 AI 业务行为，不调用真实 API；以版本化 Profile、模型摘要、校准状态和确定性轨迹供 P1/P2 执行 | ［KNOWN｜HIGH］本地候选为 behavior model 0.3.2、catalog 1.8.0、16 个 Profile、7 个运行包与 3 个 execution evidence contracts；没有真实授权数据时不得冒充 calibrated/validated |
-| Profile 横切机制 | 每类测试冻结业务类型、全量业务/网络指标、质量目标、动态关键指标、评分算法、结论与网络建议；P1/P2/P3 必须使用同一精确合同 | ［KNOWN｜HIGH］Token Quick 1.2.1 与 AI 实时 Quick 1.1.1 已分别完成跨端正负 READY；Network Quick 1.2.0 已完成离线跨端合同、E-01 部署、设备机械 collector、三报告 bundle verifier 与独立 READY 发布/消费链，仍缺 P40 正负实测 READY，不能扩大为已结案 |
+| Profile 横切机制 | 每类测试冻结业务类型、全量业务/网络指标、质量目标、动态关键指标、评分算法、结论与网络建议；P1/P2/P3 必须使用同一精确合同 | ［KNOWN｜HIGH］Token Quick 1.2.1、AI 实时 Quick 1.1.1 与 Network Quick 1.2.0 均已完成跨端正负 READY；三族的业务判定器继续独立，不能把 Quick 结案扩大为所有 Profile、正式基线或外场验收完成 |
 
 ## 2. 总体阶段
 
 | 阶段 | 必须实现的内容 | 完成证据 | 当前判断 |
 |---|---|---|---|
-| M0 契约冻结 | 冻结 Profile/KPI/AQS/结果 Schema、客户端执行要求、服务器能力回执、业务模型输入输出与来源合同 | catalog/schema 自动校验；同一 Profile SHA；正负合同测试；clean commit CI | ［KNOWN｜HIGH］部分完成；M0-EC1 Token Quick 与 M0-EC2 AI 实时 Quick 已完成正负 READY 结案，其他 Profile 的通用跨端执行合同仍未收敛 |
-| M1 核心闭环 | 三类 App 引擎、单节点服务、动态测试、Room/导出、无线证据与重复性门禁可用 | Android/Go 门禁；P40 单节点真机结果；可复算导出 | ［KNOWN｜HIGH］功能闭环大部完成；Token/Realtime Quick 已跨端，Network Quick 待真机，三族正式重复性矩阵尚未完成 |
+| M0 契约冻结 | 冻结 Profile/KPI/AQS/结果 Schema、客户端执行要求、服务器能力回执、业务模型输入输出与来源合同 | catalog/schema 自动校验；同一 Profile SHA；正负合同测试；clean commit CI | ［KNOWN｜HIGH］三类 Quick 窄切片已完成正负 READY；其他 Standard/Recovery Profile 的通用跨端执行合同仍未收敛，因此 M0 整体不是全量完成 |
+| M1 核心闭环 | 三类 App 引擎、单节点服务、动态测试、Room/导出、无线证据与重复性门禁可用 | Android/Go 门禁；P40 单节点真机结果；可复算导出 | ［KNOWN｜HIGH］三族 Quick 单节点跨端闭环已完成，功能闭环大部完成；正式重复性矩阵、无线证据完整性和非开发者连续运行门仍未完成 |
 | M2 外场 MVP | 6–8 点位、忙闲时段、双运营商，生成可比较的体验地图/报告；当前按 PO 决策使用单节点参考端 | 冻结采样计划、有效样本矩阵、独立复算报告 | ［KNOWN｜HIGH］未启动；点位、双运营商、忙闲采样与活动资源仍为外部依赖，三级节点不是当前验收前置 |
 | M3 真实交互 | AI 实时语音/视频仿真、真实业务画像校准、打断/恢复和业务适配器 | 授权观测、留出集、真机边缘条件、适配器合同 | ［KNOWN｜HIGH］WebSocket 仿真轨已完成，真实画像与 RTP/WebRTC/逐帧适配未完成 |
 | M4 产品化 | 专业 UI、安装升级、普通用户测试/结果/分享、隐私安全、正式签名与发布运维 | 非 ADB 用户整链、Release 签名、公开发布包、维护手册 | ［KNOWN｜HIGH］Debug 产品化大部完成；正式签名和公开发布未完成 |
@@ -36,7 +36,7 @@
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
 | S6 M4 发布产品 | 正式签名、安装升级、无 ADB 整链、隐私与友好错误、专业 UI/图标/分享 | 发布运维、监控、回滚、容量和安全手册 | 稳定 spec 发布节奏与兼容矩阵 | Release 包绑定版本、合同和报告格式 | 普通用户独立完成测试/查看/导出；公开 APK 与维护/恢复文档齐全 |
 
-［KNOWN｜HIGH］当前执行位置是 **S1 的第三族 M0-EC3**。S0、E-01、CI 候选及 Network 专用 collector/bundle/READY 离线链已闭合；剩余硬门是 P40 正负 READY 与真机后的最终清理。未通过前不得跳写为 S2 完成。
+［KNOWN｜HIGH］S1 的第三族 M0-EC3 已完成，当前进入 **S2 三族 M0 收敛**。S2 只抽取已由 EC1/EC2/EC3 实证的机械生命周期、发布事务与 provenance 边界；不得合并或弱化三族各自的业务语义判定器。
 
 ## 3. 已结案切片：M0-EC1 Token Quick
 
@@ -67,17 +67,17 @@
 | EC2-08 云端门 | 同提交 0.5.13/0.8.1 provenance 与全绿 CI | ［KNOWN｜HIGH］完成；source `fe60c1c`、CI `30215857444`、APK `3855b972…4664`、server binary `43e7dc16…5197` 精确绑定 |
 | EC2-09～10 跨端结案 | 受保护部署、P40 正负 READY、精确清理与独立复核 | ［KNOWN｜HIGH］完成；正向 run `019fa00a-3e17-7c9d-959b-50aab47c1b91`、负向 run `019fa00d-17f3-71d3-b2d9-af2e9271c96d`；完整证据见 `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md` |
 
-### 3.2 当前执行切片：M0-EC3 网络综合 Quick
+### 3.2 已结案切片：M0-EC3 网络综合 Quick
 
 | 门 | 应实现的内容 | 当前状态 |
 |---|---|---|
 | EC3-01 Profile/runtime | 冻结 Network Quick 1.2.0、四原语、运行顺序、manifest 与 catalog 1.8.0 | ［KNOWN｜HIGH］完成；Profile SHA=`15ae5187…82cc`，runtime SHA=`89812670…2603` |
 | EC3-02～03 P2 | 精确能力白名单、upload、ANEB2 同-run UDP、同端口运行配置和连续 request-entry 审计 | ［KNOWN｜HIGH］完成；E-01 已受保护部署 `aneb-server/0.8.2`，source `33434dc`，binary `62ff966b…c96e` |
 | EC3-04～06 P1 | 首业务包前能力门、授权传输、固定 `receipt_missing`、零业务产物、null score/grade 和单次 Room 终态 | ［KNOWN｜HIGH］离线实现完成；Android/Go/Python 回归和 full quality gate 通过 |
-| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］离线实现完成：Network 接入共用设备机械后端与独立 CLI，冻结独立 audit scope、busy-sentinel schema、启动操作码、Room 合同包名、远端 marker 与 Profile 三文件；独立 consumer 强制三阶段 sentinel、唯一 D82 marker 后日志和空 logcat stderr，再落盘并重算客户端、服务端、交叉绑定三报告。Room 包名去耦后分段完整门 796+44 及 Android/Go/发布门全部 PASS；直接 CLI 子进程与 14 模块交叉回归 159/159 PASS。此状态不等于 P40 READY |
-| EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；当前可执行候选 source `7ac8b9d57e03898fde67f4ca64d3b29e41cf158f`，GitHub run `30247477658` 7/7 全绿，artifact `8645841632`，APK `fc981c4c…3f22`，signer `d810a4be…e8ad`，0.5.14-codex/code46，独立 provenance reason=`ok` |
-| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］未完成；同一候选的 positive/negative 离线 preflight 均返回 0、`external_calls=0`，候选/P40 策略/E-01/binary/固定 CA/工具路径已绑定。当前 `adb devices -l` 为空；换装前 fail closed，卸载/安装/启动/数据库修改均为零 |
-| EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］待 EC3-09；服务器部署阶段自身已残留 0 且 flock 释放，但不能代替 P40 运行后的最终收尾 |
+| EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］完成；Network 独立 consumer 重算客户端、服务端与 cross-bound 三报告，并在最终正负 bundle 中验证同 run/mode/Profile、唯一 D82 marker、空 logcat stderr 和采集新鲜度 |
+| EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；最终真机候选 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6`，CI `30266912724` 7/7，artifact `8653462642`，APK `e1af670c…db0e`，signer `0936cdcf…f1f3`，独立 provenance PASS |
+| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］完成；负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c` / READY `7fa7fb24…0878`，正向 run `019fa3aa-c0d5-7586-b736-ae2fe0a35c78` / READY `14ea8c7f…a83b`；独立 consumer 均 PASS |
+| EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］完成；PhoneGuard receipt `a4cecc20…1789`，Launcher、相关 PID/service/accessibility/VPN/tun=0，reverse empty，stayon=7；远端两次锁释放，共享身份/指纹稳定；完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md` |
 
 ## 4. 已冻结的关键节点
 
@@ -97,8 +97,8 @@
 10. ［KNOWN｜HIGH］M0-EC2 最终 source `fe60c1c` / CI `30215857444` / APK `3855b972…4664`
     的正向与负向 READY 均已由独立 release verifier 通过；完整事实和限制见
     `M0_EC2_REALTIME_QUICK_READY_VALIDATION_2026-07-27.md`。
-11. ［KNOWN｜HIGH］D-90～D-95：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，audit scope、busy-sentinel schema、启动码、远端 marker 与证据 schema 不得隐式继承。Network 独立 consumer 还会拒绝旧日志和非空 logcat stderr。离线 collector/bundle/READY 链已完成，但尚无 P40 正负 READY。
-12. ［KNOWN｜HIGH］M0-EC3 当前可执行 CI 候选为 source `7ac8b9d57e03898fde67f4ca64d3b29e41cf158f` / run `30247477658` / artifact `8645841632` / APK `fc981c4c…3f22` / signer `d810a4be…e8ad`；positive/negative 离线 preflight 均为 0 且零外部调用。P40 因 ADB 未枚举而未产生任何手机变更，不能把 CI/E-01/preflight 成功折算为真机 READY。
+11. ［KNOWN｜HIGH］D-90～D-95：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，audit scope、busy-sentinel schema、启动码、远端 marker 与证据 schema 不得隐式继承。最终正负 READY 已实证该边界。
+12. ［KNOWN｜HIGH］M0-EC3 最终 CI 候选为 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6` / run `30266912724` / artifact `8653462642` / APK `e1af670c…db0e` / signer `0936cdcf…f1f3`；同候选正负 READY、独立 verifier 与最终清理均通过。
 
 ## 5. 本轮完成顺序与下一阶段
 
@@ -108,9 +108,9 @@
 4. ［KNOWN｜HIGH］M0-EC1 Token Quick 窄切片现已结案；不重跑已闭环证据，也不为追求新的部署返回码重复修改 E-01。
 5. ［KNOWN｜HIGH］M0-EC2 AI 实时 Quick 的 EC2-01～10 已结案；正向 `100/A` 仍受
    `INCONCLUSIVE/LOW`、coverage 0.1 限制，不得冒充正式体验基线。
-6. ［KNOWN｜HIGH］当前最小执行切片是 M0-EC3 网络综合 Quick；离线合同、E-01 0.8.2、CI provenance 与证据绑定适配层已完成，不重跑 EC1/EC2。
-7. ［INFERRED｜HIGH］ADB 恢复前的实现顺序是：完成 Network 设备生命周期 collector → bundle/READY publisher/consumer → 故障注入与全仓门禁。ADB 恢复后立即切换到：新鲜 PhoneGuard → Room 备份 → 受控换装 → 正向/负向 → 原包/Room 恢复 → 精确清理。
-8. ［KNOWN｜HIGH］M0-EC3 完成后进入 S2：把三族已经证明的 phone/remote/provenance/READY 机械生命周期抽成共用组件，但保留 Token/Realtime/Network 各自的业务语义判定器。
+6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；正向 `77/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
+7. ［KNOWN｜HIGH］当前最小执行切片进入 S2：把三族已经证明的 phone/remote/provenance/READY 机械生命周期抽成共用组件，但保留 Token/Realtime/Network 各自的业务语义判定器。
+8. ［INFERRED｜HIGH］S2 应先做等价性/故障注入和三族回归，再替换现有入口；不重跑已冻结的 EC1/EC2/EC3 真机证据来证明纯机械重构。
 9. ［KNOWN｜HIGH］A6 审核交接当前关闭；不得打开、复制或上传 reviewer HTML、secret、seed、
    private ZIP、sealed binding 或旧 material/template，也不得运行 materialization/qualification。
 
