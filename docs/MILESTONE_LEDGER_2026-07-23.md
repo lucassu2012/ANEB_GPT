@@ -30,7 +30,7 @@
 |---|---|---|---|---|---|
 | S0 契约单元 | 每个测试族先实现业务前能力门、单次终态、Room/strict-v2 与动态指标数据源 | 注册精确 Profile/原语、运行配置和 request-entry 审计 | 发布版本化 Profile/runtime/model，保留来源与校准状态 | 冻结业务类型、全量指标、目标、主动态指标、评分、结论和网络建议 | 正向 exact signature + 负向固定机器原因和零业务产物；本地/CI 全绿 |
 | S1 跨端 Quick | 安装精确 CI APK，在 P40 跑一次正向与一次受控负向 | 受锁部署精确 server binary，冻结同-run 窗口与共享指纹 | 提供同 SHA 的运行包，不把 hypothesis 冒充 calibrated | 独立 DB/audit/bundle/release consumer 重算，最后原子提交 READY | 同一 run/APK/server/Profile；正负 READY；PhoneGuard 与远端验后清理 |
-| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］S2-V4b 已把 Token READY marker consumer 接入中立合同并保持三族兼容；Token manifest/report/COMPLETE、publisher 与业务重算仍隔离。下一门为 digest/COMPLETE 纯机械等价迁移 | EC1、EC2、EC3 全部结案；Token 完整 consumer/publisher、三族全门禁与 CI 尚待完成 |
+| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］S2-V4c 已把 Token READY marker consumer 与三族 COMPLETE 字节编码接入中立合同；Token digest/manifest/report、publisher 与业务重算仍隔离。下一门为 digest 纯机械等价迁移 | EC1、EC2、EC3 全部结案；Token 完整 consumer/publisher、三族全门禁与 CI 尚待完成 |
 | S3 M1 可重复核心 | 非开发者可连续执行三类测试；无线证据、1Hz 动态刷新、历史/报告可复算 | 单节点稳定运行、合成弱网和恢复可重复 | hypothesis 参数与确定性轨迹版本化 | 同条件重复性、样本有效性和置信度门 | P40 重复样本；关键指标 CV/完整性门；导出后独立复算一致 |
 | S4 M2 外场 MVP | 点位、运营商、忙闲、网络制式矩阵采集与地图/报告 | 当前单节点参考端保持稳定；若 PO 恢复多级节点再扩展 | 冻结外场采样计划和对照元数据 | 报告只陈述采样覆盖内结论，不把单点扩写为城市基线 | 6–8 点位×忙闲×运营商有效样本矩阵与可审计热力卡 |
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
@@ -102,6 +102,7 @@
 13. ［KNOWN｜HIGH］D-98～D-101：Realtime/Network 的 READY 事务、collection verifier 原语、高层 Adapter 与证据根安全已迁入业务族中立模块；两族业务 plan/status/run 与 cross-evidence 判定仍隔离。Token 尚未接入 Adapter，S2 不得标记完成。
 14. ［KNOWN｜HIGH］D-102 / S2-V4a：共享 READY 合同已能精确表达 Token 的 `execution_mode` 方言，同时保留 Realtime/Network 默认 `mode` 兼容面；这只是 Token Adapter 的安全切口，不是 Token publisher/consumer 迁移完成。
 15. ［KNOWN｜HIGH］D-103 / S2-V4b：Token release consumer 的 READY marker key/identity/binding/timestamp 机械校验已接入 family-neutral 合同；四模块回归与 refactor 后复跑均为 46/46（4 项平台跳过）。Token manifest/report/COMPLETE、publisher、外部工具闭包与业务重算仍保持本族实现，S2 尚未完成。
+16. ［KNOWN｜HIGH］D-104 / S2-V4c：三族 COMPLETE marker 已由同一确定性编码器表达，Token 通过显式 manifest leaf 保留历史格式和失败码；adapter + Token release + Realtime/Network collection 回归 56/56（4 项平台跳过）。摘要、manifest/report、publisher 与业务重算仍未迁移。
 
 ## 5. 本轮完成顺序与下一阶段
 

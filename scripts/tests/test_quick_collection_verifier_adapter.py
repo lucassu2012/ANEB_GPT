@@ -63,6 +63,25 @@ class QuickCollectionVerifierAdapterTests(unittest.TestCase):
                 marker="NETWORK_COMPLETE",
             )
 
+    def test_complete_marker_can_bind_an_explicit_manifest_leaf(self) -> None:
+        marker = adapter_module.build_complete_marker(
+            collection="collection",
+            run_id="019fa3d7-8ab2-76eb-90bd-182a482b3c7f",
+            manifest_sha256="a" * 64,
+            marker="ANEB_D82_COMPLETE",
+            manifest_leaf="evidence-manifest.final.json",
+        )
+
+        self.assertEqual(
+            b"ANEB_D82_COMPLETE collection_id=collection "
+            b"run_id=019fa3d7-8ab2-76eb-90bd-182a482b3c7f "
+            b"manifest=evidence-manifest.final.json "
+            + b"manifest_sha256="
+            + b"a" * 64
+            + b"\n",
+            marker,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

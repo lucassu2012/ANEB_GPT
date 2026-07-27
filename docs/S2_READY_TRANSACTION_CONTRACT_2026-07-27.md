@@ -96,3 +96,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］Token 自身仍额外验证 collection stamp 的真实日历合法性；manifest、verification report、COMPLETE、文件摘要、外部工具闭包、正负业务语义和 publisher 均未迁入共享层。
 - ［KNOWN｜HIGH］TDD 证据：结构 RED 唯一为 `TOKEN_READY_CONTRACT` 缺失；GREEN 1/1。共享 core + Token/Realtime/Network release 回归 46/46（另有 4 项平台相关 skip），删除两条已无引用的 Token 重复正则后同一套件再次 46/46；每次测试前后匹配残留进程均为 0。
 - ［INFERRED｜HIGH］下一切片只抽取 digest/COMPLETE 纯机械分类，并继续用 Token 故障注入套件锁定历史失败码；在 publisher 与完整 consumer 等价迁移、三族完整门禁和 CI 全绿前，S2 仍不得标记完成。
+
+### S2-V4c 中间里程碑：三族 COMPLETE 确定性编码
+
+- ［KNOWN｜HIGH］Realtime/Network 与 Token 的 COMPLETE 都绑定 collection、run 和 manifest SHA；唯一格式差异是 Token 还冻结 `manifest=evidence-manifest.final.json`。中立 `build_complete_marker` 以可选 `manifest_leaf` 明确表达该差异，不用业务族分支猜格式。
+- ［KNOWN｜HIGH］既有 Realtime/Network `verify_complete` 已改为调用该编码器；Token release consumer 也改用相同编码器后做字节全等，仍保留本族 `release_complete_mismatch`。读取上限、路径安全、manifest/report 解析和所有业务判定均未移动。
+- ［KNOWN｜HIGH］TDD 证据：RED 唯一为公共编码器不存在；GREEN 1/1。adapter + Token release + Realtime/Network collection 兼容回归 56/56（另有 4 项平台相关 skip），测试前后匹配残留进程为 0。
+- ［KNOWN｜HIGH］本里程碑只收敛 COMPLETE marker 的确定性字节构造；Token digest、manifest、verification report、identity closure、外部工具闭包、publisher 和业务重算仍由 Token 自身负责。
+- ［INFERRED｜HIGH］下一切片是摘要绑定的业务族中立分类与 Token 历史 reason-code 映射；在故障注入等价性、完整三族门禁和 clean CI 通过前，S2 仍不得标记完成。

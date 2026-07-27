@@ -689,9 +689,29 @@ def verify_evidence_root_security(bundle: Path, validator: Callable[[Path, dict[
     return core.sha256(raw)
 
 
+def build_complete_marker(
+    *,
+    collection: str,
+    run_id: str,
+    manifest_sha256: str,
+    marker: str,
+    manifest_leaf: str | None = None,
+) -> bytes:
+    manifest_binding = "" if manifest_leaf is None else f"manifest={manifest_leaf} "
+    return (
+        f"{marker} collection_id={collection} run_id={run_id} "
+        f"{manifest_binding}manifest_sha256={manifest_sha256}\n"
+    ).encode("ascii")
+
+
 def verify_complete(bundle: Path, *, collection: str, run_id: str, manifest_sha256: str, marker: str) -> None:
     complete = core.read_regular(bundle / "COMPLETE", maximum=4096, reason="complete_marker_invalid")
-    expected = f"{marker} collection_id={collection} run_id={run_id} manifest_sha256={manifest_sha256}\n".encode("ascii")
+    expected = build_complete_marker(
+        collection=collection,
+        run_id=run_id,
+        manifest_sha256=manifest_sha256,
+        marker=marker,
+    )
     if complete != expected:
         core.fail("complete_marker_mismatch")
 
@@ -703,5 +723,6 @@ __all__ = (
     "DeviceIdentityContract", "MAX_APK_BYTES",
     "MAX_JSON_BYTES", "MAX_MANIFEST_BYTES", "MAX_TEXT_BYTES", "PLAN_KEYS",
     "PhoneStateContract", "QuickCollectionVerifierAdapter", "RUN_RECEIPT_KEYS",
+    "build_complete_marker",
     "STATUS_KEYS", "phone_state_sha256", "verify_complete",
 )

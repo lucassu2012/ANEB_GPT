@@ -14,8 +14,10 @@ import sys
 from typing import Any, NoReturn
 
 if __package__:
+    from scripts import quick_collection_verifier_adapter as collection_adapter
     from scripts import quick_ready_transaction as ready_transaction
 else:
+    import quick_collection_verifier_adapter as collection_adapter
     import quick_ready_transaction as ready_transaction
 
 
@@ -582,16 +584,14 @@ def verify_release(ready_path: str | os.PathLike[str]) -> dict[str, object]:
     _validate_final_manifest(manifest, marker)
     _validate_bundle_report(report, marker, manifest_sha)
     _validate_identity_closure(manifest, report)
-    complete_re = re.compile(
-        rb"^ANEB_D82_COMPLETE collection_id="
-        + re.escape(collection.encode("ascii"))
-        + rb" run_id="
-        + re.escape(marker["run_id"].encode("ascii"))
-        + rb" manifest=evidence-manifest\.final\.json manifest_sha256="
-        + re.escape(manifest_sha.encode("ascii"))
-        + rb"\n$"
+    expected_complete = collection_adapter.build_complete_marker(
+        collection=collection,
+        run_id=marker["run_id"],
+        manifest_sha256=manifest_sha,
+        marker="ANEB_D82_COMPLETE",
+        manifest_leaf="evidence-manifest.final.json",
     )
-    if complete_re.fullmatch(complete_raw) is None:
+    if complete_raw != expected_complete:
         fail("release_complete_mismatch")
 
     return {
