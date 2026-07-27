@@ -113,3 +113,12 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据：RED 唯一为 `publish_preverified_ready` 不存在；成功 GREEN 1/1；成功+KeyboardInterrupt 回滚 2/2；共享 core + Realtime/Network release 20/20。每次 fresh pre/post 扫描匹配残留均为 0。
 - ［KNOWN｜HIGH］Token PowerShell collector 尚未调用该入口，工具 provenance 也尚未加入 Python publisher/release verifier；因此 Token publisher 仍未迁移，S2 仍未完成。
 - ［INFERRED｜HIGH］下一切片是独立 Token publisher CLI + 工具身份闭包，再以最小 PowerShell 薄壳替换 `Publish-EvidenceReleaseReady` 的重复事务；必须先锁定旧 marker 字节与 failure/rollback 等价性。
+
+### S2-V4e 中间里程碑：Token Python publisher Adapter
+
+- ［KNOWN｜HIGH］`scripts/publish_token_quick_ready.py` 已把 Token 的既有 verification report 接到中立 `publish_preverified_ready`，并固定使用业务族中立私有根验证与真实 Token release consumer postcheck；它不会再次运行 collection verifier，也不会改写 report。
+- ［KNOWN｜HIGH］首次端到端 GREEN 因 `release_report_invalid_noncanonical` fail closed。字节差异证明 Token 历史 report 使用冻结的 schema 插入顺序，而共享 Realtime/Network report 使用 sorted-key canonical JSON；两者长度与换行一致，但键序不同。
+- ［KNOWN｜HIGH］没有因此删除全局 canonical 门。`QuickReadyContract.preverified_report_canonical` 默认仍为 `true`；只有 `TOKEN_READY_CONTRACT` 显式冻结为 `false`。Token report 仍执行 UTF-8、重复 key、NaN、对象类型、大小、schema/version/status/reason/collection 检查，并最终由完整 Token release consumer 重验。
+- ［KNOWN｜HIGH］TDD 证据：Adapter RED 唯一为模块不存在；首次 GREEN 精确暴露历史键序；修复后 Adapter 端到端 1/1，默认严格性与 Token 合同护栏 2/2，共享 core + 完整 Token release 38/38（4 项平台相关跳过）。每轮 fresh pre/post 匹配残留均为 0。
+- ［KNOWN｜HIGH］当前只建立 Python 调用面；Token PowerShell `Publish-EvidenceReleaseReady`、CLI 机器输出、工具 provenance/identity closure 尚未迁移。因此不得把 S2-V4e 扩写为 Token publisher 全量迁移或 S2 完成。
+- ［INFERRED｜HIGH］下一切片先冻结 CLI 的成功/失败机器字节与 reason code，再把 PowerShell 收敛为薄壳并补齐工具闭包；之后才进入三族完整质量门和 clean CI。

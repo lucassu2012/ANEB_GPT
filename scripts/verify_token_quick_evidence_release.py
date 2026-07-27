@@ -63,6 +63,7 @@ TOKEN_READY_CONTRACT = ready_transaction.QuickReadyContract(
     collection_report_version=BUNDLE_REPORT_VERSION,
     mode_field="execution_mode",
     mode_values=EXECUTION_MODES,
+    preverified_report_canonical=False,
 )
 READY_KEYS = ready_transaction.ready_keys(TOKEN_READY_CONTRACT)
 FINAL_MANIFEST_KEYS = frozenset(

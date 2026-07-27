@@ -293,11 +293,33 @@ class TokenQuickEvidenceReleaseVerifierTests(unittest.TestCase):
 
         contract = verifier.TOKEN_READY_CONTRACT
         self.assertEqual("execution_mode", contract.mode_field)
+        self.assertFalse(contract.preverified_report_canonical)
         self.assertEqual(
             frozenset({"positive", "negative_receipt_missing"}),
             contract.mode_values,
         )
         self.assertEqual(transaction.ready_keys(contract), verifier.READY_KEYS)
+
+    def test_token_adapter_publishes_preverified_report_and_revalidates(self) -> None:
+        from scripts import publish_token_quick_ready as publisher
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ReleaseFixture(Path(temporary))
+            fixture.ready.unlink()
+            report_raw = fixture.report.read_bytes()
+
+            result = publisher.publish_token_ready(
+                fixture.bundle,
+                fixture.report,
+                root_verifier=lambda _: None,
+            )
+            completed = fixture.run()
+
+            self.assertEqual(report_raw, fixture.report.read_bytes())
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("pass", result["status"])
+        self.assertEqual(COLLECTION_ID, result["collection_id"])
 
     def test_accepts_digest_bound_ready_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

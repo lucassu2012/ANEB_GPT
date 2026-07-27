@@ -190,6 +190,36 @@ class QuickReadyTransactionTests(unittest.TestCase):
             self.assertFalse((root / f"{COLLECTION}.READY.json").exists())
             self.assertFalse((root / f"{COLLECTION}.ready.partial").exists())
 
+    def test_default_contract_rejects_noncanonical_preverified_report(self) -> None:
+        contract = self.contract()
+        adapter = FakeQuickAdapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{COLLECTION}.complete"
+            bundle.mkdir()
+            report_path = root / f"{COLLECTION}.verification.json"
+            report_path.write_text(
+                '{"schema_version":"1.0.0","schema":'
+                '"aneb-test-quick-collection-verification"}\n',
+                encoding="utf-8",
+                newline="",
+            )
+
+            with self.assertRaisesRegex(
+                QuickReadyFailure,
+                "release_report_invalid_noncanonical",
+            ):
+                transaction.publish_preverified_ready(
+                    bundle,
+                    report_path,
+                    contract=contract,
+                    adapter=adapter,
+                    release_postcheck=lambda _: {},
+                )
+
+            self.assertTrue(report_path.is_file())
+            self.assertFalse((root / f"{COLLECTION}.READY.json").exists())
+
     def test_operator_interrupt_propagates_after_new_artifacts_are_removed(self) -> None:
         adapter = FakeQuickAdapter()
         with tempfile.TemporaryDirectory() as temporary:

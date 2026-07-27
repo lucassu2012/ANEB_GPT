@@ -63,6 +63,7 @@ class QuickReadyContract:
     collection_report_version: str
     mode_field: str = "mode"
     mode_values: frozenset[str] = frozenset({"positive", "negative"})
+    preverified_report_canonical: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -77,6 +78,7 @@ class QuickReadyContract:
                 or re.fullmatch(r"[a-z][a-z0-9_]*", value) is None
                 for value in self.mode_values
             )
+            or not isinstance(self.preverified_report_canonical, bool)
         ):
             raise ValueError("quick_ready_mode_contract_invalid")
 
@@ -256,7 +258,11 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _load_canonical_json(
-    path: Path, *, maximum: int, reason: str
+    path: Path,
+    *,
+    maximum: int,
+    reason: str,
+    require_canonical: bool = True,
 ) -> tuple[dict[str, object], bytes]:
     raw = _read_regular(path, maximum=maximum, reason=reason)
     try:
@@ -267,7 +273,9 @@ def _load_canonical_json(
         )
     except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError):
         fail(reason)
-    if not isinstance(value, dict) or _canonical_json(value) != raw:
+    if not isinstance(value, dict) or (
+        require_canonical and _canonical_json(value) != raw
+    ):
         fail(f"{reason}_noncanonical")
     return value, raw
 
@@ -483,6 +491,7 @@ def publish_preverified_ready(
         report,
         maximum=32 * 1024 * 1024,
         reason="release_report_invalid",
+        require_canonical=contract.preverified_report_canonical,
     )
     if (
         report_value.get("schema") != contract.collection_report_schema
