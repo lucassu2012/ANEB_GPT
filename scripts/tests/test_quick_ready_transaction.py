@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from scripts.quick_ready_transaction import (
+    QuickReadyFailure,
     QuickReadyContract,
     publish_ready,
 )
@@ -34,6 +35,21 @@ class FakeQuickAdapter:
             "collection_id": COLLECTION,
             "run_id": RUN_ID,
             "mode": "positive",
+            "manifest_sha256": "b" * 64,
+        }
+
+
+class FakeTokenModeAdapter(FakeQuickAdapter):
+    def verify_collection(self, bundle: Path) -> dict[str, object]:
+        self.verify_calls += 1
+        return {
+            "schema": "aneb-test-quick-collection-verification",
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "reason_code": "ok",
+            "collection_id": COLLECTION,
+            "run_id": RUN_ID,
+            "execution_mode": "negative_receipt_missing",
             "manifest_sha256": "b" * 64,
         }
 
@@ -119,6 +135,103 @@ class QuickReadyTransactionTests(unittest.TestCase):
                     contract=self.contract(),
                     adapter=InterruptedAdapter(),
                 )
+
+    def test_supports_family_specific_mode_field_and_values(self) -> None:
+        base = self.contract()
+        contract = QuickReadyContract(
+            collection_pattern=base.collection_pattern,
+            ready_pattern=base.ready_pattern,
+            release_schema=base.release_schema,
+            release_version=base.release_version,
+            verification_schema=base.verification_schema,
+            verification_version=base.verification_version,
+            publication_schema=base.publication_schema,
+            collection_report_schema=base.collection_report_schema,
+            collection_report_version=base.collection_report_version,
+            mode_field="execution_mode",
+            mode_values=frozenset({"positive", "negative_receipt_missing"}),
+        )
+        adapter = FakeTokenModeAdapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{COLLECTION}.complete"
+            bundle.mkdir()
+
+            result = publish_ready(bundle, contract=contract, adapter=adapter)
+
+            marker = json.loads(
+                (root / f"{COLLECTION}.READY.json").read_text(encoding="utf-8")
+            )
+
+        self.assertNotIn("mode", marker)
+        self.assertEqual(
+            "negative_receipt_missing",
+            marker["execution_mode"],
+        )
+        self.assertNotIn("mode", result)
+        self.assertEqual(
+            "negative_receipt_missing",
+            result["execution_mode"],
+        )
+
+    def test_rejects_a_mode_field_that_collides_with_ready_identity(self) -> None:
+        base = self.contract()
+        with self.assertRaisesRegex(
+            ValueError,
+            "quick_ready_mode_contract_invalid",
+        ):
+            QuickReadyContract(
+                collection_pattern=base.collection_pattern,
+                ready_pattern=base.ready_pattern,
+                release_schema=base.release_schema,
+                release_version=base.release_version,
+                verification_schema=base.verification_schema,
+                verification_version=base.verification_version,
+                publication_schema=base.publication_schema,
+                collection_report_schema=base.collection_report_schema,
+                collection_report_version=base.collection_report_version,
+                mode_field="schema",
+            )
+
+    def test_rejects_an_unapproved_family_mode_and_rolls_back(self) -> None:
+        base = self.contract()
+        contract = QuickReadyContract(
+            collection_pattern=base.collection_pattern,
+            ready_pattern=base.ready_pattern,
+            release_schema=base.release_schema,
+            release_version=base.release_version,
+            verification_schema=base.verification_schema,
+            verification_version=base.verification_version,
+            publication_schema=base.publication_schema,
+            collection_report_schema=base.collection_report_schema,
+            collection_report_version=base.collection_report_version,
+            mode_field="execution_mode",
+            mode_values=frozenset({"positive", "negative_receipt_missing"}),
+        )
+
+        class InvalidModeAdapter(FakeTokenModeAdapter):
+            def verify_collection(self, bundle: Path) -> dict[str, object]:
+                report = super().verify_collection(bundle)
+                report["execution_mode"] = "negative_unknown"
+                return report
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{COLLECTION}.complete"
+            bundle.mkdir()
+            with self.assertRaisesRegex(
+                QuickReadyFailure,
+                "release_ready_contract_invalid",
+            ):
+                publish_ready(
+                    bundle,
+                    contract=contract,
+                    adapter=InvalidModeAdapter(),
+                )
+
+            self.assertTrue(bundle.is_dir())
+            self.assertFalse((root / f"{COLLECTION}.verification.json").exists())
+            self.assertFalse((root / f"{COLLECTION}.READY.json").exists())
 
 
 if __name__ == "__main__":

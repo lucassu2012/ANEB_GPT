@@ -100,6 +100,7 @@
 11. ［KNOWN｜HIGH］D-90～D-95：Network Quick 使用 ANEB2 绑定 run UUID；UDP 在回显前进入同一 request-entry FIFO；Room、服务端审计与 App 终态必须同 run/mode/Profile 交叉绑定；三类 Quick 只共享机械生命周期顺序，audit scope、busy-sentinel schema、启动码、远端 marker 与证据 schema 不得隐式继承。最终正负 READY 已实证该边界。
 12. ［KNOWN｜HIGH］M0-EC3 最终 CI 候选为 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6` / run `30266912724` / artifact `8653462642` / APK `e1af670c…db0e` / signer `0936cdcf…f1f3`；同候选正负 READY、独立 verifier 与最终清理均通过。
 13. ［KNOWN｜HIGH］D-98～D-101：Realtime/Network 的 READY 事务、collection verifier 原语、高层 Adapter 与证据根安全已迁入业务族中立模块；两族业务 plan/status/run 与 cross-evidence 判定仍隔离。Token 尚未接入 Adapter，S2 不得标记完成。
+14. ［KNOWN｜HIGH］D-102 / S2-V4a：共享 READY 合同已能精确表达 Token 的 `execution_mode` 方言，同时保留 Realtime/Network 默认 `mode` 兼容面；这只是 Token Adapter 的安全切口，不是 Token publisher/consumer 迁移完成。
 
 ## 5. 本轮完成顺序与下一阶段
 

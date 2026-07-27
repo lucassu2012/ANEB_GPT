@@ -20,7 +20,7 @@ import stat
 from typing import Any, Callable, NoReturn, Protocol
 
 
-READY_KEYS = frozenset(
+READY_BASE_KEYS = frozenset(
     {
         "schema",
         "schema_version",
@@ -28,7 +28,6 @@ READY_KEYS = frozenset(
         "reason_code",
         "collection_id",
         "run_id",
-        "mode",
         "bundle_leaf",
         "manifest_sha256",
         "verification_report_leaf",
@@ -36,6 +35,9 @@ READY_KEYS = frozenset(
         "committed_at_utc",
     }
 )
+# Public compatibility surface for the existing Realtime/Network wrappers.
+# Family-specific contracts derive their key set from READY_BASE_KEYS instead.
+READY_KEYS = frozenset((*READY_BASE_KEYS, "mode"))
 RUN_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -59,6 +61,24 @@ class QuickReadyContract:
     publication_schema: str
     collection_report_schema: str
     collection_report_version: str
+    mode_field: str = "mode"
+    mode_values: frozenset[str] = frozenset({"positive", "negative"})
+
+    def __post_init__(self) -> None:
+        if (
+            re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.mode_field) is None
+            or self.mode_field in READY_BASE_KEYS
+            or not isinstance(self.mode_values, frozenset)
+            or not self.mode_values
+            or any(
+                not isinstance(value, str)
+                or not value
+                or len(value) > 64
+                or re.fullmatch(r"[a-z][a-z0-9_]*", value) is None
+                for value in self.mode_values
+            )
+        ):
+            raise ValueError("quick_ready_mode_contract_invalid")
 
 
 class QuickReadyAdapter(Protocol):
@@ -259,13 +279,13 @@ def verify_release(
     )
     collection = leaf_match.group("collection")
     if (
-        set(marker) != set(READY_KEYS)
+        set(marker) != {*READY_BASE_KEYS, contract.mode_field}
         or marker.get("schema") != contract.release_schema
         or marker.get("schema_version") != contract.release_version
         or marker.get("status") != "ready"
         or marker.get("reason_code") != "ok"
         or marker.get("collection_id") != collection
-        or marker.get("mode") not in {"positive", "negative"}
+        or marker.get(contract.mode_field) not in contract.mode_values
         or not isinstance(marker.get("run_id"), str)
         or RUN_ID_RE.fullmatch(str(marker["run_id"])) is None
         or marker.get("bundle_leaf") != f"{collection}.complete"
@@ -302,7 +322,7 @@ def verify_release(
         or report.get("reason_code") != "ok"
         or report.get("collection_id") != collection
         or report.get("run_id") != marker["run_id"]
-        or report.get("mode") != marker["mode"]
+        or report.get(contract.mode_field) != marker[contract.mode_field]
         or report.get("manifest_sha256") != marker["manifest_sha256"]
     ):
         fail("release_report_binding_mismatch")
@@ -321,7 +341,7 @@ def verify_release(
         "reason_code": "ok",
         "collection_id": collection,
         "run_id": marker["run_id"],
-        "mode": marker["mode"],
+        contract.mode_field: marker[contract.mode_field],
         "bundle_leaf": marker["bundle_leaf"],
         "manifest_sha256": marker["manifest_sha256"],
         "verification_report_leaf": marker["verification_report_leaf"],
@@ -373,7 +393,7 @@ def publish_ready(
             "reason_code": "ok",
             "collection_id": collection,
             "run_id": report["run_id"],
-            "mode": report["mode"],
+            contract.mode_field: report[contract.mode_field],
             "bundle_leaf": bundle.name,
             "manifest_sha256": report["manifest_sha256"],
             "verification_report_leaf": report_path.name,
@@ -407,7 +427,7 @@ def publish_ready(
             "reason_code": "ok",
             "collection_id": collection,
             "run_id": report["run_id"],
-            "mode": report["mode"],
+            contract.mode_field: report[contract.mode_field],
             "verification_report_path": str(report_path),
             "verification_report_sha256": marker["verification_report_sha256"],
             "ready_path": str(ready_path),

@@ -80,3 +80,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据为：neutral security RED 仅因模块不存在；compatibility 3/3、legacy+neutral security 9/9、adapter 结构 4/4、共享 core+adapter+Realtime/Network collection 30/30 PASS；最终 security/collector/双族 collection/release 生产链组合 97/97 PASS。所有执行窗口结束后匹配测试残留进程均为 0。
 - ［KNOWN｜HIGH］本里程碑没有修改冻结证据、Profile、KPI、评分、门限或真机/服务器状态，也没有把 Realtime/Network 的业务判定器并入共享模块。
 - ［INFERRED｜HIGH］下一切片是 Token compatibility fixture 与 Token Adapter；在 Token 迁移和三族完整门禁/CI 通过前，仍不得宣称 S2 三族 verifier 全部收敛。
+
+### S2-V4a 中间里程碑：Token mode 方言兼容切口
+
+- ［KNOWN｜HIGH］Token 的 READY/verification 使用 `execution_mode={positive,negative_receipt_missing}`，Realtime/Network 使用 `mode={positive,negative}`；把前者强行改名会破坏已冻结证据，把后者放宽为任意字符串会削弱既有门禁。
+- ［KNOWN｜HIGH］`QuickReadyContract` 现显式冻结 `mode_field` 与不可变 `mode_values`。默认值保持原 Realtime/Network 合同；Token 兼容夹具可选择 `execution_mode` 与精确两值。mode key 与 READY 身份字段碰撞、值不在白名单时均 fail closed，发布失败会回滚新建 report/READY。
+- ［KNOWN｜HIGH］TDD 证据：RED 唯一错误为构造器尚不接受 Token mode 合同；GREEN/安全用例 6/6 PASS。首次双族回归在加载期发现公开 `READY_KEYS` 兼容常量被改名，未执行测试逻辑；恢复默认兼容面后 core + Realtime/Network release 18/18 PASS，前后测试残留为 0。
+- ［KNOWN｜HIGH］本切口只证明共享 READY 事务能无损表达 Token 的 mode 方言；Token publisher/consumer 仍未接入共享事务，不能标记 Token Adapter 或 S2 完成。
+- ［INFERRED｜HIGH］下一步以现有 Token release 故障注入套件作等价性夹具，抽取可配置的 READY/digest/COMPLETE 机械层；必须保留 Token 的精确 reason code、外部工具闭包和正负业务重算，不得用无操作 adapter 冒充迁移。
