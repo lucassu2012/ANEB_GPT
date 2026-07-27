@@ -56,3 +56,11 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 2. Realtime/Network 显式 Adapter 与故障注入；
 3. Token compatibility fixture → Token Adapter；
 4. 三族完整回归与 clean CI，之后才替换更多入口。
+
+### S2-V1 中间里程碑：verifier primitives
+
+- ［KNOWN｜HIGH］`scripts/quick_collection_verifier.py` 已成为不导入任何业务家族的底层 verifier 原语模块，拥有 regular-file/reparse/race 防护、canonical JSON、摘要、相对路径、UUID、HTTPS endpoint 与 Android component 规范化。
+- ［KNOWN｜HIGH］Realtime 已从该模块取得上述原语；Network 的上述原语不再从 Realtime 继承。新模块 + Realtime + Network 三模块聚焦回归 26/26 PASS。
+- ［KNOWN｜HIGH］release 与跨族补跑再验 16/16 PASS，合计聚焦/跨族 42/42 PASS。当前快照的完整质量门运行 807 项：790 PASS、16 SKIP、唯一 ERROR 是既有 Token evidence verifier 子进程超过固定 120 秒；该唯一测试随后单独复现 1/1 PASS（13.924 秒）。因此本轮完整门禁不得记为 PASS，也没有证据把超时归因于 S2-V1。
+- ［KNOWN｜HIGH］Network 仍从 Realtime 取得 candidate、manifest、phone、remote、lock、serverinfo 与 COMPLETE 等高层机械函数；因此 S2-V1 只是可审计的依赖切口，不等于第 1 步“中立 collector/verifier mechanics”完成。
+- ［INFERRED｜HIGH］下一提交应把这些高层函数改为由显式 `QuickCollectionVerifierAdapter` 配置合同驱动；只有 Network 文件不再 import Realtime verifier 之后，才关闭 verifier 半边的反向依赖。

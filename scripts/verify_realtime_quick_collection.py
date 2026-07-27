@@ -8,17 +8,15 @@ does not contact the phone, E-01, GitHub, or any other network endpoint.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import stat
 import sys
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable
 import urllib.parse
-import uuid
 
 SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
 if SCRIPT_DIRECTORY not in sys.path:
@@ -26,10 +24,12 @@ if SCRIPT_DIRECTORY not in sys.path:
 
 if __package__:
     from scripts import (
+        quick_collection_verifier as verifier_core,
         verify_realtime_evidence_security as evidence_security,
         verify_realtime_quick_evidence_bundle as cross_verifier,
     )
 else:
+    import quick_collection_verifier as verifier_core
     import verify_realtime_evidence_security as evidence_security
     import verify_realtime_quick_evidence_bundle as cross_verifier
 
@@ -63,27 +63,16 @@ MAX_JSON_BYTES = 32 * 1024 * 1024
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_APK_BYTES = 256 * 1024 * 1024
 MAX_TEXT_BYTES = 16 * 1024 * 1024
-REPARSE_ATTRIBUTE = 0x400
 
 COLLECTION_RE = re.compile(
     r"^(?P<collection>m0-ec2-realtime-"
     r"(?P<stamp>[0-9]{8}T[0-9]{6}Z)-[0-9a-f]{32})\.complete$"
 )
-RUN_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
-UUID4_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+RUN_ID_RE = verifier_core.RUN_ID_RE
+UUID4_RE = verifier_core.UUID4_RE
+SHA256_RE = verifier_core.SHA256_RE
+COMMIT_RE = verifier_core.COMMIT_RE
 REMOTE_CURSOR_RE = re.compile(r"^[A-Za-z0-9;:_.=-]{10,1024}$")
-COMPONENT_RE = re.compile(
-    r"(?P<package>[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)"
-    r"/(?P<activity>[A-Za-z0-9_.$]+)"
-)
 TUNNEL_INTERFACE_RE = re.compile(
     r"^(?:tun[0-9]*|tap[0-9]*|wg[0-9A-Za-z_.-]*|"
     r"wireguard[0-9A-Za-z_.-]*)$",
@@ -213,144 +202,17 @@ RUN_RECEIPT_KEYS = frozenset(
 )
 
 
-class CollectionVerificationFailure(Exception):
-    def __init__(self, reason_code: str) -> None:
-        super().__init__(reason_code)
-        self.reason_code = reason_code
-
-
-def fail(reason_code: str) -> NoReturn:
-    raise CollectionVerificationFailure(reason_code)
-
-
-def _is_reparse(metadata: os.stat_result) -> bool:
-    return stat.S_ISLNK(metadata.st_mode) or bool(
-        int(getattr(metadata, "st_file_attributes", 0)) & REPARSE_ATTRIBUTE
-    )
-
-
-def _assert_directory(path: Path, reason: str) -> None:
-    absolute = Path(os.path.abspath(os.fspath(path)))
-    for component in reversed((absolute, *absolute.parents)):
-        try:
-            metadata = component.lstat()
-        except OSError:
-            fail(reason)
-        if _is_reparse(metadata):
-            fail("collection_path_reparse_forbidden")
-        if not stat.S_ISDIR(metadata.st_mode):
-            fail(reason)
-
-
-def _read_regular(
-    path: Path,
-    *,
-    maximum: int,
-    reason: str,
-    allow_empty: bool = False,
-) -> bytes:
-    try:
-        before = path.lstat()
-        if _is_reparse(before):
-            fail("collection_path_reparse_forbidden")
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_size > maximum
-            or (before.st_size == 0 and not allow_empty)
-        ):
-            fail(reason)
-        with path.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if (
-                _is_reparse(opened)
-                or not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino)
-                != (before.st_dev, before.st_ino)
-            ):
-                fail(reason)
-            raw = stream.read(maximum + 1)
-        after = path.lstat()
-    except CollectionVerificationFailure:
-        raise
-    except OSError:
-        fail(reason)
-    if (
-        len(raw) > maximum
-        or len(raw) != before.st_size
-        or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        or _is_reparse(after)
-    ):
-        fail(reason)
-    return raw
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate_json_key")
-        result[key] = value
-    return result
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _load_json(
-    path: Path,
-    reason: str,
-    *,
-    maximum: int = MAX_JSON_BYTES,
-    require_canonical: bool = True,
-) -> tuple[dict[str, Any], bytes]:
-    raw = _read_regular(path, maximum=maximum, reason=reason)
-    try:
-        value = json.loads(
-            raw.decode("utf-8", errors="strict"),
-            object_pairs_hook=_unique_object,
-            parse_constant=lambda item: (_ for _ in ()).throw(ValueError(item)),
-        )
-    except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError):
-        fail(reason)
-    if not isinstance(value, dict):
-        fail(reason)
-    if require_canonical and _canonical_json(value) != raw:
-        fail(f"{reason}_noncanonical")
-    return value, raw
-
-
-def _sha256(raw: bytes) -> str:
-    return hashlib.sha256(raw).hexdigest()
-
-
-def _sha256_file(path: Path, *, maximum: int = MAX_APK_BYTES) -> str:
-    return _sha256(
-        _read_regular(path, maximum=maximum, reason="manifest_file_unreadable")
-    )
-
-
-def _exact(value: object, keys: frozenset[str] | set[str]) -> bool:
-    return isinstance(value, dict) and set(value) == set(keys)
-
-
-def _safe_relative(value: object) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        fail("manifest_path_invalid")
-    path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        fail("manifest_path_invalid")
-    return value
+CollectionVerificationFailure = verifier_core.CollectionVerificationFailure
+fail = verifier_core.fail
+_assert_directory = verifier_core.assert_directory
+_is_reparse = verifier_core.is_reparse
+_read_regular = verifier_core.read_regular
+_canonical_json = verifier_core.canonical_json
+_load_json = verifier_core.load_json
+_sha256 = verifier_core.sha256
+_sha256_file = verifier_core.sha256_file
+_exact = verifier_core.exact
+_safe_relative = verifier_core.safe_relative
 
 
 def _verify_manifest(
@@ -417,40 +279,8 @@ def _verify_manifest(
     return manifest, _sha256(raw)
 
 
-def _validate_uuid(value: object, *, version: int, reason: str) -> str:
-    pattern = RUN_ID_RE if version == 7 else UUID4_RE
-    if not isinstance(value, str) or pattern.fullmatch(value) is None:
-        fail(reason)
-    try:
-        parsed = uuid.UUID(value)
-    except ValueError:
-        fail(reason)
-    if parsed.version != version or parsed.variant != uuid.RFC_4122:
-        fail(reason)
-    return value
-
-
-def _validate_server_base(value: object, reason: str) -> urllib.parse.SplitResult:
-    if not isinstance(value, str):
-        fail(reason)
-    parsed = urllib.parse.urlsplit(value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        fail(reason)
-    try:
-        port = parsed.port
-    except ValueError:
-        fail(reason)
-    if port is not None and not 1 <= port <= 65535:
-        fail(reason)
-    return parsed
+_validate_uuid = verifier_core.validate_uuid
+_validate_server_base = verifier_core.validate_server_base
 
 
 def _same_host(left: str, right: str) -> bool:
@@ -808,14 +638,7 @@ def _verify_candidate(
 
 
 def _canonical_component(value: str) -> str:
-    match = COMPONENT_RE.search(value)
-    if match is None:
-        fail("phone_state_invalid")
-    package = match.group("package")
-    activity = match.group("activity")
-    if activity.startswith("."):
-        activity = package + activity
-    return f"{package}/{activity}"
+    return verifier_core.canonical_component(value, reason="phone_state_invalid")
 
 
 def _active_vpn(connectivity: str) -> bool:

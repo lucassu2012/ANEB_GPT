@@ -15,6 +15,7 @@ from typing import Any, NoReturn
 import urllib.parse
 
 if __package__:
+    from scripts import quick_collection_verifier as verifier_core
     from scripts import verify_realtime_quick_collection as mechanics
     from scripts import collect_realtime_quick_evidence as collector_mechanics
     from scripts.collect_network_quick_evidence import (
@@ -26,6 +27,7 @@ if __package__:
     )
     from scripts.quick_collection_contract import network_quick_contract
 else:
+    import quick_collection_verifier as verifier_core
     import verify_realtime_quick_collection as mechanics
     import collect_realtime_quick_evidence as collector_mechanics
     from collect_network_quick_evidence import (
@@ -51,18 +53,22 @@ COLLECTION_RE = re.compile(
 COLLECTION_ID_RE = re.compile(
     r"^m0-ec3-network-quick-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{32}$"
 )
-RUN_ID_RE = mechanics.RUN_ID_RE
-SHA256_RE = mechanics.SHA256_RE
-COMMIT_RE = mechanics.COMMIT_RE
+RUN_ID_RE = verifier_core.RUN_ID_RE
+SHA256_RE = verifier_core.SHA256_RE
+COMMIT_RE = verifier_core.COMMIT_RE
 PLAN_KEYS = mechanics.PLAN_KEYS
 STATUS_KEYS = mechanics.STATUS_KEYS
 RUN_RECEIPT_KEYS = mechanics.RUN_RECEIPT_KEYS
-CollectionVerificationFailure = mechanics.CollectionVerificationFailure
+CollectionVerificationFailure = verifier_core.CollectionVerificationFailure
 
-_assert_directory = mechanics._assert_directory
-_canonical_json = mechanics._canonical_json
-_load_json = mechanics._load_json
-_sha256 = mechanics._sha256
+_assert_directory = verifier_core.assert_directory
+_canonical_json = verifier_core.canonical_json
+_exact = verifier_core.exact
+_load_json = verifier_core.load_json
+_read_regular = verifier_core.read_regular
+_sha256 = verifier_core.sha256
+_validate_server_base = verifier_core.validate_server_base
+_validate_uuid = verifier_core.validate_uuid
 
 
 def fail(reason_code: str) -> NoReturn:
@@ -78,7 +84,7 @@ def _same_host(left: str, right: str) -> bool:
 
 def _validate_plan(plan: dict[str, Any], collection: str) -> None:
     if (
-        not mechanics._exact(plan, PLAN_KEYS)
+        not _exact(plan, PLAN_KEYS)
         or plan.get("schema") != CONTRACT.plan_schema
         or plan.get("schema_version") != "1.0.0"
         or plan.get("collection_id") != collection
@@ -113,13 +119,13 @@ def _validate_plan(plan: dict[str, Any], collection: str) -> None:
         or type(plan.get("install_candidate")) is not bool
     ):
         fail("collector_plan_invalid")
-    mechanics._validate_uuid(
+    _validate_uuid(
         plan.get("start_barrier_id"), version=4, reason="collector_plan_invalid"
     )
-    mechanics._validate_uuid(
+    _validate_uuid(
         plan.get("end_barrier_id"), version=4, reason="collector_plan_invalid"
     )
-    server = mechanics._validate_server_base(
+    server = _validate_server_base(
         plan.get("server_base"), "collector_plan_invalid"
     )
     remote_host = plan.get("remote_host")
@@ -156,7 +162,7 @@ def _validate_status_and_run(
     cross_raw: bytes,
 ) -> str:
     if (
-        not mechanics._exact(status, STATUS_KEYS)
+        not _exact(status, STATUS_KEYS)
         or status.get("schema") != CONTRACT.status_schema
         or status.get("schema_version") != "1.0.0"
         or status.get("status") != "pass"
@@ -167,11 +173,11 @@ def _validate_status_and_run(
         or status.get("cleanup_remote") != "pass"
     ):
         fail("collector_status_invalid")
-    run_id = mechanics._validate_uuid(
+    run_id = _validate_uuid(
         status.get("run_id"), version=7, reason="collector_status_invalid"
     )
     if (
-        not mechanics._exact(receipt, RUN_RECEIPT_KEYS)
+        not _exact(receipt, RUN_RECEIPT_KEYS)
         or receipt.get("schema") != CONTRACT.run_receipt_schema
         or receipt.get("schema_version") != "1.0.0"
         or receipt.get("status") != "pass"
@@ -211,7 +217,7 @@ def _network_serverinfo_sequence(bodies: list[dict[str, Any]]) -> None:
 
 
 def _read_utf8(path: Path, reason: str) -> str:
-    raw = mechanics._read_regular(path, maximum=MAX_TEXT_BYTES, reason=reason)
+    raw = _read_regular(path, maximum=MAX_TEXT_BYTES, reason=reason)
     try:
         return raw.decode("utf-8", errors="strict")
     except UnicodeError:
@@ -258,7 +264,10 @@ def _verify_busy_sentinels(bundle: Path) -> None:
             fail("busy_sentinel_invalid")
         try:
             canonical = [
-                mechanics._canonical_component(item) for item in components
+                verifier_core.canonical_component(
+                    item, reason="phone_state_invalid"
+                )
+                for item in components
             ]
         except CollectionVerificationFailure:
             fail("busy_sentinel_invalid")
@@ -270,7 +279,7 @@ def _verify_busy_sentinels(bundle: Path) -> None:
 
 
 def _verify_logcat_stderr(bundle: Path) -> None:
-    raw = mechanics._read_regular(
+    raw = _read_regular(
         bundle / "app-logcat.stderr.txt",
         maximum=MAX_TEXT_BYTES,
         reason="network_logcat_stderr_invalid",
