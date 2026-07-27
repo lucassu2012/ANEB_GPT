@@ -6,6 +6,7 @@ import re
 import tempfile
 import unittest
 
+from scripts import quick_ready_transaction as transaction
 from scripts.quick_ready_transaction import (
     QuickReadyFailure,
     QuickReadyContract,
@@ -96,6 +97,98 @@ class QuickReadyTransactionTests(unittest.TestCase):
         self.assertEqual(str(ready), result["ready_path"])
         self.assertRegex(result["ready_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(2, adapter.verify_calls)
+
+    def test_publishes_ready_from_a_preverified_report_without_rewriting_it(self) -> None:
+        contract = self.contract()
+        adapter = FakeQuickAdapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{COLLECTION}.complete"
+            bundle.mkdir()
+            report_path = root / f"{COLLECTION}.verification.json"
+            report_raw = (
+                json.dumps(
+                    {
+                        "schema": "aneb-test-quick-collection-verification",
+                        "schema_version": "1.0.0",
+                        "status": "pass",
+                        "reason_code": "ok",
+                        "collection_id": COLLECTION,
+                        "run_id": RUN_ID,
+                        "mode": "positive",
+                        "manifest_sha256": "b" * 64,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            report_path.write_bytes(report_raw)
+
+            def postcheck(ready: Path) -> dict[str, object]:
+                marker = json.loads(ready.read_text(encoding="utf-8"))
+                return {
+                    "status": "pass",
+                    "collection_id": marker["collection_id"],
+                    "ready_sha256": "c" * 64,
+                }
+
+            result = transaction.publish_preverified_ready(
+                bundle,
+                report_path,
+                contract=contract,
+                adapter=adapter,
+                release_postcheck=postcheck,
+            )
+
+            self.assertEqual(report_raw, report_path.read_bytes())
+            self.assertTrue((root / f"{COLLECTION}.READY.json").is_file())
+
+        self.assertEqual(0, adapter.verify_calls)
+        self.assertEqual("c" * 64, result["ready_sha256"])
+
+    def test_preverified_postcheck_failure_rolls_back_only_ready(self) -> None:
+        contract = self.contract()
+        adapter = FakeQuickAdapter()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{COLLECTION}.complete"
+            bundle.mkdir()
+            report_path = root / f"{COLLECTION}.verification.json"
+            report_raw = (
+                json.dumps(
+                    {
+                        "schema": "aneb-test-quick-collection-verification",
+                        "schema_version": "1.0.0",
+                        "status": "pass",
+                        "reason_code": "ok",
+                        "collection_id": COLLECTION,
+                        "run_id": RUN_ID,
+                        "mode": "positive",
+                        "manifest_sha256": "b" * 64,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            report_path.write_bytes(report_raw)
+
+            def interrupt(_: Path) -> dict[str, object]:
+                raise KeyboardInterrupt
+
+            with self.assertRaises(KeyboardInterrupt):
+                transaction.publish_preverified_ready(
+                    bundle,
+                    report_path,
+                    contract=contract,
+                    adapter=adapter,
+                    release_postcheck=interrupt,
+                )
+
+            self.assertEqual(report_raw, report_path.read_bytes())
+            self.assertFalse((root / f"{COLLECTION}.READY.json").exists())
+            self.assertFalse((root / f"{COLLECTION}.ready.partial").exists())
 
     def test_operator_interrupt_propagates_after_new_artifacts_are_removed(self) -> None:
         adapter = FakeQuickAdapter()

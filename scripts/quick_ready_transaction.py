@@ -380,6 +380,131 @@ def verify_release(
     }
 
 
+def _publish_ready_marker(
+    *,
+    bundle: Path,
+    collection: str,
+    report_path: Path,
+    report: dict[str, object],
+    report_raw: bytes,
+    contract: QuickReadyContract,
+    adapter: QuickReadyAdapter,
+    release_postcheck: Callable[[Path], dict[str, object]] | None,
+) -> dict[str, object]:
+    root = bundle.parent
+    ready_path = root / f"{collection}.READY.json"
+    ready_temp = root / f"{collection}.ready.partial"
+    if any(path.exists() for path in (ready_path, ready_temp)):
+        fail("release_path_collision")
+    created: list[Path] = []
+    try:
+        marker = {
+            "schema": contract.release_schema,
+            "schema_version": contract.release_version,
+            "status": "ready",
+            "reason_code": "ok",
+            "collection_id": collection,
+            "run_id": report.get("run_id"),
+            contract.mode_field: report.get(contract.mode_field),
+            "bundle_leaf": bundle.name,
+            "manifest_sha256": report.get("manifest_sha256"),
+            "verification_report_leaf": report_path.name,
+            "verification_report_sha256": _sha256(report_raw),
+            "committed_at_utc": _utc_timestamp(),
+        }
+        if ready_marker_failure(marker, collection, contract=contract) is not None:
+            fail("release_ready_contract_invalid")
+        _write_exclusive_fsync(ready_temp, _canonical_json(marker))
+        created.append(ready_temp)
+        _publish_no_replace(ready_temp, ready_path)
+        created.remove(ready_temp)
+        created.append(ready_path)
+        if release_postcheck is None:
+            release_report = verify_release(
+                ready_path, contract=contract, adapter=adapter
+            )
+        else:
+            try:
+                release_report = release_postcheck(ready_path)
+            except Exception as error:
+                reason = getattr(error, "reason_code", str(error))
+                fail(f"release_postcheck_failed reason={reason}")
+        if (
+            release_report.get("status") != "pass"
+            or release_report.get("collection_id") != collection
+        ):
+            fail("release_postcheck_failed reason=report")
+        return {
+            "schema": contract.publication_schema,
+            "schema_version": "1.0.0",
+            "status": "pass",
+            "reason_code": "ok",
+            "collection_id": collection,
+            "run_id": marker["run_id"],
+            contract.mode_field: marker[contract.mode_field],
+            "verification_report_path": str(report_path),
+            "verification_report_sha256": marker["verification_report_sha256"],
+            "ready_path": str(ready_path),
+            "ready_sha256": release_report["ready_sha256"],
+        }
+    except BaseException:
+        for path in reversed(created):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        try:
+            ready_temp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def publish_preverified_ready(
+    bundle_path: str | os.PathLike[str],
+    report_path: str | os.PathLike[str],
+    *,
+    contract: QuickReadyContract,
+    adapter: QuickReadyAdapter,
+    release_postcheck: Callable[[Path], dict[str, object]],
+) -> dict[str, object]:
+    bundle = Path(os.path.abspath(os.fspath(bundle_path)))
+    match = contract.collection_pattern.fullmatch(bundle.name)
+    if match is None:
+        fail("release_bundle_leaf_invalid")
+    collection = match.group("collection")
+    root = bundle.parent
+    report = Path(os.path.abspath(os.fspath(report_path)))
+    if report != root / f"{collection}.verification.json":
+        fail("release_report_path_invalid")
+    _assert_directory(root, "release_root_invalid")
+    adapter.verify_private_root(bundle)
+    report_value, report_raw = _load_canonical_json(
+        report,
+        maximum=32 * 1024 * 1024,
+        reason="release_report_invalid",
+    )
+    if (
+        report_value.get("schema") != contract.collection_report_schema
+        or report_value.get("schema_version")
+        != contract.collection_report_version
+        or report_value.get("status") != "pass"
+        or report_value.get("reason_code") != "ok"
+        or report_value.get("collection_id") != collection
+    ):
+        fail("release_report_contract_invalid")
+    return _publish_ready_marker(
+        bundle=bundle,
+        collection=collection,
+        report_path=report,
+        report=report_value,
+        report_raw=report_raw,
+        contract=contract,
+        adapter=adapter,
+        release_postcheck=release_postcheck,
+    )
+
+
 def publish_ready(
     bundle_path: str | os.PathLike[str],
     *,
@@ -409,71 +534,31 @@ def publish_ready(
         reason = getattr(error, "reason_code", str(error))
         fail(f"collection_verification_failed reason={reason}")
     report_raw = _canonical_json(report)
-    created: list[Path] = []
+    report_created = False
     try:
         _write_exclusive_fsync(report_temp, report_raw)
-        created.append(report_temp)
         _publish_no_replace(report_temp, report_path)
-        created.remove(report_temp)
-        created.append(report_path)
-        marker = {
-            "schema": contract.release_schema,
-            "schema_version": contract.release_version,
-            "status": "ready",
-            "reason_code": "ok",
-            "collection_id": collection,
-            "run_id": report["run_id"],
-            contract.mode_field: report[contract.mode_field],
-            "bundle_leaf": bundle.name,
-            "manifest_sha256": report["manifest_sha256"],
-            "verification_report_leaf": report_path.name,
-            "verification_report_sha256": _sha256(report_raw),
-            "committed_at_utc": _utc_timestamp(),
-        }
-        _write_exclusive_fsync(ready_temp, _canonical_json(marker))
-        created.append(ready_temp)
-        _publish_no_replace(ready_temp, ready_path)
-        created.remove(ready_temp)
-        created.append(ready_path)
-        if release_postcheck is None:
-            release_report = verify_release(
-                ready_path, contract=contract, adapter=adapter
-            )
-        else:
-            try:
-                release_report = release_postcheck(ready_path)
-            except Exception as error:
-                reason = getattr(error, "reason_code", str(error))
-                fail(f"release_postcheck_failed reason={reason}")
-        if (
-            release_report.get("status") != "pass"
-            or release_report.get("collection_id") != collection
-        ):
-            fail("release_postcheck_failed reason=report")
-        return {
-            "schema": contract.publication_schema,
-            "schema_version": "1.0.0",
-            "status": "pass",
-            "reason_code": "ok",
-            "collection_id": collection,
-            "run_id": report["run_id"],
-            contract.mode_field: report[contract.mode_field],
-            "verification_report_path": str(report_path),
-            "verification_report_sha256": marker["verification_report_sha256"],
-            "ready_path": str(ready_path),
-            "ready_sha256": release_report["ready_sha256"],
-        }
+        report_created = True
+        return _publish_ready_marker(
+            bundle=bundle,
+            collection=collection,
+            report_path=report_path,
+            report=report,
+            report_raw=report_raw,
+            contract=contract,
+            adapter=adapter,
+            release_postcheck=release_postcheck,
+        )
     except BaseException:
-        for path in reversed(created):
+        if report_created:
             try:
-                path.unlink()
+                report_path.unlink()
             except FileNotFoundError:
                 pass
-        for path in (report_temp, ready_temp):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
+        try:
+            report_temp.unlink()
+        except FileNotFoundError:
+            pass
         raise
 
 
@@ -482,6 +567,7 @@ __all__ = (
     "QuickReadyContract",
     "QuickReadyFailure",
     "CollectionModuleAdapter",
+    "publish_preverified_ready",
     "publish_ready",
     "ready_keys",
     "ready_marker_failure",

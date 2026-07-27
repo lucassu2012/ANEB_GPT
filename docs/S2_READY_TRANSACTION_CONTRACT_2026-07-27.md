@@ -104,3 +104,12 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据：RED 唯一为公共编码器不存在；GREEN 1/1。adapter + Token release + Realtime/Network collection 兼容回归 56/56（另有 4 项平台相关 skip），测试前后匹配残留进程为 0。
 - ［KNOWN｜HIGH］本里程碑只收敛 COMPLETE marker 的确定性字节构造；Token digest、manifest、verification report、identity closure、外部工具闭包、publisher 和业务重算仍由 Token 自身负责。
 - ［INFERRED｜HIGH］下一切片是摘要绑定的业务族中立分类与 Token 历史 reason-code 映射；在故障注入等价性、完整三族门禁和 clean CI 通过前，S2 仍不得标记完成。
+
+### S2-V4d 中间里程碑：preverified report → READY 事务 seam
+
+- ［KNOWN｜HIGH］Token collector 的独立 bundle verifier 会先产出并提交 verification report；让共享 publisher 再运行 collection verifier 会重复昂贵业务验证，也会破坏现有跨语言顺序。因此中立事务新增 `publish_preverified_ready`：读取精确 sibling canonical report，只提交 READY。
+- ［KNOWN｜HIGH］新旧入口复用同一个内部 marker commit：合同检查、CreateNew、fsync、no-replace、postcheck 和 READY 回滚只有一份实现。原入口失败时仍清理本轮 report+READY；preverified 入口失败时只清理 READY/partial，既有 report 原字节保留。
+- ［KNOWN｜HIGH］新入口仍要求 adapter 重新验证私有根，并要求显式 release postcheck；它不会因调用方声称“已验证”就跳过根安全或最终 consumer 复核。
+- ［KNOWN｜HIGH］TDD 证据：RED 唯一为 `publish_preverified_ready` 不存在；成功 GREEN 1/1；成功+KeyboardInterrupt 回滚 2/2；共享 core + Realtime/Network release 20/20。每次 fresh pre/post 扫描匹配残留均为 0。
+- ［KNOWN｜HIGH］Token PowerShell collector 尚未调用该入口，工具 provenance 也尚未加入 Python publisher/release verifier；因此 Token publisher 仍未迁移，S2 仍未完成。
+- ［INFERRED｜HIGH］下一切片是独立 Token publisher CLI + 工具身份闭包，再以最小 PowerShell 薄壳替换 `Publish-EvidenceReleaseReady` 的重复事务；必须先锁定旧 marker 字节与 failure/rollback 等价性。
