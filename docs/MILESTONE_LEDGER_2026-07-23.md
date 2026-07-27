@@ -30,7 +30,7 @@
 |---|---|---|---|---|---|
 | S0 契约单元 | 每个测试族先实现业务前能力门、单次终态、Room/strict-v2 与动态指标数据源 | 注册精确 Profile/原语、运行配置和 request-entry 审计 | 发布版本化 Profile/runtime/model，保留来源与校准状态 | 冻结业务类型、全量指标、目标、主动态指标、评分、结论和网络建议 | 正向 exact signature + 负向固定机器原因和零业务产物；本地/CI 全绿 |
 | S1 跨端 Quick | 安装精确 CI APK，在 P40 跑一次正向与一次受控负向 | 受锁部署精确 server binary，冻结同-run 窗口与共享指纹 | 提供同 SHA 的运行包，不把 hypothesis 冒充 calibrated | 独立 DB/audit/bundle/release consumer 重算，最后原子提交 READY | 同一 run/APK/server/Profile；正负 READY；PhoneGuard 与远端验后清理 |
-| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | 三族证据合同共用发布事务和 provenance 边界 | EC1、EC2、EC3 全部结案；通用 collector/READY contract 通过故障注入 |
+| S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］READY 机械事务第一切片已抽取：Realtime/Network 使用共用深模块、Token 保持兼容对照；下一门为中立 collector/provenance mechanics 与 Token Adapter | EC1、EC2、EC3 全部结案；通用 collector/READY contract 通过故障注入 |
 | S3 M1 可重复核心 | 非开发者可连续执行三类测试；无线证据、1Hz 动态刷新、历史/报告可复算 | 单节点稳定运行、合成弱网和恢复可重复 | hypothesis 参数与确定性轨迹版本化 | 同条件重复性、样本有效性和置信度门 | P40 重复样本；关键指标 CV/完整性门；导出后独立复算一致 |
 | S4 M2 外场 MVP | 点位、运营商、忙闲、网络制式矩阵采集与地图/报告 | 当前单节点参考端保持稳定；若 PO 恢复多级节点再扩展 | 冻结外场采样计划和对照元数据 | 报告只陈述采样覆盖内结论，不把单点扩写为城市基线 | 6–8 点位×忙闲×运营商有效样本矩阵与可审计热力卡 |
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
@@ -76,8 +76,8 @@
 | EC3-04～06 P1 | 首业务包前能力门、授权传输、固定 `receipt_missing`、零业务产物、null score/grade 和单次 Room 终态 | ［KNOWN｜HIGH］离线实现完成；Android/Go/Python 回归和 full quality gate 通过 |
 | EC3-07 同-run 证据 | 独立 Room 与 server audit 判定，再把 App 终态、mode、run、Profile 交叉绑定 | ［KNOWN｜HIGH］完成；Network 独立 consumer 重算客户端、服务端与 cross-bound 三报告，并在最终正负 bundle 中验证同 run/mode/Profile、唯一 D82 marker、空 logcat stderr 和采集新鲜度 |
 | EC3-08 CI/provenance | clean commit、7-job CI、精确多 subject attestation 和独立复核 | ［KNOWN｜HIGH］完成；最终真机候选 source `ea9de17c2acea763513b144b4fb9942a3d54c5c6`，CI `30266912724` 7/7，artifact `8653462642`，APK `e1af670c…db0e`，signer `0936cdcf…f1f3`，独立 provenance PASS |
-| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］完成；负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c` / READY `7fa7fb24…0878`，正向 run `019fa3aa-c0d5-7586-b736-ae2fe0a35c78` / READY `14ea8c7f…a83b`；独立 consumer 均 PASS |
-| EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］完成；PhoneGuard receipt `a4cecc20…1789`，Launcher、相关 PID/service/accessibility/VPN/tun=0，reverse empty，stayon=7；远端两次锁释放，共享身份/指纹稳定；完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md` |
+| EC3-09 P40 正负 | 正向四原语 exact signature；负向 loopback `receipt_missing` 且客户端/服务端业务产物均为零 | ［KNOWN｜HIGH］完成；负向 run `019fa3a7-b34a-7a0c-b45f-3e6e3d7b0d8c` / READY `7fa7fb24…0878`，权威正向 run `019fa3d7-8ab2-76eb-90bd-182a482b3c7f` / READY `e153ee46…c3837`；独立 consumer 均 PASS。首份正向本地 bundle 因事后 SQLite checkpoint 污染而废弃 |
+| EC3-10 收尾结案 | 恢复进入前 App/Room、停止本轮服务/reverse/VPN、回 Launcher；E-01 lock/marker/指纹复核；回填 READY | ［KNOWN｜HIGH］完成；权威 bundle phone postflight 文件 SHA `2efbbd94…7009`、独立 stable state `27782451…c21198`，Launcher、相关 PID/service/accessibility/VPN/tun=0，reverse empty，stayon=7；远端锁释放，共享身份/指纹稳定；完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md` |
 
 ## 4. 已冻结的关键节点
 
@@ -108,7 +108,7 @@
 4. ［KNOWN｜HIGH］M0-EC1 Token Quick 窄切片现已结案；不重跑已闭环证据，也不为追求新的部署返回码重复修改 E-01。
 5. ［KNOWN｜HIGH］M0-EC2 AI 实时 Quick 的 EC2-01～10 已结案；正向 `100/A` 仍受
    `INCONCLUSIVE/LOW`、coverage 0.1 限制，不得冒充正式体验基线。
-6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；正向 `77/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
+6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；权威正向 `79/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
 7. ［KNOWN｜HIGH］当前最小执行切片进入 S2：把三族已经证明的 phone/remote/provenance/READY 机械生命周期抽成共用组件，但保留 Token/Realtime/Network 各自的业务语义判定器。
 8. ［INFERRED｜HIGH］S2 应先做等价性/故障注入和三族回归，再替换现有入口；不重跑已冻结的 EC1/EC2/EC3 真机证据来证明纯机械重构。
 9. ［KNOWN｜HIGH］A6 审核交接当前关闭；不得打开、复制或上传 reviewer HTML、secret、seed、
