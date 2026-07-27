@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.8.1"
+const serverVersion = "aneb-server/0.8.2"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -132,6 +132,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load execution profiles: %v", err)
 	}
+	if err := validateExecutionRuntimeConfig(executionCapabilities, *addr, *udpEchoAddr); err != nil {
+		log.Fatalf("execution runtime: %v", err)
+	}
 	for _, profile := range executionCapabilities.ValidatedProfiles {
 		log.Printf("execution profile validated: %s v%s (%s)", profile.ProfileID, profile.ProfileVersion, profile.ProfileSHA256)
 	}
@@ -193,7 +196,7 @@ func main() {
 				log.Fatalf("udp shared listener: %v", err)
 			}
 			go func() {
-				log.Fatalf("h3 shared server: %v", h3srv.Serve(newUDPProbeFilteringConn(packetConn)))
+				log.Fatalf("h3 shared server: %v", h3srv.Serve(newUDPProbeFilteringConnWithAudit(packetConn, auditSink)))
 			}()
 			log.Printf("udp echo: ANEB datagram probe shares h3 udp%s", *addr)
 		} else {
@@ -205,7 +208,7 @@ func main() {
 	}
 	if *udpEchoAddr != "" && (!*h3Enabled || *udpEchoAddr != *addr) {
 		go func() {
-			log.Fatalf("udp echo server: %v", serveUDPEcho(*udpEchoAddr))
+			log.Fatalf("udp echo server: %v", serveUDPEchoWithAudit(*udpEchoAddr, auditSink))
 		}()
 		log.Printf("udp echo: sequenced application datagram probe enabled on udp%s", *udpEchoAddr)
 	}

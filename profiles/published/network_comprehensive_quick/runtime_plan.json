@@ -1,0 +1,16 @@
+{
+  "contract_version": "aneb-network-runtime-plan-v1",
+  "profile_id": "network_comprehensive_quick",
+  "profile_version": "1.2.0",
+  "seed": 20260727,
+  "phases": [
+    {"type":"path_setup","attempts":3},
+    {"type":"idle_latency","samples":10},
+    {"type":"download_loaded","duration_ms":6000,"bytes":33554432,"chunk_kb":256,"parallel":4,"echo_interval_ms":250},
+    {"type":"upload_loaded","duration_ms":6000,"bytes":8388608,"chunk_kb":256,"parallel":2,"echo_interval_ms":250},
+    {"type":"udp_sequence","packets":50,"packet_bytes":256,"rate_per_second":50},
+    {"type":"post_load_latency","samples":5}
+  ],
+  "claim": "deterministic application-layer measurement plan to the ANEB probe node",
+  "variant": "quick"
+}

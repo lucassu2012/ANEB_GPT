@@ -1,7 +1,7 @@
 {
   "contract_version": "aneb-profile-v2",
   "profile_id": "network_comprehensive_quick",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "mode_id": "network_comprehensive",
   "execution_target": "aneb_probe_simulator",
   "claim_scope": "application_end_to_end_to_probe_node",
@@ -57,6 +57,33 @@
     {"type":"udp_sequence","packets":50,"packet_bytes":256,"rate_per_second":50},
     {"type":"post_load_latency","samples":5}
   ],
+  "execution_plan": {
+    "contract_version": "aneb-network-runtime-plan-v1",
+    "artifact": "runtime_plan.json",
+    "artifact_hash": "sha256:8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603",
+    "seed": 20260727,
+    "variant": "quick"
+  },
+  "execution_requirements": {
+    "contract_id": "aneb-execution-requirements",
+    "contract_version": "1.0.0",
+    "client_engine": {
+      "contract_id": "aneb-network-comprehensive-engine",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "server_capability_receipt": {
+      "contract_id": "aneb-server-capability-receipt",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "required_primitives": [
+      {"primitive_id":"download","wire_contract_id":"aneb-download-v1"},
+      {"primitive_id":"echo","wire_contract_id":"aneb-echo-v1"},
+      {"primitive_id":"udp_echo","wire_contract_id":"aneb-udp-echo-v2"},
+      {"primitive_id":"upload","wire_contract_id":"aneb-upload-v1"}
+    ]
+  },
   "evidence_tier": "quick",
   "est_duration_s": 20
 }

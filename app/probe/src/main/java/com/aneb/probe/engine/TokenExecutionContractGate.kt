@@ -67,7 +67,11 @@ internal class AnebTokenExecutionTransport(
     override suspend fun downloadThroughput(
         url: String,
         onBytes: (Int, Long) -> Unit,
-    ): AnebClient.TransferResult = client.downloadThroughput(url, runId, onBytes)
+    ): AnebClient.TransferResult = client.downloadThroughput(
+        url = url,
+        runId = runId,
+        onBytes = onBytes,
+    )
 }
 
 /**

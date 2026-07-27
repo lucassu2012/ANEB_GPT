@@ -33,14 +33,19 @@ func TestPublishedQuickProfilesProduceExactCapabilityReceipt(t *testing.T) {
 	if receipt.ContractID != serverCapabilityReceiptContractID || receipt.ContractVersion != serverCapabilityReceiptVersion {
 		t.Fatalf("receipt identity mismatch: %+v", receipt)
 	}
-	if len(receipt.ValidatedProfiles) != 2 {
-		t.Fatalf("validated profiles=%d, want 2", len(receipt.ValidatedProfiles))
+	if len(receipt.ValidatedProfiles) != 3 {
+		t.Fatalf("validated profiles=%d, want 3", len(receipt.ValidatedProfiles))
 	}
 	want := []validatedExecutionProfile{
 		{
 			ProfileID:      "ai_realtime_voice_quick",
 			ProfileVersion: "1.1.1",
 			ProfileSHA256:  "sha256:701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7",
+		},
+		{
+			ProfileID:      "network_comprehensive_quick",
+			ProfileVersion: "1.2.0",
+			ProfileSHA256:  "sha256:15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc",
 		},
 		{
 			ProfileID:      "token_multimodal_quick",
@@ -286,6 +291,21 @@ func TestDeclaredExecutionPrimitivesHaveWorkingHandlers(t *testing.T) {
 		t.Fatalf("download status=%d bytes=%d err=%v", downloadResp.StatusCode, len(downloadBody), err)
 	}
 
+	uploadBody := bytes.Repeat([]byte{0x5a}, 4096)
+	uploadResp, err := http.Post(server.URL+"/api/v1/upload", "application/octet-stream", bytes.NewReader(uploadBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploadView uploadResponse
+	if err := json.NewDecoder(uploadResp.Body).Decode(&uploadView); err != nil {
+		uploadResp.Body.Close()
+		t.Fatal(err)
+	}
+	uploadResp.Body.Close()
+	if uploadResp.StatusCode != http.StatusOK || uploadView.Bytes != int64(len(uploadBody)) {
+		t.Fatalf("upload status=%d bytes=%d", uploadResp.StatusCode, uploadView.Bytes)
+	}
+
 	plan := validTokenSimPlan()
 	body := tokenSimRequestBody(t, plan, int(plan.UploadPayloadBytes))
 	tokenResp, err := http.Post(server.URL+"/api/v1/token-sim", "application/octet-stream", bytes.NewReader(body))
@@ -296,5 +316,55 @@ func TestDeclaredExecutionPrimitivesHaveWorkingHandlers(t *testing.T) {
 	tokenResp.Body.Close()
 	if err != nil || tokenResp.StatusCode != http.StatusOK || !bytes.Contains(tokenBody, []byte("event: summary")) {
 		t.Fatalf("token status=%d err=%v body=%s", tokenResp.StatusCode, err, tokenBody)
+	}
+}
+
+func TestNetworkExecutionPrimitivesArePublished(t *testing.T) {
+	got := map[string]string{}
+	for _, primitive := range builtInExecutionPrimitives() {
+		got[primitive.PrimitiveID] = primitive.WireContractID
+	}
+	want := map[string]string{
+		"echo":     "aneb-echo-v1",
+		"download": "aneb-download-v1",
+		"upload":   "aneb-upload-v1",
+		"udp_echo": "aneb-udp-echo-v2",
+	}
+	for id, wire := range want {
+		if got[id] != wire {
+			t.Fatalf("primitive %s=%q, want %q", id, got[id], wire)
+		}
+	}
+}
+
+func TestNetworkExecutionRuntimeConfigFailsClosed(t *testing.T) {
+	receipt := baseServerCapabilityReceipt()
+	receipt.ValidatedProfiles = append(receipt.ValidatedProfiles, validatedExecutionProfile{
+		ProfileID: networkQuickExecutionProfileID, ProfileVersion: networkQuickExecutionProfileVersion,
+	})
+	tests := []struct {
+		name, httpAddr, udpAddr, want string
+	}{
+		{"missing udp", ":8443", "", "udp echo is disabled"},
+		{"ports differ", ":8443", ":9443", "requires matching TCP and UDP ports"},
+		{"invalid http", "8443", ":8443", "invalid HTTP listen address"},
+		{"invalid udp", ":8443", "8443", "invalid UDP echo address"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateExecutionRuntimeConfig(receipt, test.httpAddr, test.udpAddr)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err=%v, want %q", err, test.want)
+			}
+		})
+	}
+	if err := validateExecutionRuntimeConfig(receipt, ":8443", ":8443"); err != nil {
+		t.Fatalf("valid network runtime rejected: %v", err)
+	}
+	if err := validateExecutionRuntimeConfig(receipt, "127.0.0.1:39443", "127.0.0.1:39443"); err != nil {
+		t.Fatalf("valid staged network runtime rejected: %v", err)
+	}
+	if err := validateExecutionRuntimeConfig(baseServerCapabilityReceipt(), ":9443", ""); err != nil {
+		t.Fatalf("legacy runtime without network receipt rejected: %v", err)
 	}
 }

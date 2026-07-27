@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.7.0",
+  "catalog_version": "1.8.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -11,7 +11,7 @@
   "consumers": {
     "P1": {
       "component": "ANEB Probe Android",
-      "current_version": "0.5.13",
+      "current_version": "0.5.14",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -27,7 +27,7 @@
     },
     "P2": {
       "component": "aneb-server",
-      "current_version": "0.8.1",
+      "current_version": "0.8.2",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -55,7 +55,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.7.0",
+      "current_version": "1.8.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -201,6 +201,20 @@
         "P3",
         "Profile"
       ]
+    },
+    {
+      "contract_version": "aneb-network-runtime-plan-v1",
+      "version": "1.0.0",
+      "standalone_schema_path": null,
+      "compatible_profile_modes": [
+        "network_comprehensive"
+      ],
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P2",
+        "Profile"
+      ]
     }
   ],
   "execution_evidence_contracts": [
@@ -225,6 +239,20 @@
       "canonical_sha256": "4d1f61844121970625c281fd278da60e207fa14107556bbae1161a6d0d85acc6",
       "profile_path": "profiles/published/ai_realtime_voice_quick/profile.json",
       "runtime_plan_path": "profiles/published/ai_realtime_voice_quick/runtime_plan.json",
+      "hash_strategy_id": "canonical-json-sha256-v1",
+      "consumers": [
+        "P1",
+        "P2",
+        "Profile"
+      ]
+    },
+    {
+      "contract_id": "aneb-network-quick-protocol-bounds",
+      "version": "1.0.0",
+      "path": "spec/execution-contracts/network_comprehensive_quick-1.2.0.protocol.json",
+      "canonical_sha256": "dd836686b6fea1185cdca9282bc4f79cec64e83972263e197b5bcf2a843fbb52",
+      "profile_path": "profiles/published/network_comprehensive_quick/profile.json",
+      "runtime_plan_path": "profiles/published/network_comprehensive_quick/runtime_plan.json",
       "hash_strategy_id": "canonical-json-sha256-v1",
       "consumers": [
         "P1",
@@ -359,7 +387,8 @@
           "hash_strategy_id": "canonical-json-sha256-v1",
           "compatible_modes": [
             "token_simulation",
-            "ai_realtime_simulation"
+            "ai_realtime_simulation",
+            "network_comprehensive"
           ]
         },
         {
@@ -412,9 +441,12 @@
         },
         {
           "profile_id": "network_comprehensive_quick",
-          "version": "1.1.0",
+          "version": "1.2.0",
           "path": "profiles/published/network_comprehensive_quick/profile.json",
-          "validation_group_id": "network_embedded_phases"
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/network_comprehensive_quick/runtime_plan.json",
+          "manifest_path": "profiles/published/network_comprehensive_quick/manifest.sha256",
+          "execution_requirements_policy": "required"
         },
         {
           "profile_id": "network_comprehensive_standard",

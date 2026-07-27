@@ -156,6 +156,24 @@
           "type": "object",
           "required": ["primitive_id", "wire_contract_id"],
           "properties": {
+            "primitive_id": {"const": "upload"},
+            "wire_contract_id": {"const": "aneb-upload-v1"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["primitive_id", "wire_contract_id"],
+          "properties": {
+            "primitive_id": {"const": "udp_echo"},
+            "wire_contract_id": {"const": "aneb-udp-echo-v2"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["primitive_id", "wire_contract_id"],
+          "properties": {
             "primitive_id": {"const": "realtime_sim"},
             "wire_contract_id": {"const": "aneb-realtime-session-v1"}
           },
@@ -182,7 +200,8 @@
             "contract_id": {
               "enum": [
                 "aneb-token-simulation-engine",
-                "aneb-realtime-simulation-engine"
+                "aneb-realtime-simulation-engine",
+                "aneb-network-comprehensive-engine"
               ]
             },
             "min_version": {"$ref": "#/$defs/semver"},
@@ -203,7 +222,7 @@
         "required_primitives": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 3,
+          "maxItems": 4,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/server_primitive"}
         }
@@ -247,6 +266,27 @@
               "required_primitives": {
                 "minItems": 1,
                 "maxItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "client_engine": {
+                "properties": {
+                  "contract_id": {"const": "aneb-network-comprehensive-engine"}
+                },
+                "required": ["contract_id"]
+              }
+            },
+            "required": ["client_engine"]
+          },
+          "then": {
+            "properties": {
+              "required_primitives": {
+                "minItems": 4,
+                "maxItems": 4
               }
             }
           }

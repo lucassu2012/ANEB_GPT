@@ -9,6 +9,12 @@ import kotlin.math.abs
  * 已接入运行时后才会显示“可执行”，避免目录把候选 Profile 冒充成可测能力。
  */
 object ProfileCapability {
+    private const val NETWORK_QUICK_RUNTIME_CONTRACT = "aneb-network-runtime-plan-v1"
+    private const val NETWORK_QUICK_RUNTIME_ARTIFACT = "runtime_plan.json"
+    private const val NETWORK_QUICK_RUNTIME_HASH =
+        "sha256:8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603"
+    private const val NETWORK_QUICK_RUNTIME_SEED = 20260727L
+
     data class Assessment(
         val executable: Boolean,
         val unsupportedPhaseTypes: Set<String>,
@@ -254,7 +260,20 @@ object ProfileCapability {
             val unknown = requiredFormulaIds - networkRequiredFormulaIds
             if (unknown.isNotEmpty()) add("网络综合必需指标公式未被识别: ${unknown.sorted().joinToString()}")
             if (profile.evidenceTier !in setOf("quick", "standard", "recovery", "gateway_lab")) add("网络综合证据等级无效")
-            if (profile.executionPlan != null) add("网络综合测试不得声明行为模型执行计划")
+            val execution = profile.executionPlan
+            if (profile.profileId == "network_comprehensive_quick") {
+                if (execution == null) {
+                    add("网络综合 Quick 缺少可执行计划")
+                } else {
+                    if (execution.contractVersion != NETWORK_QUICK_RUNTIME_CONTRACT) add("网络综合执行计划合同不受支持")
+                    if (execution.artifact != NETWORK_QUICK_RUNTIME_ARTIFACT) add("网络综合执行计划文件名不受支持")
+                    if (execution.artifactHash != NETWORK_QUICK_RUNTIME_HASH) add("网络综合执行计划哈希不受支持")
+                    if (execution.seed != NETWORK_QUICK_RUNTIME_SEED) add("网络综合执行计划 seed 不受支持")
+                    if (execution.variant != "quick") add("网络综合执行计划与证据等级不一致")
+                }
+            } else if (execution != null) {
+                add("Legacy 网络综合测试不得声明独立执行计划")
+            }
             val phaseTypes = profile.phases.map { it.type }
             val standardPhases = listOf(
                 ProfilePhase.TYPE_PATH_SETUP, ProfilePhase.TYPE_IDLE_LATENCY,

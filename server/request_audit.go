@@ -67,6 +67,7 @@ var requestAuditContractRoutes = map[string]requestAuditRoute{
 	"/api/v1/echo":         {class: "business", path: "/api/v1/echo"},
 	"/api/v1/token-sim":    {class: "business", path: "/api/v1/token-sim"},
 	"/api/v1/download":     {class: "business", path: "/api/v1/download"},
+	"/api/v1/upload":       {class: "business", path: "/api/v1/upload"},
 	"/api/v1/realtime-sim": {class: "business", path: "/api/v1/realtime-sim"},
 	"/api/v1/serverinfo":   {class: "control", path: "/api/v1/serverinfo"},
 }
@@ -74,12 +75,15 @@ var requestAuditContractRoutes = map[string]requestAuditRoute{
 var requestAuditOtherRoute = requestAuditRoute{class: "business", path: "/api/v1/other"}
 
 type requestAuditRecord struct {
-	class  string
-	method string
-	path   string
-	role   requestAuditRole
-	scope  string
-	runID  string
+	class         string
+	method        string
+	path          string
+	role          requestAuditRole
+	scope         string
+	runID         string
+	datagram      bool
+	datagramSeq   uint32
+	datagramBytes int
 }
 
 type requestAuditEmitter interface {
@@ -186,6 +190,22 @@ func (s *asyncRequestAuditSink) run() {
 
 func (s *asyncRequestAuditSink) writeAuditRecord(record requestAuditRecord) {
 	seq := s.nextSequence()
+	if record.datagram {
+		s.logger.Printf(
+			"ANEB_REQUEST_AUDIT instance_id=%s seq=%d class=%s method=%s path=%s role=%s scope=%s run_id=%s datagram_seq=%d datagram_bytes=%d",
+			s.instanceID,
+			seq,
+			record.class,
+			record.method,
+			record.path,
+			record.role.String(),
+			record.scope,
+			record.runID,
+			record.datagramSeq,
+			record.datagramBytes,
+		)
+		return
+	}
 	s.logger.Printf(
 		"ANEB_REQUEST_AUDIT instance_id=%s seq=%d class=%s method=%s path=%s role=%s scope=%s run_id=%s",
 		s.instanceID,
@@ -350,7 +370,7 @@ func auditIdentityWithScope(runValues []string, scopeValues []string) (scope str
 		return "invalid_header", "redacted"
 	}
 	switch scopeValues[0] {
-	case "token_run", "realtime_run":
+	case "token_run", "realtime_run", "network_run":
 		return scopeValues[0], runValues[0]
 	default:
 		return "invalid_header", "redacted"

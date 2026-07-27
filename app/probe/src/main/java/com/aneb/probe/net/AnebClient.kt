@@ -38,6 +38,7 @@ internal enum class AnebAuditRole(val headerValue: String) {
 enum class AnebAuditScope(val headerValue: String) {
     TOKEN_RUN("token_run"),
     REALTIME_RUN("realtime_run"),
+    NETWORK_RUN("network_run"),
 }
 
 internal fun Request.Builder.withAnebRunId(
@@ -351,6 +352,7 @@ class AnebClient private constructor(
     suspend fun downloadThroughput(
         url: String,
         runId: String? = null,
+        auditScope: AnebAuditScope? = null,
         onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
     ): TransferResult {
         val call = client.newCall(
@@ -358,7 +360,7 @@ class AnebClient private constructor(
                 .url(url)
                 .header("Accept", "application/octet-stream")
                 .header("Accept-Encoding", "identity")
-                .withAnebRunId(runId)
+                .withAnebRunId(runId, auditScope = auditScope)
                 .get()
                 .build(),
         )
@@ -549,6 +551,8 @@ class AnebClient private constructor(
         url: String,
         totalBytes: Long,
         chunkBytes: Int,
+        runId: String? = null,
+        auditScope: AnebAuditScope? = null,
         onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
     ): TransferResult {
         require(totalBytes > 0L) { "totalBytes must be positive" }
@@ -569,7 +573,13 @@ class AnebClient private constructor(
                 sink.flush()
             }
         }
-        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val call = client.newCall(
+            Request.Builder()
+                .url(url)
+                .withAnebRunId(runId, auditScope = auditScope)
+                .post(body)
+                .build(),
+        )
         val startNanos = monotonicNanos()
         return try {
             executeCancellable(call) { resp ->

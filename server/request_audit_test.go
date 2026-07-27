@@ -252,6 +252,30 @@ func TestRequestAuditLogsRealtimeBusinessUnderRealtimeScope(t *testing.T) {
 	}
 }
 
+func TestRequestAuditLogsNetworkBusinessUnderNetworkScope(t *testing.T) {
+	logs := captureRequestAuditLogs(t, func(handler http.Handler) {
+		for _, request := range []*http.Request{
+			httptest.NewRequest(http.MethodPost, "/api/v1/echo", strings.NewReader("{}")),
+			httptest.NewRequest(http.MethodGet, "/api/v1/download?bytes=1&chunk_kb=1", nil),
+			httptest.NewRequest(http.MethodPost, "/api/v1/upload", strings.NewReader("x")),
+		} {
+			request.Header.Set(anebRunIDHeader, testRunID)
+			request.Header.Set("X-Aneb-Audit-Scope", "network_run")
+			handler.ServeHTTP(httptest.NewRecorder(), request)
+		}
+	})
+
+	for _, fragment := range []string{
+		"method=POST path=/api/v1/echo role=none scope=network_run run_id=" + testRunID,
+		"method=GET path=/api/v1/download role=none scope=network_run run_id=" + testRunID,
+		"method=POST path=/api/v1/upload role=none scope=network_run run_id=" + testRunID,
+	} {
+		if !strings.Contains(logs, fragment) {
+			t.Fatalf("network request was not isolated under network scope: missing=%q logs=%q", fragment, logs)
+		}
+	}
+}
+
 func TestRequestAuditRedactsLegacyInvalidAndDuplicateRunIDs(t *testing.T) {
 	logs := captureRequestAuditLogs(t, func(handler http.Handler) {
 		missing := httptest.NewRequest(http.MethodPost, "/api/v1/echo?query-secret=1", strings.NewReader("body-secret"))
@@ -358,7 +382,6 @@ func TestRequestAuditNormalizesAllContractAndUnknownAPIRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/profiles",
 		"/api/v1/stream",
-		"/api/v1/upload",
 		"/api/v1/toolloop",
 		"/api/v1/results",
 		"/api/v1/impairments",

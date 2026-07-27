@@ -12,6 +12,7 @@ import uuid
 from unittest import mock
 
 from scripts import collect_realtime_quick_evidence as collector
+from scripts.quick_collection_contract import network_quick_contract
 
 
 RUN_ID = "019fa000-1111-7222-8333-444455556666"
@@ -406,6 +407,21 @@ class CommandContractTests(unittest.TestCase):
 
         self.assertEqual("b" * 64, identity.apk_sha256)
         self.assertEqual("c" * 64, identity.signer_sha256)
+        network_report = json.loads(json.dumps(report))
+        network_report["apk"]["file_name"] = (
+            "ANEB-Probe-0.5.14-codex-debug.apk"
+        )
+        network_report["apk"]["version_name"] = "0.5.14-codex"
+        network_report["apk"]["version_code"] = 46
+        network_identity = collector.validate_ci_provenance_report(
+            network_report,
+            source_commit=commit,
+            contract=network_quick_contract(),
+        )
+        self.assertEqual(
+            "ANEB-Probe-0.5.14-codex-debug.apk",
+            network_identity.apk_file_name,
+        )
         report["apk"]["version_code"] = 44  # type: ignore[index]
         with self.assertRaisesRegex(
             collector.CollectorError,
@@ -558,6 +574,22 @@ class CommandContractTests(unittest.TestCase):
                 "'" + script + "'",
             ],
             collector.run_as_shell_tail(script),
+        )
+
+    def test_run_as_shell_script_uses_explicit_contract_package(self) -> None:
+        self.assertEqual(
+            [
+                "shell",
+                "run-as",
+                "com.example.networkprobe",
+                "sh",
+                "-c",
+                "'printf present'",
+            ],
+            collector.run_as_shell_tail(
+                "printf present",
+                package_name="com.example.networkprobe",
+            ),
         )
 
     def test_run_as_shell_script_rejects_multiline_or_nul(self) -> None:

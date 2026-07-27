@@ -215,6 +215,30 @@ class ProfileCapabilityTest {
     }
 
     @Test
+    fun `network quick requires the frozen runtime plan contract`() {
+        val file = sequenceOf(
+            File("../../profiles/published/network_comprehensive_quick/profile.json"),
+            File("../profiles/published/network_comprehensive_quick/profile.json"),
+            File("profiles/published/network_comprehensive_quick/profile.json"),
+        ).first { it.isFile }
+        val profile = ProfileParser.parseSingle(file.readText())
+
+        val accepted = ProfileCapability.assess(profile)
+        assertTrue(accepted.contractIssues.joinToString(), accepted.executable)
+        assertEquals("aneb-network-runtime-plan-v1", profile.executionPlan?.contractVersion)
+        assertEquals("sha256:8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603", profile.executionPlan?.artifactHash)
+
+        val missing = ProfileCapability.assess(profile.copy(executionPlan = null))
+        assertFalse(missing.executable)
+        assertTrue(missing.contractIssues.any { it.contains("执行计划") })
+
+        val drifted = ProfileCapability.assess(
+            profile.copy(executionPlan = profile.executionPlan?.copy(seed = 1L)),
+        )
+        assertFalse(drifted.executable)
+    }
+
+    @Test
     fun `published weak network profile freezes supported shaping and exclusions`() {
         val file = sequenceOf(
             File("../../profiles/published/network_comprehensive_weak_capacity_latency/profile.json"),

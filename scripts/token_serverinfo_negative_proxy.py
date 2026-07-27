@@ -31,6 +31,9 @@ MAX_CA_BYTES = 4 * 1024 * 1024
 MAX_HEADER_BYTES = 256 * 1024
 MAX_PEER_CERTIFICATE_BYTES = 256 * 1024
 MAX_OUTPUT_BYTES = 12 * 1024 * 1024
+ALLOWED_AUDIT_SCOPES = frozenset(
+    {"token_run", "realtime_run", "network_run"}
+)
 
 
 class NegativeProxyFailure(ValueError):
@@ -281,7 +284,7 @@ class HttpsUpstreamFetcher:
             or (
                 "X-Aneb-Audit-Scope" in headers
                 and headers["X-Aneb-Audit-Scope"]
-                not in {"token_run", "realtime_run"}
+                not in ALLOWED_AUDIT_SCOPES
             )
         ):
             raise NegativeProxyFailure("forward_headers_invalid")
@@ -741,7 +744,7 @@ class NegativeProxySession:
             "X-Aneb-Audit-Scope",
             "request_audit_scope_invalid",
         )
-        if scope is not None and scope not in {"token_run", "realtime_run"}:
+        if scope is not None and scope not in ALLOWED_AUDIT_SCOPES:
             raise NegativeProxyFailure("request_audit_scope_invalid")
         self._accepted_requests = 1
         forwarded = {
