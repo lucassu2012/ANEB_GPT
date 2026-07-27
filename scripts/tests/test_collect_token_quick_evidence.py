@@ -565,7 +565,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                     )
                     self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
-    def test_collector_and_independent_verifier_share_the_exact_31_tool_labels(self) -> None:
+    def test_collector_and_independent_verifier_share_the_exact_33_tool_labels(self) -> None:
         collector = SCRIPT.read_text(encoding="utf-8")
         expected_block = collector.split(
             "$assetExpectedPaths = [ordered]@{", 1
@@ -592,7 +592,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 verifier_labels = set(ast.literal_eval(node.value))
                 break
         self.assertIsNotNone(verifier_labels)
-        self.assertEqual(31, len(collector_labels))
+        self.assertEqual(33, len(collector_labels))
         self.assertEqual(verifier_labels, collector_labels)
 
     def test_negative_preflight_binds_canonical_proxy_and_verifier_without_external_calls(self) -> None:
@@ -2445,6 +2445,168 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             publication.index("COMPLETE"),
         )
 
+    def test_workflow_trace_is_a_shadow_gate_before_token_publication(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("function Invoke-WorkflowTraceDecision", source)
+        trace_gate = self._function_source("Invoke-WorkflowTraceDecision")
+        self.assertIn("$script:WorkflowTraceCliPath", trace_gate)
+        self.assertIn("workflow-trace.json", trace_gate)
+        self.assertIn("aneb-quick-workflow-trace@1.0.0", trace_gate)
+        self.assertIn("aneb-quick-workflow-decision@1.0.0", trace_gate)
+        self.assertIn("Invoke-BoundedNativeTextOnce", trace_gate)
+
+        publication = source.rsplit("finally {", 1)[1]
+        shadow_gate = self._function_source("Assert-WorkflowTraceShadowGate")
+        self.assertIn("workflow_trace_shadow_mismatch", shadow_gate)
+        self.assertIn("Assert-WorkflowTraceShadowGate", publication)
+        self.assertIn("$script:WorkflowTracePublishEligible", publication)
+        historical_gate = "$script:WorkflowSucceeded -and $script:CleanupSucceeded"
+        self.assertIn(historical_gate, publication)
+        self.assertLess(
+            publication.index("Invoke-WorkflowTraceDecision"),
+            publication.index("collector-status.json"),
+        )
+        self.assertLess(
+            publication.index("$script:WorkflowTracePublishEligible"),
+            publication.index("Write-EvidenceManifestDraft"),
+        )
+
+    def test_workflow_trace_shadow_gate_accepts_only_equivalent_decisions(self) -> None:
+        shadow_gate = self._function_source("Assert-WorkflowTraceShadowGate")
+        with tempfile.TemporaryDirectory() as temporary:
+            wrapper = Path(temporary) / "workflow-trace-shadow-gate.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                + shadow_gate
+                + "\n"
+                + "$acceptedTrue = Assert-WorkflowTraceShadowGate "
+                + "-HistoricalPass $true -TracePublishEligible $true\n"
+                + "if (-not $acceptedTrue) { throw 'true_true_not_accepted' }\n"
+                + "$acceptedFalse = Assert-WorkflowTraceShadowGate "
+                + "-HistoricalPass $false -TracePublishEligible $false\n"
+                + "if ($acceptedFalse) { throw 'false_false_not_retained' }\n"
+                + "foreach ($case in @(@($true,$false),@($false,$true))) {\n"
+                + "  $caught = $false\n"
+                + "  try { $null = Assert-WorkflowTraceShadowGate "
+                + "-HistoricalPass ([bool]$case[0]) "
+                + "-TracePublishEligible ([bool]$case[1]) }\n"
+                + "  catch { if ($_.Exception.Message -ceq "
+                + "'workflow_trace_shadow_mismatch') { $caught = $true } else { throw } }\n"
+                + "  if (-not $caught) { throw 'mismatch_not_rejected' }\n"
+                + "}\n"
+                + "Write-Output 'PASS'\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "PASS")
+
+    def test_workflow_trace_decision_is_written_by_the_locked_python_adapter(
+        self,
+    ) -> None:
+        functions = "\n".join(
+            self._function_source(name)
+            for name in (
+                "ConvertTo-NativeArgument",
+                "Invoke-BoundedNativeTextOnce",
+                "Test-ExactPropertyNames",
+                "Write-TextNoBom",
+                "Write-JsonNoBom",
+                "Write-NewTextNoBom",
+                "Invoke-WorkflowTraceDecision",
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            wrapper = Path(temporary) / "workflow-trace-decision.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                + functions
+                + "\n"
+                + "$script:ResolvedTools = [pscustomobject]@{ Python = "
+                + self._powershell_literal(Path(os.sys.executable))
+                + " }\n"
+                + "$script:WorkflowTraceCliPath = "
+                + self._powershell_literal(ROOT / "scripts" / "quick_collection_trace_cli.py")
+                + "\n"
+                + "$ToolCommandTimeoutSeconds = 10\n"
+                + "$script:WorkflowTracePreflightSucceeded = $true\n"
+                + "$script:WorkflowTraceAcquireSucceeded = $true\n"
+                + "$script:WorkflowSucceeded = $true\n"
+                + "$script:PrimaryFailure = $null\n"
+                + "$script:PhoneCleanupFailures = @()\n"
+                + "$script:RemoteCleanupFailures = @()\n"
+                + "$script:stableCalls = 0\n"
+                + "function Assert-ToolingProvenanceStable { "
+                + "param($ResolvedTools); $script:stableCalls++ }\n"
+                + "$decision = Invoke-WorkflowTraceDecision -EvidenceDirectory "
+                + self._powershell_literal(evidence)
+                + "\n"
+                + "if (-not $decision.publish_eligible -or "
+                + "$script:stableCalls -ne 2) { throw 'decision_contract_invalid' }\n"
+                + "Write-Output 'PASS'\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    self.powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "PASS")
+            trace = json.loads(
+                (evidence / "workflow-trace.json").read_text(encoding="utf-8")
+            )
+            decision = json.loads(
+                (evidence / "workflow-decision.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(
+            [
+                "preflight",
+                "acquire",
+                "collect",
+                "cleanup_phone",
+                "cleanup_remote",
+            ],
+            [event["phase"] for event in trace["events"]],
+        )
+        self.assertTrue(
+            all(event["outcome"] == "pass" for event in trace["events"])
+        )
+        self.assertTrue(decision["publish_eligible"])
+        self.assertIsNone(decision["primary_failure"])
+        self.assertEqual([], decision["cleanup_failures"])
+
     def test_settings_busy_sentinel_owns_phone_until_final_cleanup(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         target_stop = source.split("function Stop-TargetAppOnce", 1)[1].split(
@@ -3527,7 +3689,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             "Move-Item -LiteralPath $PartialDirectory -Destination $CompleteDirectory",
             publication,
         )
-        self.assertIn("$script:ResolvedTools.ToolingFiles.Count -ne 31", source)
+        self.assertIn("$script:ResolvedTools.ToolingFiles.Count -ne 33", source)
         report_verifier = self._function_source("Invoke-PublishedBundleVerification")
         self.assertLess(
             report_verifier.index("Assert-BundleVerificationReport"),
@@ -3557,10 +3719,12 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             "token_release_verifier",
             "quick_collection_adapter",
             "quick_collection_core",
+            "workflow_trace_cli",
+            "workflow_trace_core",
         ):
             with self.subTest(asset=asset):
                 self.assertEqual(3, source.count(f"{asset} ="))
-        self.assertEqual(3, source.count("Count -ne 31"))
+        self.assertEqual(3, source.count("Count -ne 33"))
         self.assertIn(
             "$script:ReadyPublisherPath = [string]$toolingFiles['ready_publisher']",
             source,

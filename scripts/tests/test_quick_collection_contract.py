@@ -5,10 +5,40 @@ import unittest
 from scripts.quick_collection_contract import (
     network_quick_contract,
     realtime_quick_contract,
+    token_quick_contract,
 )
 
 
 class QuickCollectionContractTest(unittest.TestCase):
+    def test_token_identity_is_frozen_to_m0_ec1_release(self) -> None:
+        contract = token_quick_contract()
+
+        self.assertEqual("token", contract.category)
+        self.assertEqual(
+            "token_multimodal_quick@1.2.1",
+            contract.profile_contract,
+        )
+        self.assertEqual("0.5.12-codex", contract.expected_version_name)
+        self.assertEqual(44, contract.expected_version_code)
+        self.assertEqual("aneb-server/0.8.0", contract.expected_server_version)
+        self.assertEqual(
+            "ANEB-Probe-0.5.12-codex-debug.apk",
+            contract.candidate_apk_name,
+        )
+        self.assertEqual("token_run", contract.audit_scope)
+        self.assertEqual("aneb-token-audit", contract.remote_marker_prefix)
+        self.assertEqual("aneb-d82-busy-sentinel", contract.busy_sentinel_schema)
+        self.assertEqual("start_token_quick", contract.launch_operation_code)
+        self.assertEqual("d82-token-quick", contract.collection_prefix)
+        self.assertEqual("aneb-d82-collector-plan", contract.plan_schema)
+        self.assertEqual("aneb-d82-collector-status", contract.status_schema)
+        self.assertEqual("aneb-d82-evidence-manifest", contract.manifest_schema)
+        self.assertEqual("execution_mode", contract.mode_field)
+        self.assertEqual(
+            frozenset({"positive", "negative_receipt_missing"}),
+            contract.mode_values,
+        )
+
     def test_network_identity_is_frozen_to_m0_ec3_release(self) -> None:
         contract = network_quick_contract()
 

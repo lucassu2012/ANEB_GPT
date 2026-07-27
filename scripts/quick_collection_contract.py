@@ -34,6 +34,8 @@ class QuickCollectionContract:
     device_identity_schema: str
     phone_receipt_schema: str
     complete_marker: str
+    mode_field: str
+    mode_values: frozenset[str]
 
 
 def network_quick_contract() -> QuickCollectionContract:
@@ -69,6 +71,8 @@ def network_quick_contract() -> QuickCollectionContract:
         device_identity_schema="aneb-network-device-identity",
         phone_receipt_schema="aneb-network-phone-live-state-receipt",
         complete_marker="ANEB_NETWORK_QUICK_COMPLETE",
+        mode_field="mode",
+        mode_values=frozenset({"positive", "negative"}),
     )
 
 
@@ -105,6 +109,48 @@ def realtime_quick_contract() -> QuickCollectionContract:
         device_identity_schema="aneb-realtime-device-identity",
         phone_receipt_schema="aneb-realtime-phone-live-state-receipt",
         complete_marker="ANEB_REALTIME_QUICK_COMPLETE",
+        mode_field="mode",
+        mode_values=frozenset({"positive", "negative"}),
+    )
+
+
+def token_quick_contract() -> QuickCollectionContract:
+    return QuickCollectionContract(
+        category="token",
+        package_name="com.aneb.probe.codex",
+        activity_component=(
+            "com.aneb.probe.codex/com.aneb.probe.ui.MainActivity"
+        ),
+        profile_contract="token_multimodal_quick@1.2.1",
+        expected_version_name="0.5.12-codex",
+        expected_version_code=44,
+        expected_server_version="aneb-server/0.8.0",
+        candidate_apk_name="ANEB-Probe-0.5.12-codex-debug.apk",
+        candidate_files=frozenset(
+            {
+                "ANEB-Probe-0.5.12-codex-debug.apk",
+                "build-manifest.json",
+                "checksums.sha256",
+                "provenance.sigstore.json",
+                "ANEB-安装说明.txt",
+            }
+        ),
+        audit_scope="token_run",
+        remote_marker_prefix="aneb-token-audit",
+        busy_sentinel_schema="aneb-d82-busy-sentinel",
+        launch_operation_code="start_token_quick",
+        collection_prefix="d82-token-quick",
+        plan_schema="aneb-d82-collector-plan",
+        status_schema="aneb-d82-collector-status",
+        run_receipt_schema="aneb-d82-bundle-verification-report",
+        manifest_schema="aneb-d82-evidence-manifest",
+        device_identity_schema=(
+            "aneb-token-quick-device-identity-verification"
+        ),
+        phone_receipt_schema="aneb-p40-live-clean-after",
+        complete_marker="ANEB_D82_COMPLETE",
+        mode_field="execution_mode",
+        mode_values=frozenset({"positive", "negative_receipt_missing"}),
     )
 
 
@@ -112,4 +158,5 @@ __all__ = (
     "QuickCollectionContract",
     "network_quick_contract",
     "realtime_quick_contract",
+    "token_quick_contract",
 )

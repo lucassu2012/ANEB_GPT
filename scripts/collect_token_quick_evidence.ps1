@@ -561,8 +561,8 @@ function Assert-ToolingProvenanceStable {
     param(
         [Parameter(Mandatory = $true)]$ResolvedTools
     )
-    if ($script:ResolvedTools.ToolingFiles.Count -ne 31 -or
-        $script:ResolvedTools.ToolingProvenance.files.Count -ne 31) {
+    if ($script:ResolvedTools.ToolingFiles.Count -ne 33 -or
+        $script:ResolvedTools.ToolingProvenance.files.Count -ne 33) {
         throw 'tooling_closure_count_invalid'
     }
     foreach ($entry in $ResolvedTools.ToolingFiles.GetEnumerator()) {
@@ -828,6 +828,8 @@ function Assert-LocalPreflight {
     $tokenReleaseVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_token_quick_evidence_release.py'
     $quickCollectionAdapterExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_verifier_adapter.py'
     $quickCollectionCoreExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_verifier.py'
+    $workflowTraceCliExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_trace_cli.py'
+    $workflowTraceCoreExpectedPath = Join-Path $repositoryRoot 'scripts\quick_collection_workflow.py'
     $ciProvenanceVerifierExpectedPath = Join-Path $repositoryRoot 'scripts\verify_ci_apk_provenance.py'
     $ciWorkflowExpectedPath = Join-Path $repositoryRoot '.github\workflows\ci.yml'
     $debugCandidatePackagerExpectedPath = Join-Path $repositoryRoot 'scripts\package_debug_candidate.py'
@@ -862,6 +864,8 @@ function Assert-LocalPreflight {
         token_release_verifier = $tokenReleaseVerifierExpectedPath
         quick_collection_adapter = $quickCollectionAdapterExpectedPath
         quick_collection_core = $quickCollectionCoreExpectedPath
+        workflow_trace_cli = $workflowTraceCliExpectedPath
+        workflow_trace_core = $workflowTraceCoreExpectedPath
         ci_provenance_verifier = $CiProvenanceVerifierPath
         ci_workflow = $ciWorkflowExpectedPath
         debug_candidate_packager = $debugCandidatePackagerExpectedPath
@@ -895,6 +899,8 @@ function Assert-LocalPreflight {
         token_release_verifier = $tokenReleaseVerifierExpectedPath
         quick_collection_adapter = $quickCollectionAdapterExpectedPath
         quick_collection_core = $quickCollectionCoreExpectedPath
+        workflow_trace_cli = $workflowTraceCliExpectedPath
+        workflow_trace_core = $workflowTraceCoreExpectedPath
         ci_provenance_verifier = $ciProvenanceVerifierExpectedPath
         ci_workflow = $ciWorkflowExpectedPath
         debug_candidate_packager = $debugCandidatePackagerExpectedPath
@@ -928,6 +934,8 @@ function Assert-LocalPreflight {
         token_release_verifier = 'Token READY release verifier'
         quick_collection_adapter = 'family-neutral collection verifier adapter'
         quick_collection_core = 'family-neutral collection verifier core'
+        workflow_trace_cli = 'family-neutral workflow trace CLI'
+        workflow_trace_core = 'family-neutral workflow trace core'
         ci_provenance_verifier = 'CI APK provenance verifier'
         ci_workflow = 'CI workflow'
         debug_candidate_packager = 'debug candidate packager'
@@ -954,7 +962,7 @@ function Assert-LocalPreflight {
             -RepositoryRoot $repositoryRoot `
             -Label ([string]$assetLabels[$assetName])
     }
-    if ($toolingFiles.Count -ne 31) {
+    if ($toolingFiles.Count -ne 33) {
         throw "tooling_closure_count_invalid count=$($toolingFiles.Count)"
     }
     $script:DeriveHelperPath = [string]$toolingFiles['derive_helper']
@@ -965,6 +973,7 @@ function Assert-LocalPreflight {
     $script:NegativeClientDbVerifierPath = [string]$toolingFiles['negative_client_db_verifier']
     $script:BundleVerifierPath = [string]$toolingFiles['bundle_verifier']
     $script:ReadyPublisherPath = [string]$toolingFiles['ready_publisher']
+    $script:WorkflowTraceCliPath = [string]$toolingFiles['workflow_trace_cli']
     $script:CiProvenanceVerifierPath = [string]$toolingFiles['ci_provenance_verifier']
     $script:ResultJsonlVerifierPath = [string]$toolingFiles['result_jsonl_verifier']
     $script:DeviceIdentityVerifierPath = [string]$toolingFiles['device_identity_verifier']
@@ -4062,6 +4071,9 @@ function Wait-ForEndBarrierAudit {
 function Complete-CollectorCleanup {
     param([Parameter(Mandatory = $true)][string]$EvidenceDirectory)
     $errors = New-Object System.Collections.Generic.List[string]
+    $phoneErrors = New-Object System.Collections.Generic.List[string]
+    $remoteErrors = New-Object System.Collections.Generic.List[string]
+    $remoteSteps = @('end_barrier', 'lock_release', 'lock_postcheck')
     foreach ($cleanupStep in @(
         @{ Name = 'target_app'; Attempts = 3; Action = { Stop-TargetAppOnce } },
         @{ Name = 'negative_reverse'; Attempts = 3; Action = {
@@ -4128,14 +4140,22 @@ function Complete-CollectorCleanup {
             }
         }
         if (-not $completed) {
-            $errors.Add((
+            $cleanupError = (
                 "{0}:attempts={1}:{2}" -f
                 $cleanupStep.Name,
                 [int]$cleanupStep.Attempts,
                 [string]$lastError
-            ))
+            )
+            $errors.Add($cleanupError)
+            if ($remoteSteps -ccontains [string]$cleanupStep.Name) {
+                $remoteErrors.Add($cleanupError)
+            } else {
+                $phoneErrors.Add($cleanupError)
+            }
         }
     }
+    $script:PhoneCleanupFailures = @($phoneErrors | ForEach-Object { [string]$_ })
+    $script:RemoteCleanupFailures = @($remoteErrors | ForEach-Object { [string]$_ })
     $script:CleanupSucceeded = $errors.Count -eq 0
     Write-JsonNoBom -Path (Join-Path $EvidenceDirectory 'cleanup-report.json') -Value ([ordered]@{
         schema = 'aneb-d82-collector-cleanup'
@@ -4162,6 +4182,109 @@ function Complete-CollectorCleanup {
         stayon_restored = -not $script:StayonChanged
         lock_release_attempted = $script:LockReleaseAttempted
     })
+}
+
+function Assert-WorkflowTraceShadowGate {
+    param(
+        [Parameter(Mandatory = $true)][bool]$HistoricalPass,
+        [Parameter(Mandatory = $true)][bool]$TracePublishEligible
+    )
+    if ($HistoricalPass -ne $TracePublishEligible) {
+        throw 'workflow_trace_shadow_mismatch'
+    }
+    return $HistoricalPass
+}
+
+function Invoke-WorkflowTraceDecision {
+    param([Parameter(Mandatory = $true)][string]$EvidenceDirectory)
+
+    $failure = if ([string]::IsNullOrWhiteSpace([string]$script:PrimaryFailure)) {
+        'collector_failed_without_reason'
+    } else {
+        [string]$script:PrimaryFailure
+    }
+    $events = New-Object System.Collections.Generic.List[object]
+    if (-not $script:WorkflowTracePreflightSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'fail'; failure = $failure })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'skip' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'skip' })
+    } elseif (-not $script:WorkflowTraceAcquireSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'fail'; failure = $failure })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'skip' })
+    } elseif (-not $script:WorkflowSucceeded) {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'fail'; failure = $failure })
+    } else {
+        $events.Add([ordered]@{ phase = 'preflight'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'acquire'; outcome = 'pass' })
+        $events.Add([ordered]@{ phase = 'collect'; outcome = 'pass' })
+    }
+
+    foreach ($cleanup in @(
+        @{ Phase = 'cleanup_phone'; Failures = @($script:PhoneCleanupFailures) },
+        @{ Phase = 'cleanup_remote'; Failures = @($script:RemoteCleanupFailures) }
+    )) {
+        $cleanupFailures = @($cleanup.Failures | ForEach-Object { [string]$_ })
+        if ($cleanupFailures.Count -eq 0) {
+            $events.Add([ordered]@{ phase = [string]$cleanup.Phase; outcome = 'pass' })
+        } else {
+            $events.Add([ordered]@{
+                phase = [string]$cleanup.Phase
+                outcome = 'fail'
+                failure = ($cleanupFailures -join ' | ')
+            })
+        }
+    }
+
+    $tracePath = Join-Path $EvidenceDirectory 'workflow-trace.json'
+    Write-JsonNoBom -Path $tracePath -Value ([ordered]@{
+        schema = 'aneb-quick-workflow-trace@1.0.0'
+        events = $events.ToArray()
+    })
+    Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+    $result = Invoke-BoundedNativeTextOnce `
+        -Command ([string]$script:ResolvedTools.Python) `
+        -Arguments @([string]$script:WorkflowTraceCliPath, $tracePath) `
+        -TimeoutSeconds $ToolCommandTimeoutSeconds `
+        -TimeoutReason 'workflow_trace_cli_timeout' `
+        -LaunchReason 'workflow_trace_cli_launch_failed'
+    if ($result.ExitCode -ne 0) {
+        throw "workflow_trace_cli_failed rc=$($result.ExitCode) output=$($result.Text -replace '\r?\n', '|')"
+    }
+    $output = ([string]$result.Text -replace "`r`n", "`n" -replace "`r", "`n")
+    if ([string]::IsNullOrWhiteSpace($output) -or $output.Contains("`n")) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    try {
+        $decision = $output | ConvertFrom-Json
+    } catch {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    if (-not (Test-ExactPropertyNames `
+        -Value $decision `
+        -Expected @('cleanup_failures', 'primary_failure', 'publish_eligible', 'schema')) -or
+        [string]$decision.schema -cne 'aneb-quick-workflow-decision@1.0.0' -or
+        $decision.publish_eligible -isnot [bool]) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    if ($null -ne $decision.primary_failure -and
+        ($decision.primary_failure -isnot [string] -or
+         [string]::IsNullOrWhiteSpace([string]$decision.primary_failure))) {
+        throw 'workflow_trace_cli_output_invalid'
+    }
+    foreach ($cleanupFailure in @($decision.cleanup_failures)) {
+        if ($cleanupFailure -isnot [string] -or
+            [string]::IsNullOrWhiteSpace([string]$cleanupFailure)) {
+            throw 'workflow_trace_cli_output_invalid'
+        }
+    }
+    Assert-ToolingProvenanceStable -ResolvedTools $script:ResolvedTools
+    Write-NewTextNoBom `
+        -Path (Join-Path $EvidenceDirectory 'workflow-decision.json') `
+        -Text ($output + "`n")
+    return $decision
 }
 
 function Get-RelativeEvidencePath {
@@ -5283,6 +5406,12 @@ if ([bool]$script:ResolvedTools.ToolingProvenance.source_dirty) {
 
 $script:WorkflowSucceeded = $false
 $script:CleanupSucceeded = $false
+$script:WorkflowTracePreflightSucceeded = $false
+$script:WorkflowTraceAcquireSucceeded = $false
+$script:WorkflowTracePublishEligible = $false
+$script:WorkflowTraceEvaluated = $false
+$script:PhoneCleanupFailures = @()
+$script:RemoteCleanupFailures = @()
 $script:Published = $false
 $script:ReadyPath = $null
 $script:PrimaryFailure = $null
@@ -5390,6 +5519,7 @@ Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-plan.json') -Value
 
 try {
     $devicePreflight = Assert-LiveDevicePreflight -EvidenceDirectory $PartialDirectory
+    $script:WorkflowTracePreflightSucceeded = $true
     $script:OriginalStayon = [string]$devicePreflight.stay_on_while_plugged_in
     Start-BusySentinel -EvidenceDirectory $PartialDirectory
 
@@ -5434,6 +5564,7 @@ try {
     $null = Assert-BusySentinelFocused `
         -EvidenceDirectory $PartialDirectory `
         -Stage 'before_target_handoff'
+    $script:WorkflowTraceAcquireSucceeded = $true
     $null = Start-TokenQuickRun
     $script:RunId = Wait-TokenQuickCompletion `
         -Logcat $script:Logcat `
@@ -5504,6 +5635,8 @@ try {
     } catch {
         $script:CleanupSucceeded = $false
         $cleanupFailure = "cleanup_orchestration_failure:$($_.Exception.Message)"
+        $script:PhoneCleanupFailures = @($cleanupFailure)
+        $script:RemoteCleanupFailures = @($cleanupFailure)
         if ([string]::IsNullOrWhiteSpace($script:PrimaryFailure)) {
             $script:PrimaryFailure = $cleanupFailure
         } else {
@@ -5511,7 +5644,27 @@ try {
         }
     }
 
-    $combinedPass = $script:WorkflowSucceeded -and $script:CleanupSucceeded
+    $historicalPass = $script:WorkflowSucceeded -and $script:CleanupSucceeded
+    try {
+        $traceDecision = Invoke-WorkflowTraceDecision -EvidenceDirectory $PartialDirectory
+        $script:WorkflowTraceEvaluated = $true
+        $script:WorkflowTracePublishEligible = Assert-WorkflowTraceShadowGate `
+            -HistoricalPass ([bool]$historicalPass) `
+            -TracePublishEligible ([bool]$traceDecision.publish_eligible)
+    } catch {
+        $traceFailure = $_.Exception.Message
+        $script:WorkflowTracePublishEligible = $false
+        if ([string]::IsNullOrWhiteSpace($script:PrimaryFailure)) {
+            $script:PrimaryFailure = $traceFailure
+        } else {
+            $script:PrimaryFailure = $script:PrimaryFailure + ' | ' + $traceFailure
+        }
+    }
+    $combinedPass = (
+        $historicalPass -and
+        $script:WorkflowTraceEvaluated -and
+        $script:WorkflowTracePublishEligible
+    )
     Write-JsonNoBom -Path (Join-Path $PartialDirectory 'collector-status.json') -Value ([ordered]@{
         schema = 'aneb-d82-collector-status'
         schema_version = '1.0.0'
@@ -5529,7 +5682,9 @@ try {
         complete_directory = $CompleteDirectory
     })
 
-    if ($script:WorkflowSucceeded -and $script:CleanupSucceeded) {
+    if ($script:WorkflowSucceeded -and
+        $script:CleanupSucceeded -and
+        $script:WorkflowTracePublishEligible) {
         $verificationCandidateCreated = $false
         $verificationReportTempPath = $null
         $verificationReportPublished = $false

@@ -114,6 +114,8 @@ TOOL_PATHS = {
     "token_release_verifier": "scripts/verify_token_quick_evidence_release.py",
     "quick_collection_adapter": "scripts/quick_collection_verifier_adapter.py",
     "quick_collection_core": "scripts/quick_collection_verifier.py",
+    "workflow_trace_cli": "scripts/quick_collection_trace_cli.py",
+    "workflow_trace_core": "scripts/quick_collection_workflow.py",
     "time_chain_verifier": "scripts/verify_token_quick_time_chain.py",
     "raw_state_verifier": "scripts/verify_token_quick_raw_state.py",
     "device_identity_verifier": "scripts/verify_token_quick_device_identity.py",
@@ -361,6 +363,85 @@ def write_json(path: Path, value: object) -> None:
         encoding="utf-8",
         newline="",
     )
+
+
+class WorkflowTraceBundleEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def _write_valid_evidence(bundle: Path) -> None:
+        write_json(
+            bundle / "workflow-trace.json",
+            {
+                "schema": "aneb-quick-workflow-trace@1.0.0",
+                "events": [
+                    {"phase": "preflight", "outcome": "pass"},
+                    {"phase": "acquire", "outcome": "pass"},
+                    {"phase": "collect", "outcome": "pass"},
+                    {"phase": "cleanup_phone", "outcome": "pass"},
+                    {"phase": "cleanup_remote", "outcome": "pass"},
+                ],
+            },
+        )
+        write_json(
+            bundle / "workflow-decision.json",
+            {
+                "schema": "aneb-quick-workflow-decision@1.0.0",
+                "publish_eligible": True,
+                "primary_failure": None,
+                "cleanup_failures": [],
+            },
+        )
+
+    def test_valid_trace_and_decision_are_independently_recomputed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            self._write_valid_evidence(bundle)
+
+            decision = bundle_verifier.verify_workflow_trace_evidence(bundle)
+
+        self.assertTrue(decision["publish_eligible"])
+        self.assertIsNone(decision["primary_failure"])
+        self.assertEqual([], decision["cleanup_failures"])
+
+    def test_tampered_decision_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            self._write_valid_evidence(bundle)
+            write_json(
+                bundle / "workflow-decision.json",
+                {
+                    "schema": "aneb-quick-workflow-decision@1.0.0",
+                    "publish_eligible": False,
+                    "primary_failure": None,
+                    "cleanup_failures": [],
+                },
+            )
+
+            with self.assertRaises(bundle_verifier.BundleFailure) as caught:
+                bundle_verifier.verify_workflow_trace_evidence(bundle)
+
+        self.assertEqual(
+            "workflow_trace_evidence_invalid", caught.exception.reason_code
+        )
+
+    def test_invalid_trace_order_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary)
+            self._write_valid_evidence(bundle)
+            trace = json.loads(
+                (bundle / "workflow-trace.json").read_text(encoding="utf-8")
+            )
+            trace["events"][3], trace["events"][4] = (
+                trace["events"][4],
+                trace["events"][3],
+            )
+            write_json(bundle / "workflow-trace.json", trace)
+
+            with self.assertRaises(bundle_verifier.BundleFailure) as caught:
+                bundle_verifier.verify_workflow_trace_evidence(bundle)
+
+        self.assertEqual(
+            "workflow_trace_evidence_invalid", caught.exception.reason_code
+        )
 
 
 def certificate_thumbprint(path: Path) -> str:
@@ -919,6 +1000,7 @@ class BundleFixture:
                 "complete_directory": str(self.bundle),
             },
         )
+        WorkflowTraceBundleEvidenceTests._write_valid_evidence(self.bundle)
         write_json(
             self.bundle / "collector-plan.json",
             {
@@ -1979,6 +2061,27 @@ class TokenQuickEvidenceBundleVerifierTests(unittest.TestCase):
         self.assertEqual(20, report["business_counts"]["echo"])
         self.assertEqual(3, report["business_counts"]["token_sim"])
         self.assertEqual(1, report["business_counts"]["download"])
+
+    def test_self_consistent_manifest_cannot_hide_workflow_decision_tampering(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = BundleFixture(Path(temporary))
+            write_json(
+                fixture.bundle / "workflow-decision.json",
+                {
+                    "schema": "aneb-quick-workflow-decision@1.0.0",
+                    "publish_eligible": False,
+                    "primary_failure": None,
+                    "cleanup_failures": [],
+                },
+            )
+            fixture.rebuild_manifests()
+
+            completed, report = fixture.run()
+
+        self.assertEqual(1, completed.returncode, completed.stderr)
+        self.assertEqual("workflow_trace_evidence_invalid", report["reason_code"])
 
     def test_manifest_execution_mode_cannot_be_verified_as_another_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
