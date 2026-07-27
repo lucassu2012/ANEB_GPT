@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import io
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 import tempfile
@@ -32,6 +34,24 @@ RUN_ID = "019fa111-1111-7111-8111-111111111111"
 
 
 class NetworkQuickCollectorContractTest(unittest.TestCase):
+    def test_direct_script_help_is_executable(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(repo / "scripts" / "collect_network_quick_evidence.py"),
+                "--help",
+            ],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertIn("Collect one bounded Network Quick evidence bundle", completed.stdout)
+
     @staticmethod
     def network_serverinfo() -> dict[str, object]:
         return {

@@ -17,7 +17,7 @@ import re
 from typing import Literal, Mapping, Sequence
 import uuid
 
-try:
+if __package__:
     from scripts import collect_realtime_quick_evidence as mechanics
     from scripts.quick_collection_workflow import (
         CollectorError,
@@ -28,7 +28,7 @@ try:
     from scripts.quick_collection_contract import network_quick_contract
     from scripts.verify_network_quick_client_db import verify_database
     from scripts.verify_network_quick_run_audit import verify_journal
-except ModuleNotFoundError:  # Direct script execution from scripts/.
+else:  # Direct script execution from scripts/.
     import collect_realtime_quick_evidence as mechanics
     from quick_collection_contract import network_quick_contract
     from quick_collection_workflow import (
