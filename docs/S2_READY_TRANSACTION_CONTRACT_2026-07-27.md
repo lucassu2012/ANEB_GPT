@@ -130,3 +130,12 @@ Family wrapper 继续拥有原 CLI、异常类型和输出 schema，因此外部
 - ［KNOWN｜HIGH］TDD 证据：RED 精确表现为脚本无 `main`、错误输入仍 exit `0`；GREEN 1/1；完整 Realtime/Network/Token direct CLI + Token Adapter E2E 3/3。每轮 fresh pre/post 匹配残留均为 0。
 - ［KNOWN｜HIGH］Token PowerShell collector 仍使用旧 `Publish-EvidenceReleaseReady` 实现，tooling closure 仍未包含新 publisher 与 release verifier；因此 CLI 完成不等于 collector 迁移，S2 仍未完成。
 - ［INFERRED｜HIGH］下一切片是先以 PowerShell 合同测试锁定 CLI 参数、失败传播、report 原字节保留与 READY 最后提交顺序，再替换重复 PowerShell marker 逻辑并扩充工具 provenance。
+
+### S2-V4g 中间里程碑：Token PowerShell 薄壳与 31-file tooling closure
+
+- ［KNOWN｜HIGH］`Publish-EvidenceReleaseReady` 不再计算 manifest/report SHA、不再构造 READY JSON，也不再直接执行临时文件写入或原子移动；它只以冻结的 `bundle report` 两参数有界调用 S2-V4f CLI，并验证单行 canonical 机器回执。
+- ［KNOWN｜HIGH］CLI 非零退出时，薄壳只接受精确 failure schema/version/status/reason；它传播机器 reason，且不删除既有 verification report 或其他运行的 READY。CLI 已成功提交后，如果成功回执、路径绑定或后置 tooling provenance 复核失败，薄壳删除本轮 READY/partial 后再传播失败。
+- ［KNOWN｜HIGH］tooling closure 从 25 扩为 31，新增 `publish_token_quick_ready.py`、`quick_ready_transaction.py`、`quick_evidence_security.py`、`verify_token_quick_evidence_release.py`、`quick_collection_verifier_adapter.py`、`quick_collection_verifier.py`。collector、production bundle verifier 与 verifier fixture 精确共享同一标签集；每个文件继续受当前字节 SHA、Git tracked/clean 和 exact-path 门约束。
+- ［KNOWN｜HIGH］验证证据：薄壳 2 static + 3 dynamic 为 5/5；PowerShell parser `parse_errors=0`；完整 collector 92/92（1 个既有平台 skip）；完整 bundle verifier 119/119（2 个既有平台 skip）；共享 core/transaction/CLI 与 Token/Realtime/Network collection/release 91/91（4 个平台 skip）；真实 31-file provenance 正向发布和单 digest 篡改负向 2/2。所有 fresh pre/post 匹配残留均为 0。
+- ［KNOWN｜HIGH］最终本地全仓质量门 exit `0`：主 Python 827/827（16 个合同/平台 skip）、附加 Python 44/44、Android unit/lint/assemble、release boundary、repository secret scan、spec/schema、Go server/gateway 全部 PASS；结束后匹配残留进程为 0。日志 SHA-256 为 `6993149fd362de8c3c9df51cbf03c2b867b1bc726b9a5e75f4a8cab2fb629373`。
+- ［KNOWN｜HIGH］本里程碑没有重跑 P40/E-01，没有修改 Profile、业务 KPI、评分、阈值或三族业务 verifier。三族交叉回归与本地全仓质量门已经完成；本次提交的 clean GitHub CI 尚未完成，因此 S2 仍未结案。

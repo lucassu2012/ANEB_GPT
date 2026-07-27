@@ -565,7 +565,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                     )
                     self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
-    def test_collector_and_independent_verifier_share_the_exact_25_tool_labels(self) -> None:
+    def test_collector_and_independent_verifier_share_the_exact_31_tool_labels(self) -> None:
         collector = SCRIPT.read_text(encoding="utf-8")
         expected_block = collector.split(
             "$assetExpectedPaths = [ordered]@{", 1
@@ -592,7 +592,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 verifier_labels = set(ast.literal_eval(node.value))
                 break
         self.assertIsNotNone(verifier_labels)
-        self.assertEqual(25, len(collector_labels))
+        self.assertEqual(31, len(collector_labels))
         self.assertEqual(verifier_labels, collector_labels)
 
     def test_negative_preflight_binds_canonical_proxy_and_verifier_without_external_calls(self) -> None:
@@ -3527,7 +3527,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
             "Move-Item -LiteralPath $PartialDirectory -Destination $CompleteDirectory",
             publication,
         )
-        self.assertIn("$script:ResolvedTools.ToolingFiles.Count -ne 25", source)
+        self.assertIn("$script:ResolvedTools.ToolingFiles.Count -ne 31", source)
         report_verifier = self._function_source("Invoke-PublishedBundleVerification")
         self.assertLess(
             report_verifier.index("Assert-BundleVerificationReport"),
@@ -3535,46 +3535,71 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         )
 
     @unittest.skipUnless(os.name == "nt", "Windows evidence publication contract")
-    def test_ready_marker_is_digest_bound_and_is_the_last_release_commit(self) -> None:
+    def test_ready_publication_is_a_thin_attested_token_cli_shell(self) -> None:
         publish_ready = self._function_source("Publish-EvidenceReleaseReady")
+
+        self.assertIn("$script:ReadyPublisherPath", publish_ready)
+        self.assertIn("Invoke-BoundedNativeTextOnce", publish_ready)
+        self.assertIn("Assert-ToolingProvenanceStable", publish_ready)
+        self.assertIn("evidence_release_publisher_failed reason=", publish_ready)
+        self.assertNotIn("Get-FileHash", publish_ready)
+        self.assertNotIn("Write-NewTextNoBom", publish_ready)
+        self.assertNotIn("ConvertTo-Json", publish_ready)
+        self.assertNotIn("[IO.File]::Move", publish_ready)
+
+    def test_ready_cli_transitive_modules_are_inside_tooling_closure(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+
+        for asset in (
+            "ready_publisher",
+            "ready_transaction",
+            "quick_evidence_security",
+            "token_release_verifier",
+            "quick_collection_adapter",
+            "quick_collection_core",
+        ):
+            with self.subTest(asset=asset):
+                self.assertEqual(3, source.count(f"{asset} ="))
+        self.assertEqual(3, source.count("Count -ne 31"))
         self.assertIn(
-            "$roundTrip.committed_at_utc -is [DateTime]",
-            publish_ready,
+            "$script:ReadyPublisherPath = [string]$toolingFiles['ready_publisher']",
+            source,
         )
-        self.assertIn(
-            "$roundTripCommittedAt -cne [string]$marker.committed_at_utc",
-            publish_ready,
-        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows evidence publication contract")
+    def test_ready_shell_accepts_canonical_cli_success_as_last_release_commit(self) -> None:
+        publish_ready = self._function_source("Publish-EvidenceReleaseReady")
         collection_id = "d82-token-quick-20260719T010203Z-" + "a" * 32
-        run_id = "11111111-2222-7333-8444-555555555555"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bundle = root / f"{collection_id}.complete"
             bundle.mkdir()
-            manifest = bundle / "evidence-manifest.final.json"
-            manifest.write_text('{"schema":"fixture"}\n', encoding="utf-8")
-            manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
             report = root / f"{collection_id}.verification.json"
             report.write_text('{"schema":"verification-fixture"}\n', encoding="utf-8")
-            report_sha = hashlib.sha256(report.read_bytes()).hexdigest()
             ready = root / f"{collection_id}.READY.json"
             ready_temp = root / f"{collection_id}.ready.partial"
             wrapper = root / "publish-ready.ps1"
             wrapper.write_text(
                 "$ErrorActionPreference='Stop'\nSet-StrictMode -Version 2.0\n"
-                + self._function_source("Write-NewTextNoBom")
-                + "\n"
-                + self._function_source("Assert-NonEmptyFile")
+                + self._function_source("Test-ExactPropertyNames")
                 + "\n"
                 + publish_ready
-                + "\nfunction Assert-NonReparseDirectoryChain { param($Path,$ReasonPrefix); return $Path }\n"
-                + "function Assert-PrivateEvidenceRoot { param($Path) }\n"
-                + f"$result=Publish-EvidenceReleaseReady -EvidenceRootPath '{root}' "
-                + f"-CollectionId '{collection_id}' -RunId '{run_id}' "
-                + "-ExecutionMode 'negative_receipt_missing' "
-                + f"-CompleteDirectory '{bundle}' -FinalManifestSha256 '{manifest_sha}' "
+                + "\n$script:ResolvedTools=[pscustomobject]@{Python='python'}\n"
+                + "$script:ReadyPublisherPath='publisher.py'\n"
+                + "$ToolCommandTimeoutSeconds=30\n$script:stableCalls=0\n"
+                + "function Assert-ToolingProvenanceStable { param($ResolvedTools); $script:stableCalls++ }\n"
+                + "function Invoke-BoundedNativeTextOnce { param($Command,$Arguments,$TimeoutSeconds,$TimeoutReason,$LaunchReason)\n"
+                + "if ($Command -cne 'python' -or $Arguments.Count -ne 3 -or $Arguments[0] -cne 'publisher.py') { throw 'publisher_arguments_invalid' }\n"
+                + f"if ($Arguments[1] -cne '{bundle}' -or $Arguments[2] -cne '{report}') {{ throw 'publisher_paths_invalid' }}\n"
+                + f"[IO.File]::WriteAllText('{ready}','ready')\n"
+                + "$value=[ordered]@{schema='aneb-d82-evidence-ready-publication';schema_version='1.0.0';status='pass';reason_code='ok';"
+                + f"collection_id='{collection_id}';run_id='11111111-2222-7333-8444-555555555555';execution_mode='negative_receipt_missing';"
+                + f"verification_report_path='{report}';verification_report_sha256='{'b' * 64}';ready_path='{ready}';ready_sha256='{'c' * 64}'}}\n"
+                + "return [pscustomobject]@{ExitCode=0;Text=($value|ConvertTo-Json -Compress)} }\n"
+                + f"$result=Publish-EvidenceReleaseReady -CompleteDirectory '{bundle}' "
                 + f"-VerificationReportPath '{report}'\n"
                 + f"if ($result -cne '{ready}') {{ throw 'ready_path_invalid' }}\n"
+                + "if ($script:stableCalls -ne 2) { throw 'tooling_stability_count_invalid' }\n"
                 + f"if (Test-Path -LiteralPath '{ready_temp}') {{ throw 'ready_temp_remained' }}\n",
                 encoding="utf-8",
             )
@@ -3586,18 +3611,7 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 timeout=20,
             )
             self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-            marker = json.loads(ready.read_text(encoding="utf-8"))
-            self.assertEqual("aneb-d82-evidence-release", marker["schema"])
-            self.assertEqual("1.0.0", marker["schema_version"])
-            self.assertEqual("ready", marker["status"])
-            self.assertEqual("ok", marker["reason_code"])
-            self.assertEqual(collection_id, marker["collection_id"])
-            self.assertEqual(run_id, marker["run_id"])
-            self.assertEqual("negative_receipt_missing", marker["execution_mode"])
-            self.assertEqual(bundle.name, marker["bundle_leaf"])
-            self.assertEqual(manifest_sha, marker["manifest_sha256"])
-            self.assertEqual(report.name, marker["verification_report_leaf"])
-            self.assertEqual(report_sha, marker["verification_report_sha256"])
+            self.assertTrue(ready.is_file())
 
         source = SCRIPT.read_text(encoding="utf-8")
         publication = source.split("$draftManifestPath = Write-EvidenceManifestDraft", 1)[1]
@@ -3609,23 +3623,34 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
         self.assertIn(".READY.json", source)
         self.assertIn(".ready.partial", source)
 
-    def test_ready_marker_rejects_non_uuidv7_run_id(self) -> None:
+    def test_ready_shell_propagates_canonical_cli_failure_without_deleting_report(self) -> None:
         publish_ready = self._function_source("Publish-EvidenceReleaseReady")
         collection_id = "d82-token-quick-20260719T010203Z-" + "a" * 32
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            wrapper = root / "reject-non-v7-ready.ps1"
+            bundle = root / f"{collection_id}.complete"
+            bundle.mkdir()
+            report = root / f"{collection_id}.verification.json"
+            report.write_bytes(b"frozen-report\n")
+            ready = root / f"{collection_id}.READY.json"
+            wrapper = root / "reject-publisher-failure.ps1"
             wrapper.write_text(
                 "$ErrorActionPreference='Stop'\nSet-StrictMode -Version 2.0\n"
+                + self._function_source("Test-ExactPropertyNames")
+                + "\n"
                 + publish_ready
-                + "\n$caught=$false\ntry { $null=Publish-EvidenceReleaseReady "
-                + f"-EvidenceRootPath '{root}' -CollectionId '{collection_id}' "
-                + "-RunId '11111111-2222-4333-8444-555555555555' "
-                + "-ExecutionMode 'positive' -CompleteDirectory 'unused' "
-                + f"-FinalManifestSha256 '{'b' * 64}' -VerificationReportPath 'unused' "
-                + "} catch { if ($_.Exception.Message -ceq 'evidence_release_identity_invalid') "
+                + "\n$script:ResolvedTools=[pscustomobject]@{Python='python'}\n"
+                + "$script:ReadyPublisherPath='publisher.py'\n$ToolCommandTimeoutSeconds=30\n$script:stableCalls=0\n"
+                + "function Assert-ToolingProvenanceStable { param($ResolvedTools); $script:stableCalls++ }\n"
+                + "function Invoke-BoundedNativeTextOnce { param($Command,$Arguments,$TimeoutSeconds,$TimeoutReason,$LaunchReason); "
+                + "return [pscustomobject]@{ExitCode=1;Text='{\"reason_code\":\"release_bundle_leaf_invalid\",\"schema\":\"aneb-d82-evidence-ready-publication\",\"schema_version\":\"1.0.0\",\"status\":\"fail\"}'} }\n"
+                + "$caught=$false\ntry { $null=Publish-EvidenceReleaseReady "
+                + f"-CompleteDirectory '{bundle}' -VerificationReportPath '{report}' "
+                + "} catch { if ($_.Exception.Message -ceq 'evidence_release_publisher_failed reason=release_bundle_leaf_invalid') "
                 + "{ $caught=$true } else { throw } }\n"
-                + "if (-not $caught) { throw 'non_uuidv7_ready_identity_was_accepted' }\n",
+                + "if (-not $caught) { throw 'publisher_failure_was_accepted' }\n"
+                + "if ($script:stableCalls -ne 1) { throw 'failure_stability_count_invalid' }\n"
+                + f"if (Test-Path -LiteralPath '{ready}') {{ throw 'failure_deleted_or_created_ready' }}\n",
                 encoding="utf-8",
             )
             completed = subprocess.run(
@@ -3635,8 +3660,53 @@ class TokenQuickEvidenceCollectorTests(unittest.TestCase):
                 check=False,
                 timeout=20,
             )
+            report_after = report.read_bytes()
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(b"frozen-report\n", report_after)
+
+    def test_ready_shell_rolls_back_cli_ready_when_post_provenance_fails(self) -> None:
+        publish_ready = self._function_source("Publish-EvidenceReleaseReady")
+        collection_id = "d82-token-quick-20260719T010203Z-" + "a" * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / f"{collection_id}.complete"
+            bundle.mkdir()
+            report = root / f"{collection_id}.verification.json"
+            report.write_bytes(b"frozen-report\n")
+            ready = root / f"{collection_id}.READY.json"
+            wrapper = root / "rollback-post-provenance.ps1"
+            wrapper.write_text(
+                "$ErrorActionPreference='Stop'\nSet-StrictMode -Version 2.0\n"
+                + self._function_source("Test-ExactPropertyNames")
+                + "\n"
+                + publish_ready
+                + "\n$script:ResolvedTools=[pscustomobject]@{Python='python'}\n"
+                + "$script:ReadyPublisherPath='publisher.py'\n$ToolCommandTimeoutSeconds=30\n$script:stableCalls=0\n"
+                + "function Assert-ToolingProvenanceStable { param($ResolvedTools); $script:stableCalls++; if ($script:stableCalls -eq 2) { throw 'tooling_drift' } }\n"
+                + "function Invoke-BoundedNativeTextOnce { param($Command,$Arguments,$TimeoutSeconds,$TimeoutReason,$LaunchReason); "
+                + f"[IO.File]::WriteAllText('{ready}','ready'); "
+                + "$value=[ordered]@{schema='aneb-d82-evidence-ready-publication';schema_version='1.0.0';status='pass';reason_code='ok';"
+                + f"collection_id='{collection_id}';run_id='11111111-2222-7333-8444-555555555555';execution_mode='positive';verification_report_path='{report}';verification_report_sha256='{'b' * 64}';ready_path='{ready}';ready_sha256='{'c' * 64}'}}; "
+                + "return [pscustomobject]@{ExitCode=0;Text=($value|ConvertTo-Json -Compress)} }\n"
+                + "$caught=$false\ntry { $null=Publish-EvidenceReleaseReady "
+                + f"-CompleteDirectory '{bundle}' -VerificationReportPath '{report}' "
+                + "} catch { if ($_.Exception.Message -ceq 'tooling_drift') { $caught=$true } else { throw } }\n"
+                + "if (-not $caught) { throw 'tooling_drift_was_accepted' }\n"
+                + f"if (Test-Path -LiteralPath '{ready}') {{ throw 'ready_was_not_rolled_back' }}\n",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [self.powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper)],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=20,
+            )
+            report_after = report.read_bytes()
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertEqual(b"frozen-report\n", report_after)
 
     def test_bundle_verification_report_gate_rejects_multiline_or_nonpass_output(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
