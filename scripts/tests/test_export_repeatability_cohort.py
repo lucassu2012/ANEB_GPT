@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -120,6 +122,20 @@ def _database(path: Path, documents: list[dict[str, object]]) -> list[str]:
 
 
 class ExportRepeatabilityCohortTests(unittest.TestCase):
+    def test_direct_script_help_uses_the_supported_import_path(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "export_repeatability_cohort.py"),
+                "--help",
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr.decode("utf-8", "replace"))
+
     def test_exports_frozen_result_envelope_bytes_in_requested_order(self) -> None:
         documents = [_realtime_run(index, (0.98, 42.0 + index, 0.01)) for index in (1, 2)]
         run_ids = [document["run"]["run_id"] for document in reversed(documents)]
@@ -139,6 +155,47 @@ class ExportRepeatabilityCohortTests(unittest.TestCase):
             self.assertEqual(run_ids, receipt["run_ids"])
             self.assertEqual(2, receipt["run_count"])
 
+    def test_failure_path_preserves_the_source_database_wal_and_shm_bytes(self) -> None:
+        document = _realtime_run(1, (0.98, 43.0, 0.01))
+        run_id = document["run"]["run_id"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = root / "aneb-probe.db"
+            _database(database, [document])
+            connection = sqlite3.connect(database)
+            self.assertEqual(
+                "wal",
+                connection.execute("PRAGMA journal_mode = WAL").fetchone()[0],
+            )
+            connection.execute("PRAGMA wal_autocheckpoint = 0")
+            connection.execute(
+                "UPDATE radio_sample SET tsNanos = tsNanos + 1 WHERE runId = ? AND id = 1",
+                (run_id,),
+            )
+            connection.commit()
+
+            source_paths = [
+                database,
+                Path(str(database) + "-wal"),
+                Path(str(database) + "-shm"),
+            ]
+            self.assertTrue(all(path.is_file() for path in source_paths))
+            before = {path.name: path.read_bytes() for path in source_paths}
+            output = root / "cohort.jsonl"
+            try:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "radio_envelope_binding_mismatch",
+                ):
+                    export_cohort(database, [run_id], output, root=ROOT)
+
+                self.assertEqual(
+                    before,
+                    {path.name: path.read_bytes() for path in source_paths},
+                )
+                self.assertFalse(output.exists())
+            finally:
+                connection.close()
     def test_rejects_room_radio_rows_that_do_not_match_the_frozen_envelope(self) -> None:
         document = _realtime_run(1, (0.98, 43.0, 0.01))
         run_id = document["run"]["run_id"]

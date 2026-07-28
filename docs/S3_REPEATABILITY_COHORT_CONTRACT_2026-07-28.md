@@ -5,7 +5,7 @@
 - ［KNOWN｜HIGH］`scripts/analyze_repeatability_cohort.py` 已实现三族共用的 strict-v2 cohort 身份、完整性和诊断层，输出合同为 `aneb-repeatability-cohort-v1`。
 - ［KNOWN｜HIGH］只有 Token `TOK-B04` 端到端 TTFT 调用既有 D-58 判据并产生 `pass/fail`；AI 实时与网络综合固定返回 `policy_pending + diagnostic_only`，不继承 D-58 的 CV≤10%、5-run 或 30 分钟门限。
 - ［KNOWN｜HIGH］分析器固定输出 `formal_baseline_eligible=false` 和 `single_run_confidence_unchanged=true`。一次 Quick、一个诊断 CV 或一次 CLI 成功都不能提升原结果置信度，也不能生成正式体验基线。
-- ［KNOWN｜HIGH］当前已在纯离线侧补齐无线序列结构审计和冻结 Room 原字节导出器；尚未采集 S3 新的 P40 三族重复样本，尚未关闭无线 cadence 正式判据、非开发者连续执行和真机导出后独立复算验收门。
+- ［KNOWN｜HIGH］2026-07-28 已用同一候选完成 P40 三族各 5 次、共 15 次业务运行；但 15/15 无线状态均为 `permission_denied`、样本数为 0，严格导出器据此拒绝，未形成合格的 strict-v2 三族 cohort。无线 cadence 正式判据、非开发者连续执行和真机导出后独立复算验收门仍未关闭，详见 `S3_M1_REPEATABILITY_ENGINEERING_VALIDATION_2026-07-28.md`。
 
 ## 2. 输入与 fail-closed 门
 
@@ -76,5 +76,8 @@ python -m scripts.export_repeatability_cohort `
 - ［KNOWN｜HIGH］新增切片后的稳定工作树完整 `scripts/quality_gate.ps1` 单次运行 exit=0：主 Python 863/863（skip 16）、附加 Python 44/44、Android、Go、release boundary、secret scan、APK packaging、spec catalog 与 result schemas 全部 PASS；post-scan 重型进程残留为 0。stdout/stderr/status SHA-256 分别为 `E9E339ECCE3C66BFD630016CF9B6FD77AB33A15EF8A2F784C3E423541E045156`、`DFAF7B97B7236EBD1E55EECF85BE06630ECF9022648F9C809150AFB601C6D653`、`13BF7B3039C63BF5A50491FA3CFD8EB4E699D1BA1436315AEF9CBE5711530354`。
 - ［KNOWN｜HIGH］稳定工作树完整 `scripts/quality_gate.ps1` 单次运行 exit=0、耗时 1,175,158ms：主 Python 858/858（skip 16）、附加 Python 44/44、Android、Go、release boundary、secret scan、APK packaging、spec catalog 与 result schemas 全部 PASS；运行后重型进程残留为 0。原始 stdout/stderr/status SHA-256 分别为 `D6B83E54451BF129E3BE4F69AF0B4FB29B4E092D2F3F17A93441D924B3A61F05`、`11FA501D358206B36B93B09E63E6DFB9CA5FDA8E259667A9CC56A489EEE53056`、`3BAA54E67B38FB13BA31BA1C6238B54B0377E96E7BC937082A35F7147183D2D8`。
 - ［KNOWN｜HIGH］冻结生产提交为 `3a35236`；GitHub Actions run `30320671090` 的 7 个 job 全部成功，覆盖 dedicated gateway、AI behavior model、Windows evidence、tracked-source credential scan、Profile/result/packaging、Go server 与 Android candidate build。
+- ［KNOWN｜HIGH］后续 P40 工程采样以 source `5b968bfffdb81451c80b2fd86064c06b35da925b`、CI run `30323979935`、APK SHA-256=`09db3b4a3f137cd98c2346c55f5dadf3f9e797367327e0c5e7b986de525ce8b4` 完成三族各 5 次业务运行。Token D-58 业务子门为 PASS；Realtime/Network 只保留诊断分布；15/15 无线权限拒绝使严格 cohort 不成立，不能写成正式重复性通过。
+- ［KNOWN｜HIGH］临时诊断直接连接冻结 Room 源并触发 WAL checkpoint，原 DB/WAL/SHM 三件套被转换为单 DB；该事件已固定为 `engineering_diagnostic_only`，严格导出器本身不是根因。新增失败路径回归要求导出拒绝前后源三件套逐字节一致。
+- ［KNOWN｜HIGH］runner 现会在首个业务 run 前生成 `aneb-repeatability-radio-permissions-v1` create-once 回执；任何必需权限缺失、重复或无法唯一解析均 fail closed，且拒绝事实仍被保留。该机械修复不改变 Profile、KPI、AQS 或评分语义。
 - ［KNOWN｜HIGH］未修改任何 Profile、KPI、质量目标、AQS 权重、结果置信度或历史真机证据。
-- ［KNOWN｜HIGH］下一步是在同一 exact App/server/设备/承载下采集 P40 三族重复样本，以本导出器生成 JSONL，再由 cohort 分析器独立复算。Realtime/Network 的正式重复性阈值以及无线 gap/stale 正式门限，必须由 Product Owner 单独批准并写入新的全局 Decision。
+- ［KNOWN｜HIGH］下一步是在同一 exact App/server/设备/承载下，先以机器回执证明三项无线权限全部生效，再重新采集三族各 5 次；只对冻结快照/副本运行本导出器并由 cohort 分析器独立复算。Realtime/Network 的正式重复性阈值以及无线 gap/stale 正式门限，必须由 Product Owner 单独批准并写入新的全局 Decision。

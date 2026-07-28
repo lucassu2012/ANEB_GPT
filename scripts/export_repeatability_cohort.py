@@ -20,6 +20,9 @@ import tempfile
 from typing import Any, Iterable
 import uuid
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from scripts.analyze_repeatability_cohort import (
     CohortError,
     _canonical_digest,
