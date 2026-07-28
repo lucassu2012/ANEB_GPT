@@ -223,6 +223,40 @@ class RepeatabilityCohortTests(unittest.TestCase):
         self.assertEqual(5, report["cohort"]["run_count"])
         self.assertIn("TOK-B04", report["metric_diagnostics"])
 
+    def test_dynamic_link_bandwidth_estimates_do_not_split_a_wifi_cohort(self) -> None:
+        documents = [_token_run(index, 640.0 + index) for index in range(1, 6)]
+        for index, document in enumerate(documents, 1):
+            document["context"]["network"]["capabilities"] = [
+                "validated=true",
+                "transports=wifi",
+                f"down_kbps={85_000 + index}",
+                f"up_kbps={37_000 + index}",
+            ]
+
+        report = analyze(documents, root=ROOT)
+
+        self.assertEqual("pass", report["status"])
+        self.assertEqual(
+            ["validated=true", "transports=wifi"],
+            report["cohort"]["identity"]["network"]["capabilities"],
+        )
+
+    def test_non_bandwidth_network_capability_drift_still_splits_a_cohort(self) -> None:
+        documents = [_token_run(index, 640.0 + index) for index in range(1, 3)]
+        documents[0]["context"]["network"]["capabilities"] = [
+            "validated=true",
+            "transports=wifi",
+            "up_kbps=40000",
+        ]
+        documents[1]["context"]["network"]["capabilities"] = [
+            "validated=false",
+            "transports=wifi",
+            "up_kbps=41000",
+        ]
+
+        with self.assertRaisesRegex(CohortError, "heterogeneous_cohort"):
+            analyze(documents, root=ROOT)
+
     def test_realtime_is_diagnostic_only_and_does_not_inherit_d58(self) -> None:
         report = analyze(
             [_realtime_run(index, (0.98, 42.0 + index, 0.01)) for index in range(1, 6)],

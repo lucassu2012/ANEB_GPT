@@ -13,10 +13,14 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import statistics
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.analyze_ttft_repeatability import RepeatabilityError, analyze as analyze_ttft
 from scripts.verify_result_jsonl import _load_schema_validators
@@ -145,6 +149,17 @@ def _cohort_identity(document: dict[str, Any]) -> dict[str, Any]:
     if device.get("availability") != "observed":
         raise CohortError("device_context_not_observed")
 
+    capabilities = network.get("capabilities")
+    if not isinstance(capabilities, list) or any(
+        not isinstance(item, str) for item in capabilities
+    ):
+        raise CohortError("network_capabilities_invalid")
+    stable_capabilities = [
+        item
+        for item in capabilities
+        if re.fullmatch(r"(?:up|down)_kbps=[0-9]+", item) is None
+    ]
+
     stable_algorithms = {
         key: value for key, value in algorithms.items() if key != "finalized_at_epoch_ms"
     }
@@ -172,19 +187,21 @@ def _cohort_identity(document: dict[str, Any]) -> dict[str, Any]:
         "device": device,
         "endpoint": endpoint,
         "network": {
-            key: network.get(key)
-            for key in (
-                "availability",
-                "requested_transport",
-                "active_transport",
-                "capabilities",
-                "interface_name",
-                "validated",
-                "not_suspended",
-                "metered",
-                "vpn_active",
-                "private_dns_mode",
-            )
+            **{
+                key: network.get(key)
+                for key in (
+                    "availability",
+                    "requested_transport",
+                    "active_transport",
+                    "interface_name",
+                    "validated",
+                    "not_suspended",
+                    "metered",
+                    "vpn_active",
+                    "private_dns_mode",
+                )
+            },
+            "capabilities": stable_capabilities,
         },
         "algorithm_versions": stable_algorithms,
     }

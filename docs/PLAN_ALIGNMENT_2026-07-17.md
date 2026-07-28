@@ -206,3 +206,14 @@
 - ［INFERRED｜HIGH］下一最小阶段为 S2 三族 M0 收敛：通过等价性与故障注入抽取共用机械组件，不重跑或改写三族已经冻结的真机业务证据。
 
 完整证据见 `M0_EC3_NETWORK_QUICK_READY_VALIDATION_2026-07-27.md`。
+
+## 13. 2026-07-28：S3/M1 三族无线重复性工程闭环
+
+- ［KNOWN｜HIGH］source `8a834d49dd61a1f544dc5ea10991e50929f85a3e` / CI `30349786024` 的 exact APK 在 P40 完成 Token、AI 实时、Network 各 5 次；业务前权限回执证明三项无线权限均 granted，15/15 run completed。
+- ［KNOWN｜HIGH］冻结 Room 副本严格导出三组各 5 条 strict-v2 envelope，原 DB/WAL/SHM 分析前后逐字一致；Token/Realtime/Network 无线样本总数分别为 641/135/100，约 1 Hz，stale 与订阅切换均为 0。
+- ［COMPUTED｜HIGH］Token D-58 任务 TTFT CV 中位数 `1.71%`，授权结论 `PASS`；Realtime/Network 只有 diagnostic distribution，正式重复性判据仍为 policy pending。
+- ［KNOWN｜HIGH］所有 formal baseline eligibility 继续为 false：无线 cadence/gap/stale 没有批准阈值，Realtime/Network 没有族专属门，部分 run 级业务指标也未达到 Profile 声明的最低样本数。
+- ［KNOWN｜HIGH］runner finally、原 APK/Room 恢复、独立 PhoneGuard T+0/T+2、E-01 六项共享指纹与 flock release 全部闭合；P40/E-01 已释放。
+- ［INFERRED｜HIGH］下一最小阶段是 S3/M2 门限提案与更长样本计划：先根据本批真实分布提出 2–3 套候选门限及成本，再由 Product Owner 决策；不得从 5 次工程样本自动生成正式判据。
+
+完整证据见 `S3_M1_REPEATABILITY_RADIO_VALIDATION_2026-07-28.md`。

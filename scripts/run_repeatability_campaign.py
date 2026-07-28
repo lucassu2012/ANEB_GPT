@@ -70,7 +70,7 @@ def parse_radio_permission_status(package_dump: str) -> dict[str, bool]:
     status: dict[str, bool] = {}
     for permission in radio_permissions():
         rows = re.findall(
-            rf"(?m)^\s*{re.escape(permission)}: granted=(true|false),",
+            rf"(?m)^\s*{re.escape(permission)}: granted=(true|false)(?:,|\s*$)",
             package_dump,
         )
         if len(rows) != 1:

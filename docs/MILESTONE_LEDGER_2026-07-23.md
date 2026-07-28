@@ -112,6 +112,7 @@
 23. ［KNOWN｜HIGH］S3/M1 首个纯离线切片新增 `aneb-repeatability-cohort-v1`：只接受完整 strict-v2、completed+valid、observed device/network、Wi-Fi/蜂窝且 VPN=false，并冻结 producer/Profile/claim/device/endpoint/network/algorithm 同质身份。Token `TOK-B04` 唯一委托 D-58；Realtime 三指标与 Network 三指标仅输出 `policy_pending/diagnostic_only`，正式基线资格固定 false、单 run 置信度不变。TDD 7/7、CLI 5/5、与既有 D-58/result-v2 四模块交叉回归 24/24 PASS；完整质量门 exit0：858 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，post-scan 残留为 0；生产提交 `3a35236` 的 clean CI `30320671090` 七个 job 全绿。尚无本切片新 P40 样本，详见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 24. ［KNOWN｜HIGH］S3/M1 第二个纯离线切片为 cohort 增加每 run 无线序列结构审计：要求 collected、内联样本数一致、elapsedRealtime 严格递增，并输出跨度、min/median/P95/max gap、观测频率、stale 与切卡计数；正式 cadence 判据仍为 null/diagnostic-only。新增 `aneb-repeatability-export-v1` 从 Room v19 原字节导出 strict-v2 JSONL，同时逐条绑定 `radio_sample`，不重建结果或评分。聚焦 29/29、完整质量门主 Python 863/863（16 skip）+44 附加及 Android/Go/release/spec/secret 全 PASS；尚未产生新 P40 三族 cohort，不能写成无线正式门或真机复算已完成。
 25. ［KNOWN｜HIGH］S3/M1 首轮真机工程采样使用 source `5b968bfffdb81451c80b2fd86064c06b35da925b`、CI `30323979935`、APK SHA-256=`09db3b4a3f137cd98c2346c55f5dadf3f9e797367327e0c5e7b986de525ce8b4`，完成 Token/Realtime/Network 各 5 次、共 15 次业务运行。Token D-58 子门以 TTFT CV 中位数 2.61% PASS；Realtime/Network 只生成诊断分布。15/15 `radio=permission_denied/0 samples` 使严格导出拒绝，正式 cohort 未形成。临时 SQLite 诊断另触发原 DB/WAL/SHM checkpoint 转换，已降级为 engineering-only；runner 新增权限 create-once 回执，exporter 新增失败路径源三件套逐字节保护。聚焦交叉回归 39/39 PASS；冻结改动后的完整质量门 exit0：主 Python 873/873（skip 16）、附加 44/44、Android/Go/release/spec/secret 全 PASS。生产修复提交 `4184065` 的 clean CI `30348907807` 七个 job 全绿，详见 `S3_M1_REPEATABILITY_ENGINEERING_VALIDATION_2026-07-28.md`。
+26. ［KNOWN｜HIGH］S3/M1 无线重采使用 source `8a834d49dd61a1f544dc5ea10991e50929f85a3e`、CI `30349786024`、APK SHA-256=`6b45ddd94ea0621fba09dfbb2eb31596a9c6ed4bb1212c7011018ec75a307ba3`；三项 runtime permission 机器回执全 granted，Token/Realtime/Network 15/15 completed。严格导出从冻结 Room 副本形成三组各 5 条 strict-v2 envelope，原 DB/WAL/SHM 在分析前后逐字一致；三族约 1 Hz 无线序列共 876 个样本，stale/订阅切换均为 0。Token D-58 以任务 TTFT CV 中位数 1.71% PASS；Realtime/Network 继续 `policy_pending/diagnostic_only`，无线 cadence 与正式基线资格仍未批准。runner finally 与独立 PhoneGuard、E-01 六指纹及 flock release 均闭合；冻结工作树完整质量门 exit0，主 Python 877/877（skip 16）、附加 44/44 及 Android/Go/release/spec/secret 全 PASS。详见 `S3_M1_REPEATABILITY_RADIO_VALIDATION_2026-07-28.md`。
 
 ## 5. 本轮完成顺序与下一阶段
 
@@ -122,7 +123,7 @@
 5. ［KNOWN｜HIGH］M0-EC2 AI 实时 Quick 的 EC2-01～10 已结案；正向 `100/A` 仍受
    `INCONCLUSIVE/LOW`、coverage 0.1 限制，不得冒充正式体验基线。
 6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；权威正向 `79/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
-7. ［KNOWN｜HIGH］S2 已关闭；S3/M1 cohort/导出合同和首轮三族各 5 次 P40 工程业务采样均已完成。当前真实下一门是“无线权限机器回执 → 三族重采 → 冻结副本严格导出 → 独立复算”；Realtime/Network 正式阈值仍需 Product Owner 单独批准。
+7. ［KNOWN｜HIGH］S2 已关闭；S3/M1 的“无线权限机器回执 → 三族重采 → 冻结副本严格导出 → 独立复算”已完成。Token D-58 子门 PASS；Realtime/Network 正式阈值与无线 cadence/gap/stale 质量门仍需 Product Owner 单独批准，因此 M1 仍为部分完成且所有正式基线资格为 false。
 8. ［INFERRED｜HIGH］Realtime/Network 的正式重复性判据不能直接照搬 Token D-58：比例指标接近 0/1 时 CV 解释不稳定，P05/P95 指标还受样本量影响；应先用真实重复样本审计分布，再由 Product Owner 批准族专属门限。
 9. ［KNOWN｜HIGH］A6 审核交接当前关闭；不得打开、复制或上传 reviewer HTML、secret、seed、
    private ZIP、sealed binding 或旧 material/template，也不得运行 materialization/qualification。

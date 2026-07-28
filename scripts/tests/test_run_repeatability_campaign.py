@@ -57,6 +57,16 @@ class RepeatabilityCampaignTests(unittest.TestCase):
                 )
             )
 
+    def test_runtime_permission_verifier_accepts_granted_rows_without_flags(self) -> None:
+        granted = "\n".join(
+            f"    {permission}: granted=true"
+            for permission in radio_permissions()
+        )
+        self.assertEqual(
+            {permission: True for permission in radio_permissions()},
+            assert_radio_permissions_granted(granted),
+        )
+
     def test_radio_permission_preflight_retains_diagnostic_receipt_before_denial(self) -> None:
         package_dump = "\n".join(
             f"    {permission}: granted={'false' if permission.endswith('FINE_LOCATION') else 'true'}, flags=[ USER_SET ]"
