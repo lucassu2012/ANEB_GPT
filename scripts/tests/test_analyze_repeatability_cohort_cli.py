@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,20 @@ from scripts.tests.test_analyze_repeatability_cohort import ROOT, _realtime_run,
 
 
 class RepeatabilityCohortCliTests(unittest.TestCase):
+    def test_direct_script_help_uses_the_supported_import_path(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "analyze_repeatability_cohort.py"),
+                "--help",
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr.decode("utf-8", "replace"))
+
     def test_loader_rejects_duplicate_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "duplicate.jsonl"

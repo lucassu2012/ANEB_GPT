@@ -46,6 +46,44 @@ def _stamp(document: dict[str, object], index: int) -> dict[str, object]:
         bound_network_generation=1,
         evidence_ref_ids=[],
     )
+    radio_start = 10_000_000_000 + index * 10_000_000_000
+    radio_samples = []
+    for offset in (0, 1_000_000_000, 2_000_000_000):
+        radio_samples.append(
+            {
+                "elapsed_realtime_nanos": radio_start + offset,
+                "cell_elapsed_realtime_nanos": radio_start + offset - 50_000_000,
+                "stale": False,
+                "sub_id": 1,
+                "sub_switched": False,
+                "network_type": "LTE",
+                "override_type": "NR_NSA",
+                "nr_state": "nsa",
+                "rat": "LTE",
+                "pci": 101,
+                "tac": 202,
+                "arfcn": 1650,
+                "rsrp_dbm": -91.0,
+                "rsrq_db": -11.0,
+                "sinr_db": 18.0,
+                "operator_name": "test-operator",
+            }
+        )
+    body["context"]["radio"].update(
+        collection_status="collected",
+        unavailable_reason=None,
+        operator_name="test-operator",
+        network_type="LTE",
+        override_type="NR_NSA",
+        nr_state="nsa",
+        rat="LTE",
+        rsrp_dbm=-91.0,
+        rsrq_db=-11.0,
+        sinr_db=18.0,
+        sample_count=len(radio_samples),
+        samples=radio_samples,
+        evidence_ref_ids=["radio-context"],
+    )
     return body
 
 
@@ -137,6 +175,39 @@ def _network_run(index: int, values: tuple[float, float, float]) -> dict[str, ob
 
 
 class RepeatabilityCohortTests(unittest.TestCase):
+    def test_reports_inline_one_hz_radio_integrity_without_inventing_a_quality_threshold(self) -> None:
+        report = analyze(
+            [_realtime_run(index, (0.98, 42.0 + index, 0.01)) for index in range(1, 3)],
+            root=ROOT,
+        )
+
+        self.assertEqual("diagnostic_only", report["radio_integrity"]["policy_mode"])
+        self.assertEqual(1.0, report["radio_integrity"]["nominal_frequency_hz"])
+        self.assertFalse(report["radio_integrity"]["formal_baseline_eligible"])
+        run = report["radio_integrity"]["runs"][0]
+        self.assertEqual("structurally_valid", run["status"])
+        self.assertEqual(3, run["sample_count"])
+        self.assertEqual(1.0, run["median_gap_seconds"])
+        self.assertEqual(1.0, run["observed_median_frequency_hz"])
+        self.assertEqual(1.0, run["p95_gap_seconds"])
+        self.assertEqual(0, run["stale_sample_count"])
+        self.assertIsNone(run["cadence_verdict"])
+
+    def test_rejects_radio_reference_without_inline_samples_for_integrity_audit(self) -> None:
+        documents = [_realtime_run(index, (0.98, 42.0, 0.01)) for index in range(1, 3)]
+        documents[1]["context"]["radio"]["samples"] = []
+
+        with self.assertRaisesRegex(CohortError, "radio_inline_series_required"):
+            analyze(documents, root=ROOT)
+
+    def test_rejects_non_monotonic_radio_timestamps(self) -> None:
+        documents = [_network_run(index, (45.0, 18.0, 80.0)) for index in range(1, 3)]
+        samples = documents[0]["context"]["radio"]["samples"]
+        samples[2]["elapsed_realtime_nanos"] = samples[1]["elapsed_realtime_nanos"]
+
+        with self.assertRaisesRegex(CohortError, "radio_timestamps_not_strictly_increasing"):
+            analyze(documents, root=ROOT)
+
     def test_token_delegates_the_only_authorized_threshold_to_d58(self) -> None:
         report = analyze(
             [_token_run(index, 640.0 + index) for index in range(1, 6)],
@@ -151,6 +222,40 @@ class RepeatabilityCohortTests(unittest.TestCase):
         self.assertTrue(report["policy"]["single_run_confidence_unchanged"])
         self.assertEqual(5, report["cohort"]["run_count"])
         self.assertIn("TOK-B04", report["metric_diagnostics"])
+
+    def test_dynamic_link_bandwidth_estimates_do_not_split_a_wifi_cohort(self) -> None:
+        documents = [_token_run(index, 640.0 + index) for index in range(1, 6)]
+        for index, document in enumerate(documents, 1):
+            document["context"]["network"]["capabilities"] = [
+                "validated=true",
+                "transports=wifi",
+                f"down_kbps={85_000 + index}",
+                f"up_kbps={37_000 + index}",
+            ]
+
+        report = analyze(documents, root=ROOT)
+
+        self.assertEqual("pass", report["status"])
+        self.assertEqual(
+            ["validated=true", "transports=wifi"],
+            report["cohort"]["identity"]["network"]["capabilities"],
+        )
+
+    def test_non_bandwidth_network_capability_drift_still_splits_a_cohort(self) -> None:
+        documents = [_token_run(index, 640.0 + index) for index in range(1, 3)]
+        documents[0]["context"]["network"]["capabilities"] = [
+            "validated=true",
+            "transports=wifi",
+            "up_kbps=40000",
+        ]
+        documents[1]["context"]["network"]["capabilities"] = [
+            "validated=false",
+            "transports=wifi",
+            "up_kbps=41000",
+        ]
+
+        with self.assertRaisesRegex(CohortError, "heterogeneous_cohort"):
+            analyze(documents, root=ROOT)
 
     def test_realtime_is_diagnostic_only_and_does_not_inherit_d58(self) -> None:
         report = analyze(

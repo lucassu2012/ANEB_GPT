@@ -13,10 +13,14 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import statistics
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.analyze_ttft_repeatability import RepeatabilityError, analyze as analyze_ttft
 from scripts.verify_result_jsonl import _load_schema_validators
@@ -145,6 +149,17 @@ def _cohort_identity(document: dict[str, Any]) -> dict[str, Any]:
     if device.get("availability") != "observed":
         raise CohortError("device_context_not_observed")
 
+    capabilities = network.get("capabilities")
+    if not isinstance(capabilities, list) or any(
+        not isinstance(item, str) for item in capabilities
+    ):
+        raise CohortError("network_capabilities_invalid")
+    stable_capabilities = [
+        item
+        for item in capabilities
+        if re.fullmatch(r"(?:up|down)_kbps=[0-9]+", item) is None
+    ]
+
     stable_algorithms = {
         key: value for key, value in algorithms.items() if key != "finalized_at_epoch_ms"
     }
@@ -172,19 +187,21 @@ def _cohort_identity(document: dict[str, Any]) -> dict[str, Any]:
         "device": device,
         "endpoint": endpoint,
         "network": {
-            key: network.get(key)
-            for key in (
-                "availability",
-                "requested_transport",
-                "active_transport",
-                "capabilities",
-                "interface_name",
-                "validated",
-                "not_suspended",
-                "metered",
-                "vpn_active",
-                "private_dns_mode",
-            )
+            **{
+                key: network.get(key)
+                for key in (
+                    "availability",
+                    "requested_transport",
+                    "active_transport",
+                    "interface_name",
+                    "validated",
+                    "not_suspended",
+                    "metered",
+                    "vpn_active",
+                    "private_dns_mode",
+                )
+            },
+            "capabilities": stable_capabilities,
         },
         "algorithm_versions": stable_algorithms,
     }
@@ -272,6 +289,71 @@ def _diagnostic(
     }
 
 
+def _radio_integrity(
+    documents: list[dict[str, Any]], run_ids: list[str]
+) -> dict[str, Any]:
+    runs: list[dict[str, Any]] = []
+    for document, run_id in zip(documents, run_ids, strict=True):
+        context = _object(_required(document, "context", "$"), "$/context")
+        radio = _object(_required(context, "radio", "$/context"), "$/context/radio")
+        samples = _required(radio, "samples", "$/context/radio")
+        if not isinstance(samples, list):
+            raise CohortError(f"radio_samples_invalid:{run_id}")
+        sample_count = radio.get("sample_count")
+        if (
+            radio.get("collection_status") != "collected"
+            or isinstance(sample_count, bool)
+            or not isinstance(sample_count, int)
+            or sample_count != len(samples)
+            or sample_count < 2
+        ):
+            raise CohortError(f"radio_inline_series_required:{run_id}")
+
+        timestamps: list[int] = []
+        stale_count = 0
+        switched_count = 0
+        for index, raw_sample in enumerate(samples):
+            sample = _object(raw_sample, f"$/context/radio/samples/{index}")
+            timestamp = sample.get("elapsed_realtime_nanos")
+            if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+                raise CohortError(f"radio_timestamp_invalid:{run_id}:{index}")
+            timestamps.append(timestamp)
+            stale_count += int(sample.get("stale") is True)
+            switched_count += int(sample.get("sub_switched") is True)
+        if any(right <= left for left, right in zip(timestamps, timestamps[1:])):
+            raise CohortError(f"radio_timestamps_not_strictly_increasing:{run_id}")
+
+        gaps = [
+            (right - left) / 1_000_000_000.0
+            for left, right in zip(timestamps, timestamps[1:])
+        ]
+        median_gap = statistics.median(gaps)
+        ordered_gaps = sorted(gaps)
+        p95_gap = ordered_gaps[math.ceil(0.95 * len(ordered_gaps)) - 1]
+        runs.append(
+            {
+                "run_id": run_id,
+                "status": "structurally_valid",
+                "sample_count": sample_count,
+                "span_seconds": (timestamps[-1] - timestamps[0]) / 1_000_000_000.0,
+                "median_gap_seconds": median_gap,
+                "observed_median_frequency_hz": 1.0 / median_gap,
+                "p95_gap_seconds": p95_gap,
+                "minimum_gap_seconds": min(gaps),
+                "maximum_gap_seconds": max(gaps),
+                "stale_sample_count": stale_count,
+                "subscription_switch_sample_count": switched_count,
+                "cadence_verdict": None,
+            }
+        )
+    return {
+        "policy_mode": "diagnostic_only",
+        "nominal_frequency_hz": 1.0,
+        "formal_baseline_eligible": False,
+        "runs": runs,
+    }
+
+
 def analyze(documents: list[dict[str, Any]], *, root: Path) -> dict[str, Any]:
     """Return a fail-closed repeatability cohort report for one result family."""
 
@@ -336,6 +418,7 @@ def analyze(documents: list[dict[str, Any]], *, root: Path) -> dict[str, Any]:
             "started_at_span_ms": max(starts) - min(starts),
         },
         "metric_diagnostics": diagnostics,
+        "radio_integrity": _radio_integrity(documents, run_ids),
         "authorized_evaluation": authorized_evaluation,
     }
 
