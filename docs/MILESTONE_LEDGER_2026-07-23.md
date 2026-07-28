@@ -31,12 +31,12 @@
 | S0 契约单元 | 每个测试族先实现业务前能力门、单次终态、Room/strict-v2 与动态指标数据源 | 注册精确 Profile/原语、运行配置和 request-entry 审计 | 发布版本化 Profile/runtime/model，保留来源与校准状态 | 冻结业务类型、全量指标、目标、主动态指标、评分、结论和网络建议 | 正向 exact signature + 负向固定机器原因和零业务产物；本地/CI 全绿 |
 | S1 跨端 Quick | 安装精确 CI APK，在 P40 跑一次正向与一次受控负向 | 受锁部署精确 server binary，冻结同-run 窗口与共享指纹 | 提供同 SHA 的运行包，不把 hypothesis 冒充 calibrated | 独立 DB/audit/bundle/release consumer 重算，最后原子提交 READY | 同一 run/APK/server/Profile；正负 READY；PhoneGuard 与远端验后清理 |
 | S2 三族 M0 收敛 | Token、Realtime、Network 三族均达到 S1；抽取共用采集生命周期，避免三套语义漂移 | 三族能力与旧客户端兼容回归 | catalog/schema/manifest 统一治理 | ［KNOWN｜HIGH］D-109/S2-V5a 已完成 WorkflowTrace、Token shadow Adapter、33-file tooling closure、Token 两套全模块、三族 11 模块交叉回归、本地全仓质量门与 clean CI；未改写冻结的 EC1 真机证据 | ［KNOWN｜HIGH］EC1、EC2、EC3 与 S2-V5a 均结案；commit `95aaaf0` 的 CI `30313367261` 七个 job 全绿，S2 于 2026-07-28 关闭 |
-| S3 M1 可重复核心 | 非开发者可连续执行三类测试；无线证据、1Hz 动态刷新、历史/报告可复算 | 单节点稳定运行、合成弱网和恢复可重复 | hypothesis 参数与确定性轨迹版本化 | 同条件重复性、样本有效性和置信度门 | P40 重复样本；关键指标 CV/完整性门；导出后独立复算一致 |
+| S3 M1 可重复核心 | 非开发者可连续执行三类测试；无线证据、1Hz 动态刷新、历史/报告可复算 | 单节点稳定运行、合成弱网和恢复可重复 | hypothesis 参数与确定性轨迹版本化 | ［KNOWN｜HIGH］首个 strict-v2 三族 cohort 身份/完整性/诊断层已实现；Token 只复用 D-58，Realtime/Network 保持 policy pending，不提升置信度 | P40 重复样本；1Hz 无线完整性；关键指标 CV/完整性门；导出后独立复算一致 |
 | S4 M2 外场 MVP | 点位、运营商、忙闲、网络制式矩阵采集与地图/报告 | 当前单节点参考端保持稳定；若 PO 恢复多级节点再扩展 | 冻结外场采样计划和对照元数据 | 报告只陈述采样覆盖内结论，不把单点扩写为城市基线 | 6–8 点位×忙闲×运营商有效样本矩阵与可审计热力卡 |
 | S5 M3 真实画像/适配 | 独立 Experience Lab/adapter 驱动首批业务 App；核心 ANEB 仍只跑自建仿真 | 独立网关承载弱网，不污染 E-01 | 授权观测→训练/留出→画像参数；签名审核闭环 | Profile 标注 source_portrait、校准状态和适用边界 | 豆包/DeepSeek 首批适配；画像留出误差门；失败不进入正式基线 |
 | S6 M4 发布产品 | 正式签名、安装升级、无 ADB 整链、隐私与友好错误、专业 UI/图标/分享 | 发布运维、监控、回滚、容量和安全手册 | 稳定 spec 发布节奏与兼容矩阵 | Release 包绑定版本、合同和报告格式 | 普通用户独立完成测试/查看/导出；公开 APK 与维护/恢复文档齐全 |
 
-［KNOWN｜HIGH］S1 的第三族 M0-EC3 已完成，当前进入 **S2 三族 M0 收敛**。S2 只抽取已由 EC1/EC2/EC3 实证的机械生命周期、发布事务与 provenance 边界；不得合并或弱化三族各自的业务语义判定器。
+［KNOWN｜HIGH］S2 已按 D-109 于 2026-07-28 关闭，当前进入 **S3 M1 可重复核心**。首个切片只建立三族 strict-v2 同质 cohort 与诊断层；不得把 Realtime/Network 诊断 CV 扩写为已批准门限，也不得把离线合同扩写为 P40 重复样本或正式基线完成。
 
 ## 3. 已结案切片：M0-EC1 Token Quick
 
@@ -109,6 +109,7 @@
 20. ［KNOWN｜HIGH］D-108 / S2-V4g：Token PowerShell 已删除重复 READY digest/JSON/Move 事务，改为有界调用已冻结 CLI；CLI 失败保留既有 report，CLI 成功后若输出或后置 provenance 失败则回滚本轮 READY/partial。collector、独立 bundle verifier 与 fixture 精确共享 31-file tooling closure。PowerShell AST 无错误，collector 92/92（1 skip）、bundle verifier 119/119（2 skip）、三族共享/collection/release 91/91（4 skip）通过；全仓质量门 exit0：827 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS；commit `c3f1d11` 的 clean CI `30303472975` 七个 job 全部通过。D-108 已完成，但 Token 尚未接入共享 live lifecycle，S2 仍不能结案。
 21. ［KNOWN｜HIGH］D-109 / S2-V5a：下一切片使用 family-neutral WorkflowTrace 统一阶段顺序、多失败保留与发布资格。Realtime/Network callback executor 与 Token PowerShell executor 是两个真实 Adapter；Token 先采用 shadow gate，不重排现有 try/finally、cleanup 重试、业务语义或 READY 字节。新旧发布资格不一致必须 fail closed；完成门见 `S2_TOKEN_LIFECYCLE_ADAPTER_CONTRACT_2026-07-28.md`。
 22. ［KNOWN｜HIGH］D-109 / S2-V5a 已结案：新增 canonical WorkflowTrace evaluator/CLI，Python callback executor 与 Token PowerShell 薄壳均使用同一决策；Token bundle 独立 verifier 从 trace 重算 decision 并要求原字节一致，tooling closure 从 31 扩为 33。collector 95/95（1 skip）、bundle verifier 123/123（2 skip）、三族 11 模块 150/150（4 skip）通过；完整质量门 exit0：846 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，所有 fresh pre/post 残留为 0。commit `95aaaf0` 的 clean CI `30313367261` 七个 job 全部通过；结案审计确认 HEAD/远端一致、工作树干净、base diff-check 通过、D-108 的 31-file 与旧计数只作为历史证据保留。S2 于 2026-07-28 关闭。
+23. ［KNOWN｜HIGH］S3/M1 首个纯离线切片新增 `aneb-repeatability-cohort-v1`：只接受完整 strict-v2、completed+valid、observed device/network、Wi-Fi/蜂窝且 VPN=false，并冻结 producer/Profile/claim/device/endpoint/network/algorithm 同质身份。Token `TOK-B04` 唯一委托 D-58；Realtime 三指标与 Network 三指标仅输出 `policy_pending/diagnostic_only`，正式基线资格固定 false、单 run 置信度不变。TDD 7/7、CLI 5/5、与既有 D-58/result-v2 四模块交叉回归 24/24 PASS；完整质量门 exit0：858 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，post-scan 残留为 0；生产提交 `3a35236` 的 clean CI `30320671090` 七个 job 全绿。尚无本切片新 P40 样本，详见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 
 ## 5. 本轮完成顺序与下一阶段
 
@@ -119,8 +120,8 @@
 5. ［KNOWN｜HIGH］M0-EC2 AI 实时 Quick 的 EC2-01～10 已结案；正向 `100/A` 仍受
    `INCONCLUSIVE/LOW`、coverage 0.1 限制，不得冒充正式体验基线。
 6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；权威正向 `79/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
-7. ［KNOWN｜HIGH］当前最小执行切片进入 S2：把三族已经证明的 phone/remote/provenance/READY 机械生命周期抽成共用组件，但保留 Token/Realtime/Network 各自的业务语义判定器。
-8. ［INFERRED｜HIGH］S2 应先做等价性/故障注入和三族回归，再替换现有入口；不重跑已冻结的 EC1/EC2/EC3 真机证据来证明纯机械重构。
+7. ［KNOWN｜HIGH］S2 已关闭；S3/M1 首个三族 strict-v2 cohort 纯离线切片已完成聚焦验证、完整本地质量门与 clean CI。下一门是 P40 三族重复样本、无线完整性和导出独立复算；Realtime/Network 正式阈值仍需 Product Owner 单独批准。
+8. ［INFERRED｜HIGH］Realtime/Network 的正式重复性判据不能直接照搬 Token D-58：比例指标接近 0/1 时 CV 解释不稳定，P05/P95 指标还受样本量影响；应先用真实重复样本审计分布，再由 Product Owner 批准族专属门限。
 9. ［KNOWN｜HIGH］A6 审核交接当前关闭；不得打开、复制或上传 reviewer HTML、secret、seed、
    private ZIP、sealed binding 或旧 material/template，也不得运行 materialization/qualification。
 
