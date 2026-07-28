@@ -51,5 +51,6 @@ python -m scripts.analyze_repeatability_cohort `
 - ［KNOWN｜HIGH］TDD 首轮 RED 为生产模块缺失；实现后夹具暴露 `not_collected` 与错误 family payload，生产门未放宽，改用三族 schema-valid、observed-context 夹具后 7/7 GREEN。
 - ［KNOWN｜HIGH］JSONL/CLI 独立 RED→GREEN 5/5；四模块交叉回归（新增 cohort/CLI、既有 D-58、result-v2 validator）24/24 PASS。
 - ［KNOWN｜HIGH］稳定工作树完整 `scripts/quality_gate.ps1` 单次运行 exit=0、耗时 1,175,158ms：主 Python 858/858（skip 16）、附加 Python 44/44、Android、Go、release boundary、secret scan、APK packaging、spec catalog 与 result schemas 全部 PASS；运行后重型进程残留为 0。原始 stdout/stderr/status SHA-256 分别为 `D6B83E54451BF129E3BE4F69AF0B4FB29B4E092D2F3F17A93441D924B3A61F05`、`11FA501D358206B36B93B09E63E6DFB9CA5FDA8E259667A9CC56A489EEE53056`、`3BAA54E67B38FB13BA31BA1C6238B54B0377E96E7BC937082A35F7147183D2D8`。
+- ［KNOWN｜HIGH］冻结生产提交为 `3a35236`；GitHub Actions run `30320671090` 的 7 个 job 全部成功，覆盖 dedicated gateway、AI behavior model、Windows evidence、tracked-source credential scan、Profile/result/packaging、Go server 与 Android candidate build。
 - ［KNOWN｜HIGH］未修改任何 Profile、KPI、质量目标、AQS 权重、结果置信度或历史真机证据。
-- ［KNOWN｜HIGH］下一完成门是：冻结提交、推送与 clean CI；随后才可进入 P40 三族重复样本、1Hz 无线证据完整性和导出独立复算。Realtime/Network 若需要正式重复性阈值，必须由 Product Owner 单独批准并写入新的全局 Decision。
+- ［KNOWN｜HIGH］本纯离线切片已通过本地全量门与 clean CI；下一步才可进入 P40 三族重复样本、1Hz 无线证据完整性和导出独立复算。Realtime/Network 若需要正式重复性阈值，必须由 Product Owner 单独批准并写入新的全局 Decision。

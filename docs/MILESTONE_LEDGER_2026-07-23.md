@@ -109,7 +109,7 @@
 20. ［KNOWN｜HIGH］D-108 / S2-V4g：Token PowerShell 已删除重复 READY digest/JSON/Move 事务，改为有界调用已冻结 CLI；CLI 失败保留既有 report，CLI 成功后若输出或后置 provenance 失败则回滚本轮 READY/partial。collector、独立 bundle verifier 与 fixture 精确共享 31-file tooling closure。PowerShell AST 无错误，collector 92/92（1 skip）、bundle verifier 119/119（2 skip）、三族共享/collection/release 91/91（4 skip）通过；全仓质量门 exit0：827 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS；commit `c3f1d11` 的 clean CI `30303472975` 七个 job 全部通过。D-108 已完成，但 Token 尚未接入共享 live lifecycle，S2 仍不能结案。
 21. ［KNOWN｜HIGH］D-109 / S2-V5a：下一切片使用 family-neutral WorkflowTrace 统一阶段顺序、多失败保留与发布资格。Realtime/Network callback executor 与 Token PowerShell executor 是两个真实 Adapter；Token 先采用 shadow gate，不重排现有 try/finally、cleanup 重试、业务语义或 READY 字节。新旧发布资格不一致必须 fail closed；完成门见 `S2_TOKEN_LIFECYCLE_ADAPTER_CONTRACT_2026-07-28.md`。
 22. ［KNOWN｜HIGH］D-109 / S2-V5a 已结案：新增 canonical WorkflowTrace evaluator/CLI，Python callback executor 与 Token PowerShell 薄壳均使用同一决策；Token bundle 独立 verifier 从 trace 重算 decision 并要求原字节一致，tooling closure 从 31 扩为 33。collector 95/95（1 skip）、bundle verifier 123/123（2 skip）、三族 11 模块 150/150（4 skip）通过；完整质量门 exit0：846 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，所有 fresh pre/post 残留为 0。commit `95aaaf0` 的 clean CI `30313367261` 七个 job 全部通过；结案审计确认 HEAD/远端一致、工作树干净、base diff-check 通过、D-108 的 31-file 与旧计数只作为历史证据保留。S2 于 2026-07-28 关闭。
-23. ［KNOWN｜HIGH］S3/M1 首个纯离线切片新增 `aneb-repeatability-cohort-v1`：只接受完整 strict-v2、completed+valid、observed device/network、Wi-Fi/蜂窝且 VPN=false，并冻结 producer/Profile/claim/device/endpoint/network/algorithm 同质身份。Token `TOK-B04` 唯一委托 D-58；Realtime 三指标与 Network 三指标仅输出 `policy_pending/diagnostic_only`，正式基线资格固定 false、单 run 置信度不变。TDD 7/7、CLI 5/5、与既有 D-58/result-v2 四模块交叉回归 24/24 PASS；完整质量门 exit0：858 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，post-scan 残留为 0；尚无本切片新 P40 样本，详见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
+23. ［KNOWN｜HIGH］S3/M1 首个纯离线切片新增 `aneb-repeatability-cohort-v1`：只接受完整 strict-v2、completed+valid、observed device/network、Wi-Fi/蜂窝且 VPN=false，并冻结 producer/Profile/claim/device/endpoint/network/algorithm 同质身份。Token `TOK-B04` 唯一委托 D-58；Realtime 三指标与 Network 三指标仅输出 `policy_pending/diagnostic_only`，正式基线资格固定 false、单 run 置信度不变。TDD 7/7、CLI 5/5、与既有 D-58/result-v2 四模块交叉回归 24/24 PASS；完整质量门 exit0：858 主 Python（16 skip）、44 附加 Python、Android、Go、release/spec/secret 全 PASS，post-scan 残留为 0；生产提交 `3a35236` 的 clean CI `30320671090` 七个 job 全绿。尚无本切片新 P40 样本，详见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 
 ## 5. 本轮完成顺序与下一阶段
 
@@ -120,7 +120,7 @@
 5. ［KNOWN｜HIGH］M0-EC2 AI 实时 Quick 的 EC2-01～10 已结案；正向 `100/A` 仍受
    `INCONCLUSIVE/LOW`、coverage 0.1 限制，不得冒充正式体验基线。
 6. ［KNOWN｜HIGH］M0-EC3 Network Quick 已结案；权威正向 `79/B` 仍为 `INCONCLUSIVE/LOW`、coverage 0.5，不得冒充正式网络质量基线。
-7. ［KNOWN｜HIGH］S2 已关闭；当前最小切片进入 S3/M1。三族 strict-v2 cohort 身份/完整性与诊断层已完成聚焦验证和完整本地质量门，下一门是冻结提交与 clean CI，再进入 P40 重复样本、无线完整性和导出独立复算。
+7. ［KNOWN｜HIGH］S2 已关闭；S3/M1 首个三族 strict-v2 cohort 纯离线切片已完成聚焦验证、完整本地质量门与 clean CI。下一门是 P40 三族重复样本、无线完整性和导出独立复算；Realtime/Network 正式阈值仍需 Product Owner 单独批准。
 8. ［INFERRED｜HIGH］Realtime/Network 的正式重复性判据不能直接照搬 Token D-58：比例指标接近 0/1 时 CV 解释不稳定，P05/P95 指标还受样本量影响；应先用真实重复样本审计分布，再由 Product Owner 批准族专属门限。
 9. ［KNOWN｜HIGH］A6 审核交接当前关闭；不得打开、复制或上传 reviewer HTML、secret、seed、
    private ZIP、sealed binding 或旧 material/template，也不得运行 materialization/qualification。

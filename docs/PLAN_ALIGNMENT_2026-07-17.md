@@ -26,7 +26,7 @@
 | **P2 服务器侧** | **0.8.2 已部署；Token/Realtime 跨端窄切片完成，Network 服务端门完成** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.2`，覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、ANEB2 UDP、结果与逐 run 合成弱网，并提供三类 Quick 的 Profile 白名单能力回执和同-run request-entry 审计。受锁部署验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
 | **P3 标准与业务模型** | **0.3.2 本地候选；真实画像仍未完成外部签名校准** | ［KNOWN｜HIGH］授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.2 已进入 Token/Realtime/Network 三类 Quick 的合同消费区间。现有 4 个模型仍为 `hypothesis`；A6 私有校准链已形成 first-50 选择，但独立外部 reviewer 签名与正式 qualification 尚未闭合，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
 | **横切 Profile 体系** | **1.8.0；三类 Quick 精确执行合同及正负 READY 均已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、7 个 runtime bundle、4 个模型资产和 3 个 execution evidence contract；Token 1.2.1、AI 实时 1.1.1、Network 1.2.0 均已形成 P1/P2/Profile 共同消费并真机验证的精确合同。其余 Published Profile 仍保持兼容，不能扩大为全部 Profile 已完成端到端验收。 |
-| **里程碑位置** | **S2 三族 M0 收敛已关闭，当前进入 S3 M1 可重复核心** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3 首个 strict-v2 cohort 身份/完整性/诊断切片已完成聚焦回归和完整本地质量门（858 主 Python、44 附加 Python、Android、Go、release/spec/secret 全 PASS）；尚未完成 clean CI、新的 P40 三族重复样本、1Hz 无线完整性、非开发者连续运行或正式基线。 |
+| **里程碑位置** | **S2 三族 M0 收敛已关闭，当前进入 S3 M1 可重复核心** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3 首个 strict-v2 cohort 身份/完整性/诊断切片已完成聚焦回归、完整本地质量门和生产提交 `3a35236` 的 clean CI `30320671090`（7/7）；尚未完成新的 P40 三族重复样本、1Hz 无线完整性、非开发者连续运行或正式基线。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -163,7 +163,7 @@
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复部署或重跑冻结真机证据来证明纯离线重构。当前转入 S3/M1；首个 `aneb-repeatability-cohort-v1` 切片聚焦验证和完整本地质量门已完成，下一门是冻结提交与 clean CI，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
+1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复部署或重跑冻结真机证据来证明纯离线重构。当前转入 S3/M1；首个 `aneb-repeatability-cohort-v1` 纯离线切片已通过聚焦验证、完整本地质量门与 clean CI，下一门是 P40 三族重复样本、无线完整性和导出独立复算，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
 3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
 4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector 与活动承载/蜂窝协变量分轨已实现；只有 Token TTFT 的 D-58 同条件重复性已有 P40 可复算证据。Realtime/Network 当前只有 diagnostic-only cohort 能力，不能写成正式重复性通过。
