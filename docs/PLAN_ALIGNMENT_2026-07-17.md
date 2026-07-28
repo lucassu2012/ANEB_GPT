@@ -26,7 +26,7 @@
 | **P2 服务器侧** | **0.8.2 已部署；Token/Realtime 跨端窄切片完成，Network 服务端门完成** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.2`，覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、ANEB2 UDP、结果与逐 run 合成弱网，并提供三类 Quick 的 Profile 白名单能力回执和同-run request-entry 审计。受锁部署验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
 | **P3 标准与业务模型** | **0.3.2 本地候选；真实画像仍未完成外部签名校准** | ［KNOWN｜HIGH］授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.2 已进入 Token/Realtime/Network 三类 Quick 的合同消费区间。现有 4 个模型仍为 `hypothesis`；A6 私有校准链已形成 first-50 选择，但独立外部 reviewer 签名与正式 qualification 尚未闭合，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
 | **横切 Profile 体系** | **1.8.0；三类 Quick 精确执行合同及正负 READY 均已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、7 个 runtime bundle、4 个模型资产和 3 个 execution evidence contract；Token 1.2.1、AI 实时 1.1.1、Network 1.2.0 均已形成 P1/P2/Profile 共同消费并真机验证的精确合同。其余 Published Profile 仍保持兼容，不能扩大为全部 Profile 已完成端到端验收。 |
-| **里程碑位置** | **S1 三族 Quick 已完成，当前进入 S2 三族 M0 收敛** | ［KNOWN｜HIGH］详见 §7 与里程碑账本；S2 只共用 phone/remote/provenance/READY 的机械生命周期和发布事务，三类业务判定器继续独立。M1 正式重复性、M2 体验地图、M3 外部校准与 M4 正式发布均未因 Quick 窄切片自动完成。 |
+| **里程碑位置** | **S2 三族 M0 收敛已关闭，当前进入 S3 M1 可重复核心** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3 首个 strict-v2 cohort 身份/完整性/诊断切片已完成聚焦回归和完整本地质量门（858 主 Python、44 附加 Python、Android、Go、release/spec/secret 全 PASS）；尚未完成 clean CI、新的 P40 三族重复样本、1Hz 无线完整性、非开发者连续运行或正式基线。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -156,17 +156,17 @@
 | 里程碑 | Codex 现状 | 验收判断 |
 |---|---|---|
 | **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0；D-82 正向与 D-86 `receipt_missing` 负向均已在 P40/E-01 生成 D-87 READY 并由独立消费者复核 | ［KNOWN｜HIGH］**首个 Token Quick 窄切片正负跨端闭环，M0 总体仍部分完成且通用执行合同仍分叉**；正负使用不同 CI APK，只支持各自合同闭环，不是严格同二进制性能 A/B；不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
-| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；P40 同点位 5-run TTFT CV 中位数 1.425%、最大值 4.986% | ［KNOWN｜HIGH］**原计划单节点验收切片通过；内容项中的同城/区域/中心三级部署未完成，因此 M1 整体仍为部分完成**。 |
+| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；D-58 Token 5-run 已有历史 P40 证据；新增 strict-v2 三族 cohort 身份/完整性/诊断层，Token 仍只用 D-58，Realtime/Network policy pending | ［KNOWN｜HIGH］**M1 仍为部分完成**：离线 cohort 合同不等于新的 P40 三族重复样本；无线 1Hz 完整性、非开发者连续运行、导出独立复算和族专属正式门限尚未验收。 |
 | **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
 | **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
 | **M4 产品化** | Compose UI、动态测试、历史/结果/报告/分享已完成大部；正式发布边界与生命周期加固中 | ［KNOWN｜HIGH］**部分超前**；非开发者验收、签名 Release 与公开发布仍未完成。 |
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］M0-EC1 Token Quick 正负 READY 已完成：正向 source `10927c1` / CI `30124854408` / run `019f95f9-a317-7766-9725-243b9660b9f1`，负向 source `67eb66d` / CI `30162011890` / run `019f99c7-5b40-75ba-ad58-b5b522e9abf9`；独立 release verifier 与结束清理均通过，详见 `M0_TOKEN_QUICK_READY_VALIDATION_2026-07-25.md`。下一步不重复部署 E-01 或重跑该窄切片，转入计划架构中的下一项未完成门；A6 受 D-110 约束，在 v3 neutral package 明确交接前不得打开旧 material PNG/template-v2。
+1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复部署或重跑冻结真机证据来证明纯离线重构。当前转入 S3/M1；首个 `aneb-repeatability-cohort-v1` 切片聚焦验证和完整本地质量门已完成，下一门是冻结提交与 clean CI，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
 3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
-4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector、活动承载/蜂窝协变量分轨和 TTFT 同条件重复性复测已经完成并有 P40 可复算证据。
+4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector 与活动承载/蜂窝协变量分轨已实现；只有 Token TTFT 的 D-58 同条件重复性已有 P40 可复算证据。Realtime/Network 当前只有 diagnostic-only cohort 能力，不能写成正式重复性通过。
 5. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
 6. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入、全量门禁、真实 GitHub Actions 工件、来源证明和 P40 精确候选验收；混合批量 32/36 条及单条 v2 已通过离线验证，两条成功导出的 MediaStore 行均完成。下一步是不依赖 ADB 的终端用户整链与正式签名 Release；签名密钥仍服从仓库外 Product Owner 所有权边界。
 7. ［KNOWN｜HIGH］M4 高置信凭据扫描已接入本地质量门和独立 GitHub security job；工作区与暂存区双读、日志脱敏及 6 项定向测试通过，run `29635434193` 的 `Tracked-source credential scan` 与其后 Android 候选 job 均成功。已经披露的凭据仍必须撤销，扫描结果不能替代供应商审计。
