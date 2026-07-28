@@ -87,6 +87,7 @@
 
 - ［KNOWN｜HIGH］本轮代码聚焦交叉回归 39/39 PASS，直接 exporter CLI `--help` exit=0，相关模块 `py_compile` PASS。
 - ［KNOWN｜HIGH］冻结当前改动后的完整 `scripts/quality_gate.ps1` 单次运行 exit=0、耗时 1,395.9 秒：主 Python 873/873（skip 16）、附加 Python 44/44、Android 单测/lint/assemble、Go server/gateway、release boundary、699 个 tracked 文件凭据扫描、Profile/Schema/打包检查全部 PASS；本地 Debug APK SHA-256=`00c0033743f768752b676c1c6056963863a092d2bb2ef3d4e99e150b583c1b5e`。运行后没有 Python/Java/Gradle/Go 测试残留；既有 ADB server 进程不是本轮启动或测试证据。
+- ［KNOWN｜HIGH］生产修复提交 `4184065889833f70e4853f241c1d1dc39e2593de` 已推送；GitHub Actions run `30348907807` 的 7 个 job 全部成功，覆盖 credential scan、AI model、Windows evidence、Go server、dedicated gateway、Profile/result/packaging 与 Android candidate/provenance。
 - ［KNOWN｜HIGH］S3/M1 当前状态是：**业务重复采样已发生；严格无线 cohort 未形成；正式重复性矩阵仍未完成。**
 - ［KNOWN｜HIGH］下一轮必须先取得三项无线权限全为 granted 的 create-once 回执，再跑三族各 5 次；任一权限、样本、绑定、PhoneGuard 或 E-01 基线门失败即停止，不消耗后续 run。
 - ［KNOWN｜HIGH］下一轮只对冻结快照/副本运行 exporter 和分析器，禁止任何 ad-hoc 诊断直接连接原始 DB/WAL/SHM。
