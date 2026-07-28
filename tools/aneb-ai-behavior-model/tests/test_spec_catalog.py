@@ -57,7 +57,7 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
     def test_execution_evidence_contracts_are_cataloged_and_source_bound(self):
-        self.assertEqual("1.9.0", self.catalog["catalog_version"])
+        self.assertEqual("1.10.0", self.catalog["catalog_version"])
         self.assertEqual(3, len(self.catalog["execution_evidence_contracts"]))
         by_id = {
             entry["contract_id"]: entry

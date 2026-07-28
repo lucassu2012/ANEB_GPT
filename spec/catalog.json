@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.9.0",
+  "catalog_version": "1.10.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -57,7 +57,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.9.0",
+      "current_version": "1.10.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -181,6 +181,18 @@
       "path": "spec/schemas/aneb-repeatability-qualification-policy-v1.schema.json",
       "json_schema_id": "urn:aneb:schema:repeatability-qualification-policy:v1",
       "contract_version": "aneb-repeatability-qualification-policy-v1",
+      "consumers": [
+        "P1",
+        "P3",
+        "Profile"
+      ]
+    },
+    {
+      "schema_id": "aneb-repeatability-qualification-v1",
+      "schema_version": "1.0.0",
+      "path": "spec/schemas/aneb-repeatability-qualification-v1.schema.json",
+      "json_schema_id": "urn:aneb:schema:repeatability-qualification:v1",
+      "contract_version": "aneb-repeatability-qualification-v1",
       "consumers": [
         "P1",
         "P3",

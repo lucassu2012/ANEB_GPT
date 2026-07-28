@@ -11,7 +11,7 @@
 |---|---|---|
 | P1 手机端 | ANEB App 以真实网络流量模拟 Token 多模态、AI 实时交互和网络综合业务；动态展示关键指标，冻结全量指标、评分、结论与可导出证据 | ［KNOWN｜HIGH］三类引擎、Compose 动态界面、Room v19、strict-v2 结果与导出主链已实现；三族 Quick 正负 READY 已闭环；S3/M1 已完成三族各 5 次、无线权限 granted 的 strict cohort，S3/M2 的 10-run qualification 尚未执行 |
 | P2 测试服务器 | 提供可审计的 echo、token-sim、download、实时交互、综合网络与受控故障原语；任何共享主机变更都可预检、互斥、回滚和验后复核 | ［KNOWN｜HIGH］E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`，PID=`1295423`，InvocationID=`d975f7c374aa4ef3a490210d0a495e53`；受锁部署后六项共享指纹不变，owned/stage/watchdog 残留为 0，flock 已释放 |
-| P3 标准/业务模型 | 独立模拟 Kimi、DeepSeek、千问等 AI 业务行为，不调用真实 API；以版本化 Profile、模型摘要、校准状态和确定性轨迹供 P1/P2 执行 | ［KNOWN｜HIGH］本地候选为 behavior model 0.3.2、catalog 1.9.0、16 个 Profile、7 个运行包、3 个 execution evidence contracts 与 D-110 唯一重复性资格政策；没有真实授权数据时不得冒充 calibrated/validated |
+| P3 标准/业务模型 | 独立模拟 Kimi、DeepSeek、千问等 AI 业务行为，不调用真实 API；以版本化 Profile、模型摘要、校准状态和确定性轨迹供 P1/P2 执行 | ［KNOWN｜HIGH］本地候选为 behavior model 0.3.2、catalog 1.10.0、16 个 Profile、7 个运行包、3 个 execution evidence contracts、D-110 唯一重复性资格政策与资格报告 Schema；分析器核心/CLI 已接通，但 qualification Profile/runtime 与真实 Q1/Q2 尚未完成，没有真实授权数据时不得冒充 calibrated/validated |
 | Profile 横切机制 | 每类测试冻结业务类型、全量业务/网络指标、质量目标、动态关键指标、评分算法、结论与网络建议；P1/P2/P3 必须使用同一精确合同 | ［KNOWN｜HIGH］Token Quick 1.2.1、AI 实时 Quick 1.1.1 与 Network Quick 1.2.0 均已完成跨端正负 READY；三族的业务判定器继续独立，不能把 Quick 结案扩大为所有 Profile、正式基线或外场验收完成 |
 
 ## 2. 总体阶段

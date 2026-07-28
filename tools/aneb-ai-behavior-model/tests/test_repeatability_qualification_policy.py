@@ -23,7 +23,7 @@ class RepeatabilityQualificationPolicyTest(unittest.TestCase):
         catalog = json.loads(
             (REPO_ROOT / "spec" / "catalog.json").read_text(encoding="utf-8")
         )
-        self.assertEqual("1.9.0", catalog["catalog_version"])
+        self.assertEqual("1.10.0", catalog["catalog_version"])
         self.assertEqual(1, len(catalog["repeatability_qualification_policies"]))
 
         entry = catalog["repeatability_qualification_policies"][0]
