@@ -156,14 +156,14 @@
 | 里程碑 | Codex 现状 | 验收判断 |
 |---|---|---|
 | **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0；D-82 正向与 D-86 `receipt_missing` 负向均已在 P40/E-01 生成 D-87 READY 并由独立消费者复核 | ［KNOWN｜HIGH］**首个 Token Quick 窄切片正负跨端闭环，M0 总体仍部分完成且通用执行合同仍分叉**；正负使用不同 CI APK，只支持各自合同闭环，不是严格同二进制性能 A/B；不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
-| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；D-58 Token 5-run 已有历史 P40 证据；新增 strict-v2 三族 cohort 身份/完整性/诊断层，Token 仍只用 D-58，Realtime/Network policy pending | ［KNOWN｜HIGH］**M1 仍为部分完成**：离线 cohort 合同不等于新的 P40 三族重复样本；无线 1Hz 完整性、非开发者连续运行、导出独立复算和族专属正式门限尚未验收。 |
+| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；D-58 Token 5-run 已有历史 P40 证据；新增 strict-v2 三族 cohort、无线序列结构诊断与冻结 Room 原字节导出/绑定层，Token 仍只用 D-58，Realtime/Network policy pending | ［KNOWN｜HIGH］**M1 仍为部分完成**：离线结构审计不等于新的 P40 三族重复样本；无线 cadence 正式判据、非开发者连续运行、真机导出独立复算和族专属正式门限尚未验收。 |
 | **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
 | **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
 | **M4 产品化** | Compose UI、动态测试、历史/结果/报告/分享已完成大部；正式发布边界与生命周期加固中 | ［KNOWN｜HIGH］**部分超前**；非开发者验收、签名 Release 与公开发布仍未完成。 |
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复部署或重跑冻结真机证据来证明纯离线重构。当前转入 S3/M1；首个 `aneb-repeatability-cohort-v1` 纯离线切片已通过聚焦验证、完整本地质量门与 clean CI，下一门是 P40 三族重复样本、无线完整性和导出独立复算，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
+1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复部署或重跑冻结真机证据来证明纯离线重构。当前 S3/M1 已完成 `aneb-repeatability-cohort-v1`、无线序列结构诊断与 `aneb-repeatability-export-v1` 离线门；下一门是 P40 三族重复样本、真机 Room/无线绑定和导出独立复算，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md`。
 2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
 3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
 4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector 与活动承载/蜂窝协变量分轨已实现；只有 Token TTFT 的 D-58 同条件重复性已有 P40 可复算证据。Realtime/Network 当前只有 diagnostic-only cohort 能力，不能写成正式重复性通过。
