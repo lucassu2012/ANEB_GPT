@@ -12,7 +12,7 @@
 | P1 / ANEB Probe Android | 0.5.14（code 46，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token、AI 实时和 Network Quick 运行包执行合同与跨语言规范化哈希校验；三种 Quick 均在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏、分族审计 ID；Room 版本、指标、门限和评分均不变 |
 | P2 / aneb-server | 0.8.2 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token、AI realtime 与 Network Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；0.8.2 是 M0-EC3 离线候选，E-01 是否切换必须由受保护部署和验后证据确认 |
 | P3 / aneb-ai-behavior-model | 0.3.2 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；Token Quick 与 AI realtime Quick 均生成带运行计划和受限执行要求的 v2 发布包；保留绑定留出报告的 validated 门禁 |
-| Profile 横切机制 | 1.8.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token request-entry、AI realtime 协议签名和 Network Quick 执行协议证据合同，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
+| Profile 横切机制 | 1.9.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token request-entry、AI realtime 协议签名、Network Quick 执行协议证据合同和 D-110 重复性资格政策，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 ［KNOWN｜HIGH］M0-EC1/M0-EC2/M0-EC3 为 `token_multimodal_quick@1.2.1`、

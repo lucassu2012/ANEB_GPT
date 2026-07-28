@@ -4,7 +4,7 @@
 
 - ［KNOWN｜HIGH］当前三族各 5 次的 P40 数据不能直接生成正式门限。Realtime 的 `LIVE-N02`、`LIVE-B08` 和 Network 的 `NET-B01`、`NET-B02` 均未达到 Profile 声明的 run 级最低样本数；Network 下载 CV `24.07%` 还同时混合了真实 Wi-Fi 波动与测量链波动。
 - ［KNOWN｜HIGH］重复性与体验质量是两道门。重复性回答“同条件重测是否稳定”，Profile 质量目标回答“体验是否足够好”；任何方案都不得用稳定但很差的结果冒充高质量，也不得用一次高分结果替代重复性。
-- ［KNOWN｜HIGH］本文件是待 Product Owner 选择的提案，不是 Decision，不修改 D-58、Profile、KPI、AQS、结果置信度或 `formal_baseline_eligible=false`。
+- ［KNOWN｜HIGH］本文件保留三套候选及成本推导的提案原貌；Product Owner 的既有“按推荐方案、后续自主决策”授权已由 D-110 正式选择方案 B。D-110 不修改 D-58、Profile 质量目标、KPI、AQS、结果置信度或 `formal_baseline_eligible=false`。
 
 NIST 把 repeatability 限定为同方法、同仪器、同地点、短时间内的连续测量，并建议用离散度量化；IETF IPPM 也要求在尽量相同的网络条件下比较统计性质，同时指出无线网络的条件控制尤其困难。因此本计划把“同条件短期重复性”和“跨承载/跨时段可复现性”拆成两个阶段，而不是混成一个 CV。
 
@@ -88,20 +88,20 @@ NIST 把 repeatability 限定为同方法、同仪器、同地点、短时间内
 - ［COMPUTED｜HIGH］A 按现有 Standard duration 计算：`(1380.1 + 1306.9 + 42) × 10 = 27,290 s`，即单承载约 7.58 小时；Wi-Fi+蜂窝约 15.16 小时，尚未计入预检、冷却与失败重试。
 - ［COMPUTED｜MED］B 按 10-task Token 约 7.5–8 分钟、Realtime 约 1.5–2.5 分钟、Network 42 秒估算，单承载 10 run 约 1.7–1.9 小时。实际时长需由生成后的 deterministic runtime plan 精确计算。
 - ［COMPUTED｜HIGH］当前 Token 候选的 10-run 理论最小起始跨度约为 `9 × 431.596 = 3,884.364 s`，即 `64.739 分钟`，因此不可能作为一个 D-58 cohort；拆成两个 5-run D-58 子批是保持 D-58 不变的必要条件，不是可选优化。
-- ［INFERRED｜MED］提议的 10-run pooled 起始跨度上限 `90 分钟` 是工程控制门，不是由当前 5 样本估计出来的统计边界；它为约 64.7 分钟的理论执行时长保留约 25 分钟受控开销，同时防止把相隔过久的数据伪装成短期重复性。该值必须随方案 B 一并由 Product Owner 批准。
+- ［INFERRED｜MED］10-run pooled 起始跨度上限 `90 分钟` 是 D-110 批准的工程控制门，不是由当前 5 样本估计出来的统计边界；它为约 64.7 分钟的理论执行时长保留约 25 分钟受控开销，同时防止把相隔过久的数据伪装成短期重复性。
 - ［INFERRED｜HIGH］A 的成本会鼓励跳过复测或把不同时间段拼池；B 更可能被持续执行，并且能满足现有最低样本合同。
 - ［INFERRED｜HIGH］B 的 15%/20% 门限仍是产品工程门，不是从本次 5 样本估计出的统计置信区间。批准后应先运行一轮 Q1，再做一次冻结回放审计；若失败，只能调整 Profile/环境或提出新的 Decision，不能在结果出来后放宽阈值。
 
-## 7. Product Owner 决策项
+## 7. Product Owner 决策结果
 
-推荐选择 **B：平衡正式**，并批准以下四件事作为一个原子 Decision：
+［KNOWN｜HIGH］D-110 已原子批准 **B：平衡正式** 及以下四项：
 
 1. 新增三族 `repeatability_qualification` Profile/运行计划，不改现有 Quick/Standard；
 2. 批准 B 表中的指标类型、阈值、10-run 和无线 cadence 门；
 3. 批准 Token 的 `两个独立 5-run D-58 子批 + 10-run pooled TTFT CV 中位数 ≤10% + 完整起始跨度 ≤90 分钟` 上层门；任一子批超出 30 分钟即失败，不放宽 D-58；
 4. 先只执行 Q1 Wi-Fi；Q1 通过后再单独领取 Q2 蜂窝窗口，避免一次授权扩大到外场或弱网。
 
-在 Product Owner 选择前，代码保持 `policy_pending/diagnostic_only`，不实现或预埋任一候选阈值。
+D-110 之前的实现保持 `policy_pending/diagnostic_only`；D-110 之后只能从版本化政策读取方案 B，禁止把候选 A/C 常数预埋到生产路径。
 
 ## 8. 实施落点审计（决策后执行）
 

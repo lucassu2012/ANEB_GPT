@@ -3,7 +3,7 @@
 > 更新日期：2026-07-28。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.14-codex / code 46 / Room v19；E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`；behavior model 0.3.2；Profile catalog 1.8.0。M0-EC1 Token Quick、M0-EC2 AI 实时 Quick 与 M0-EC3 Network Quick 均已完成正负 READY，D-109/S2 已关闭。S3/M1 已用 source `5b968bfffdb81451c80b2fd86064c06b35da925b` / CI `30323979935` / APK SHA-256=`09db3b4a3f137cd98c2346c55f5dadf3f9e797367327e0c5e7b986de525ce8b4` 完成三族各 5 次工程业务采样；15/15 无线权限拒绝使 strict cohort 未形成，正式重复性矩阵仍未完成。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖继续列为缺口。
+> 当前事实基线：App 0.5.14-codex / code 46 / Room v19；E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`；behavior model 0.3.2；Profile catalog 1.9.0。M0-EC1 Token Quick、M0-EC2 AI 实时 Quick 与 M0-EC3 Network Quick 均已完成正负 READY，D-109/S2 已关闭。S3/M1 已用 source `8a834d49dd61a1f544dc5ea10991e50929f85a3e` / CI `30349786024` 的 exact APK 完成三族各 5 次、无线权限 granted 的 strict-v2 cohort：15/15 completed，876 条无线样本，冻结 Room 三件套分析前后逐字一致；Token D-58 PASS，Realtime/Network 仍只具 diagnostic 结论。D-110 已批准 S3/M2 方案 B，版本化 qualification 政策/Schema 已在 catalog 1.9.0 发布，当前进入 analyzer 执行链实现。真实授权数据、三级节点、正式签名发布和 M2/M3 外部依赖继续列为缺口。
 > M0-EC1 边界：Token Quick 1.2.1 已建立 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 精确执行合同、真实 1MiB 返回附件、同-run服务端审计以及 D-82/D-86/D-87 正负 READY。正向 run `019f95f9-a317-7766-9725-243b9660b9f1` 和负向 run `019f99c7-5b40-75ba-ad58-b5b522e9abf9` 已完成，窄切片可以结案；正负使用不同 CI APK，因此不能冒充同二进制性能 A/B，且不能扩大为全部 Profile 已统一。
 > 逐门里程碑账本：`docs/MILESTONE_LEDGER_2026-07-23.md`。后续任务必须回填实际 commit/run/APK/READY 身份，不能只更新叙述性进度。
 > 协同规则：2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 退役。P40 改为“实时只读现场检查 → 干净则直接测试 → 停止本轮全部 App/VPN/抓包/临时规则并恢复设置 → Huawei Launcher → 即时复核”；无法安全归属的既有会话不得擅自清理。E-01/阿里云继续执行独立预检、远端 `flock`、受限变更、原子回滚和验后检查。
@@ -22,11 +22,11 @@
 | 计划单元 | Codex 当前状态 | 结论 |
 |---|---|---|
 | **P1a 前台 UI** | **0.5.10 产品化大部完成；开测、导出和统一结论已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL，设置页可把全部独立验真的 v1/v2 历史按时间导出，并分别提示格式不支持与完整性异常。0.5.9 直接展示评分器冻结的完成性、Profile 业务行为、门限与瓶颈；0.5.10 对下载目录的创建、写入、完成和失败清理逐阶段验真，禁止半成品或误报成功。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
-| **P1b 测量引擎** | **三族 Quick 单节点跨端闭环；已做 15 次工程重复采样，正式矩阵仍待完成** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果先落 Room 再发布，并冻结 `aneb-result-v2`、1Hz 无线样本、环境事件、稳定结论 ID 与证据依据。三族 Quick 正负 READY 已完成；S3/M1 又完成三族各 5 次业务运行，但 15/15 无线权限拒绝、严格导出被拒绝。这证明业务编排可连续运行，不证明 Standard/Recovery、无线完整性或正式基线完成。 |
+| **P1b 测量引擎** | **三族 Quick 单节点跨端闭环；S3/M1 严格 cohort 已形成，S3/M2 qualification 待实现** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果先落 Room 再发布，并冻结 `aneb-result-v2`、1Hz 无线样本、环境事件、稳定结论 ID 与证据依据。三族 Quick 正负 READY 已完成；S3/M1 的 15/15 run 均完成且无线权限 granted，strict-v2 导出与冻结 Room 原字节复核通过。Token D-58 PASS；Realtime/Network 尚未经过 D-110 的 10-run qualification，因此不证明正式重复性或基线完成。 |
 | **P2 服务器侧** | **0.8.2 已部署；Token/Realtime 跨端窄切片完成，Network 服务端门完成** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.2`，覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、ANEB2 UDP、结果与逐 run 合成弱网，并提供三类 Quick 的 Profile 白名单能力回执和同-run request-entry 审计。受锁部署验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
 | **P3 标准与业务模型** | **0.3.2 本地候选；真实画像仍未完成外部签名校准** | ［KNOWN｜HIGH］授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.2 已进入 Token/Realtime/Network 三类 Quick 的合同消费区间。现有 4 个模型仍为 `hypothesis`；A6 私有校准链已形成 first-50 选择，但独立外部 reviewer 签名与正式 qualification 尚未闭合，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
-| **横切 Profile 体系** | **1.8.0；三类 Quick 精确执行合同及正负 READY 均已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 8 个 Schema、2 个 Profile 家族、16 个 Profile、7 个 runtime bundle、4 个模型资产和 3 个 execution evidence contract；Token 1.2.1、AI 实时 1.1.1、Network 1.2.0 均已形成 P1/P2/Profile 共同消费并真机验证的精确合同。其余 Published Profile 仍保持兼容，不能扩大为全部 Profile 已完成端到端验收。 |
-| **里程碑位置** | **S2 三族 M0 收敛已关闭；S3 M1 首轮真机工程采样已完成但严格门失败** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3 cohort/导出离线合同已完成；首轮 P40 三族各 5 次业务运行完成，Token D-58 子门 PASS，但无线权限 15/15 拒绝且严格导出不成立。当前下一门是带权限机器回执的重采、无线完整性与独立复算，不是把这批诊断结果提升为正式基线。 |
+| **横切 Profile 体系** | **1.9.0；三类 Quick 精确执行合同与 D-110 政策均已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 9 个 Schema、2 个 Profile 家族、16 个 Profile、7 个 runtime bundle、4 个模型资产、3 个 execution evidence contract 和 1 个 canonical-hash-bound repeatability policy；Token 1.2.1、AI 实时 1.1.1、Network 1.2.0 均已形成 P1/P2/Profile 共同消费并真机验证的精确合同。qualification analyzer/Profile/runtime 尚未接通，不能把政策发布扩大为执行链或正式基线已完成。 |
+| **里程碑位置** | **S2 已关闭；S3/M1 工程闭环完成；S3/M2 方案 B 已批准并进入实现** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3/M1 三族严格 cohort、无线完整性、冻结导出与独立复算已完成；Token D-58 子门 PASS，Realtime/Network 保持 diagnostic。D-110 已冻结 10-run、三族离散度、无线 cadence 与承载隔离门；下一门是实现政策/分析器/Profile/Android/server/campaign，再执行 Q1 Wi-Fi，不是把现有 5-run 工程样本提升为正式基线。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -156,17 +156,17 @@
 | 里程碑 | Codex 现状 | 验收判断 |
 |---|---|---|
 | **M0 契约冻结** | `spec/catalog.json` 索引 8 Schema/2 家族/16 Profile/6 运行包；兼容 v1/严格 v2 结果、授权观测、校准数据集和留出报告合同已有正反例校验；Token Quick 1.2.1 已形成 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 共用的精确执行合同、真实 download 和同-run审计；E-01 已部署 0.8.0；D-82 正向与 D-86 `receipt_missing` 负向均已在 P40/E-01 生成 D-87 READY 并由独立消费者复核 | ［KNOWN｜HIGH］**首个 Token Quick 窄切片正负跨端闭环，M0 总体仍部分完成且通用执行合同仍分叉**；正负使用不同 CI APK，只支持各自合同闭环，不是严格同二进制性能 A/B；不能把一个 Quick 切片扩大为全部 Profile 已统一。 |
-| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；strict-v2 cohort、无线结构诊断与冻结 Room 原字节导出/绑定层已实现；首轮新 P40 三族各 5 次业务运行完成，Token D-58 子门 PASS，Realtime/Network policy pending | ［KNOWN｜HIGH］**M1 仍为部分完成**：首轮新样本的无线权限全部拒绝，strict cohort 未形成；无线 cadence 正式判据、非开发者连续运行、真机导出独立复算和族专属正式门限尚未验收。 |
+| **M1 核心闭环** | Kotlin 引擎 + Go 单节点 + 三类仿真轨、Room v19 统一信封、UI JSONL 与正式三引擎 radio_ctx 已跑通；strict-v2 cohort、无线结构诊断、冻结 Room 原字节导出/绑定层及三族 5-run 工程闭环已实现；Token D-58 PASS，D-110 已批准 Realtime/Network 与无线 cadence 的 qualification 政策 | ［KNOWN｜HIGH］**M1 仍为部分完成**：S3/M1 工程证据链已闭合，但 D-110 的 10-run qualification 执行链和 Q1 Wi-Fi 尚未实现/执行；单次 Quick 与 5-run 工程样本均不得升级为正式基线。 |
 | **M2 外场 MVP** | 无 6–8 点位 × 忙闲 × 双运营商活动，无三级实例与正式热力报告 | ［KNOWN｜HIGH］**未启动**。 |
 | **M3 真实业务与语音** | AI 实时 WS 仿真/打断/恢复已完成；真实画像、Profile 3 适配器、RTP/WebRTC 回环与逐帧打点验收未做 | ［KNOWN｜HIGH］**仅 WebSocket 仿真轨完成**；其余验收没有客观完成比例。 |
 | **M4 产品化** | Compose UI、动态测试、历史/结果/报告/分享已完成大部；正式发布边界与生命周期加固中 | ［KNOWN｜HIGH］**部分超前**；非开发者验收、签名 Release 与公开发布仍未完成。 |
 
 ## 8. 当前自主执行顺序
 
-1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复冻结真机证据来证明纯离线重构。S3/M1 已完成 cohort/无线结构/冻结导出合同，并完成首轮 P40 三族各 5 次工程业务采样；因 15/15 无线权限拒绝，下一门改为“权限回执先行 → 三族重采 → 冻结快照导出 → 独立复算”，见 `S3_REPEATABILITY_COHORT_CONTRACT_2026-07-28.md` 与 `S3_M1_REPEATABILITY_ENGINEERING_VALIDATION_2026-07-28.md`。
+1. ［KNOWN｜HIGH］M0-EC1/EC2/EC3 与 D-109/S2 已结案，不重复冻结真机证据来证明纯离线重构。S3/M1 已完成无线权限 granted 的三族 strict-v2 cohort、冻结快照导出与独立复算；D-110 已批准方案 B。当前按“版本化政策 → analyzer → qualification Profile/runtime → Android → server capability → campaign → 离线门禁 → Q1 Wi-Fi”推进，见 `S3_M2_THRESHOLD_AND_SAMPLE_PLAN_PROPOSAL_2026-07-28.md`。
 2. ［KNOWN｜HIGH］P1 发布边界、AI 实时生命周期修复、`spec/` 目录与统一结果 Schema 已完成并有自动校验。
 3. ［KNOWN｜HIGH］AI 实时/网络综合 Room v19 结果信封、用户可见 JSONL 与 P40 真机回归已完成。
-4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector 与活动承载/蜂窝协变量分轨已实现；首轮新样本证明业务轨能连续完成，也反证“安装命令成功即无线权限已生效”的假设。只有 Token TTFT 的 D-58 子门具有授权判据；Realtime/Network 当前仍只有 diagnostic-only 能力，不能写成正式重复性通过。
+4. ［KNOWN｜HIGH］三个正式新引擎的 RadioCollector 与活动承载/蜂窝协变量分轨已实现；S3/M1 证明三族无线数据可完整采集。Token TTFT 的 D-58 子门保持不变；Realtime/Network 与无线 cadence 的正式工程门已由 D-110 批准，但在版本化执行链和 Q1 10-run 证据完成前仍只能写 diagnostic-only。
 5. ［KNOWN｜HIGH］P3“授权观测 JSONL → 校准模型 → 留出验证 → validated 发布”流水线已实现；没有真实授权数据时仍不生成 calibrated/validated 正式资产。
 6. ［KNOWN｜HIGH］M4 下载导出失败清理和云端 Debug 候选打包已在 0.5.10 完成本地故障注入、全量门禁、真实 GitHub Actions 工件、来源证明和 P40 精确候选验收；混合批量 32/36 条及单条 v2 已通过离线验证，两条成功导出的 MediaStore 行均完成。下一步是不依赖 ADB 的终端用户整链与正式签名 Release；签名密钥仍服从仓库外 Product Owner 所有权边界。
 7. ［KNOWN｜HIGH］M4 高置信凭据扫描已接入本地质量门和独立 GitHub security job；工作区与暂存区双读、日志脱敏及 6 项定向测试通过，run `29635434193` 的 `Tracked-source credential scan` 与其后 Android 候选 job 均成功。已经披露的凭据仍必须撤销，扫描结果不能替代供应商审计。
@@ -211,9 +211,18 @@
 
 - ［KNOWN｜HIGH］source `8a834d49dd61a1f544dc5ea10991e50929f85a3e` / CI `30349786024` 的 exact APK 在 P40 完成 Token、AI 实时、Network 各 5 次；业务前权限回执证明三项无线权限均 granted，15/15 run completed。
 - ［KNOWN｜HIGH］冻结 Room 副本严格导出三组各 5 条 strict-v2 envelope，原 DB/WAL/SHM 分析前后逐字一致；Token/Realtime/Network 无线样本总数分别为 641/135/100，约 1 Hz，stale 与订阅切换均为 0。
-- ［COMPUTED｜HIGH］Token D-58 任务 TTFT CV 中位数 `1.71%`，授权结论 `PASS`；Realtime/Network 只有 diagnostic distribution，正式重复性判据仍为 policy pending。
+- ［COMPUTED｜HIGH］Token D-58 任务 TTFT CV 中位数 `1.71%`，授权结论 `PASS`；Realtime/Network 的当前 5-run 仍只有 diagnostic distribution。D-110 已批准后续 10-run qualification 判据，但不追溯改判当前样本。
 - ［KNOWN｜HIGH］所有 formal baseline eligibility 继续为 false：无线 cadence/gap/stale 没有批准阈值，Realtime/Network 没有族专属门，部分 run 级业务指标也未达到 Profile 声明的最低样本数。
 - ［KNOWN｜HIGH］runner finally、原 APK/Room 恢复、独立 PhoneGuard T+0/T+2、E-01 六项共享指纹与 flock release 全部闭合；P40/E-01 已释放。
-- ［INFERRED｜HIGH］下一最小阶段是 S3/M2 门限提案与更长样本计划：先根据本批真实分布提出 2–3 套候选门限及成本，再由 Product Owner 决策；不得从 5 次工程样本自动生成正式判据。
+- ［KNOWN｜HIGH］下一最小阶段已进入 S3/M2 Batch 1：先把 D-110 转为可哈希、可校验、可被 catalog 索引的政策资产，再逐批接通 analyzer、三族 qualification runtime、Android/server capability 与 campaign；全部离线门通过后才执行 Q1 Wi-Fi。
 
 完整证据见 `S3_M1_REPEATABILITY_RADIO_VALIDATION_2026-07-28.md`。
+
+## 14. 2026-07-28：S3/M2 方案 B 决策与实施入口
+
+- ［KNOWN｜HIGH］Product Owner 既有“按推荐方案、后续自主决策”授权已由 D-110 正式选择 B：三族各 10 个 qualification run，Wi-Fi/蜂窝分池，Q1 先于 Q2。
+- ［KNOWN｜HIGH］Token 继续服从不变的 D-58：两个独立 5-run 子批各自满足 30 分钟与 TTFT CV 中位数 ≤10%，完整 10-run 再通过 ≤90 分钟 pooled 漂移门；证明不了 30 分钟只能缩短任务，不能放宽 D-58。
+- ［KNOWN｜HIGH］Realtime 冻结 `LIVE-B05` 极差 ≤0.01、`LIVE-N02/LIVE-B08` CV 各 ≤15%；Network 冻结 `NET-B01/B02` CV 各 ≤20%、`NET-B04` CV ≤15%；所有参与指标必须逐 run 满足最小样本量。
+- ［KNOWN｜HIGH］无线门冻结为每 run P95 gap ≤1.25s、max gap <1.50s、stale=0、订阅切换=0，并继续要求 collected、计数一致和单调递增。
+- ［KNOWN｜HIGH］重复性门与 Profile 质量门独立；D-110 不改变 Quick/Standard、KPI/AQS/T4、权重、claim scope、`null` 语义、单 run 置信度或当前 `formal_baseline_eligible=false`。
+- ［KNOWN｜HIGH］Batch 1“Decision + 版本化政策/Schema”已实现：catalog 1.9.0 唯一索引 D-110 政策，Schema 与 canonical SHA 绑定通过；当前转入 Batch 2 analyzer。qualification Profile/runtime、P40 Q1 与正式基线仍未完成。

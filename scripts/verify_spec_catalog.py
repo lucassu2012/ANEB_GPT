@@ -1131,6 +1131,102 @@ def _validate_execution_evidence_contracts(
     _check_inventory("execution evidence contract inventory", declared_paths, actual, errors)
 
 
+def _validate_repeatability_qualification_policies(
+    root: Path,
+    catalog: dict[str, Any],
+    schema_ids: set[str],
+    hash_strategy_ids: set[str],
+    errors: list[str],
+) -> None:
+    entries = catalog.get("repeatability_qualification_policies")
+    if not isinstance(entries, list) or len(entries) != 1:
+        errors.append(
+            "catalog.repeatability_qualification_policies: expected exactly one approved policy"
+        )
+        entries = entries if isinstance(entries, list) else []
+    required = {
+        "policy_id",
+        "version",
+        "decision_id",
+        "path",
+        "schema_ref",
+        "canonical_sha256",
+        "hash_strategy_id",
+        "consumers",
+    }
+    declared_paths: set[str] = set()
+    identities: set[tuple[str, str]] = set()
+    for index, entry in enumerate(entries):
+        label = f"catalog.repeatability_qualification_policies[{index}]"
+        if not _strict_keys(entry, required, set(), label, errors):
+            continue
+        policy_id = entry.get("policy_id")
+        version = entry.get("version")
+        _semver(version, f"{label}.version", errors)
+        identity = (
+            policy_id if isinstance(policy_id, str) else "",
+            version if isinstance(version, str) else "",
+        )
+        if identity in identities:
+            errors.append(f"{label}: duplicate policy id/version {identity}")
+        identities.add(identity)
+        expected_identity = (
+            "aneb-repeatability-qualification-balanced-v1",
+            "1.0.0",
+        )
+        if identity != expected_identity:
+            errors.append(f"{label}: unsupported policy id/version {identity}")
+        if entry.get("decision_id") != "D-110":
+            errors.append(f"{label}.decision_id: expected D-110")
+        expected_path = (
+            "spec/repeatability-policies/"
+            "aneb-repeatability-qualification-balanced-v1.json"
+        )
+        if entry.get("path") != expected_path:
+            errors.append(f"{label}.path: expected approved D-110 policy path")
+        schema_ref = entry.get("schema_ref")
+        if schema_ref != "aneb-repeatability-qualification-policy-v1":
+            errors.append(f"{label}.schema_ref: unsupported policy schema")
+        if schema_ref not in schema_ids:
+            errors.append(f"{label}.schema_ref: unknown schema")
+        if entry.get("hash_strategy_id") not in hash_strategy_ids:
+            errors.append(f"{label}.hash_strategy_id: unknown hash strategy")
+        digest = entry.get("canonical_sha256")
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+            errors.append(f"{label}.canonical_sha256: expected lowercase SHA-256")
+        consumers = set(_string_list(entry.get("consumers"), f"{label}.consumers", errors))
+        if consumers != {"P1", "P3", "Profile"}:
+            errors.append(f"{label}.consumers: expected P1, P3 and Profile")
+
+        ref = entry.get("path")
+        if isinstance(ref, str):
+            declared_paths.add(ref)
+        path = _resolve_file(root, ref, f"{label}.path", errors)
+        if path is None:
+            continue
+        document = load_json(path, str(ref), errors)
+        if not isinstance(document, dict):
+            continue
+        expected_document_identity = {
+            "contract_version": schema_ref,
+            "policy_id": policy_id,
+            "version": version,
+            "decision_id": entry.get("decision_id"),
+            "status": "approved",
+            "classification": "engineering_qualification_policy",
+            "claim_scope": "application_end_to_end_to_probe_node",
+        }
+        for key, expected in expected_document_identity.items():
+            if document.get(key) != expected:
+                errors.append(f"{label}: document {key} does not match catalog policy")
+        if digest != canonical_json_sha256(document):
+            errors.append(f"{label}.canonical_sha256 does not match policy")
+    actual = _relative_set(root, (root / "spec/repeatability-policies").glob("*.json"))
+    _check_inventory(
+        "repeatability qualification policy inventory", declared_paths, actual, errors
+    )
+
+
 def _validate_models(
     root: Path,
     catalog: dict[str, Any],
@@ -1595,7 +1691,7 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
     required = {
         "catalog_id", "catalog_version", "compatibility", "consumers", "hash_strategies",
         "schemas", "runtime_contracts", "execution_evidence_contracts", "model_assets",
-        "profile_families",
+        "repeatability_qualification_policies", "profile_families",
     }
     if not _strict_keys(catalog, required, set(), "catalog", errors):
         return errors
@@ -1613,6 +1709,9 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
     schema_ids = _validate_schemas(root, catalog, errors)
     runtime_contracts = _validate_runtime_contracts(root, catalog, hash_strategy_ids, errors)
     _validate_execution_evidence_contracts(root, catalog, hash_strategy_ids, errors)
+    _validate_repeatability_qualification_policies(
+        root, catalog, schema_ids, hash_strategy_ids, errors
+    )
     model_hashes = _validate_models(root, catalog, hash_strategy_ids, errors)
     _validate_profiles(root, catalog, schema_ids, hash_strategy_ids, runtime_contracts, model_hashes, errors)
     return errors
@@ -1651,7 +1750,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(profiles)} profiles, {len(runtime_bound)} runtime bundles, "
             f"{len(embedded_network)} embedded-network profiles, "
             f"{len(catalog['model_assets'])} behavior models, "
-            f"{len(catalog['execution_evidence_contracts'])} execution evidence contracts"
+            f"{len(catalog['execution_evidence_contracts'])} execution evidence contracts, "
+            f"{len(catalog['repeatability_qualification_policies'])} repeatability policy"
         )
     return 0
 
