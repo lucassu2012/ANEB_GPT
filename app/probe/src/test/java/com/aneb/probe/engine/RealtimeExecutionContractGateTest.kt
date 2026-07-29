@@ -21,6 +21,23 @@ class RealtimeExecutionContractGateTest {
         assertEquals(1, transport.serverInfoRequests)
     }
 
+    @Test
+    fun `repeatability qualification requires and accepts its exact capability receipt`() = runBlocking {
+        val profileId = "ai_realtime_voice_repeatability_qualification"
+        val version = "1.0.0"
+        val transport = FakeCapabilityTransport(validReceipt(profileId, version))
+
+        val authorization = RealtimeExecutionContractGate.authorize(
+            serverBase = "https://aneb.test",
+            profile = requiredProfile(profileId, version),
+            profileCanonicalSha256 = PROFILE_SHA,
+            transport = transport,
+        )
+
+        assertEquals(ExecutionAuthorization.VALIDATED_RECEIPT, authorization)
+        assertEquals(1, transport.serverInfoRequests)
+    }
+
     private class FakeCapabilityTransport(
         private val receipt: String,
     ) : ExecutionCapabilityTransport {
@@ -32,9 +49,12 @@ class RealtimeExecutionContractGateTest {
         }
     }
 
-    private fun requiredProfile() = ScenarioProfile(
-        profileId = "ai_realtime_voice_quick",
-        version = "1.1.1",
+    private fun requiredProfile(
+        profileId: String = "ai_realtime_voice_quick",
+        version: String = "1.1.1",
+    ) = ScenarioProfile(
+        profileId = profileId,
+        version = version,
         executionTarget = "aneb_probe_simulator",
         claimScope = "application_end_to_end_to_probe_node",
         contractVersion = ScenarioProfile.CONTRACT_V2,
@@ -54,7 +74,10 @@ class RealtimeExecutionContractGateTest {
         ),
     )
 
-    private fun validReceipt(): String = """
+    private fun validReceipt(
+        profileId: String = "ai_realtime_voice_quick",
+        profileVersion: String = "1.1.1",
+    ): String = """
         {
           "version":"aneb-server/test",
           "execution_capabilities":{
@@ -65,8 +88,8 @@ class RealtimeExecutionContractGateTest {
             ],
             "validated_profiles":[
               {
-                "profile_id":"ai_realtime_voice_quick",
-                "profile_version":"1.1.1",
+                "profile_id":"$profileId",
+                "profile_version":"$profileVersion",
                 "profile_sha256":"$PROFILE_SHA"
               }
             ]

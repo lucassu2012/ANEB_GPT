@@ -25,6 +25,24 @@ class TokenExecutionContractGateTest {
         assertEquals(1, fakeServer.businessRequests)
     }
 
+    @Test
+    fun `repeatability qualification requires and accepts its exact capability receipt`() = runBlocking {
+        val profileId = "token_multimodal_repeatability_qualification"
+        val version = "1.0.0"
+        val fakeServer = FakeTokenServer(validReceipt(PROFILE_SHA, profileId, version))
+
+        val traffic = TokenExecutionContractGate.authorize(
+            serverBase = "https://aneb.test",
+            profile = requiredProfile(profileId, version),
+            profileCanonicalSha256 = PROFILE_SHA,
+            transport = fakeServer,
+        )
+
+        assertEquals(TokenExecutionAuthorization.VALIDATED_RECEIPT, traffic.authorization)
+        assertEquals(1, fakeServer.serverInfoRequests)
+        assertEquals(0, fakeServer.businessRequests)
+    }
+
     private class FakeTokenServer(private val serverInfoBody: String) : TokenExecutionTransport {
         var serverInfoRequests = 0
         var businessRequests = 0
@@ -65,9 +83,12 @@ class TokenExecutionContractGateTest {
         ): AnebClient.TransferResult = error("unexpected download")
     }
 
-    private fun requiredProfile(): ScenarioProfile = ScenarioProfile(
-        profileId = "token_multimodal_quick",
-        version = "1.2.1",
+    private fun requiredProfile(
+        profileId: String = "token_multimodal_quick",
+        version: String = "1.2.1",
+    ): ScenarioProfile = ScenarioProfile(
+        profileId = profileId,
+        version = version,
         executionTarget = "aneb_probe_simulator",
         claimScope = "application_end_to_end_to_probe_node",
         contractVersion = ScenarioProfile.CONTRACT_V2,
@@ -93,7 +114,11 @@ class TokenExecutionContractGateTest {
         ),
     )
 
-    private fun validReceipt(profileSha: String): String = """
+    private fun validReceipt(
+        profileSha: String,
+        profileId: String = "token_multimodal_quick",
+        profileVersion: String = "1.2.1",
+    ): String = """
         {
           "version":"aneb-server/test",
           "execution_capabilities":{
@@ -105,7 +130,7 @@ class TokenExecutionContractGateTest {
               {"primitive_id":"token_sim","wire_contract_id":"aneb-token-task-v1"}
             ],
             "validated_profiles":[
-              {"profile_id":"token_multimodal_quick","profile_version":"1.2.1","profile_sha256":"$profileSha"}
+              {"profile_id":"$profileId","profile_version":"$profileVersion","profile_sha256":"$profileSha"}
             ]
           }
         }

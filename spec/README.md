@@ -11,12 +11,12 @@
 |---|---:|---|
 | P1 / ANEB Probe Android | 0.5.14（code 46，Room v19） | ［KNOWN｜HIGH］消费两族 Profile；对 Token、AI 实时和 Network Quick 运行包执行合同与跨语言规范化哈希校验；三种 Quick 均在首个业务请求前校验 P1 引擎、P2 能力回执和精确 Profile 身份，并为同一 run 的控制/业务请求附加脱敏、分族审计 ID；Room 版本、指标、门限和评分均不变 |
 | P2 / aneb-server | 0.8.2 | ［KNOWN｜HIGH］解析并下发 4 个服务端根 Profile；启动时校验已发布 Token、AI realtime 与 Network Quick 包，并通过 `/api/v1/serverinfo` 提供版本化能力回执；0.8.2 是 M0-EC3 离线候选，E-01 是否切换必须由受保护部署和验后证据确认 |
-| P3 / aneb-ai-behavior-model | 0.3.2 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；Token Quick 与 AI realtime Quick 均生成带运行计划和受限执行要求的 v2 发布包；保留绑定留出报告的 validated 门禁 |
-| Profile 横切机制 | 1.10.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结 Token request-entry、AI realtime 协议签名、Network Quick 执行协议证据合同、D-110 重复性资格政策和资格报告 Schema，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
+| P3 / aneb-ai-behavior-model | 0.3.3 | ［KNOWN｜HIGH］维护 Profile/trace/授权观测/校准数据集/留出验证 Schema；三族 D-110 qualification runtime 由统一 CLI 确定性发布并绑定 approved policy SHA；保留绑定留出报告的 validated 门禁 |
+| Profile 横切机制 | 1.11.0 | ［KNOWN｜HIGH］索引全部正式资产，分别冻结三类 Quick 执行合同、D-110 重复性资格政策、三族 qualification 运行包和资格报告 Schema，继续治理执行要求、兼容范围、消费者、完整性和发布方式 |
 
 目录合同使用半开 SemVer 区间：当前消费者声明接受 `>=1.0.0,<2.0.0` 的 catalog。
 ［KNOWN｜HIGH］M0-EC1/M0-EC2/M0-EC3 为 `token_multimodal_quick@1.2.1`、
-`ai_realtime_voice_quick@1.1.1` 与 `network_comprehensive_quick@1.2.0` 接通执行能力握手；其余 9 个 Published Profile 没有
+`ai_realtime_voice_quick@1.1.1` 与 `network_comprehensive_quick@1.2.0` 接通执行能力握手；三族 qualification Profile 也声明同类受限执行要求但尚未接入 Android/server；其余 9 个 Published Profile 没有
 `execution_requirements`，继续走原有兼容路径。任何不兼容字段或语义变化
 仍必须先升级 catalog/contract 主版本，再升级消费者。
 
@@ -32,15 +32,15 @@
 
 ### 2. Published Profile v2
 
-- 资产：`profiles/published/*/profile.json`，当前 12 个。
+- 资产：`profiles/published/*/profile.json`，当前 15 个。
 - 消费者：P1、P2、P3、Profile；P2 当前只消费声明了执行要求的 Quick 子集。
 - 合同：`aneb-profile-v2`，引用现有 JSON Schema。
 - 该族内部必须按执行语义分成两组，不能用同一个“文件存在即可”的校验代替：
 
 | v2 校验组 | 数量 | mode | 运行资产策略 |
 |---|---:|---|---|
-| `behavior_runtime_bound` | 6 | Token 3 + AI realtime 3 | 必须同目录包含 `profile.json`、`runtime_plan.json`、`manifest.sha256`；模型、seed、variant、runtime contract 和规范化哈希必须交叉一致 |
-| `network_runtime_bound` | 1 | Network Quick | 必须同目录包含三件套；无行为模型，但必须冻结 deterministic runtime plan、四项受限原语、seed、variant 和规范化哈希 |
+| `behavior_runtime_bound` | 8 | Token 4 + AI realtime 4 | 必须同目录包含 `profile.json`、`runtime_plan.json`、`manifest.sha256`；模型、seed、variant、runtime contract 和规范化哈希必须交叉一致；qualification 还必须绑定 approved D-110 policy |
+| `network_runtime_bound` | 2 | Network Quick + qualification | 必须同目录包含三件套；无行为模型，但必须冻结 deterministic runtime plan、四项受限原语、seed、variant 和规范化哈希；qualification 还必须绑定 approved D-110 policy |
 | `network_embedded_phases` | 5 | 其余 network comprehensive | phases 全部内嵌在 `profile.json`；禁止 `execution_plan`、`behavior_trace`、`runtime_plan.json` 和 `manifest.sha256` |
 
 Network Quick 的运行计划是确定性测量编排，不是 AI 行为模型；其余网络综合 Profile 仍没有独立运行计划，给它们补空 manifest 会制造错误的完整性语义。反过来，任何 runtime-bound Profile 如果缺 manifest，P1 就无法证明 Profile 与运行计划绑定，必须
@@ -162,7 +162,7 @@ Schema 级生成测试和 P1 的 capability/integrity/结果信封测试仍须�
 
 ## P3 校准发布闸门
 
-- ［KNOWN｜HIGH］P3 v0.3.2 保留 v0.2.0 的校准门禁：只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠；0.3.1 保证 Token Quick 覆盖 download，0.3.2 再为 AI realtime Quick 冻结单一 realtime 原语与精确帧签名合同。
+- ［KNOWN｜HIGH］P3 v0.3.3 保留 v0.2.0 的校准门禁：只接受获授权、派生统计字段白名单的 Token session；训练与留出 observation ID、HMAC subject group 必须同时零重叠；0.3.1 保证 Token Quick 覆盖 download，0.3.2 为 AI realtime Quick 冻结单一 realtime 原语与精确帧签名合同，0.3.3 新增三族 D-110 qualification 确定性发布与严格 policy binding。
 - ［KNOWN｜HIGH］calibrated 候选只由 training 拟合，holdout 报告按 `token-holdout-validation-v1` 独立生成；任一 P50/P95、pause 或转移矩阵门限失败即禁止 promote。
 - ［KNOWN｜HIGH］validated 模型 build/runtime 发布必须携带原报告和 dataset manifest，并现场重算报告与 promoted 模型；单独篡改 `status=pass` 无效。
 - ［KNOWN｜HIGH］当前 4 个 catalog 模型仍全部为 hypothesis；Schema 和流水线存在不等于真实业务校准已经完成。

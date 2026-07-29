@@ -26,6 +26,14 @@ class TokenSimulationScorerTest {
     }
 
     @Test
+    fun `single repeatability qualification run cannot raise confidence or pass`() {
+        val result = TokenSimulationScorer.score(goodEvidence("repeatability_qualification", 20))
+        assertNotNull(result.totalScore)
+        assertEquals(TokenConfidence.LOW, result.confidence)
+        assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
+    }
+
+    @Test
     fun `standard fully compliant run passes high confidence`() {
         val result = TokenSimulationScorer.score(
             goodEvidence("standard", 20),

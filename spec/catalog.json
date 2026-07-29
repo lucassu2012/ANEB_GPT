@@ -1,6 +1,6 @@
 {
   "catalog_id": "aneb-spec-catalog",
-  "catalog_version": "1.10.0",
+  "catalog_version": "1.11.0",
   "compatibility": {
     "policy": "semver-half-open-v1",
     "catalog_range": {
@@ -28,7 +28,7 @@
     },
     "P2": {
       "component": "aneb-server",
-      "current_version": "0.8.2",
+      "current_version": "0.8.3",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -41,7 +41,7 @@
     },
     "P3": {
       "component": "aneb-ai-behavior-model",
-      "current_version": "0.3.2",
+      "current_version": "0.3.3",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -57,7 +57,7 @@
     },
     "Profile": {
       "component": "ANEB Profile governance",
-      "current_version": "1.10.0",
+      "current_version": "1.11.0",
       "catalog_range": {
         "min_inclusive": "1.0.0",
         "max_exclusive": "2.0.0"
@@ -84,7 +84,7 @@
   "schemas": [
     {
       "schema_id": "aneb-profile-v2",
-      "schema_version": "2.1.0",
+      "schema_version": "2.2.0",
       "path": "tools/aneb-ai-behavior-model/schemas/aneb-profile-v2.schema.json",
       "json_schema_id": "https://aneb.local/schemas/aneb-profile-v2.schema.json",
       "contract_version": "aneb-profile-v2",
@@ -409,7 +409,7 @@
     },
     {
       "family_id": "published-profile-v2",
-      "family_version": "2.1.0",
+      "family_version": "2.2.0",
       "contract_version": "aneb-profile-v2",
       "profile_version_range": {
         "min_inclusive": "1.0.0",
@@ -463,6 +463,16 @@
           "manifest_path": "profiles/published/ai_realtime_voice_recovery/manifest.sha256"
         },
         {
+          "profile_id": "ai_realtime_voice_repeatability_qualification",
+          "version": "1.0.0",
+          "path": "profiles/published/ai_realtime_voice_repeatability_qualification/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/ai_realtime_voice_repeatability_qualification/runtime_plan.json",
+          "manifest_path": "profiles/published/ai_realtime_voice_repeatability_qualification/manifest.sha256",
+          "execution_requirements_policy": "required",
+          "qualification_policy_ref": "aneb-repeatability-qualification-balanced-v1"
+        },
+        {
           "profile_id": "ai_realtime_voice_standard",
           "version": "1.1.0",
           "path": "profiles/published/ai_realtime_voice_standard/profile.json",
@@ -492,6 +502,16 @@
           "execution_requirements_policy": "required"
         },
         {
+          "profile_id": "network_comprehensive_repeatability_qualification",
+          "version": "1.0.0",
+          "path": "profiles/published/network_comprehensive_repeatability_qualification/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/network_comprehensive_repeatability_qualification/runtime_plan.json",
+          "manifest_path": "profiles/published/network_comprehensive_repeatability_qualification/manifest.sha256",
+          "execution_requirements_policy": "required",
+          "qualification_policy_ref": "aneb-repeatability-qualification-balanced-v1"
+        },
+        {
           "profile_id": "network_comprehensive_standard",
           "version": "1.1.0",
           "path": "profiles/published/network_comprehensive_standard/profile.json",
@@ -517,6 +537,16 @@
           "runtime_plan_path": "profiles/published/token_multimodal_quick/runtime_plan.json",
           "manifest_path": "profiles/published/token_multimodal_quick/manifest.sha256",
           "execution_requirements_policy": "required"
+        },
+        {
+          "profile_id": "token_multimodal_repeatability_qualification",
+          "version": "1.0.0",
+          "path": "profiles/published/token_multimodal_repeatability_qualification/profile.json",
+          "validation_group_id": "behavior_runtime_bound",
+          "runtime_plan_path": "profiles/published/token_multimodal_repeatability_qualification/runtime_plan.json",
+          "manifest_path": "profiles/published/token_multimodal_repeatability_qualification/manifest.sha256",
+          "execution_requirements_policy": "required",
+          "qualification_policy_ref": "aneb-repeatability-qualification-balanced-v1"
         },
         {
           "profile_id": "token_multimodal_standard",

@@ -239,6 +239,61 @@ class ProfileCapabilityTest {
     }
 
     @Test
+    fun `repeatability qualification requires the exact D-110 policy binding`() {
+        val file = sequenceOf(
+            File("../../profiles/published/token_multimodal_repeatability_qualification/profile.json"),
+            File("../profiles/published/token_multimodal_repeatability_qualification/profile.json"),
+            File("profiles/published/token_multimodal_repeatability_qualification/profile.json"),
+        ).first { it.isFile }
+        val profile = ProfileParser.parseSingle(file.readText())
+
+        assertTrue(ProfileCapability.assess(profile).contractIssues.joinToString(), ProfileCapability.assess(profile).executable)
+        val qualification = requireNotNull(profile.qualification)
+        val drifted = profile.copy(
+            qualification = qualification.copy(policySha256 = "0".repeat(64)),
+        )
+
+        assertFalse(ProfileCapability.assess(drifted).executable)
+        assertTrue(ProfileCapability.assess(drifted).contractIssues.any { it.contains("策略哈希") })
+    }
+
+    @Test
+    fun `repeatability qualification freezes each published runtime plan`() {
+        val profiles = listOf(
+            "token_multimodal_repeatability_qualification" to
+                ("sha256:d8f31633e0c0d91a321bb1007f7cb0c30e84f855fa4e1e7b0a181e80879e7ea4" to 20260716L),
+            "ai_realtime_voice_repeatability_qualification" to
+                ("sha256:883b36003dbb84cb264c7742908c9f045f3fa7c2938db9a339566f6b32b70eda" to 20260716L),
+            "network_comprehensive_repeatability_qualification" to
+                ("sha256:f430fba09fd7453872690fd0d5cf9ad130637f87f347a6247c04ad069b2e4aab" to 20260727L),
+        )
+
+        profiles.forEach { (name, expected) ->
+            val file = sequenceOf(
+                File("../../profiles/published/$name/profile.json"),
+                File("../profiles/published/$name/profile.json"),
+                File("profiles/published/$name/profile.json"),
+            ).first { it.isFile }
+            val profile = ProfileParser.parseSingle(file.readText())
+            val execution = requireNotNull(profile.executionPlan)
+
+            assertEquals("$name runtime hash", expected.first, execution.artifactHash)
+            assertEquals("$name runtime seed", expected.second, execution.seed)
+            assertTrue("$name published profile", ProfileCapability.assess(profile).executable)
+            assertFalse(
+                "$name runtime hash drift",
+                ProfileCapability.assess(
+                    profile.copy(executionPlan = execution.copy(artifactHash = "sha256:${"0".repeat(64)}")),
+                ).executable,
+            )
+            assertFalse(
+                "$name runtime seed drift",
+                ProfileCapability.assess(profile.copy(executionPlan = execution.copy(seed = 1L))).executable,
+            )
+        }
+    }
+
+    @Test
     fun `published weak network profile freezes supported shaping and exclusions`() {
         val file = sequenceOf(
             File("../../profiles/published/network_comprehensive_weak_capacity_latency/profile.json"),

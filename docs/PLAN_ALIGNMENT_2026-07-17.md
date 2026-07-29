@@ -1,9 +1,9 @@
 # ANEB Codex 进展对齐报告——按《ANEB 系统开发计划 v1.0》映射
 
-> 更新日期：2026-07-28。
+> 更新日期：2026-07-29。
 > 架构基线：产品负责人提供的《ANEB 系统开发计划 v1.0》——“P1 手机端 + P2 服务器端 + P3 标准/业务模型 + Profile 横切机制”。
 > 对照输入：Claude 侧 `E:\C Project\ANEB\docs\PLAN_ALIGNMENT_2026-07-17.md`。
-> 当前事实基线：App 0.5.14-codex / code 46 / Room v19；E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`；behavior model 0.3.2；Profile catalog 1.10.0。M0-EC1 Token Quick、M0-EC2 AI 实时 Quick 与 M0-EC3 Network Quick 均已完成正负 READY，D-109/S2 已关闭。S3/M1 已用 source `8a834d49dd61a1f544dc5ea10991e50929f85a3e` / CI `30349786024` 的 exact APK 完成三族各 5 次、无线权限 granted 的 strict-v2 cohort：15/15 completed，876 条无线样本，冻结 Room 三件套分析前后逐字一致；Token D-58 PASS，Realtime/Network 仍只具 diagnostic 结论。D-110 已批准 S3/M2 方案 B；版本化 qualification 政策、分析器核心/CLI 与资格报告 Schema 已进入 catalog 1.10.0，Batch 2 的完整本地质量门已通过。真实 Q1/Q2 数据、qualification Profile/runtime、三级节点、正式签名发布和 M2/M3 外部依赖继续列为缺口。
+> 当前事实基线：App 0.5.14-codex / code 46 / Room v19；E-01 运行 `aneb-server/0.8.2`，binary SHA-256=`62ff966bf396abe836c6179053ee549110e41e16af569cdeadc97535bc64c96e`；behavior model 0.3.3；Profile catalog 1.11.0。M0-EC1 Token Quick、M0-EC2 AI 实时 Quick 与 M0-EC3 Network Quick 均已完成正负 READY，D-109/S2 已关闭。S3/M1 已用 source `8a834d49dd61a1f544dc5ea10991e50929f85a3e` / CI `30349786024` 的 exact APK 完成三族各 5 次、无线权限 granted 的 strict-v2 cohort：15/15 completed，876 条无线样本，冻结 Room 三件套分析前后逐字一致；Token D-58 PASS，Realtime/Network 仍只具 diagnostic 结论。D-110 已批准 S3/M2 方案 B；版本化政策、分析器、资格报告 Schema、三族 qualification Profile/runtime、Android 本地消费门、server 本地能力白名单、host campaign controller、authority-false offline finalizer 与其 public CLI 已在本地接通，controller 完整模块 25/25 PASS，finalizer core+CLI 聚焦回归 14/14 PASS，Host 八模块交叉回归 88/88 PASS；当前冻结工作树完整 `quality_gate` 已单次从头 exit 0（probe 628、Python 922+54、Go/Android lint/assemble 与静态门均通过）。真实 Q1/Q2 数据、server 候选构建/提交/CI/部署、现场 campaign、三级节点、正式签名发布和 M2/M3 外部依赖继续列为缺口。
 > M0-EC1 边界：Token Quick 1.2.1 已建立 P1 0.5.12 / P2 0.8.0 / P3 0.3.1 精确执行合同、真实 1MiB 返回附件、同-run服务端审计以及 D-82/D-86/D-87 正负 READY。正向 run `019f95f9-a317-7766-9725-243b9660b9f1` 和负向 run `019f99c7-5b40-75ba-ad58-b5b522e9abf9` 已完成，窄切片可以结案；正负使用不同 CI APK，因此不能冒充同二进制性能 A/B，且不能扩大为全部 Profile 已统一。
 > 逐门里程碑账本：`docs/MILESTONE_LEDGER_2026-07-23.md`。后续任务必须回填实际 commit/run/APK/READY 身份，不能只更新叙述性进度。
 > 协同规则：2026-07-19 起，`SHARED_TEST_STATUS.md`、lease、待交接和自动 `Verifier` 退役。P40 改为“实时只读现场检查 → 干净则直接测试 → 停止本轮全部 App/VPN/抓包/临时规则并恢复设置 → Huawei Launcher → 即时复核”；无法安全归属的既有会话不得擅自清理。E-01/阿里云继续执行独立预检、远端 `flock`、受限变更、原子回滚和验后检查。
@@ -14,7 +14,7 @@
 - ［INFERRED｜HIGH］现阶段保持逻辑隔离更合适；出现独立发布节奏或独立负责人后再物理拆仓。
 - ［KNOWN｜HIGH］“Profile 即数据”目前只完成了一半：业务参数、质量目标、动态指标和运行计划已数据化；新增一种全新的传输原语、采样语义或评分算法仍然需要代码。可执行的铁律应是：**已有原语内的业务变化只改 Profile；新增原语先升 spec/contract，再改 P1/P2 引擎。**
 - ［KNOWN｜HIGH］JSON 与 YAML 都能承载声明式合同。当前产物已统一为可校验 JSON；为了形式改成 YAML没有业务价值，后续重点是单一 schema、兼容区间和消费者一致性。
-- ［KNOWN｜HIGH］现有 Profile 有两族合同：服务端根 Profile（4 个相位 Profile）和 App 发布 Profile v2（12 个业务/测量 Profile）。M0-EC1 只让 `token_multimodal_quick@1.2.1` 成为 P1/P2/P3 可同时证明的首个窄切片；其余 Published Profile 与根 Profile 家族尚未收敛成通用端到端合同，仍是 M0 的治理欠账。
+- ［KNOWN｜HIGH］现有 Profile 有两族合同：服务端根 Profile（4 个相位 Profile）和 App 发布 Profile v2（15 个业务/测量 Profile）。M0-EC1 只让 `token_multimodal_quick@1.2.1` 成为 P1/P2/P3 可同时证明的首个窄切片；新增三族 qualification 已接入 Android/server/host campaign 的本地合同，但尚无候选部署或真实 Q1/Q2 运行，不能冒充端到端闭环。
 - ［KNOWN｜HIGH］真实第三方 App 适配器尚未进入主 App。依照此前“ANEB App 只做自建节点仿真”的产品边界，未来 Profile 3 应放在独立 `aneb-adapters` 模块，不得把真实 API、账号或脆弱自动化混入 P1b 核心评分链。
 
 ## 1. 一页结论
@@ -22,11 +22,11 @@
 | 计划单元 | Codex 当前状态 | 结论 |
 |---|---|---|
 | **P1a 前台 UI** | **0.5.10 产品化大部完成；开测、导出和统一结论已闭环** | ［KNOWN｜HIGH］原生 Compose 已覆盖测试发起、三类动态测试、Profile 目录、历史、结果、报告、设置、节点与体验地图外壳；三类结果页均可保存/分享经摘要校验的单条 JSONL，设置页可把全部独立验真的 v1/v2 历史按时间导出，并分别提示格式不支持与完整性异常。0.5.9 直接展示评分器冻结的完成性、Profile 业务行为、门限与瓶颈；0.5.10 对下载目录的创建、写入、完成和失败清理逐阶段验真，禁止半成品或误报成功。视觉按 `ANEB_UI` 原生实现，并已有新 App 图标。真实 API Probe 已从正式 UI/Release 组件移除，只保留受保护 Debug/ADB 诊断组件。 |
-| **P1b 测量引擎** | **三族 Quick 单节点跨端闭环；S3/M1 严格 cohort 已形成，S3/M2 qualification 待实现** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果先落 Room 再发布，并冻结 `aneb-result-v2`、1Hz 无线样本、环境事件、稳定结论 ID 与证据依据。三族 Quick 正负 READY 已完成；S3/M1 的 15/15 run 均完成且无线权限 granted，strict-v2 导出与冻结 Room 原字节复核通过。Token D-58 PASS；Realtime/Network 尚未经过 D-110 的 10-run qualification，因此不证明正式重复性或基线完成。 |
-| **P2 服务器侧** | **0.8.2 已部署；Token/Realtime 跨端窄切片完成，Network 服务端门完成** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.2`，覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、ANEB2 UDP、结果与逐 run 合成弱网，并提供三类 Quick 的 Profile 白名单能力回执和同-run request-entry 审计。受锁部署验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
-| **P3 标准与业务模型** | **0.3.2 本地候选；真实画像仍未完成外部签名校准** | ［KNOWN｜HIGH］授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.2 已进入 Token/Realtime/Network 三类 Quick 的合同消费区间。现有 4 个模型仍为 `hypothesis`；A6 私有校准链已形成 first-50 选择，但独立外部 reviewer 签名与正式 qualification 尚未闭合，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
-| **横切 Profile 体系** | **1.10.0；三类 Quick、D-110 政策与资格报告合同已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 10 个 Schema、2 个 Profile 家族、16 个 Profile、7 个 runtime bundle、4 个模型资产、3 个 execution evidence contract 和 1 个 canonical-hash-bound repeatability policy；Token 1.2.1、AI 实时 1.1.1、Network 1.2.0 均已形成 P1/P2/Profile 共同消费并真机验证的精确合同。qualification analyzer 核心、Q1/Q2 CLI 和报告 Schema 已接通；qualification Profile/runtime、Android/server/campaign 与真实 Q1/Q2 仍未接通，不能扩大为正式基线完成。 |
-| **里程碑位置** | **S2 已关闭；S3/M1 工程闭环完成；S3/M2 方案 B 已批准并进入实现** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3/M1 三族严格 cohort、无线完整性、冻结导出与独立复算已完成；Token D-58 子门 PASS，Realtime/Network 保持 diagnostic。D-110 已冻结 10-run、三族离散度、无线 cadence 与承载隔离门；下一门是实现政策/分析器/Profile/Android/server/campaign，再执行 Q1 Wi-Fi，不是把现有 5-run 工程样本提升为正式基线。 |
+| **P1b 测量引擎** | **三族 Quick 单节点跨端闭环；S3/M2 qualification 本地消费门已接线** | ［KNOWN｜HIGH］Token 多模态、AI 实时双工、网络综合、合成弱网、恢复与专用网关控制均已成独立引擎，由前台 Service 持有；三类正式结果先落 Room 再发布，并冻结 `aneb-result-v2`、1Hz 无线样本、环境事件、稳定结论 ID 与证据依据。三族 Quick 正负 READY 已完成；S3/M1 的 15/15 run 均完成且无线权限 granted，strict-v2 导出与冻结 Room 原字节复核通过。qualification 的 parser/capability/runtime/receipt/scorer 与 host campaign controller 本地门已接通并保持单 run LOW/INCONCLUSIVE；真实 Q1/Q2 各 30 次（每族 10 次）均未执行，因此不证明正式重复性或基线完成。 |
+| **P2 服务器侧** | **0.8.2 已部署；qualification 白名单仅在本地候选接线** | ［KNOWN｜HIGH］E-01 当前运行 `aneb-server/0.8.2`，覆盖 Token、上传、下载、工具循环、WebSocket 实时双工、测速、ANEB2 UDP、结果与逐 run 合成弱网，并提供三类 Quick 的 Profile 白名单能力回执和同-run request-entry 审计。本地 server 候选已增加三族 qualification exact profile SHA 并通过聚焦测试，但尚未版本化、打包或部署。受锁部署验后确认共享主机指纹不变、临时残留为 0。对照原计划仍缺 RTP/WebRTC 语音回环、通用 1GiB 上传档位、全端点统一时戳/序号和同城/区域/中心三级实例。 |
+| **P3 标准与业务模型** | **0.3.3 本地候选；真实画像仍未完成外部签名校准** | ［KNOWN｜HIGH］授权统计白名单、HMAC 主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算继续保持；0.3.3 新增三族 qualification 的统一确定性发布入口与 D-110 policy binding。现有 4 个模型仍为 `hypothesis`；A6 私有校准链已形成 first-50 选择，但独立外部 reviewer 签名与正式 qualification 尚未闭合，不能声称代表 Kimi/DeepSeek/千问真实性能。 |
+| **横切 Profile 体系** | **1.11.0；三类 Quick、D-110 政策、三族 qualification bundle 与本地消费者已建立** | ［KNOWN｜HIGH］`spec/catalog.json` 机器索引 10 个 Schema、2 个 Profile 家族、19 个 Profile、10 个 runtime bundle、4 个模型资产、3 个 execution evidence contract 和 1 个 canonical-hash-bound repeatability policy；三份 qualification bundle 都把 Profile/runtime、执行要求与 exact policy SHA 交叉绑定，Android/server 本地消费者和 host campaign controller 按 exact identity/SHA 接线。server 候选发布、现场 campaign 与真实 Q1/Q2 仍未接通，不能扩大为正式基线完成。 |
+| **里程碑位置** | **S2 已关闭；S3/M1 工程闭环完成；S3/M2 方案 B 的本地执行合同与完整全仓门已接通** | ［KNOWN｜HIGH］D-109/S2 已由 commit `95aaaf0` 与 clean CI `30313367261` 关闭。S3/M1 三族严格 cohort、无线完整性、冻结导出与独立复算已完成；Token D-58 子门 PASS，Realtime/Network 保持 diagnostic。D-110 已冻结 10-run、三族离散度、无线 cadence 与承载隔离门；政策/分析器/Profile/Android/server/host campaign 已本地接线，当前冻结工作树完整 `quality_gate` 已单次从头 exit 0。下一门是 clean commit/CI、候选构建/部署与受保护 Q1 Wi-Fi，不是把现有 5-run 工程样本提升为正式基线。 |
 
 ## 2. P1a 手机端前台 UI
 
@@ -139,8 +139,8 @@
 ### 当前资产
 
 - ［KNOWN｜HIGH］服务端根 Profile：`s1_chat`、`s2_coding_agent`、`s3_multimodal`、`basic_network`。
-- ［KNOWN｜HIGH］App 发布 Profile 共 12 个：Token 3 个、AI 实时 3 个、网络综合 6 个。
-- ［KNOWN｜HIGH］Token 与 AI 实时共 6 个发布 Profile 使用 `profile + runtime_plan + manifest`，App 启动前校验合同、模型和规范化哈希；网络综合 6 个 Profile 采用内嵌 phase 合同与客户端 capability 校验，目前没有独立 runtime manifest。两条路径都不接受节点下发任意脚本。
+- ［KNOWN｜HIGH］App 发布 Profile 共 15 个：Token 4 个、AI 实时 4 个、网络综合 7 个；其中新增三族 qualification 各 1 个，已接入 Android 本地消费门和 server 本地白名单，但尚未部署或进入真实 campaign。
+- ［KNOWN｜HIGH］Token 与 AI 实时共 8 个发布 Profile 使用 `profile + runtime_plan + manifest`，App 启动前校验合同、模型和规范化哈希；网络综合 7 个 Profile 中 Quick 与 qualification 使用独立 runtime manifest，其余 5 个采用内嵌 phase 合同。两条路径都不接受节点下发任意脚本。
 - ［KNOWN｜HIGH］新增既有模式的 Quick/Standard/Stress/Recovery 变体主要通过数据完成；新增全新 phase 或测量语义仍需引擎适配并升合同版本。
 
 ### 下一步收敛顺序
@@ -226,4 +226,5 @@
 - ［KNOWN｜HIGH］无线门冻结为每 run P95 gap ≤1.25s、max gap <1.50s、stale=0、订阅切换=0，并继续要求 collected、计数一致和单调递增。
 - ［KNOWN｜HIGH］重复性门与 Profile 质量门独立；D-110 不改变 Quick/Standard、KPI/AQS/T4、权重、claim scope、`null` 语义、单 run 置信度或当前 `formal_baseline_eligible=false`。
 - ［KNOWN｜HIGH］Batch 1“Decision + 版本化政策/Schema”已实现：catalog 1.9.0 唯一索引 D-110 政策，Schema 与 canonical SHA 绑定通过。
-- ［KNOWN｜HIGH］Batch 2 analyzer 核心已进入 catalog 1.10.0：三族 Q1、Q2 前置报告绑定、无线 cadence、独立 Profile 质量门、CLI 与资格报告 Schema 已落地，完整本地质量门已通过。qualification Profile/runtime、P40 Q1/Q2 与正式基线仍未完成。
+- ［KNOWN｜HIGH］Batch 2 analyzer 核心已进入 catalog 1.10.0：三族 Q1、Q2 前置报告绑定、无线 cadence、独立 Profile 质量门、CLI 与资格报告 Schema 已落地，完整本地质量门已通过。
+- ［KNOWN｜HIGH］Batch 3 本地实现已进入 catalog 1.11.0：Token/Realtime/Network 三族 qualification 三件套由同一 CLI 确定性生成，严格绑定 D-110 policy SHA、Q1→Q2、禁止混池、每族 10 run、质量门独立和 `formal_baseline_eligible=false`；Android parser/capability/runtime/receipt/scorer、server exact profile 白名单与 host campaign controller 均已接线，campaign 模块从头 25/25 PASS，证据目录按已验证 Q1/Q2 stage 归档。offline finalizer 可恢复三族各 10 个唯一 run，在 Room 访问前拒绝 plan/run/Profile/runtime 绑定漂移与重复 run ID；真实 SQLite/strict-v2 Q1 30-run 会按族导出分析，真实 Q2 会把每族结果绑定到自身 Q1 prerequisite，中途失败不发布 final/partial，并生成 authority-false manifest。public finalizer CLI 已固定三族 PASS→0、已完成但任一家族 failed→1、usage/证据无效→2 的确定性机器边界；Room 三件套、导出后 cohort 文件读取与最终 publication rename 故障安全门加入后 core10+CLI4 从头 14/14 PASS，连同 campaign/cohort/exporter、D-58 与 result-v2 validator 的八模块从头交叉回归 88/88 PASS。当前冻结工作树完整 `scripts/quality_gate.ps1` 已单次从头 exit 0（31m21.546s），覆盖 probe 628、Python 922+54、Android lint/assemble、静态合同与 server/gateway Go。server 候选构建/提交/CI/部署、P40 真实 Q1/Q2 与正式基线仍未完成。

@@ -33,6 +33,7 @@
       ]
     },
     "execution_requirements": {"$ref": "#/$defs/execution_requirements"},
+    "qualification": {"$ref": "#/$defs/repeatability_qualification_binding"},
     "business": {
       "type": "object",
       "required": ["category_id", "label", "behavior_feature_ids", "calibration_status"],
@@ -122,6 +123,40 @@
     "semver": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "repeatability_qualification_binding": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "policy_id",
+        "policy_version",
+        "decision_id",
+        "policy_sha256",
+        "stage_order",
+        "transport_pooling",
+        "q2_requires_q1_pass",
+        "runs_per_family",
+        "repeatability_and_quality_gates_independent",
+        "formal_baseline_eligible",
+        "single_run_confidence_unchanged"
+      ],
+      "properties": {
+        "contract_version": {"const": "aneb-repeatability-profile-binding-v1"},
+        "policy_id": {"const": "aneb-repeatability-qualification-balanced-v1"},
+        "policy_version": {"const": "1.0.0"},
+        "decision_id": {"const": "D-110"},
+        "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "stage_order": {
+          "const": ["Q1_WIFI", "Q2_CELLULAR"]
+        },
+        "transport_pooling": {"const": "forbidden"},
+        "q2_requires_q1_pass": {"const": true},
+        "runs_per_family": {"const": 10},
+        "repeatability_and_quality_gates_independent": {"const": true},
+        "formal_baseline_eligible": {"const": false},
+        "single_run_confidence_unchanged": {"const": true}
+      },
+      "additionalProperties": false
     },
     "server_primitive": {
       "oneOf": [

@@ -12,7 +12,7 @@ class RealtimeRuntimeIntegrityTest {
 
     @Test
     fun `published realtime assets are executable hash bound and contain barge in`() {
-        listOf("quick", "standard", "recovery").forEach { variant ->
+        listOf("quick", "standard", "recovery", "repeatability_qualification").forEach { variant ->
             val base = repositoryRoot().resolve("profiles/published/ai_realtime_voice_$variant")
             val profileText = Files.readAllBytes(base.resolve("profile.json")).toString(Charsets.UTF_8)
             val planText = Files.readAllBytes(base.resolve("runtime_plan.json")).toString(Charsets.UTF_8)
@@ -21,6 +21,7 @@ class RealtimeRuntimeIntegrityTest {
 
             assertTrue(ProfileCapability.assess(profile).executable)
             assertEquals(profile.executionPlan?.artifactHash, TokenRuntimeIntegrity.canonicalSha256(planText))
+            assertEquals(variant, profile.evidenceTier)
             assertEquals(variant, plan.variant)
             assertEquals(plan.sessionCount, plan.sessions.size)
             assertTrue(plan.sessions.flatMap { it.turns }.any { it.interrupted })
@@ -41,6 +42,13 @@ class RealtimeRuntimeIntegrityTest {
                 assertEquals(2, plan.sessions.count { it.controlledDisconnectAfterTurn != null })
             } else {
                 assertTrue(plan.sessions.none { it.controlledDisconnectAfterTurn != null })
+            }
+            if (variant == "repeatability_qualification") {
+                val qualification = requireNotNull(profile.qualification)
+                assertEquals("D-110", qualification.decisionId)
+                assertTrue(qualification.repeatabilityAndQualityGatesIndependent)
+                assertTrue(!qualification.formalBaselineEligible)
+                assertTrue(qualification.singleRunConfidenceUnchanged)
             }
         }
     }

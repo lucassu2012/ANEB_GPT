@@ -1,0 +1,628 @@
+{
+  "contract_version": "aneb-profile-v2",
+  "profile_id": "token_multimodal_repeatability_qualification",
+  "version": "1.0.0",
+  "mode_id": "token_simulation",
+  "execution_target": "aneb_probe_simulator",
+  "claim_scope": "application_end_to_end_to_probe_node",
+  "business": {
+    "category_id": "token_multimodal",
+    "label": "多模态 Token 业务",
+    "archetype_labels": [
+      "kimi_like",
+      "deepseek_like",
+      "qwen_like"
+    ],
+    "behavior_feature_ids": [
+      "uplink_burst",
+      "low_latency_start",
+      "stream_continuity",
+      "large_downlink_optional"
+    ],
+    "behavior_model_id": "token-multimodal-behavior-v0.1",
+    "behavior_model_version": "0.1.0",
+    "behavior_model_hash": "sha256:76d4e93bdcd2951291169a867674004c7a13a28cd2a393f3da3aa0d14bd3cb5b",
+    "calibration_status": "hypothesis",
+    "model_source_kind": "product_requirement_hypothesis"
+  },
+  "live_presentation": {
+    "primary_metric_id": "SIM_TPS_LIVE",
+    "secondary_metric_ids": [
+      "RTT_LIVE",
+      "UP_LIVE",
+      "ON_TIME_RATIO_LIVE"
+    ],
+    "window_ms": 1000,
+    "ui_refresh_ms": 250,
+    "stale_after_ms": 1500,
+    "missing_behavior": "show_unavailable_never_zero"
+  },
+  "evaluation": {
+    "target_set_id": "token-sim-targets-v1",
+    "score_policy_id": "token-sim-score-v1",
+    "score_anchor_policy_id": "compliance-anchors-v1",
+    "conclusion_policy_id": "token-sim-conclusions-v2",
+    "required_metric_ids": [
+      "TOK-B01",
+      "TOK-B02",
+      "TOK-B05",
+      "TOK-B07",
+      "TOK-B09",
+      "TOK-B10",
+      "TOK-B11",
+      "TOK-B14",
+      "TOK-N03",
+      "TOK-N04",
+      "TOK-N05",
+      "TOK-N06"
+    ],
+    "guardrail_metric_ids": [
+      "TOK-B10"
+    ],
+    "group_weights": {
+      "task_completion": 0.25,
+      "interaction": 0.3,
+      "multimodal_transfer": 0.25,
+      "network_stability": 0.15,
+      "efficiency": 0.05
+    },
+    "missing_required_metric": "score_null",
+    "invalid_run": "retain_raw_suppress_score"
+  },
+  "measurements": [
+    {
+      "metric_id": "TOK-B01",
+      "label": "任务成功率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "tok_b01-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.99,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B02",
+      "label": "点击至节点完整接收",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_b02-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 3,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte_by_workload",
+        "values": {
+          "text": 1000,
+          "document_5mib": 6000,
+          "image_10mib": 10000,
+          "video_100mib": 60000
+        },
+        "policy_id": "token-upload-deadline-v1",
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B03",
+      "label": "仿真处理时延",
+      "domain": "business_model",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_b03-v1",
+      "aggregation": "distribution",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "model_baseline",
+      "quality_target": null
+    },
+    {
+      "metric_id": "TOK-B04",
+      "label": "端到端 TTFT",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_b04-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte_model_p95_plus_ms",
+        "value": 200,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B05",
+      "label": "首 Token 超额时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "ttft-excess-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 10,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 200,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B06",
+      "label": "仿真 Token 到达速率",
+      "domain": "business",
+      "unit": "token/s",
+      "measurement_level": "exact",
+      "formula_id": "tok_b06-v1",
+      "aggregation": "rolling_1s",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 2,
+      "target_role": "live",
+      "quality_target": null
+    },
+    {
+      "metric_id": "TOK-B07",
+      "label": "Token 准时到达率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "token-on-time-200ms-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.95,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B08",
+      "label": "ITL 残差 P95",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "itl-residual-seq-join-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 100,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B09",
+      "label": "卡顿率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "itl-residual-over-200ms-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.02,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B10",
+      "label": "严重卡顿率",
+      "domain": "guardrail",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "itl-residual-over-1000ms-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "eq",
+        "value": 0.0,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B11",
+      "label": "流完整率",
+      "domain": "business",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "unique-seq-completeness-v1",
+      "aggregation": "ratio",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 100,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 0.99,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B12",
+      "label": "返回文件完成时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_b12-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 3,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "deadline_by_artifact_size",
+        "policy_id": "artifact-deadline-v1",
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B13",
+      "label": "重连恢复时延",
+      "domain": "business",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_b13-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 3,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 3000,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B14",
+      "label": "仿真 Token 传输冗余",
+      "domain": "efficiency",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "sim-token-retry-overhead-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 1,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.05,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-B15",
+      "label": "仿真 Token 计划/传输/有效量",
+      "domain": "business_model",
+      "unit": "token",
+      "measurement_level": "exact",
+      "formula_id": "tok_b15-v1",
+      "aggregation": "counts",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "descriptive",
+      "quality_target": null
+    },
+    {
+      "metric_id": "TOK-N01",
+      "label": "DNS 时延",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_n01-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 3,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 500,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N02",
+      "label": "TCP/TLS 建连时延",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_n02-v1",
+      "aggregation": "p95_by_stage",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 3,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte_by_stage",
+        "values": {
+          "tcp": 500,
+          "tls": 1000
+        },
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N03",
+      "label": "应用层 RTT",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_n03-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 100,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N04",
+      "label": "RTT 变化",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "tok_n04-v1",
+      "aggregation": "p95_minus_p50",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 30,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N05",
+      "label": "应用请求失败率",
+      "domain": "network",
+      "unit": "ratio",
+      "measurement_level": "derived",
+      "formula_id": "tok_n05-v1",
+      "aggregation": "ratio",
+      "direction": "lower_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 0.02,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N06",
+      "label": "上行有效速率",
+      "domain": "network",
+      "unit": "Mbps",
+      "measurement_level": "derived",
+      "formula_id": "tok_n06-v1",
+      "aggregation": "p05",
+      "direction": "higher_is_better",
+      "required_for_score": true,
+      "minimum_sample_count": 5,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte_by_workload",
+        "values": {
+          "text": 1,
+          "document": 10,
+          "image": 12,
+          "video": 20
+        },
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N07",
+      "label": "下行有效速率",
+      "domain": "network",
+      "unit": "Mbps",
+      "measurement_level": "derived",
+      "formula_id": "tok_n07-v1",
+      "aggregation": "p05",
+      "direction": "higher_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 5,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "gte",
+        "value": 25,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N08",
+      "label": "负载中 RTT",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "exact",
+      "formula_id": "tok_n08-v1",
+      "aggregation": "p95",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 200,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N09",
+      "label": "负载时延增量",
+      "domain": "network",
+      "unit": "ms",
+      "measurement_level": "derived",
+      "formula_id": "tok_n09-v1",
+      "aggregation": "loaded_p95_minus_idle_p50",
+      "direction": "lower_is_better",
+      "required_for_score": false,
+      "minimum_sample_count": 20,
+      "target_role": "quality",
+      "quality_target": {
+        "operator": "lte",
+        "value": 100,
+        "required_compliance_ratio": 0.95,
+        "provenance": "aneb_product_provisional_v1"
+      }
+    },
+    {
+      "metric_id": "TOK-N10",
+      "label": "TCP 重传协变量",
+      "domain": "network_covariate",
+      "unit": "count",
+      "measurement_level": "exact",
+      "formula_id": "tok_n10-v1",
+      "aggregation": "distribution",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "covariate",
+      "quality_target": null
+    },
+    {
+      "metric_id": "TOK-R01",
+      "label": "无线层协变量",
+      "domain": "radio_covariate",
+      "unit": "mixed",
+      "measurement_level": "exact",
+      "formula_id": "tok_r01-v1",
+      "aggregation": "time_series",
+      "direction": "descriptive",
+      "required_for_score": false,
+      "minimum_sample_count": 1,
+      "target_role": "covariate",
+      "quality_target": null
+    }
+  ],
+  "measurement_catalog_id": "token-sim-measurements-v1",
+  "trace": {
+    "contract_version": "aneb-behavior-trace-v1",
+    "seed": 20260716,
+    "prng": "pcg32-v1"
+  },
+  "phases": [
+    {
+      "type": "behavior_trace",
+      "model_id": "token-multimodal-behavior-v0.1",
+      "model_version": "0.1.0",
+      "model_hash": "sha256:76d4e93bdcd2951291169a867674004c7a13a28cd2a393f3da3aa0d14bd3cb5b",
+      "seed": 20260716,
+      "runtime_artifact": "runtime_plan.json",
+      "runtime_artifact_hash": "sha256:d8f31633e0c0d91a321bb1007f7cb0c30e84f855fa4e1e7b0a181e80879e7ea4"
+    }
+  ],
+  "evidence_tier": "repeatability_qualification",
+  "est_duration_s": 414.7,
+  "execution_plan": {
+    "contract_version": "aneb-token-runtime-plan-v1",
+    "artifact": "runtime_plan.json",
+    "artifact_hash": "sha256:d8f31633e0c0d91a321bb1007f7cb0c30e84f855fa4e1e7b0a181e80879e7ea4",
+    "seed": 20260716,
+    "variant": "repeatability_qualification"
+  },
+  "execution_requirements": {
+    "contract_id": "aneb-execution-requirements",
+    "contract_version": "1.0.0",
+    "client_engine": {
+      "contract_id": "aneb-token-simulation-engine",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "server_capability_receipt": {
+      "contract_id": "aneb-server-capability-receipt",
+      "min_version": "1.0.0",
+      "max_version_exclusive": "2.0.0"
+    },
+    "required_primitives": [
+      {
+        "primitive_id": "echo",
+        "wire_contract_id": "aneb-echo-v1"
+      },
+      {
+        "primitive_id": "token_sim",
+        "wire_contract_id": "aneb-token-task-v1"
+      },
+      {
+        "primitive_id": "download",
+        "wire_contract_id": "aneb-download-v1"
+      }
+    ]
+  },
+  "qualification": {
+    "contract_version": "aneb-repeatability-profile-binding-v1",
+    "policy_id": "aneb-repeatability-qualification-balanced-v1",
+    "policy_version": "1.0.0",
+    "decision_id": "D-110",
+    "policy_sha256": "505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa",
+    "stage_order": [
+      "Q1_WIFI",
+      "Q2_CELLULAR"
+    ],
+    "transport_pooling": "forbidden",
+    "q2_requires_q1_pass": true,
+    "runs_per_family": 10,
+    "repeatability_and_quality_gates_independent": true,
+    "formal_baseline_eligible": false,
+    "single_run_confidence_unchanged": true
+  }
+}

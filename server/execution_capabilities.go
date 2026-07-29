@@ -21,32 +21,38 @@ import (
 )
 
 const (
-	executionRequirementsContractID      = "aneb-execution-requirements"
-	executionRequirementsContractVersion = "1.0.0"
-	tokenClientEngineContractID          = "aneb-token-simulation-engine"
-	tokenClientEngineContractVersion     = "1.0.0"
-	realtimeClientEngineContractID       = "aneb-realtime-simulation-engine"
-	realtimeClientEngineContractVersion  = "1.0.0"
-	networkClientEngineContractID        = "aneb-network-comprehensive-engine"
-	networkClientEngineContractVersion   = "1.0.0"
-	serverCapabilityReceiptContractID    = "aneb-server-capability-receipt"
-	serverCapabilityReceiptVersion       = "1.0.0"
-	echoWireContractID                   = "aneb-echo-v1"
-	downloadWireContractID               = "aneb-download-v1"
-	uploadWireContractID                 = "aneb-upload-v1"
-	udpEchoWireContractID                = "aneb-udp-echo-v2"
-	realtimeWireContractID               = "aneb-realtime-session-v1"
-	tokenQuickExecutionProfileID         = "token_multimodal_quick"
-	tokenQuickExecutionProfileVersion    = "1.2.1"
-	tokenQuickExecutionModeID            = "token_simulation"
-	realtimeQuickExecutionProfileID      = "ai_realtime_voice_quick"
-	realtimeQuickExecutionProfileVersion = "1.1.1"
-	realtimeQuickExecutionModeID         = "ai_realtime_simulation"
-	networkQuickExecutionProfileID       = "network_comprehensive_quick"
-	networkQuickExecutionProfileVersion  = "1.2.0"
-	networkQuickExecutionModeID          = "network_comprehensive"
-	probeSimulatorExecutionTarget        = "aneb_probe_simulator"
-	probeNodeClaimScope                  = "application_end_to_end_to_probe_node"
+	executionRequirementsContractID              = "aneb-execution-requirements"
+	executionRequirementsContractVersion         = "1.0.0"
+	tokenClientEngineContractID                  = "aneb-token-simulation-engine"
+	tokenClientEngineContractVersion             = "1.0.0"
+	realtimeClientEngineContractID               = "aneb-realtime-simulation-engine"
+	realtimeClientEngineContractVersion          = "1.0.0"
+	networkClientEngineContractID                = "aneb-network-comprehensive-engine"
+	networkClientEngineContractVersion           = "1.0.0"
+	serverCapabilityReceiptContractID            = "aneb-server-capability-receipt"
+	serverCapabilityReceiptVersion               = "1.0.0"
+	echoWireContractID                           = "aneb-echo-v1"
+	downloadWireContractID                       = "aneb-download-v1"
+	uploadWireContractID                         = "aneb-upload-v1"
+	udpEchoWireContractID                        = "aneb-udp-echo-v2"
+	realtimeWireContractID                       = "aneb-realtime-session-v1"
+	tokenQuickExecutionProfileID                 = "token_multimodal_quick"
+	tokenQuickExecutionProfileVersion            = "1.2.1"
+	tokenQuickExecutionModeID                    = "token_simulation"
+	tokenQualificationExecutionProfileID         = "token_multimodal_repeatability_qualification"
+	tokenQualificationExecutionProfileVersion    = "1.0.0"
+	realtimeQuickExecutionProfileID              = "ai_realtime_voice_quick"
+	realtimeQuickExecutionProfileVersion         = "1.1.1"
+	realtimeQuickExecutionModeID                 = "ai_realtime_simulation"
+	realtimeQualificationExecutionProfileID      = "ai_realtime_voice_repeatability_qualification"
+	realtimeQualificationExecutionProfileVersion = "1.0.0"
+	networkQuickExecutionProfileID               = "network_comprehensive_quick"
+	networkQuickExecutionProfileVersion          = "1.2.0"
+	networkQuickExecutionModeID                  = "network_comprehensive"
+	networkQualificationExecutionProfileID       = "network_comprehensive_repeatability_qualification"
+	networkQualificationExecutionProfileVersion  = "1.0.0"
+	probeSimulatorExecutionTarget                = "aneb_probe_simulator"
+	probeNodeClaimScope                          = "application_end_to_end_to_probe_node"
 )
 
 var strictManifestLine = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$`)
@@ -104,6 +110,20 @@ type executionProfilePolicy struct {
 }
 
 var executionProfilePolicies = map[string]executionProfilePolicy{
+	networkQualificationExecutionProfileID: {
+		ProfileID:      networkQualificationExecutionProfileID,
+		ProfileVersion: networkQualificationExecutionProfileVersion,
+		ModeID:         networkQuickExecutionModeID,
+		ContractName:   "Network Comprehensive repeatability qualification",
+		ClientEngineID: networkClientEngineContractID,
+		ClientEngine:   networkClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"download": downloadWireContractID,
+			"echo":     echoWireContractID,
+			"udp_echo": udpEchoWireContractID,
+			"upload":   uploadWireContractID,
+		},
+	},
 	networkQuickExecutionProfileID: {
 		ProfileID:      networkQuickExecutionProfileID,
 		ProfileVersion: networkQuickExecutionProfileVersion,
@@ -118,6 +138,17 @@ var executionProfilePolicies = map[string]executionProfilePolicy{
 			"upload":   uploadWireContractID,
 		},
 	},
+	realtimeQualificationExecutionProfileID: {
+		ProfileID:      realtimeQualificationExecutionProfileID,
+		ProfileVersion: realtimeQualificationExecutionProfileVersion,
+		ModeID:         realtimeQuickExecutionModeID,
+		ContractName:   "AI realtime repeatability qualification",
+		ClientEngineID: realtimeClientEngineContractID,
+		ClientEngine:   realtimeClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"realtime_sim": realtimeWireContractID,
+		},
+	},
 	realtimeQuickExecutionProfileID: {
 		ProfileID:      realtimeQuickExecutionProfileID,
 		ProfileVersion: realtimeQuickExecutionProfileVersion,
@@ -127,6 +158,19 @@ var executionProfilePolicies = map[string]executionProfilePolicy{
 		ClientEngine:   realtimeClientEngineContractVersion,
 		RequiredPrimitive: map[string]string{
 			"realtime_sim": realtimeWireContractID,
+		},
+	},
+	tokenQualificationExecutionProfileID: {
+		ProfileID:      tokenQualificationExecutionProfileID,
+		ProfileVersion: tokenQualificationExecutionProfileVersion,
+		ModeID:         tokenQuickExecutionModeID,
+		ContractName:   "Token repeatability qualification",
+		ClientEngineID: tokenClientEngineContractID,
+		ClientEngine:   tokenClientEngineContractVersion,
+		RequiredPrimitive: map[string]string{
+			"download":  downloadWireContractID,
+			"echo":      echoWireContractID,
+			"token_sim": tokenSimTaskContract,
 		},
 	},
 	tokenQuickExecutionProfileID: {
@@ -167,7 +211,9 @@ func baseServerCapabilityReceipt() serverCapabilityReceipt {
 func validateExecutionRuntimeConfig(receipt serverCapabilityReceipt, httpAddr, udpEchoAddr string) error {
 	requiresNetwork := false
 	for _, profile := range receipt.ValidatedProfiles {
-		if profile.ProfileID == networkQuickExecutionProfileID {
+		policy, known := executionProfilePolicies[profile.ProfileID]
+		_, requiresUDPEcho := policy.RequiredPrimitive["udp_echo"]
+		if known && requiresUDPEcho {
 			requiresNetwork = true
 			break
 		}
@@ -176,7 +222,7 @@ func validateExecutionRuntimeConfig(receipt serverCapabilityReceipt, httpAddr, u
 		return nil
 	}
 	if udpEchoAddr == "" {
-		return fmt.Errorf("Network Comprehensive Quick requires UDP echo but udp echo is disabled")
+		return fmt.Errorf("network execution profile requires UDP echo but udp echo is disabled")
 	}
 	_, httpPort, err := net.SplitHostPort(httpAddr)
 	if err != nil {
@@ -187,7 +233,7 @@ func validateExecutionRuntimeConfig(receipt serverCapabilityReceipt, httpAddr, u
 		return fmt.Errorf("invalid UDP echo address %q: %w", udpEchoAddr, err)
 	}
 	if httpPort != udpPort {
-		return fmt.Errorf("Network Comprehensive Quick requires matching TCP and UDP ports, got TCP %s and UDP %s", httpPort, udpPort)
+		return fmt.Errorf("network execution profile requires matching TCP and UDP ports, got TCP %s and UDP %s", httpPort, udpPort)
 	}
 	return nil
 }

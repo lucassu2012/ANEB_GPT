@@ -21,6 +21,26 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         cls.source = SCRIPT.read_text(encoding="utf-8")
         cls.remote = cls.source.split("$remoteScript = @'", 1)[1].split("\n'@", 1)[0]
 
+    @staticmethod
+    def run_bash_fixture(
+        bash: str,
+        script: str,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        # Git Bash on Windows truncates sufficiently long `bash -c` payloads.
+        # Execute long extracted functions from a private temporary script so
+        # the production cleanup body is tested byte-for-byte without relying
+        # on the host command-line length limit.
+        with tempfile.TemporaryDirectory() as temporary:
+            script_path = Path(temporary) / "fixture.sh"
+            script_path.write_text(script, encoding="utf-8", newline="\n")
+            return subprocess.run(
+                [bash, str(script_path), *arguments],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
     @classmethod
     def canonicalize_iptables_save(cls, snapshot: str, expected_tool: str) -> str:
         function = cls.remote.split("canonicalize_iptables_save() {", 1)[1].split(
@@ -83,6 +103,9 @@ class DeployServerSafetyContractTest(unittest.TestCase):
             token_manifest_path = root / "token-manifest.sha256"
             realtime_manifest_path = root / "realtime-manifest.sha256"
             network_manifest_path = root / "network-manifest.sha256"
+            token_qualification_manifest_path = root / "token-qualification-manifest.sha256"
+            realtime_qualification_manifest_path = root / "realtime-qualification-manifest.sha256"
+            network_qualification_manifest_path = root / "network-qualification-manifest.sha256"
             receipt_sha_path = root / "receipt.sha256"
             body_path.write_text(json.dumps(body), encoding="utf-8")
             token_manifest_path.write_text(
@@ -97,6 +120,18 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                 "5" * 64 + "  profile.json\n" + "6" * 64 + "  runtime_plan.json\n",
                 encoding="utf-8",
             )
+            token_qualification_manifest_path.write_text(
+                "7" * 64 + "  profile.json\n" + "8" * 64 + "  runtime_plan.json\n",
+                encoding="utf-8",
+            )
+            realtime_qualification_manifest_path.write_text(
+                "9" * 64 + "  profile.json\n" + "a" * 64 + "  runtime_plan.json\n",
+                encoding="utf-8",
+            )
+            network_qualification_manifest_path.write_text(
+                "b" * 64 + "  profile.json\n" + "c" * 64 + "  runtime_plan.json\n",
+                encoding="utf-8",
+            )
             return subprocess.run(
                 [
                     sys.executable,
@@ -106,6 +141,9 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                     str(token_manifest_path),
                     str(realtime_manifest_path),
                     str(network_manifest_path),
+                    str(token_qualification_manifest_path),
+                    str(realtime_qualification_manifest_path),
+                    str(network_qualification_manifest_path),
                     "true" if expected_h3 else "false",
                     str(receipt_sha_path),
                 ],
@@ -117,7 +155,7 @@ class DeployServerSafetyContractTest(unittest.TestCase):
     @staticmethod
     def valid_receipt_body(*, h3_enabled: bool = False) -> dict[str, object]:
         return {
-            "version": "aneb-server/0.8.2",
+            "version": "aneb-server/0.8.3",
             "h3_enabled": h3_enabled,
             "execution_capabilities": {
                 "contract_id": "aneb-server-capability-receipt",
@@ -140,15 +178,30 @@ class DeployServerSafetyContractTest(unittest.TestCase):
                         "profile_sha256": "sha256:" + "3" * 64,
                     },
                     {
+                        "profile_id": "ai_realtime_voice_repeatability_qualification",
+                        "profile_version": "1.0.0",
+                        "profile_sha256": "sha256:" + "9" * 64,
+                    },
+                    {
                         "profile_id": "network_comprehensive_quick",
                         "profile_version": "1.2.0",
                         "profile_sha256": "sha256:" + "5" * 64,
                     },
                     {
+                        "profile_id": "network_comprehensive_repeatability_qualification",
+                        "profile_version": "1.0.0",
+                        "profile_sha256": "sha256:" + "b" * 64,
+                    },
+                    {
                         "profile_id": "token_multimodal_quick",
                         "profile_version": "1.2.1",
                         "profile_sha256": "sha256:" + "1" * 64,
-                    }
+                    },
+                    {
+                        "profile_id": "token_multimodal_repeatability_qualification",
+                        "profile_version": "1.0.0",
+                        "profile_sha256": "sha256:" + "7" * 64,
+                    },
                 ],
             },
         }
@@ -164,20 +217,29 @@ class DeployServerSafetyContractTest(unittest.TestCase):
             "execution-profiles/network_comprehensive_quick/profile.json",
             "execution-profiles/network_comprehensive_quick/runtime_plan.json",
             "execution-profiles/network_comprehensive_quick/manifest.sha256",
+            "execution-profiles/token_multimodal_repeatability_qualification/profile.json",
+            "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256",
+            "execution-profiles/network_comprehensive_repeatability_qualification/profile.json",
+            "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256",
         ):
             self.assertIn(relative, self.source)
 
-    def test_upgrade_and_rollback_contract_is_exactly_081_to_082(self) -> None:
+    def test_upgrade_and_rollback_contract_is_exactly_082_to_083(self) -> None:
         self.assertIn(
-            "validate_server_identity 'aneb-server/0.8.1' pre-switch",
+            "validate_server_identity 'aneb-server/0.8.2' pre-switch",
             self.remote,
         )
         self.assertIn(
-            "validate_server_identity 'aneb-server/0.8.2' live",
+            "validate_server_identity 'aneb-server/0.8.3' live",
             self.remote,
         )
         self.assertIn(
-            "validate_server_identity 'aneb-server/0.8.1' rollback",
+            "validate_server_identity 'aneb-server/0.8.2' rollback",
             self.remote,
         )
 
@@ -259,15 +321,15 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         self.assertIn('kill -TERM -- "-$stage_pid"', self.remote)
         self.assertIn("STAGED_SERVER_STOP_FAILED", self.remote)
 
-    def test_pre_switch_requires_exact_081_identity_and_freezes_shared_host(self) -> None:
+    def test_pre_switch_requires_exact_082_identity_and_freezes_shared_host(self) -> None:
         freeze_call = self.remote.index("freeze_live_baseline\n")
         live_boundary = self.remote.index("LIVE_TOUCHED=1", freeze_call)
         self.assertLess(freeze_call, live_boundary)
         freeze_function = self.remote.index("freeze_live_baseline()")
         self.assertLess(freeze_function, freeze_call)
-        self.assertIn("validate_server_identity 'aneb-server/0.8.1' pre-switch", self.remote)
+        self.assertIn("validate_server_identity 'aneb-server/0.8.2' pre-switch", self.remote)
         freeze_body = self.remote.split("freeze_live_baseline() {", 1)[1].split("\n}", 1)[0]
-        identity = freeze_body.index("validate_server_identity 'aneb-server/0.8.1' pre-switch")
+        identity = freeze_body.index("validate_server_identity 'aneb-server/0.8.2' pre-switch")
         legacy = freeze_body.index("validate_legacy_surface pre-switch-0.8 aneb1")
         binary = freeze_body.index("BASE_BINARY_SHA=")
         self.assertLess(identity, legacy)
@@ -678,15 +740,26 @@ COMMIT
             "quick-bundle": "/opt/aneb/execution-profiles/token_multimodal_quick",
             "realtime-quick-bundle": "/opt/aneb/execution-profiles/ai_realtime_voice_quick",
             "network-quick-bundle": "/opt/aneb/execution-profiles/network_comprehensive_quick",
+            "token-qualification-bundle": "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification",
+            "realtime-qualification-bundle": "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification",
+            "network-qualification-bundle": "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification",
             "service-unit": "/etc/systemd/system/aneb-server.service",
         }
         for label, path in expected.items():
             self.assertIn(f"snapshot_item {label} {path}", self.remote)
             self.assertIn(f"restore_item {label} {path}", self.remote)
+        for label, path in (
+            ("token-qualification-bundle", "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification"),
+            ("realtime-qualification-bundle", "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification"),
+            ("network-qualification-bundle", "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification"),
+        ):
+            variable = "BASE_" + label.replace("-", "_").upper() + "_SHA"
+            self.assertIn(f'{variable}="$(path_fingerprint {path})"', self.remote)
+            self.assertIn(f'"$(path_fingerprint {path})" == "${variable}"', self.remote)
         self.assertIn("systemctl restart aneb-server", self.remote)
         self.assertIn("ROLLBACK_OK", self.remote)
         self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", self.remote)
-        self.assertIn("validate_server_identity 'aneb-server/0.8.1' rollback", self.remote)
+        self.assertIn("validate_server_identity 'aneb-server/0.8.2' rollback", self.remote)
         self.assertIn("validate_legacy_surface rollback-0.8 aneb1", self.remote)
         self.assertIn("assert_restored_aneb_baseline", self.remote)
         self.assertIn("assert_shared_host_baseline rollback", self.remote)
@@ -867,6 +940,33 @@ COMMIT
             ),
             "execution-profiles/network_comprehensive_quick/manifest.sha256": (
                 "profiles/published/network_comprehensive_quick/manifest.sha256"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/profile.json": (
+                "profiles/published/token_multimodal_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json": (
+                "profiles/published/token_multimodal_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256": (
+                "profiles/published/token_multimodal_repeatability_qualification/manifest.sha256"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json": (
+                "profiles/published/ai_realtime_voice_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json": (
+                "profiles/published/ai_realtime_voice_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256": (
+                "profiles/published/ai_realtime_voice_repeatability_qualification/manifest.sha256"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/profile.json": (
+                "profiles/published/network_comprehensive_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json": (
+                "profiles/published/network_comprehensive_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256": (
+                "profiles/published/network_comprehensive_repeatability_qualification/manifest.sha256"
             ),
         }
 
@@ -1113,6 +1213,14 @@ COMMIT
         extra_profile["execution_capabilities"]["validated_profiles"][0]["unexpected"] = 1  # type: ignore[index]
         mutations["extra profile member"] = extra_profile
 
+        missing_qualification = json.loads(json.dumps(valid))
+        missing_qualification["execution_capabilities"]["validated_profiles"].pop(1)  # type: ignore[index]
+        mutations["missing qualification profile"] = missing_qualification
+
+        old_candidate_version = json.loads(json.dumps(valid))
+        old_candidate_version["version"] = "aneb-server/0.8.2"
+        mutations["old candidate version"] = old_candidate_version
+
         wrong_h3 = self.valid_receipt_body(h3_enabled=True)
         mutations["staged h3 enabled"] = wrong_h3
 
@@ -1269,7 +1377,7 @@ printf 'DEPLOY_OK\n'
             for name, value in {
                 "build-provenance.json": "{}\n",
                 "go-buildinfo.json": "{}\n",
-                "staged-serverinfo.json": '{"version":"aneb-server/0.8.2"}\n',
+                "staged-serverinfo.json": '{"version":"aneb-server/0.8.3"}\n',
                 "staged-serverinfo.headers": "HTTP/1.1 200 OK\r\n\r\n",
                 "candidate.log": "candidate ready\n",
                 "artifact-manifest.sha256": "0" * 64 + "  aneb-server-linux\n",
@@ -1365,6 +1473,18 @@ printf 'DEPLOY_OK\n'
         )
         self.assertNotIn(
             "rm -rf -- /opt/aneb/execution-profiles/ai_realtime_voice_quick",
+            live,
+        )
+        self.assertNotIn(
+            "rm -rf -- /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification",
+            live,
+        )
+        self.assertNotIn(
+            "rm -rf -- /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification",
+            live,
+        )
+        self.assertNotIn(
+            "rm -rf -- /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification",
             live,
         )
 
@@ -1497,11 +1617,12 @@ exit 42
             stage = base / "stage"
             stage.mkdir()
             evidence = base / "evidence-does-not-exist"
-            completed = subprocess.run(
-                [bash, "-c", script, "--", str(trace), str(stage), str(evidence)],
-                text=True,
-                capture_output=True,
-                check=False,
+            completed = self.run_bash_fixture(
+                bash,
+                script,
+                str(trace),
+                str(stage),
+                str(evidence),
             )
             self.assertEqual(42, completed.returncode, completed.stderr)
             events = trace.read_text(encoding="utf-8")
@@ -1543,6 +1664,15 @@ exit 42
             "execution-profiles/network_comprehensive_quick/profile.json",
             "execution-profiles/network_comprehensive_quick/runtime_plan.json",
             "execution-profiles/network_comprehensive_quick/manifest.sha256",
+            "execution-profiles/token_multimodal_repeatability_qualification/profile.json",
+            "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256",
+            "execution-profiles/network_comprehensive_repeatability_qualification/profile.json",
+            "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json",
+            "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256",
             "tls/ip-cert.pem",
             "tls/ip-key.pem",
         ):
@@ -1591,6 +1721,33 @@ exit 42
             ),
             "execution-profiles/network_comprehensive_quick/manifest.sha256": (
                 "/opt/aneb/execution-profiles/network_comprehensive_quick/manifest.sha256"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/profile.json": (
+                "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json": (
+                "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256": (
+                "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256": (
+                "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/profile.json": (
+                "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/profile.json"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json": (
+                "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json"
+            ),
+            "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256": (
+                "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256"
             ),
         }
         with tempfile.TemporaryDirectory() as temporary:
@@ -1994,12 +2151,7 @@ false
 """
         with tempfile.TemporaryDirectory() as temporary:
             trace = Path(temporary) / "trace.txt"
-            completed = subprocess.run(
-                [bash, "-c", script, "--", str(trace)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            completed = self.run_bash_fixture(bash, script, str(trace))
             self.assertEqual(1, completed.returncode, completed.stderr)
             events = trace.read_text(encoding="utf-8")
             self.assertIn("after_hup", events)
@@ -2041,12 +2193,7 @@ false
 """
         with tempfile.TemporaryDirectory() as temporary:
             trace = Path(temporary) / "trace.txt"
-            completed = subprocess.run(
-                [bash, "-c", script, "--", str(trace)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            completed = self.run_bash_fixture(bash, script, str(trace))
             self.assertEqual(1, completed.returncode, completed.stderr)
             events = trace.read_text(encoding="utf-8")
             self.assertIn("stage_remove_failed", events)

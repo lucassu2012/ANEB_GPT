@@ -229,7 +229,7 @@ private data class NetworkRuntimePlan(
 
 private class NetworkComprehensiveProfileRepository(private val context: Context) {
     suspend fun load(variant: String): LoadedNetworkProfile = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard", "weak_capacity_latency", "weak_recovery", "gateway_loss", "gateway_recovery")) {
+        require(variant in setOf("quick", "standard", "repeatability_qualification", "weak_capacity_latency", "weak_recovery", "gateway_loss", "gateway_recovery")) {
             "unsupported_network_variant:$variant"
         }
         val base = "published/network_comprehensive_$variant"

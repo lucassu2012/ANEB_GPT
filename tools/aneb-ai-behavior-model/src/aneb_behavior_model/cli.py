@@ -17,6 +17,7 @@ from .calibration import (
 from .generator import (
     _sha256_json,
     build_artifacts,
+    derive_network_runtime_variant,
     derive_realtime_runtime_variant,
     derive_token_runtime_variant,
 )
@@ -48,6 +49,20 @@ def main(argv: list[str] | None = None) -> int:
         choices=("quick", "standard", "stress", "recovery"),
         default="standard",
     )
+
+    publish_qualification = subparsers.add_parser(
+        "publish-qualification-runtime",
+        help="publish a D-110 repeatability qualification profile/runtime pair",
+    )
+    publish_qualification.add_argument(
+        "--family",
+        required=True,
+        choices=("token_multimodal", "ai_realtime_voice", "network_comprehensive"),
+    )
+    publish_qualification.add_argument("--source", required=True, type=Path)
+    publish_qualification.add_argument("--qualification-policy", required=True, type=Path)
+    publish_qualification.add_argument("--seed", required=True, type=int)
+    publish_qualification.add_argument("--out", required=True, type=Path)
 
     prepare = subparsers.add_parser(
         "prepare-token-dataset",
@@ -89,6 +104,14 @@ def main(argv: list[str] | None = None) -> int:
             args.variant,
             args.validation,
             args.dataset_manifest,
+        )
+    if args.command == "publish-qualification-runtime":
+        return _publish_qualification_runtime(
+            args.family,
+            args.source,
+            args.qualification_policy,
+            args.seed,
+            args.out,
         )
     if args.command == "prepare-token-dataset":
         prepare_token_dataset(
@@ -180,6 +203,55 @@ def _publish_runtime(
         profile, runtime_plan = derive_realtime_runtime_variant(artifacts, variant)
     else:
         raise ValueError(f"unsupported runtime business_type: {model['business_type']}")
+    _write_runtime_bundle(output_dir, profile, runtime_plan)
+    return 0
+
+
+def _publish_qualification_runtime(
+    family: str,
+    source_path: Path,
+    policy_path: Path,
+    seed: int,
+    output_dir: Path,
+) -> int:
+    policy = load_json_object(policy_path)
+    if family == "network_comprehensive":
+        source_profile = load_json_object(source_path)
+        profile, runtime_plan = derive_network_runtime_variant(
+            source_profile,
+            "repeatability_qualification",
+            seed=seed,
+            qualification_policy=policy,
+        )
+    else:
+        model = load_model(source_path)
+        if model["business_type"] != family:
+            raise ValueError(
+                f"qualification family/source mismatch: expected {family}, "
+                f"got {model['business_type']}"
+            )
+        artifacts = build_artifacts(model, seed)
+        if family == "token_multimodal":
+            profile, runtime_plan = derive_token_runtime_variant(
+                artifacts,
+                "repeatability_qualification",
+                qualification_policy=policy,
+            )
+        else:
+            profile, runtime_plan = derive_realtime_runtime_variant(
+                artifacts,
+                "repeatability_qualification",
+                qualification_policy=policy,
+            )
+    _write_runtime_bundle(output_dir, profile, runtime_plan)
+    return 0
+
+
+def _write_runtime_bundle(
+    output_dir: Path,
+    profile: dict[str, Any],
+    runtime_plan: dict[str, Any],
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "profile.json", profile)
     _write_json(output_dir / "runtime_plan.json", runtime_plan)
@@ -191,7 +263,6 @@ def _publish_runtime(
         "".join(f"{digest.removeprefix('sha256:')}  {name}\n" for name, digest in selected.items()),
         encoding="utf-8",
     )
-    return 0
 
 
 def _verify_publishable_status(

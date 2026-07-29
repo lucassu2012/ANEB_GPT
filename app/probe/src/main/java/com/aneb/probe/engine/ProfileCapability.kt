@@ -9,11 +9,18 @@ import kotlin.math.abs
  * 已接入运行时后才会显示“可执行”，避免目录把候选 Profile 冒充成可测能力。
  */
 object ProfileCapability {
+    private const val QUALIFICATION_TIER = "repeatability_qualification"
+    private const val QUALIFICATION_POLICY_ID = "aneb-repeatability-qualification-balanced-v1"
+    private const val QUALIFICATION_POLICY_SHA =
+        "505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa"
     private const val NETWORK_QUICK_RUNTIME_CONTRACT = "aneb-network-runtime-plan-v1"
     private const val NETWORK_QUICK_RUNTIME_ARTIFACT = "runtime_plan.json"
     private const val NETWORK_QUICK_RUNTIME_HASH =
         "sha256:8981267030abd4cd95dabe3e3bff8d2af4b7de6b8659cc8c267c97f519cf2603"
     private const val NETWORK_QUICK_RUNTIME_SEED = 20260727L
+    private const val NETWORK_QUALIFICATION_RUNTIME_HASH =
+        "sha256:f430fba09fd7453872690fd0d5cf9ad130637f87f347a6247c04ad069b2e4aab"
+    private const val NETWORK_QUALIFICATION_RUNTIME_SEED = 20260727L
 
     data class Assessment(
         val executable: Boolean,
@@ -154,6 +161,7 @@ object ProfileCapability {
         }
         if (profile.phases.isEmpty()) add("没有测试阶段")
         if (profile.measurements.isEmpty()) add("缺少全量测量指标")
+        addAll(qualificationIssues(profile))
 
         val metricIds = profile.measurements.map { it.metricId }
         if (metricIds.any { it.isBlank() }) add("存在空指标 ID")
@@ -196,7 +204,7 @@ object ProfileCapability {
             val unknown = requiredFormulaIds - tokenRequiredFormulaIds
             if (unknown.isNotEmpty()) add("Token 必需指标公式未被识别: ${unknown.sorted().joinToString()}")
             val execution = profile.executionPlan
-            if (profile.evidenceTier !in setOf("quick", "standard", "stress")) add("Token 证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "stress", QUALIFICATION_TIER)) add("Token 证据等级无效")
             if (execution == null) {
                 add("Token 缺少可执行计划")
             } else {
@@ -222,7 +230,7 @@ object ProfileCapability {
             val unknown = requiredFormulaIds - realtimeRequiredFormulaIds
             if (unknown.isNotEmpty()) add("实时交互必需指标公式未被识别: ${unknown.sorted().joinToString()}")
             val execution = profile.executionPlan
-            if (profile.evidenceTier !in setOf("quick", "standard", "recovery")) add("实时交互证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "recovery", QUALIFICATION_TIER)) add("实时交互证据等级无效")
             if (execution == null) {
                 add("实时交互缺少可执行计划")
             } else {
@@ -259,7 +267,7 @@ object ProfileCapability {
                 .toSet()
             val unknown = requiredFormulaIds - networkRequiredFormulaIds
             if (unknown.isNotEmpty()) add("网络综合必需指标公式未被识别: ${unknown.sorted().joinToString()}")
-            if (profile.evidenceTier !in setOf("quick", "standard", "recovery", "gateway_lab")) add("网络综合证据等级无效")
+            if (profile.evidenceTier !in setOf("quick", "standard", "recovery", "gateway_lab", QUALIFICATION_TIER)) add("网络综合证据等级无效")
             val execution = profile.executionPlan
             if (profile.profileId == "network_comprehensive_quick") {
                 if (execution == null) {
@@ -270,6 +278,16 @@ object ProfileCapability {
                     if (execution.artifactHash != NETWORK_QUICK_RUNTIME_HASH) add("网络综合执行计划哈希不受支持")
                     if (execution.seed != NETWORK_QUICK_RUNTIME_SEED) add("网络综合执行计划 seed 不受支持")
                     if (execution.variant != "quick") add("网络综合执行计划与证据等级不一致")
+                }
+            } else if (profile.profileId == "network_comprehensive_repeatability_qualification") {
+                if (execution == null) {
+                    add("网络综合资格 Profile 缺少可执行计划")
+                } else {
+                    if (execution.contractVersion != NETWORK_QUICK_RUNTIME_CONTRACT) add("网络综合资格执行计划合同不受支持")
+                    if (execution.artifact != NETWORK_QUICK_RUNTIME_ARTIFACT) add("网络综合资格执行计划文件名不受支持")
+                    if (execution.artifactHash != NETWORK_QUALIFICATION_RUNTIME_HASH) add("网络综合资格执行计划哈希不受支持")
+                    if (execution.seed != NETWORK_QUALIFICATION_RUNTIME_SEED) add("网络综合资格执行计划 seed 不受支持")
+                    if (execution.variant != QUALIFICATION_TIER) add("网络综合资格执行计划与证据等级不一致")
                 }
             } else if (execution != null) {
                 add("Legacy 网络综合测试不得声明独立执行计划")
@@ -366,5 +384,29 @@ object ProfileCapability {
                 if (phase.seed != execution.seed) add("阶段 seed 与执行计划不一致")
             }
         }
+    }
+
+    private fun qualificationIssues(profile: ScenarioProfile): List<String> = buildList {
+        val qualification = profile.qualification
+        if (profile.evidenceTier != QUALIFICATION_TIER) {
+            if (qualification != null) add("非资格 Profile 不得声明 repeatability qualification")
+            return@buildList
+        }
+        if (qualification == null) {
+            add("资格 Profile 缺少 D-110 绑定")
+            return@buildList
+        }
+        if (qualification.contractVersion != "aneb-repeatability-profile-binding-v1") add("资格绑定合同版本不受支持")
+        if (qualification.policyId != QUALIFICATION_POLICY_ID) add("资格策略 ID 不受支持")
+        if (qualification.policyVersion != "1.0.0") add("资格策略版本不受支持")
+        if (qualification.decisionId != "D-110") add("资格决策 ID 不受支持")
+        if (qualification.policySha256 != QUALIFICATION_POLICY_SHA) add("资格策略哈希不匹配")
+        if (qualification.stageOrder != listOf("Q1_WIFI", "Q2_CELLULAR")) add("资格阶段顺序不受支持")
+        if (qualification.transportPooling != "forbidden") add("资格测试不得合并传输类型")
+        if (!qualification.q2RequiresQ1Pass) add("资格测试必须先通过 Q1")
+        if (qualification.runsPerFamily != 10) add("资格测试每族必须固定 10 次")
+        if (!qualification.repeatabilityAndQualityGatesIndependent) add("重复性门与质量门必须独立")
+        if (qualification.formalBaselineEligible) add("资格 Profile 不得直接获得正式基线资格")
+        if (!qualification.singleRunConfidenceUnchanged) add("资格 Profile 不得提升单次 run 置信度")
     }
 }

@@ -25,6 +25,14 @@ class RealtimeSimulationScorerTest {
     }
 
     @Test
+    fun `single repeatability qualification run cannot raise confidence or pass`() {
+        val result = RealtimeSimulationScorer.score(goodEvidence("repeatability_qualification", 10, 12))
+        assertNotNull(result.totalScore)
+        assertEquals(TokenConfidence.LOW, result.confidence)
+        assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
+    }
+
+    @Test
     fun `standard compliant evidence passes with high confidence`() {
         val result = RealtimeSimulationScorer.score(goodEvidence("standard", 10, 12))
         assertEquals(100.0, result.totalScore!!, 1e-9)

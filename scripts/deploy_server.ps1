@@ -38,6 +38,18 @@ $NetworkQuickBundle = Join-Path $ProfilesDir 'published\network_comprehensive_qu
 $NetworkQuickProfile = Join-Path $NetworkQuickBundle 'profile.json'
 $NetworkQuickRuntimePlan = Join-Path $NetworkQuickBundle 'runtime_plan.json'
 $NetworkQuickManifest = Join-Path $NetworkQuickBundle 'manifest.sha256'
+$TokenQualificationBundle = Join-Path $ProfilesDir 'published\token_multimodal_repeatability_qualification'
+$TokenQualificationProfile = Join-Path $TokenQualificationBundle 'profile.json'
+$TokenQualificationRuntimePlan = Join-Path $TokenQualificationBundle 'runtime_plan.json'
+$TokenQualificationManifest = Join-Path $TokenQualificationBundle 'manifest.sha256'
+$RealtimeQualificationBundle = Join-Path $ProfilesDir 'published\ai_realtime_voice_repeatability_qualification'
+$RealtimeQualificationProfile = Join-Path $RealtimeQualificationBundle 'profile.json'
+$RealtimeQualificationRuntimePlan = Join-Path $RealtimeQualificationBundle 'runtime_plan.json'
+$RealtimeQualificationManifest = Join-Path $RealtimeQualificationBundle 'manifest.sha256'
+$NetworkQualificationBundle = Join-Path $ProfilesDir 'published\network_comprehensive_repeatability_qualification'
+$NetworkQualificationProfile = Join-Path $NetworkQualificationBundle 'profile.json'
+$NetworkQualificationRuntimePlan = Join-Path $NetworkQualificationBundle 'runtime_plan.json'
+$NetworkQualificationManifest = Join-Path $NetworkQualificationBundle 'manifest.sha256'
 $Unit = Join-Path $ServerDir 'aneb-server.service'
 $VerifyCatalog = Join-Path $PSScriptRoot 'verify_spec_catalog.py'
 $BuildCandidate = Join-Path $PSScriptRoot 'build_server_candidate.py'
@@ -147,6 +159,18 @@ function Invoke-LocalSafetyGates {
     Assert-RequiredFile -Path $RealtimeQuickProfile -Label 'Realtime Quick profile'
     Assert-RequiredFile -Path $RealtimeQuickRuntimePlan -Label 'Realtime Quick runtime plan'
     Assert-RequiredFile -Path $RealtimeQuickManifest -Label 'Realtime Quick manifest'
+    Assert-RequiredFile -Path $NetworkQuickProfile -Label 'Network Quick profile'
+    Assert-RequiredFile -Path $NetworkQuickRuntimePlan -Label 'Network Quick runtime plan'
+    Assert-RequiredFile -Path $NetworkQuickManifest -Label 'Network Quick manifest'
+    Assert-RequiredFile -Path $TokenQualificationProfile -Label 'Token qualification profile'
+    Assert-RequiredFile -Path $TokenQualificationRuntimePlan -Label 'Token qualification runtime plan'
+    Assert-RequiredFile -Path $TokenQualificationManifest -Label 'Token qualification manifest'
+    Assert-RequiredFile -Path $RealtimeQualificationProfile -Label 'Realtime qualification profile'
+    Assert-RequiredFile -Path $RealtimeQualificationRuntimePlan -Label 'Realtime qualification runtime plan'
+    Assert-RequiredFile -Path $RealtimeQualificationManifest -Label 'Realtime qualification manifest'
+    Assert-RequiredFile -Path $NetworkQualificationProfile -Label 'Network qualification profile'
+    Assert-RequiredFile -Path $NetworkQualificationRuntimePlan -Label 'Network qualification runtime plan'
+    Assert-RequiredFile -Path $NetworkQualificationManifest -Label 'Network qualification manifest'
     foreach ($profilePath in $RootProfileFiles) {
         Assert-RequiredFile -Path $profilePath -Label 'root profile'
     }
@@ -273,6 +297,15 @@ try {
         'execution-profiles/network_comprehensive_quick/profile.json' = $NetworkQuickProfile
         'execution-profiles/network_comprehensive_quick/runtime_plan.json' = $NetworkQuickRuntimePlan
         'execution-profiles/network_comprehensive_quick/manifest.sha256' = $NetworkQuickManifest
+        'execution-profiles/token_multimodal_repeatability_qualification/profile.json' = $TokenQualificationProfile
+        'execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json' = $TokenQualificationRuntimePlan
+        'execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256' = $TokenQualificationManifest
+        'execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json' = $RealtimeQualificationProfile
+        'execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json' = $RealtimeQualificationRuntimePlan
+        'execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256' = $RealtimeQualificationManifest
+        'execution-profiles/network_comprehensive_repeatability_qualification/profile.json' = $NetworkQualificationProfile
+        'execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json' = $NetworkQualificationRuntimePlan
+        'execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256' = $NetworkQualificationManifest
     }
     if ($script:HaveIpCert) {
         $CandidateArtifacts['tls/ip-cert.pem'] = $IpCert
@@ -338,7 +371,7 @@ try {
 
     Write-Host '== [3/5] create isolated remote staging directory =='
     $WatchdogUnit = "aneb-deploy-expire-$DeploymentId"
-    $createStage = "set -Eeuo pipefail; umask 077; install -d -m 0700 '$RemoteStage' '$RemoteStage/root-profiles' '$RemoteStage/execution-profiles/token_multimodal_quick' '$RemoteStage/execution-profiles/ai_realtime_voice_quick' '$RemoteStage/execution-profiles/network_comprehensive_quick' '$RemoteStage/tls'"
+    $createStage = "set -Eeuo pipefail; umask 077; install -d -m 0700 '$RemoteStage' '$RemoteStage/root-profiles' '$RemoteStage/execution-profiles/token_multimodal_quick' '$RemoteStage/execution-profiles/ai_realtime_voice_quick' '$RemoteStage/execution-profiles/network_comprehensive_quick' '$RemoteStage/execution-profiles/token_multimodal_repeatability_qualification' '$RemoteStage/execution-profiles/ai_realtime_voice_repeatability_qualification' '$RemoteStage/execution-profiles/network_comprehensive_repeatability_qualification' '$RemoteStage/tls'"
     & ssh @SshOpts $Remote $createStage
     if ($LASTEXITCODE -ne 0) {
         throw "remote staging creation failed with exit code $LASTEXITCODE"
@@ -443,6 +476,9 @@ BASE_ROOT_PROFILES_SHA=""
 BASE_QUICK_BUNDLE_SHA=""
 BASE_REALTIME_QUICK_BUNDLE_SHA=""
 BASE_NETWORK_QUICK_BUNDLE_SHA=""
+BASE_TOKEN_QUALIFICATION_BUNDLE_SHA=""
+BASE_REALTIME_QUALIFICATION_BUNDLE_SHA=""
+BASE_NETWORK_QUALIFICATION_BUNDLE_SHA=""
 BASE_SERVICE_UNIT_SHA=""
 BASE_IP_CERT_SHA=""
 BASE_IP_KEY_SHA=""
@@ -670,6 +706,15 @@ expected = {
     'execution-profiles/network_comprehensive_quick/profile.json',
     'execution-profiles/network_comprehensive_quick/runtime_plan.json',
     'execution-profiles/network_comprehensive_quick/manifest.sha256',
+    'execution-profiles/token_multimodal_repeatability_qualification/profile.json',
+    'execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json',
+    'execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256',
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json',
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json',
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256',
+    'execution-profiles/network_comprehensive_repeatability_qualification/profile.json',
+    'execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json',
+    'execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256',
 }
 if ship_ip_cert == '1':
     expected.add('tls/ip-cert.pem')
@@ -774,6 +819,33 @@ live_paths = {
     ),
     'execution-profiles/network_comprehensive_quick/manifest.sha256': Path(
         '/opt/aneb/execution-profiles/network_comprehensive_quick/manifest.sha256'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/profile.json': Path(
+        '/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json': Path(
+        '/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256': Path(
+        '/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256': Path(
+        '/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/profile.json': Path(
+        '/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json': Path(
+        '/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256': Path(
+        '/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256'
     ),
 }
 if ship_ip_cert == '1':
@@ -1044,6 +1116,33 @@ artifact_source_paths = {
     ),
     'execution-profiles/network_comprehensive_quick/manifest.sha256': (
         'profiles/published/network_comprehensive_quick/manifest.sha256'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/profile.json': (
+        'profiles/published/token_multimodal_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json': (
+        'profiles/published/token_multimodal_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256': (
+        'profiles/published/token_multimodal_repeatability_qualification/manifest.sha256'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json': (
+        'profiles/published/ai_realtime_voice_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json': (
+        'profiles/published/ai_realtime_voice_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256': (
+        'profiles/published/ai_realtime_voice_repeatability_qualification/manifest.sha256'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/profile.json': (
+        'profiles/published/network_comprehensive_repeatability_qualification/profile.json'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json': (
+        'profiles/published/network_comprehensive_repeatability_qualification/runtime_plan.json'
+    ),
+    'execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256': (
+        'profiles/published/network_comprehensive_repeatability_qualification/manifest.sha256'
     ),
 }
 if ship_ip_cert == '1':
@@ -1525,13 +1624,16 @@ freeze_live_baseline() {
     local sample1_full sample1_v4 sample1_v6 sample1_nft sample1_docker sample1_extra
     local sample2_full sample2_v4 sample2_v6 sample2_nft sample2_docker sample2_extra
     local digest verify_docker_sha
-    validate_server_identity 'aneb-server/0.8.1' pre-switch
+    validate_server_identity 'aneb-server/0.8.2' pre-switch
     validate_legacy_surface pre-switch-0.8 aneb1
     BASE_BINARY_SHA="$(file_sha256 /opt/aneb/bin/aneb-server)"
     BASE_ROOT_PROFILES_SHA="$(path_fingerprint /opt/aneb/profiles)"
     BASE_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_quick)"
     BASE_REALTIME_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_quick)"
     BASE_NETWORK_QUICK_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/network_comprehensive_quick)"
+    BASE_TOKEN_QUALIFICATION_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification)"
+    BASE_REALTIME_QUALIFICATION_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification)"
+    BASE_NETWORK_QUALIFICATION_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification)"
     BASE_SERVICE_UNIT_SHA="$(path_fingerprint /etc/systemd/system/aneb-server.service)"
     if [[ "$SHIP_IP_CERT" == "1" ]]; then
         BASE_IP_CERT_SHA="$(path_fingerprint /opt/aneb/tls/ip/cert.pem)"
@@ -1594,6 +1696,9 @@ freeze_live_baseline() {
     BASE_DOCKER_FIREWALL_SHA="$sample1_docker"
     printf '%s\n' \
         "binary_sha256=$BASE_BINARY_SHA" \
+        "token_qualification_bundle_fingerprint=$BASE_TOKEN_QUALIFICATION_BUNDLE_SHA" \
+        "realtime_qualification_bundle_fingerprint=$BASE_REALTIME_QUALIFICATION_BUNDLE_SHA" \
+        "network_qualification_bundle_fingerprint=$BASE_NETWORK_QUALIFICATION_BUNDLE_SHA" \
         "docker_iptables_fingerprint=$BASE_DOCKER_FIREWALL_SHA" \
         "eth0_qdisc_fingerprint=$BASE_ETH0_QDISC_SHA" \
         "iptables_v4_fingerprint=$BASE_IPTABLES_V4_FIREWALL_SHA" \
@@ -1602,7 +1707,7 @@ freeze_live_baseline() {
         "firewall_fingerprint=$BASE_FIREWALL_SHA" \
         > "$STAGE/pre-switch-fingerprints.txt"
     echo 'pre_switch_firewall_stability=verified samples=2'
-    echo 'pre_switch_baseline=verified version=0.8.1 shared_host=frozen'
+    echo 'pre_switch_baseline=verified version=0.8.2 shared_host=frozen'
 }
 
 assert_shared_host_baseline() {
@@ -1698,6 +1803,18 @@ assert_restored_aneb_baseline() {
     }
     [[ "$(path_fingerprint /opt/aneb/execution-profiles/network_comprehensive_quick)" == "$BASE_NETWORK_QUICK_BUNDLE_SHA" ]] || {
         echo 'ROLLBACK_VERIFY_FAILED surface=network_quick_bundle' >&2
+        return 1
+    }
+    [[ "$(path_fingerprint /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification)" == "$BASE_TOKEN_QUALIFICATION_BUNDLE_SHA" ]] || {
+        echo 'ROLLBACK_VERIFY_FAILED surface=token_qualification_bundle' >&2
+        return 1
+    }
+    [[ "$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification)" == "$BASE_REALTIME_QUALIFICATION_BUNDLE_SHA" ]] || {
+        echo 'ROLLBACK_VERIFY_FAILED surface=realtime_qualification_bundle' >&2
+        return 1
+    }
+    [[ "$(path_fingerprint /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification)" == "$BASE_NETWORK_QUALIFICATION_BUNDLE_SHA" ]] || {
+        echo 'ROLLBACK_VERIFY_FAILED surface=network_qualification_bundle' >&2
         return 1
     }
     [[ "$(path_fingerprint /etc/systemd/system/aneb-server.service)" == "$BASE_SERVICE_UNIT_SHA" ]] || {
@@ -1882,6 +1999,9 @@ restore_item() {
         /opt/aneb/execution-profiles/token_multimodal_quick|\
         /opt/aneb/execution-profiles/ai_realtime_voice_quick|\
         /opt/aneb/execution-profiles/network_comprehensive_quick|\
+        /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification|\
+        /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification|\
+        /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification|\
         /etc/systemd/system/aneb-server.service|\
         /opt/aneb/tls/ip/cert.pem|\
         /opt/aneb/tls/ip/key.pem) ;;
@@ -1933,6 +2053,9 @@ rollback_live() {
     restore_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick || rollback_rc=1
     restore_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick || rollback_rc=1
     restore_item network-quick-bundle /opt/aneb/execution-profiles/network_comprehensive_quick || rollback_rc=1
+    restore_item token-qualification-bundle /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification || rollback_rc=1
+    restore_item realtime-qualification-bundle /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification || rollback_rc=1
+    restore_item network-qualification-bundle /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification || rollback_rc=1
     restore_item service-unit /etc/systemd/system/aneb-server.service || rollback_rc=1
     if [[ "$SHIP_IP_CERT" == "1" ]]; then
         restore_item ip-cert /opt/aneb/tls/ip/cert.pem || rollback_rc=1
@@ -1945,7 +2068,7 @@ rollback_live() {
         wait_live_server || rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
-        validate_server_identity 'aneb-server/0.8.1' rollback || rollback_rc=1
+        validate_server_identity 'aneb-server/0.8.2' rollback || rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
         ( set -Eeuo pipefail; validate_legacy_surface rollback-0.8 aneb1 )
@@ -1964,7 +2087,7 @@ rollback_live() {
         echo 'ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97' >&2
         return 1
     fi
-    echo 'ROLLBACK_OK version=0.8.1 legacy_surface=pass fingerprints=match' >&2
+    echo 'ROLLBACK_OK version=0.8.2 legacy_surface=pass fingerprints=match' >&2
     return 0
 }
 
@@ -2466,6 +2589,9 @@ cleanup() {
         "/opt/aneb/execution-profiles/token_multimodal_quick.new-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/ai_realtime_voice_quick.new-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/network_comprehensive_quick.new-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.new-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.new-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.new-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID"
         "/opt/aneb/tls/ip/cert.pem.new-$DEPLOY_ID"
         "/opt/aneb/tls/ip/key.pem.new-$DEPLOY_ID"
@@ -2479,6 +2605,12 @@ cleanup() {
         "/opt/aneb/execution-profiles/ai_realtime_voice_quick.absent-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/network_comprehensive_quick.restore-$DEPLOY_ID"
         "/opt/aneb/execution-profiles/network_comprehensive_quick.absent-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.restore-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.absent-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.restore-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.absent-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.restore-$DEPLOY_ID"
+        "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.absent-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.restore-$DEPLOY_ID"
         "/etc/systemd/system/aneb-server.service.absent-$DEPLOY_ID"
         "/opt/aneb/tls/ip/cert.pem.restore-$DEPLOY_ID"
@@ -2648,14 +2780,19 @@ validate_receipt() {
     local token_manifest="$2"
     local realtime_manifest="$3"
     local network_manifest="$4"
-    local output="$5"
-    local expected_h3="$6"
-    local receipt_sha_path="$7"
+    local token_qualification_manifest="$5"
+    local realtime_qualification_manifest="$6"
+    local network_qualification_manifest="$7"
+    local output="$8"
+    local expected_h3="$9"
+    local receipt_sha_path="${10}"
     local headers="${output%.json}.headers"
     curl -fksS --connect-timeout 2 --max-time 10 \
         -D "$headers" -o "$output" "$base_url/api/v1/serverinfo"
     python3 - \
         "$output" "$token_manifest" "$realtime_manifest" "$network_manifest" \
+        "$token_qualification_manifest" "$realtime_qualification_manifest" \
+        "$network_qualification_manifest" \
         "$expected_h3" "$receipt_sha_path" <<'PY'
 import hashlib
 import json
@@ -2683,9 +2820,9 @@ body = json.loads(
 )
 if not isinstance(body, dict):
     raise SystemExit('serverinfo body must be an object')
-if body.get('version') != 'aneb-server/0.8.2':
+if body.get('version') != 'aneb-server/0.8.3':
     raise SystemExit(f'unexpected server version: {body.get("version")!r}')
-expected_h3_text = sys.argv[5]
+expected_h3_text = sys.argv[8]
 if expected_h3_text not in {'true', 'false'}:
     raise SystemExit('invalid expected h3 marker')
 expected_h3 = expected_h3_text == 'true'
@@ -2741,9 +2878,12 @@ def read_manifest(path_text):
 token_manifest_entries = read_manifest(sys.argv[2])
 realtime_manifest_entries = read_manifest(sys.argv[3])
 network_manifest_entries = read_manifest(sys.argv[4])
+token_qualification_manifest_entries = read_manifest(sys.argv[5])
+realtime_qualification_manifest_entries = read_manifest(sys.argv[6])
+network_qualification_manifest_entries = read_manifest(sys.argv[7])
 
 profiles = receipt['validated_profiles']
-if not isinstance(profiles, list) or len(profiles) != 3:
+if not isinstance(profiles, list) or len(profiles) != 6:
     raise SystemExit(f'unexpected validated profiles: {profiles!r}')
 expected_profiles = [
     {
@@ -2752,14 +2892,29 @@ expected_profiles = [
         'profile_sha256': 'sha256:' + realtime_manifest_entries['profile.json'],
     },
     {
+        'profile_id': 'ai_realtime_voice_repeatability_qualification',
+        'profile_version': '1.0.0',
+        'profile_sha256': 'sha256:' + realtime_qualification_manifest_entries['profile.json'],
+    },
+    {
         'profile_id': 'network_comprehensive_quick',
         'profile_version': '1.2.0',
         'profile_sha256': 'sha256:' + network_manifest_entries['profile.json'],
     },
     {
+        'profile_id': 'network_comprehensive_repeatability_qualification',
+        'profile_version': '1.0.0',
+        'profile_sha256': 'sha256:' + network_qualification_manifest_entries['profile.json'],
+    },
+    {
         'profile_id': 'token_multimodal_quick',
         'profile_version': '1.2.1',
         'profile_sha256': 'sha256:' + token_manifest_entries['profile.json'],
+    },
+    {
+        'profile_id': 'token_multimodal_repeatability_qualification',
+        'profile_version': '1.0.0',
+        'profile_sha256': 'sha256:' + token_qualification_manifest_entries['profile.json'],
     },
 ]
 if profiles != expected_profiles:
@@ -2773,7 +2928,7 @@ canonical = json.dumps(
     ensure_ascii=True,
 ).encode('ascii')
 receipt_sha = hashlib.sha256(canonical).hexdigest()
-receipt_sha_path = Path(sys.argv[6])
+receipt_sha_path = Path(sys.argv[9])
 descriptor, temporary_name = tempfile.mkstemp(
     dir=receipt_sha_path.parent,
     prefix=f'.{receipt_sha_path.name}.',
@@ -2793,7 +2948,11 @@ finally:
 print(
     'execution_receipt=verified '
     'profiles=ai_realtime_voice_quick@1.1.1,'
-    'network_comprehensive_quick@1.2.0,token_multimodal_quick@1.2.1 '
+    'ai_realtime_voice_repeatability_qualification@1.0.0,'
+    'network_comprehensive_quick@1.2.0,'
+    'network_comprehensive_repeatability_qualification@1.0.0,'
+    'token_multimodal_quick@1.2.1,'
+    'token_multimodal_repeatability_qualification@1.0.0 '
     f'receipt_sha256={receipt_sha}'
 )
 PY
@@ -2825,6 +2984,15 @@ test -f "$STAGE/execution-profiles/ai_realtime_voice_quick/manifest.sha256"
 test -f "$STAGE/execution-profiles/network_comprehensive_quick/profile.json"
 test -f "$STAGE/execution-profiles/network_comprehensive_quick/runtime_plan.json"
 test -f "$STAGE/execution-profiles/network_comprehensive_quick/manifest.sha256"
+test -f "$STAGE/execution-profiles/token_multimodal_repeatability_qualification/profile.json"
+test -f "$STAGE/execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json"
+test -f "$STAGE/execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json"
+test -f "$STAGE/execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256"
+test -f "$STAGE/execution-profiles/network_comprehensive_repeatability_qualification/profile.json"
+test -f "$STAGE/execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json"
+test -f "$STAGE/execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256"
 CURRENT_STAGE='uploaded_artifacts'
 validate_uploaded_artifacts
 STAGED_BINARY_SHA="$(file_sha256 "$STAGE/aneb-server-linux")"
@@ -2887,6 +3055,9 @@ validate_receipt \
     "$STAGE/execution-profiles/token_multimodal_quick/manifest.sha256" \
     "$STAGE/execution-profiles/ai_realtime_voice_quick/manifest.sha256" \
     "$STAGE/execution-profiles/network_comprehensive_quick/manifest.sha256" \
+    "$STAGE/execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256" \
+    "$STAGE/execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256" \
+    "$STAGE/execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256" \
     "$STAGE/staged-serverinfo.json" \
     false \
     "$STAGE/staged-receipt.sha256"
@@ -2913,7 +3084,7 @@ else
 fi
 
 # Nothing above this line mutates the live ANEB installation.
-# Freeze the exact 0.8.1 rollback identity and every shared-host surface before
+# Freeze the exact 0.8.2 rollback identity and every shared-host surface before
 # replacing any ANEB-owned live file. PID is intentionally not frozen because
 # both upgrade and rollback restart the ANEB service.
 CURRENT_STAGE='live_snapshot'
@@ -2925,6 +3096,9 @@ snapshot_item root-profiles /opt/aneb/profiles
 snapshot_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick
 snapshot_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick
 snapshot_item network-quick-bundle /opt/aneb/execution-profiles/network_comprehensive_quick
+snapshot_item token-qualification-bundle /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification
+snapshot_item realtime-qualification-bundle /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification
+snapshot_item network-qualification-bundle /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification
 snapshot_item service-unit /etc/systemd/system/aneb-server.service
 if [[ "$SHIP_IP_CERT" == "1" ]]; then
     test -f "$STAGE/tls/ip-cert.pem"
@@ -2977,6 +3151,30 @@ atomic_replace_candidate \
     /opt/aneb/execution-profiles/network_comprehensive_quick
 rm -rf -- "/opt/aneb/execution-profiles/network_comprehensive_quick.new-$DEPLOY_ID"
 
+cp -a -- "$STAGE/execution-profiles/token_multimodal_repeatability_qualification" \
+    "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.new-$DEPLOY_ID"
+chown -R aneb:aneb "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.new-$DEPLOY_ID"
+atomic_replace_candidate \
+    "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.new-$DEPLOY_ID" \
+    /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification
+rm -rf -- "/opt/aneb/execution-profiles/token_multimodal_repeatability_qualification.new-$DEPLOY_ID"
+
+cp -a -- "$STAGE/execution-profiles/ai_realtime_voice_repeatability_qualification" \
+    "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.new-$DEPLOY_ID"
+chown -R aneb:aneb "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.new-$DEPLOY_ID"
+atomic_replace_candidate \
+    "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.new-$DEPLOY_ID" \
+    /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification
+rm -rf -- "/opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification.new-$DEPLOY_ID"
+
+cp -a -- "$STAGE/execution-profiles/network_comprehensive_repeatability_qualification" \
+    "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.new-$DEPLOY_ID"
+chown -R aneb:aneb "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.new-$DEPLOY_ID"
+atomic_replace_candidate \
+    "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.new-$DEPLOY_ID" \
+    /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification
+rm -rf -- "/opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification.new-$DEPLOY_ID"
+
 install -m 0644 "$STAGE/aneb-server.service" \
     "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID"
 atomic_replace_candidate "/etc/systemd/system/aneb-server.service.new-$DEPLOY_ID" \
@@ -3008,12 +3206,15 @@ if ! wait_live_server; then
     exit 1
 fi
 
-validate_server_identity 'aneb-server/0.8.2' live
+validate_server_identity 'aneb-server/0.8.3' live
 validate_receipt \
     'https://127.0.0.1:8443' \
     /opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256 \
     /opt/aneb/execution-profiles/ai_realtime_voice_quick/manifest.sha256 \
     /opt/aneb/execution-profiles/network_comprehensive_quick/manifest.sha256 \
+    /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256 \
+    /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256 \
+    /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256 \
     "$STAGE/live-serverinfo.json" \
     true \
     "$STAGE/live-receipt.sha256"

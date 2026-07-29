@@ -68,21 +68,25 @@ class RealtimeRuntimeRepository(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun load(variant: String): LoadedRealtimeRuntime = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard", "recovery")) { "unsupported_realtime_variant:$variant" }
+        require(variant in setOf("quick", "standard", "recovery", "repeatability_qualification")) {
+            "unsupported_realtime_variant:$variant"
+        }
         val base = "published/ai_realtime_voice_$variant"
         val profileText = context.assets.open("$base/profile.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val planText = context.assets.open("$base/runtime_plan.json").use { it.readBytes().toString(Charsets.UTF_8) }
+        val manifestText = context.assets.open("$base/manifest.sha256").use { it.readBytes().toString(Charsets.UTF_8) }
+        val manifest = TokenRuntimeManifestIntegrity.verify(manifestText, profileText, planText)
         val profile = ProfileParser.parseSingle(profileText)
         val capability = ProfileCapability.assess(profile)
         require(capability.executable) {
             "realtime_profile_not_executable:${(capability.contractIssues + capability.unsupportedPhaseTypes).joinToString("|")}"
         }
         val execution = requireNotNull(profile.executionPlan) { "realtime_execution_plan_missing" }
-        val profileHash = TokenRuntimeIntegrity.canonicalSha256(profileText)
-        val runtimeArtifactHash = TokenRuntimeIntegrity.canonicalSha256(planText)
+        val profileHash = manifest.profileSha256
+        val runtimeArtifactHash = manifest.runtimePlanSha256
         require(runtimeArtifactHash == execution.artifactHash) { "realtime_runtime_hash_mismatch" }
         val plan = json.decodeFromString(RealtimeRuntimePlan.serializer(), planText)
-        validateBinding(profile, plan)
+        validateBinding(profile, plan, variant)
         LoadedRealtimeRuntime(
             profile = profile,
             plan = plan,
@@ -93,8 +97,12 @@ class RealtimeRuntimeRepository(private val context: Context) {
         )
     }
 
-    private fun validateBinding(profile: ScenarioProfile, plan: RealtimeRuntimePlan) {
+    private fun validateBinding(profile: ScenarioProfile, plan: RealtimeRuntimePlan, requestedVariant: String) {
+        require(profile.profileId == "ai_realtime_voice_$requestedVariant") { "realtime_profile_id_variant_mismatch" }
+        require(profile.evidenceTier == requestedVariant) { "realtime_profile_evidence_variant_mismatch" }
         val execution = requireNotNull(profile.executionPlan)
+        require(execution.variant == requestedVariant) { "realtime_execution_profile_variant_mismatch" }
+        require(plan.variant == requestedVariant) { "realtime_runtime_requested_variant_mismatch" }
         require(plan.contractVersion == execution.contractVersion) { "realtime_runtime_contract_mismatch" }
         require(plan.modelId == profile.business.behaviorModelId) { "realtime_runtime_model_id_mismatch" }
         require(plan.modelVersion == profile.business.behaviorModelVersion) { "realtime_runtime_model_version_mismatch" }

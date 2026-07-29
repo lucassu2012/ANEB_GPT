@@ -15,6 +15,22 @@ from .statistics import describe
 TRACE_CONTRACT = "aneb-behavior-trace-v1"
 TOKEN_RUNTIME_CONTRACT = "aneb-token-runtime-plan-v1"
 REALTIME_RUNTIME_CONTRACT = "aneb-realtime-runtime-plan-v1"
+NETWORK_RUNTIME_CONTRACT = "aneb-network-runtime-plan-v1"
+REPEATABILITY_BINDING_CONTRACT = "aneb-repeatability-profile-binding-v1"
+REPEATABILITY_POLICY_SHA256 = "505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa"
+
+TOKEN_REPEATABILITY_TASK_IDS = (
+    "task-0001",
+    "task-0003",
+    "task-0004",
+    "task-0006",
+    "task-0010",
+    "task-0011",
+    "task-0012",
+    "task-0015",
+    "task-0016",
+    "task-0017",
+)
 
 
 @dataclass(frozen=True)
@@ -54,11 +70,13 @@ def build_artifacts(model: dict[str, Any], seed: int) -> BuildArtifacts:
 def derive_token_runtime_variant(
     artifacts: BuildArtifacts,
     variant: str,
+    *,
+    qualification_policy: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return a published standard, quick, or isolated large-object stress runtime pair."""
     if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != TOKEN_RUNTIME_CONTRACT:
         raise ValueError("token runtime variant requires token_multimodal artifacts")
-    if variant not in {"standard", "quick", "stress"}:
+    if variant not in {"standard", "quick", "stress", "repeatability_qualification"}:
         raise ValueError(f"unsupported runtime variant: {variant}")
     plan = deepcopy(artifacts.runtime_plan)
     profile = deepcopy(artifacts.profile)
@@ -102,34 +120,7 @@ def derive_token_runtime_variant(
         plan["task_count"] = len(selected)
         profile["profile_id"] = "token_multimodal_quick"
         profile["version"] = "1.2.1"
-        profile["execution_requirements"] = {
-            "contract_id": "aneb-execution-requirements",
-            "contract_version": "1.0.0",
-            "client_engine": {
-                "contract_id": "aneb-token-simulation-engine",
-                "min_version": "1.0.0",
-                "max_version_exclusive": "2.0.0",
-            },
-            "server_capability_receipt": {
-                "contract_id": "aneb-server-capability-receipt",
-                "min_version": "1.0.0",
-                "max_version_exclusive": "2.0.0",
-            },
-            "required_primitives": [
-                {
-                    "primitive_id": "echo",
-                    "wire_contract_id": "aneb-echo-v1",
-                },
-                {
-                    "primitive_id": "token_sim",
-                    "wire_contract_id": "aneb-token-task-v1",
-                },
-                {
-                    "primitive_id": "download",
-                    "wire_contract_id": "aneb-download-v1",
-                },
-            ],
-        }
+        profile["execution_requirements"] = _token_execution_requirements()
         profile.setdefault("business", {})["label"] = "多模态 Token 快测"
     elif variant == "stress":
         video_tasks = [
@@ -144,19 +135,145 @@ def derive_token_runtime_variant(
         plan["task_count"] = len(video_tasks)
         profile["profile_id"] = "token_multimodal_stress"
         profile.setdefault("business", {})["label"] = "多模态 Token 大对象压力测试"
+    elif variant == "repeatability_qualification":
+        if qualification_policy is None:
+            raise ValueError("repeatability qualification requires an approved qualification policy")
+        tasks_by_id = {str(task["task_id"]): task for task in plan["tasks"]}
+        missing = [task_id for task_id in TOKEN_REPEATABILITY_TASK_IDS if task_id not in tasks_by_id]
+        if missing:
+            raise ValueError(f"repeatability qualification source tasks missing: {','.join(missing)}")
+        plan["tasks"] = [tasks_by_id[task_id] for task_id in TOKEN_REPEATABILITY_TASK_IDS]
+        plan["task_count"] = len(plan["tasks"])
+        profile["profile_id"] = "token_multimodal_repeatability_qualification"
+        profile["version"] = "1.0.0"
+        profile["execution_requirements"] = _token_execution_requirements()
+        qualification = _build_repeatability_qualification_binding(
+            qualification_policy,
+            family_id="token_simulation",
+            profile_id=profile["profile_id"],
+            profile_version=profile["version"],
+        )
+        profile["qualification"] = qualification
+        plan["qualification"] = deepcopy(qualification)
     plan["variant"] = variant
     _bind_token_runtime_plan(profile, plan, int(plan["seed"]), variant)
     return profile, plan
 
 
+def _token_execution_requirements() -> dict[str, Any]:
+    return {
+        "contract_id": "aneb-execution-requirements",
+        "contract_version": "1.0.0",
+        "client_engine": {
+            "contract_id": "aneb-token-simulation-engine",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "server_capability_receipt": {
+            "contract_id": "aneb-server-capability-receipt",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "required_primitives": [
+            {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+            {"primitive_id": "token_sim", "wire_contract_id": "aneb-token-task-v1"},
+            {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+        ],
+    }
+
+
+def _realtime_execution_requirements() -> dict[str, Any]:
+    return {
+        "contract_id": "aneb-execution-requirements",
+        "contract_version": "1.0.0",
+        "client_engine": {
+            "contract_id": "aneb-realtime-simulation-engine",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "server_capability_receipt": {
+            "contract_id": "aneb-server-capability-receipt",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "required_primitives": [
+            {"primitive_id": "realtime_sim", "wire_contract_id": "aneb-realtime-session-v1"}
+        ],
+    }
+
+
+def _build_repeatability_qualification_binding(
+    policy: dict[str, Any],
+    *,
+    family_id: str,
+    profile_id: str,
+    profile_version: str,
+) -> dict[str, Any]:
+    if policy.get("contract_version") != "aneb-repeatability-qualification-policy-v1":
+        raise ValueError("unsupported repeatability qualification policy contract")
+    if policy.get("status") != "approved":
+        raise ValueError("repeatability qualification policy must be approved")
+    stages = policy.get("stages", {})
+    common = policy.get("common", {})
+    if (
+        policy.get("policy_id") != "aneb-repeatability-qualification-balanced-v1"
+        or policy.get("version") != "1.0.0"
+        or policy.get("decision_id") != "D-110"
+        or stages.get("order") != ["Q1_WIFI", "Q2_CELLULAR"]
+        or stages.get("definitions")
+        != {
+            "Q1_WIFI": {"transport": "wifi", "runs_per_family": 10},
+            "Q2_CELLULAR": {"transport": "cellular", "runs_per_family": 10},
+        }
+        or stages.get("transport_pooling") != "forbidden"
+        or stages.get("q2_requires_q1_pass") is not True
+        or common.get("runs_per_family") != 10
+        or common.get("repeatability_and_quality_gates_independent") is not True
+        or common.get("single_run_confidence_unchanged") is not True
+        or common.get("formal_baseline_requires_additional_gates") is not True
+    ):
+        raise ValueError("repeatability qualification policy does not match approved D-110 contract")
+    family = policy.get("families", {}).get(family_id)
+    if not isinstance(family, dict):
+        raise ValueError(f"repeatability qualification policy missing family: {family_id}")
+    if (
+        family.get("qualification_profile_id") != profile_id
+        or family.get("qualification_profile_version") != profile_version
+    ):
+        raise ValueError("repeatability qualification profile identity does not match policy")
+    policy_sha256 = _sha256_json(policy).removeprefix("sha256:")
+    if policy_sha256 != REPEATABILITY_POLICY_SHA256:
+        raise ValueError(
+            "repeatability qualification policy does not match approved D-110 canonical SHA"
+        )
+    return {
+        "contract_version": REPEATABILITY_BINDING_CONTRACT,
+        "policy_id": str(policy["policy_id"]),
+        "policy_version": str(policy["version"]),
+        "decision_id": str(policy["decision_id"]),
+        "policy_sha256": policy_sha256,
+        "stage_order": list(stages["order"]),
+        "transport_pooling": str(stages["transport_pooling"]),
+        "q2_requires_q1_pass": bool(stages["q2_requires_q1_pass"]),
+        "runs_per_family": int(common["runs_per_family"]),
+        "repeatability_and_quality_gates_independent": bool(
+            common["repeatability_and_quality_gates_independent"]
+        ),
+        "formal_baseline_eligible": False,
+        "single_run_confidence_unchanged": bool(common["single_run_confidence_unchanged"]),
+    }
+
+
 def derive_realtime_runtime_variant(
     artifacts: BuildArtifacts,
     variant: str,
+    *,
+    qualification_policy: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return a published realtime standard, quick, or controlled-recovery pair."""
     if artifacts.runtime_plan is None or artifacts.runtime_plan.get("contract_version") != REALTIME_RUNTIME_CONTRACT:
         raise ValueError("realtime runtime variant requires ai_realtime_voice artifacts")
-    if variant not in {"standard", "quick", "recovery"}:
+    if variant not in {"standard", "quick", "recovery", "repeatability_qualification"}:
         raise ValueError(f"unsupported runtime variant: {variant}")
     plan = deepcopy(artifacts.runtime_plan)
     profile = deepcopy(artifacts.profile)
@@ -191,26 +308,7 @@ def derive_realtime_runtime_variant(
         plan["session_count"] = 1
         profile["profile_id"] = "ai_realtime_voice_quick"
         profile["version"] = "1.1.1"
-        profile["execution_requirements"] = {
-            "contract_id": "aneb-execution-requirements",
-            "contract_version": "1.0.0",
-            "client_engine": {
-                "contract_id": "aneb-realtime-simulation-engine",
-                "min_version": "1.0.0",
-                "max_version_exclusive": "2.0.0",
-            },
-            "server_capability_receipt": {
-                "contract_id": "aneb-server-capability-receipt",
-                "min_version": "1.0.0",
-                "max_version_exclusive": "2.0.0",
-            },
-            "required_primitives": [
-                {
-                    "primitive_id": "realtime_sim",
-                    "wire_contract_id": "aneb-realtime-session-v1",
-                }
-            ],
-        }
+        profile["execution_requirements"] = _realtime_execution_requirements()
         profile.setdefault("business", {})["label"] = "AI 实时语音快测"
     elif variant == "recovery":
         # Recovery is deliberately separate from Standard. The business model
@@ -282,8 +380,101 @@ def derive_realtime_runtime_variant(
             if metric_id in required_minimums:
                 metric["minimum_sample_count"] = required_minimums[metric_id]
         plan["recovery_probe_contract"] = "fixed_model_derived_minimum_speech_plus_wait_v1"
+    elif variant == "repeatability_qualification":
+        if qualification_policy is None:
+            raise ValueError("repeatability qualification requires an approved qualification policy")
+        selected = min(
+            plan["sessions"],
+            key=lambda session: (
+                float(session["planned_duration_ms"]),
+                str(session["session_id"]),
+            ),
+        )
+        plan["sessions"] = [selected]
+        plan["session_count"] = 1
+        profile["profile_id"] = "ai_realtime_voice_repeatability_qualification"
+        profile["version"] = "1.0.0"
+        profile["execution_requirements"] = _realtime_execution_requirements()
+        qualification = _build_repeatability_qualification_binding(
+            qualification_policy,
+            family_id="ai_realtime_simulation",
+            profile_id=profile["profile_id"],
+            profile_version=profile["version"],
+        )
+        profile["qualification"] = qualification
+        plan["qualification"] = deepcopy(qualification)
     plan["variant"] = variant
     _bind_realtime_runtime_plan(profile, plan, int(plan["seed"]), variant)
+    return profile, plan
+
+
+def derive_network_runtime_variant(
+    source_profile: dict[str, Any],
+    variant: str,
+    *,
+    seed: int,
+    qualification_policy: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a hash-bound network runtime pair derived from a published Profile."""
+    if (
+        source_profile.get("profile_id") != "network_comprehensive_standard"
+        or source_profile.get("version") != "1.1.0"
+        or source_profile.get("mode_id") != "network_comprehensive"
+    ):
+        raise ValueError("network runtime variant requires network_comprehensive_standard@1.1.0")
+    if variant != "repeatability_qualification":
+        raise ValueError(f"unsupported network runtime variant: {variant}")
+    if qualification_policy is None:
+        raise ValueError("repeatability qualification requires an approved qualification policy")
+
+    profile = deepcopy(source_profile)
+    profile["profile_id"] = "network_comprehensive_repeatability_qualification"
+    profile["version"] = "1.0.0"
+    qualification = _build_repeatability_qualification_binding(
+        qualification_policy,
+        family_id="network_comprehensive",
+        profile_id=profile["profile_id"],
+        profile_version=profile["version"],
+    )
+    plan = {
+        "contract_version": NETWORK_RUNTIME_CONTRACT,
+        "profile_id": profile["profile_id"],
+        "profile_version": profile["version"],
+        "seed": seed,
+        "phases": deepcopy(profile["phases"]),
+        "claim": "deterministic application-layer measurement plan to the ANEB probe node",
+        "variant": variant,
+        "qualification": deepcopy(qualification),
+    }
+    profile["qualification"] = qualification
+    profile["execution_plan"] = {
+        "contract_version": NETWORK_RUNTIME_CONTRACT,
+        "artifact": "runtime_plan.json",
+        "artifact_hash": _sha256_json(plan),
+        "seed": seed,
+        "variant": variant,
+    }
+    profile["execution_requirements"] = {
+        "contract_id": "aneb-execution-requirements",
+        "contract_version": "1.0.0",
+        "client_engine": {
+            "contract_id": "aneb-network-comprehensive-engine",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "server_capability_receipt": {
+            "contract_id": "aneb-server-capability-receipt",
+            "min_version": "1.0.0",
+            "max_version_exclusive": "2.0.0",
+        },
+        "required_primitives": [
+            {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+            {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+            {"primitive_id": "udp_echo", "wire_contract_id": "aneb-udp-echo-v2"},
+            {"primitive_id": "upload", "wire_contract_id": "aneb-upload-v1"},
+        ],
+    }
+    profile["evidence_tier"] = variant
     return profile, plan
 
 
