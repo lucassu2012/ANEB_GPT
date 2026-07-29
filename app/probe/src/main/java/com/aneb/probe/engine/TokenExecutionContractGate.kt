@@ -126,11 +126,12 @@ internal object TokenExecutionContractGate {
         ),
         acceptedProfiles = listOf(
             tokenIdentity("token_multimodal_quick", "1.2.1", requiresReceipt = true),
+            tokenIdentity("token_multimodal_repeatability_qualification", "1.0.0", requiresReceipt = true),
             tokenIdentity("token_multimodal_standard", "1.1.0", requiresReceipt = false),
             tokenIdentity("token_multimodal_stress", "1.1.0", requiresReceipt = false),
         ),
         profileIdentityReasonCode = "token_profile_identity_not_allowed",
-        profileIdentityMessage = "Token Profile 不在冻结的 Quick 或 Legacy 接受集中，测试已停止。",
+        profileIdentityMessage = "Token Profile 不在冻结的 Quick、资格或 Legacy 接受集中，测试已停止。",
     )
 
     suspend fun authorize(

@@ -2,7 +2,7 @@ package com.aneb.probe.engine
 
 /** Exact binding between the requested Token path, its Profile and runtime plan. */
 internal object TokenRuntimeBinding {
-    private val variants = setOf("quick", "standard", "stress")
+    private val variants = setOf("quick", "standard", "stress", "repeatability_qualification")
 
     fun validate(profile: ScenarioProfile, plan: TokenRuntimePlan, requestedVariant: String) {
         require(requestedVariant in variants) { "unsupported_token_variant:$requestedVariant" }

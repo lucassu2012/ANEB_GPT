@@ -56,6 +56,8 @@ import com.aneb.probe.engine.ProbeRunService
 import com.aneb.probe.engine.ProbeRunSession
 import com.aneb.probe.engine.ProbeSpecialRunService
 import com.aneb.probe.engine.ProfileRepository
+import com.aneb.probe.engine.RepeatabilityQualificationActivityHandoff
+import com.aneb.probe.engine.RepeatabilityQualificationLaunchExtras
 import com.aneb.probe.engine.ScenarioProfile
 import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
@@ -102,6 +104,7 @@ class MainActivity : ComponentActivity() {
     private var intentDriveTestOverride: Boolean? = null
     private var intentGatewayBase: String? = null
     private var intentGatewayToken: String? = null
+    private val intentQualificationHandoff = RepeatabilityQualificationActivityHandoff()
 
     private var intentContinuity: Boolean = false
     private var intentCTokens: Int = ContinuityRunner.DEFAULT_TOKENS
@@ -200,6 +203,15 @@ class MainActivity : ComponentActivity() {
         db = AnebDatabase.get(applicationContext)
         settingsStore = ProbeSettingsStore(applicationContext)
         intentServer = intent?.getStringExtra("server")
+        intentQualificationHandoff.replace(
+            RepeatabilityQualificationLaunchExtras.readAndRemoveForActivity(
+                isFirstCreation = savedInstanceState == null,
+                enabled = BuildConfig.DEBUG,
+                getBoolean = { key, default -> intent?.getBooleanExtra(key, default) ?: default },
+                getString = { key -> intent?.getStringExtra(key) },
+                remove = { key -> intent?.removeExtra(key) },
+            ),
+        )
         intentAutorun = consumeAutorunOnce(
             isFirstCreation = savedInstanceState == null,
             enabled = BuildConfig.DEBUG,
@@ -339,6 +351,7 @@ class MainActivity : ComponentActivity() {
                         }
                         val oneTimeGatewayToken = intentGatewayToken
                         intentGatewayToken = null
+                        val oneTimeQualificationWire = intentQualificationHandoff.take()
                         ProbeRunService.start(
                             context = applicationContext,
                             config = ProbeRunService.Config(
@@ -350,6 +363,7 @@ class MainActivity : ComponentActivity() {
                                 driveTest = driveTest,
                                 gatewayBase = intentGatewayBase,
                                 gatewayToken = oneTimeGatewayToken,
+                                qualificationWire = oneTimeQualificationWire,
                             ),
                             autorun = fromAutorun,
                         )

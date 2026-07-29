@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 from pathlib import Path
 
+import aneb_behavior_model.generator as generator
 from aneb_behavior_model.generator import (
     build_artifacts,
     derive_realtime_runtime_variant,
@@ -12,6 +14,16 @@ from aneb_behavior_model.generator import (
 from aneb_behavior_model.model import load_model
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parents[1]
+
+
+def _qualification_policy() -> dict:
+    return json.loads(
+        (
+            REPO_ROOT
+            / "spec/repeatability-policies/aneb-repeatability-qualification-balanced-v1.json"
+        ).read_text(encoding="utf-8")
+    )
 
 
 class GeneratorTest(unittest.TestCase):
@@ -143,6 +155,86 @@ class GeneratorTest(unittest.TestCase):
         task_metric = next(metric for metric in profile["measurements"] if metric["metric_id"] == "TOK-B01")
         self.assertGreaterEqual(plan["task_count"], task_metric["minimum_sample_count"])
 
+    def test_token_repeatability_qualification_freezes_balanced_ten_task_runtime(self) -> None:
+        model = load_model(ROOT / "models/token_multimodal_hypothesis_v0.1.json")
+        artifacts = build_artifacts(model, 20260716)
+
+        profile, plan = derive_token_runtime_variant(
+            artifacts,
+            "repeatability_qualification",
+            qualification_policy=_qualification_policy(),
+        )
+
+        self.assertEqual("token_multimodal_repeatability_qualification", profile["profile_id"])
+        self.assertEqual("1.0.0", profile["version"])
+        self.assertEqual("repeatability_qualification", profile["evidence_tier"])
+        self.assertEqual("repeatability_qualification", profile["execution_plan"]["variant"])
+        self.assertEqual("repeatability_qualification", plan["variant"])
+        self.assertEqual(10, plan["task_count"])
+        self.assertEqual(
+            [
+                "task-0001",
+                "task-0003",
+                "task-0004",
+                "task-0006",
+                "task-0010",
+                "task-0011",
+                "task-0012",
+                "task-0015",
+                "task-0016",
+                "task-0017",
+            ],
+            [task["task_id"] for task in plan["tasks"]],
+        )
+        self.assertEqual(
+            {"text": 4, "document": 3, "image": 3},
+            {
+                workload_kind: sum(
+                    task["workload_kind"] == workload_kind for task in plan["tasks"]
+                )
+                for workload_kind in ("text", "document", "image")
+            },
+        )
+        quick_profile, _ = derive_token_runtime_variant(artifacts, "quick")
+        self.assertEqual(
+            quick_profile["execution_requirements"],
+            profile["execution_requirements"],
+        )
+        self.assertEqual(artifacts.profile["evaluation"], profile["evaluation"])
+        self.assertEqual(profile["qualification"], plan["qualification"])
+        self.assertEqual(
+            {
+                "contract_version": "aneb-repeatability-profile-binding-v1",
+                "policy_id": "aneb-repeatability-qualification-balanced-v1",
+                "policy_version": "1.0.0",
+                "decision_id": "D-110",
+                "policy_sha256": profile["qualification"]["policy_sha256"],
+                "stage_order": ["Q1_WIFI", "Q2_CELLULAR"],
+                "transport_pooling": "forbidden",
+                "q2_requires_q1_pass": True,
+                "runs_per_family": 10,
+                "repeatability_and_quality_gates_independent": True,
+                "formal_baseline_eligible": False,
+                "single_run_confidence_unchanged": True,
+            },
+            profile["qualification"],
+        )
+        self.assertRegex(profile["qualification"]["policy_sha256"], r"^[0-9a-f]{64}$")
+        self.assertLess(profile["est_duration_s"], 600)
+
+    def test_repeatability_qualification_rejects_relaxed_transport_pooling_policy(self) -> None:
+        model = load_model(ROOT / "models/token_multimodal_hypothesis_v0.1.json")
+        artifacts = build_artifacts(model, 20260716)
+        relaxed = _qualification_policy()
+        relaxed["stages"]["transport_pooling"] = "allowed"
+
+        with self.assertRaisesRegex(ValueError, "approved D-110 contract"):
+            derive_token_runtime_variant(
+                artifacts,
+                "repeatability_qualification",
+                qualification_policy=relaxed,
+            )
+
     def test_stress_variant_is_isolated_100mib_bidirectional_task(self) -> None:
         model = load_model(ROOT / "models/token_multimodal_stress_hypothesis_v0.1.json")
         artifacts = build_artifacts(model, 20260716)
@@ -219,6 +311,54 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(sum(turn["uplink_frames"] for turn in turns), 400)
         self.assertEqual(sum(turn["downlink_frames_before_stop"] for turn in turns), 676)
 
+    def test_realtime_repeatability_qualification_freezes_shortest_full_session(self) -> None:
+        model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
+        artifacts = build_artifacts(model, 20260716)
+
+        profile, plan = derive_realtime_runtime_variant(
+            artifacts,
+            "repeatability_qualification",
+            qualification_policy=_qualification_policy(),
+        )
+
+        self.assertEqual("ai_realtime_voice_repeatability_qualification", profile["profile_id"])
+        self.assertEqual("1.0.0", profile["version"])
+        self.assertEqual("repeatability_qualification", profile["evidence_tier"])
+        self.assertEqual("repeatability_qualification", profile["execution_plan"]["variant"])
+        self.assertEqual("repeatability_qualification", plan["variant"])
+        self.assertEqual(1, plan["session_count"])
+        self.assertEqual("session-0005", plan["sessions"][0]["session_id"])
+        self.assertEqual(12, plan["sessions"][0]["turn_count"])
+        self.assertGreaterEqual(
+            sum(turn["interrupted"] for turn in plan["sessions"][0]["turns"]),
+            2,
+        )
+        quick_profile, _ = derive_realtime_runtime_variant(artifacts, "quick")
+        self.assertEqual(
+            quick_profile["execution_requirements"],
+            profile["execution_requirements"],
+        )
+        self.assertEqual(artifacts.profile["evaluation"], profile["evaluation"])
+        self.assertEqual(profile["qualification"], plan["qualification"])
+        self.assertEqual(
+            {
+                "contract_version": "aneb-repeatability-profile-binding-v1",
+                "policy_id": "aneb-repeatability-qualification-balanced-v1",
+                "policy_version": "1.0.0",
+                "decision_id": "D-110",
+                "policy_sha256": profile["qualification"]["policy_sha256"],
+                "stage_order": ["Q1_WIFI", "Q2_CELLULAR"],
+                "transport_pooling": "forbidden",
+                "q2_requires_q1_pass": True,
+                "runs_per_family": 10,
+                "repeatability_and_quality_gates_independent": True,
+                "formal_baseline_eligible": False,
+                "single_run_confidence_unchanged": True,
+            },
+            profile["qualification"],
+        )
+        self.assertLess(profile["est_duration_s"], 90)
+
     def test_realtime_recovery_isolated_faults_are_hash_bound_test_actions(self) -> None:
         model = load_model(ROOT / "models/ai_realtime_voice_hypothesis_v0.2.json")
         artifacts = build_artifacts(model, 20260716)
@@ -271,6 +411,78 @@ class GeneratorTest(unittest.TestCase):
         serialized = json.dumps(plan)
         forbidden = {"arrival_ms", "network_delay_ms", "packet_loss", "measured_rtt_ms"}
         self.assertFalse(forbidden.intersection(serialized))
+
+    def test_network_repeatability_qualification_hash_binds_standard_phases(self) -> None:
+        source = json.loads(
+            (
+                REPO_ROOT
+                / "profiles/published/network_comprehensive_standard/profile.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        profile, plan = generator.derive_network_runtime_variant(
+            source,
+            "repeatability_qualification",
+            seed=20260727,
+            qualification_policy=_qualification_policy(),
+        )
+
+        self.assertEqual("network_comprehensive_repeatability_qualification", profile["profile_id"])
+        self.assertEqual("1.0.0", profile["version"])
+        self.assertEqual("repeatability_qualification", profile["evidence_tier"])
+        self.assertEqual("repeatability_qualification", profile["execution_plan"]["variant"])
+        self.assertEqual("aneb-network-runtime-plan-v1", plan["contract_version"])
+        self.assertEqual("repeatability_qualification", plan["variant"])
+        self.assertEqual(20260727, plan["seed"])
+        self.assertEqual(source["phases"], plan["phases"])
+        self.assertEqual(source["phases"], profile["phases"])
+        self.assertEqual(source["evaluation"], profile["evaluation"])
+        self.assertEqual(profile["qualification"], plan["qualification"])
+        self.assertEqual(
+            {
+                "contract_version": "aneb-repeatability-profile-binding-v1",
+                "policy_id": "aneb-repeatability-qualification-balanced-v1",
+                "policy_version": "1.0.0",
+                "decision_id": "D-110",
+                "policy_sha256": profile["qualification"]["policy_sha256"],
+                "stage_order": ["Q1_WIFI", "Q2_CELLULAR"],
+                "transport_pooling": "forbidden",
+                "q2_requires_q1_pass": True,
+                "runs_per_family": 10,
+                "repeatability_and_quality_gates_independent": True,
+                "formal_baseline_eligible": False,
+                "single_run_confidence_unchanged": True,
+            },
+            profile["qualification"],
+        )
+        self.assertEqual(
+            {
+                "contract_id": "aneb-execution-requirements",
+                "contract_version": "1.0.0",
+                "client_engine": {
+                    "contract_id": "aneb-network-comprehensive-engine",
+                    "min_version": "1.0.0",
+                    "max_version_exclusive": "2.0.0",
+                },
+                "server_capability_receipt": {
+                    "contract_id": "aneb-server-capability-receipt",
+                    "min_version": "1.0.0",
+                    "max_version_exclusive": "2.0.0",
+                },
+                "required_primitives": [
+                    {"primitive_id": "download", "wire_contract_id": "aneb-download-v1"},
+                    {"primitive_id": "echo", "wire_contract_id": "aneb-echo-v1"},
+                    {"primitive_id": "udp_echo", "wire_contract_id": "aneb-udp-echo-v2"},
+                    {"primitive_id": "upload", "wire_contract_id": "aneb-upload-v1"},
+                ],
+            },
+            profile["execution_requirements"],
+        )
+        expected_plan_hash = "sha256:" + hashlib.sha256(
+            json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(expected_plan_hash, profile["execution_plan"]["artifact_hash"])
+        self.assertEqual(42, profile["est_duration_s"])
 
 
 if __name__ == "__main__":

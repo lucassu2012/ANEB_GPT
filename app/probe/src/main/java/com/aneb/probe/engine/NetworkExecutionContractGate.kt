@@ -179,6 +179,7 @@ internal object NetworkExecutionContractGate {
         ),
         acceptedProfiles = listOf(
             networkIdentity("network_comprehensive_quick", "1.2.0", requiresReceipt = true),
+            networkIdentity("network_comprehensive_repeatability_qualification", "1.0.0", requiresReceipt = true),
             networkIdentity("network_comprehensive_standard", "1.1.0", requiresReceipt = false),
             networkIdentity(
                 "network_comprehensive_weak_capacity_latency",
@@ -206,7 +207,7 @@ internal object NetworkExecutionContractGate {
             ),
         ),
         profileIdentityReasonCode = "network_profile_identity_not_allowed",
-        profileIdentityMessage = "网络综合 Profile 不在冻结的 Quick 或 Legacy 接受集中，测试已停止。",
+        profileIdentityMessage = "网络综合 Profile 不在冻结的 Quick、资格或 Legacy 接受集中，测试已停止。",
     )
 
     suspend fun authorize(

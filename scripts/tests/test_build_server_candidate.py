@@ -69,6 +69,33 @@ ARTIFACT_PATHS = {
     "execution-profiles/network_comprehensive_quick/manifest.sha256": (
         "profiles/published/network_comprehensive_quick/manifest.sha256"
     ),
+    "execution-profiles/token_multimodal_repeatability_qualification/profile.json": (
+        "profiles/published/token_multimodal_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/token_multimodal_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256": (
+        "profiles/published/token_multimodal_repeatability_qualification/manifest.sha256"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/manifest.sha256"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/profile.json": (
+        "profiles/published/network_comprehensive_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/network_comprehensive_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256": (
+        "profiles/published/network_comprehensive_repeatability_qualification/manifest.sha256"
+    ),
 }
 
 

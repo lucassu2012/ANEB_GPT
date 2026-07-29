@@ -75,6 +75,33 @@ ARTIFACT_ALLOWLIST = {
     "execution-profiles/network_comprehensive_quick/manifest.sha256": (
         "profiles/published/network_comprehensive_quick/manifest.sha256"
     ),
+    "execution-profiles/token_multimodal_repeatability_qualification/profile.json": (
+        "profiles/published/token_multimodal_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/token_multimodal_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/token_multimodal_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/token_multimodal_repeatability_qualification/manifest.sha256": (
+        "profiles/published/token_multimodal_repeatability_qualification/manifest.sha256"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/profile.json": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/ai_realtime_voice_repeatability_qualification/manifest.sha256": (
+        "profiles/published/ai_realtime_voice_repeatability_qualification/manifest.sha256"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/profile.json": (
+        "profiles/published/network_comprehensive_repeatability_qualification/profile.json"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/runtime_plan.json": (
+        "profiles/published/network_comprehensive_repeatability_qualification/runtime_plan.json"
+    ),
+    "execution-profiles/network_comprehensive_repeatability_qualification/manifest.sha256": (
+        "profiles/published/network_comprehensive_repeatability_qualification/manifest.sha256"
+    ),
     "tls/ip-cert.pem": "server/tls/ip/aneb_ip_cert.pem",
 }
 OPTIONAL_ARTIFACTS = frozenset({"tls/ip-cert.pem"})

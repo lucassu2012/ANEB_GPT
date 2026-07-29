@@ -25,7 +25,7 @@ func validExecutionRequirements() executionRequirements {
 	}
 }
 
-func TestPublishedQuickProfilesProduceExactCapabilityReceipt(t *testing.T) {
+func TestPublishedExecutionProfilesProduceExactCapabilityReceipt(t *testing.T) {
 	receipt, err := loadExecutionCapabilityReceipt("../profiles/published")
 	if err != nil {
 		t.Fatalf("load execution receipt: %v", err)
@@ -33,8 +33,8 @@ func TestPublishedQuickProfilesProduceExactCapabilityReceipt(t *testing.T) {
 	if receipt.ContractID != serverCapabilityReceiptContractID || receipt.ContractVersion != serverCapabilityReceiptVersion {
 		t.Fatalf("receipt identity mismatch: %+v", receipt)
 	}
-	if len(receipt.ValidatedProfiles) != 3 {
-		t.Fatalf("validated profiles=%d, want 3", len(receipt.ValidatedProfiles))
+	if len(receipt.ValidatedProfiles) != 6 {
+		t.Fatalf("validated profiles=%d, want 6", len(receipt.ValidatedProfiles))
 	}
 	want := []validatedExecutionProfile{
 		{
@@ -43,14 +43,29 @@ func TestPublishedQuickProfilesProduceExactCapabilityReceipt(t *testing.T) {
 			ProfileSHA256:  "sha256:701c43cb19644e732c59faa6141b5b8bbc069e6c2ef006c410ee2bc0b51b30f7",
 		},
 		{
+			ProfileID:      "ai_realtime_voice_repeatability_qualification",
+			ProfileVersion: "1.0.0",
+			ProfileSHA256:  "sha256:ad86006f48bb06716c9d69d430d84f511c206ebd9114feffd0ca8679aeace75c",
+		},
+		{
 			ProfileID:      "network_comprehensive_quick",
 			ProfileVersion: "1.2.0",
 			ProfileSHA256:  "sha256:15ae5187fac72d86b78ff89ad44d5a51706dc7c4e4cf01432f367acd9ed082cc",
 		},
 		{
+			ProfileID:      "network_comprehensive_repeatability_qualification",
+			ProfileVersion: "1.0.0",
+			ProfileSHA256:  "sha256:e39dcabd2276a19c193e0a6b0c3126af734ff7c8d2fba17c91d0d48019a0c375",
+		},
+		{
 			ProfileID:      "token_multimodal_quick",
 			ProfileVersion: "1.2.1",
 			ProfileSHA256:  "sha256:caeda36fc11046385fd2ca3052e68d02e4e49ad72ab4125015fd61c91a592773",
+		},
+		{
+			ProfileID:      "token_multimodal_repeatability_qualification",
+			ProfileVersion: "1.0.0",
+			ProfileSHA256:  "sha256:eaeb0af8c1a38c88a8f341c120701580659625eb3b68b8d7960db2888a01ee7b",
 		},
 	}
 	for index := range want {
@@ -338,10 +353,6 @@ func TestNetworkExecutionPrimitivesArePublished(t *testing.T) {
 }
 
 func TestNetworkExecutionRuntimeConfigFailsClosed(t *testing.T) {
-	receipt := baseServerCapabilityReceipt()
-	receipt.ValidatedProfiles = append(receipt.ValidatedProfiles, validatedExecutionProfile{
-		ProfileID: networkQuickExecutionProfileID, ProfileVersion: networkQuickExecutionProfileVersion,
-	})
 	tests := []struct {
 		name, httpAddr, udpAddr, want string
 	}{
@@ -350,19 +361,29 @@ func TestNetworkExecutionRuntimeConfigFailsClosed(t *testing.T) {
 		{"invalid http", "8443", ":8443", "invalid HTTP listen address"},
 		{"invalid udp", ":8443", "8443", "invalid UDP echo address"},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateExecutionRuntimeConfig(receipt, test.httpAddr, test.udpAddr)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("err=%v, want %q", err, test.want)
+	profiles := []validatedExecutionProfile{
+		{ProfileID: networkQuickExecutionProfileID, ProfileVersion: networkQuickExecutionProfileVersion},
+		{ProfileID: networkQualificationExecutionProfileID, ProfileVersion: networkQualificationExecutionProfileVersion},
+	}
+	for _, profile := range profiles {
+		t.Run(profile.ProfileID, func(t *testing.T) {
+			receipt := baseServerCapabilityReceipt()
+			receipt.ValidatedProfiles = append(receipt.ValidatedProfiles, profile)
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					err := validateExecutionRuntimeConfig(receipt, test.httpAddr, test.udpAddr)
+					if err == nil || !strings.Contains(err.Error(), test.want) {
+						t.Fatalf("err=%v, want %q", err, test.want)
+					}
+				})
+			}
+			if err := validateExecutionRuntimeConfig(receipt, ":8443", ":8443"); err != nil {
+				t.Fatalf("valid network runtime rejected: %v", err)
+			}
+			if err := validateExecutionRuntimeConfig(receipt, "127.0.0.1:39443", "127.0.0.1:39443"); err != nil {
+				t.Fatalf("valid staged network runtime rejected: %v", err)
 			}
 		})
-	}
-	if err := validateExecutionRuntimeConfig(receipt, ":8443", ":8443"); err != nil {
-		t.Fatalf("valid network runtime rejected: %v", err)
-	}
-	if err := validateExecutionRuntimeConfig(receipt, "127.0.0.1:39443", "127.0.0.1:39443"); err != nil {
-		t.Fatalf("valid staged network runtime rejected: %v", err)
 	}
 	if err := validateExecutionRuntimeConfig(baseServerCapabilityReceipt(), ":9443", ""); err != nil {
 		t.Fatalf("legacy runtime without network receipt rejected: %v", err)

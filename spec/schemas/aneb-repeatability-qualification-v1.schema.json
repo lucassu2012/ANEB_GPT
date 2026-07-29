@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aneb:schema:repeatability-qualification:v1",
+  "title": "ANEB repeatability qualification report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_version",
+    "status",
+    "policy",
+    "cohort",
+    "prerequisite_gate",
+    "repeatability_gate",
+    "radio_integrity",
+    "profile_quality_gate",
+    "formal_baseline_eligible",
+    "single_run_confidence_unchanged"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "aneb-repeatability-qualification-v1"
+    },
+    "contract_version": {
+      "const": "aneb-repeatability-qualification-v1"
+    },
+    "status": {
+      "enum": [
+        "repeatability_passed",
+        "repeatability_failed"
+      ]
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    },
+    "cohort": {
+      "$ref": "#/$defs/cohort"
+    },
+    "prerequisite_gate": {
+      "$ref": "#/$defs/prerequisiteGate"
+    },
+    "repeatability_gate": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/metricRepeatabilityGate"
+        },
+        {
+          "$ref": "#/$defs/tokenRepeatabilityGate"
+        }
+      ]
+    },
+    "radio_integrity": {
+      "$ref": "#/$defs/radioIntegrity"
+    },
+    "profile_quality_gate": {
+      "$ref": "#/$defs/profileQualityGate"
+    },
+    "formal_baseline_eligible": {
+      "const": false
+    },
+    "single_run_confidence_unchanged": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prefixedSha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "version",
+        "decision_id",
+        "canonical_sha256",
+        "stage_id"
+      ],
+      "properties": {
+        "policy_id": {
+          "const": "aneb-repeatability-qualification-balanced-v1"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "decision_id": {
+          "const": "D-110"
+        },
+        "canonical_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stage_id": {
+          "enum": [
+            "Q1_WIFI",
+            "Q2_CELLULAR"
+          ]
+        }
+      }
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "identity_sha256",
+        "run_count",
+        "run_ids",
+        "run_canonical_sha256",
+        "started_at_span_ms"
+      ],
+      "properties": {
+        "identity": {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "test_type",
+            "producer",
+            "profile",
+            "claim",
+            "device",
+            "endpoint",
+            "network",
+            "algorithm_versions"
+          ]
+        },
+        "identity_sha256": {
+          "$ref": "#/$defs/prefixedSha256"
+        },
+        "run_count": {
+          "const": 10
+        },
+        "run_ids": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "run_canonical_sha256": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/prefixedSha256"
+          }
+        },
+        "started_at_span_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "prerequisiteGate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "stage_id",
+            "report_sha256"
+          ],
+          "properties": {
+            "status": {
+              "const": "not_required"
+            },
+            "stage_id": {
+              "type": "null"
+            },
+            "report_sha256": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "stage_id",
+            "report_sha256"
+          ],
+          "properties": {
+            "status": {
+              "const": "pass"
+            },
+            "stage_id": {
+              "const": "Q1_WIFI"
+            },
+            "report_sha256": {
+              "$ref": "#/$defs/prefixedSha256"
+            }
+          }
+        }
+      ]
+    },
+    "metricRepeatabilityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "combine_policy",
+        "metric_gates"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "combine_policy": {
+          "const": "all"
+        },
+        "metric_gates": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/metricGate"
+          }
+        }
+      }
+    },
+    "metricGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric_id",
+        "statistic",
+        "value",
+        "max_inclusive",
+        "minimum_samples_satisfied",
+        "status"
+      ],
+      "properties": {
+        "metric_id": {
+          "enum": [
+            "LIVE-B05",
+            "LIVE-N02",
+            "LIVE-B08",
+            "NET-B01",
+            "NET-B02",
+            "NET-B04"
+          ]
+        },
+        "statistic": {
+          "enum": [
+            "absolute_range",
+            "sample_cv"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "max_inclusive": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "minimum_samples_satisfied": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        }
+      }
+    },
+    "tokenRepeatabilityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "status",
+        "subcohorts",
+        "pooled"
+      ],
+      "properties": {
+        "mode": {
+          "const": "two_subcohorts_and_pooled"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "subcohorts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/tokenEvaluation"
+          }
+        },
+        "pooled": {
+          "$ref": "#/$defs/tokenEvaluation"
+        }
+      }
+    },
+    "tokenEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "run_count",
+        "status",
+        "evaluation"
+      ],
+      "properties": {
+        "batch_id": {
+          "enum": [
+            "A",
+            "B"
+          ]
+        },
+        "authority": {
+          "const": "D-58"
+        },
+        "run_count": {
+          "enum": [
+            5,
+            10
+          ]
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "evaluation": {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "status",
+            "criterion",
+            "run_count",
+            "median_task_ttft_cv",
+            "maximum_task_ttft_cv"
+          ]
+        }
+      }
+    },
+    "radioIntegrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_mode",
+        "status",
+        "formal_baseline_eligible",
+        "thresholds",
+        "runs"
+      ],
+      "properties": {
+        "policy_mode": {
+          "const": "authorized_threshold"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "formal_baseline_eligible": {
+          "const": false
+        },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "required_state",
+            "require_count_consistency",
+            "require_monotonic_timestamps",
+            "p95_gap_seconds_max_inclusive",
+            "max_gap_seconds_max_exclusive",
+            "stale_samples_max",
+            "subscription_switches_max",
+            "switch_policy"
+          ],
+          "properties": {
+            "required_state": {
+              "const": "collected"
+            },
+            "require_count_consistency": {
+              "const": true
+            },
+            "require_monotonic_timestamps": {
+              "const": true
+            },
+            "p95_gap_seconds_max_inclusive": {
+              "const": 1.25
+            },
+            "max_gap_seconds_max_exclusive": {
+              "const": 1.5
+            },
+            "stale_samples_max": {
+              "const": 0
+            },
+            "subscription_switches_max": {
+              "const": 0
+            },
+            "switch_policy": {
+              "const": "split_or_reject"
+            }
+          }
+        },
+        "runs": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/radioRun"
+          }
+        }
+      }
+    },
+    "radioRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "status",
+        "sample_count",
+        "span_seconds",
+        "median_gap_seconds",
+        "observed_median_frequency_hz",
+        "p95_gap_seconds",
+        "minimum_gap_seconds",
+        "maximum_gap_seconds",
+        "stale_sample_count",
+        "subscription_switch_sample_count",
+        "cadence_verdict"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "structurally_valid"
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "span_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "median_gap_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "observed_median_frequency_hz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "p95_gap_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "minimum_gap_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maximum_gap_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "stale_sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subscription_switch_sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cadence_verdict": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        }
+      }
+    },
+    "profileQualityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "independent_from_repeatability",
+        "failures"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "independent_from_repeatability": {
+          "const": true
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "run_id",
+              "metric_id",
+              "reason"
+            ],
+            "properties": {
+              "run_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "metric_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "enum": [
+                  "metric_not_observed",
+                  "minimum_sample_count_not_met",
+                  "quality_target_not_met"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 
 ## 状态
 
-`v0.3.2` 可运行纵向切片（保留 v0.2.0 校准闸门、v0.3.0 跨端执行要求，并让 Token Quick 与 AI realtime Quick 都发布可机器核验的精确执行合同）：
+`v0.3.3` 可运行纵向切片（保留 v0.2.0 校准闸门、v0.3.0 跨端执行要求，并让三族 D-110 qualification runtime 通过统一命令确定性发布）：
 
 - PCG32 跨语言确定性随机数；
 - Token `FAST / NORMAL / PAUSE` 三状态 Markov + 状态内经验分布；
@@ -26,6 +26,7 @@ ANEB App 只消费冻结后的 Profile，不执行拟合，不把第三方服务
 - 训练集拟合、留出集独立验证和摘要绑定的 `calibrated → validated` 发布闸门；
 - Profile v2、验证报告和 SHA-256 manifest 导出；JSON/JSONL 条目使用 UTF-8 规范化语义哈希，排版变化不影响绑定，不等同于 pretty-printed 文件的原始字节哈希；
 - Token Quick Profile 固定声明 `echo`、`token_sim`、`download` 三项白名单原语；AI realtime Quick 固定声明 `realtime_sim/aneb-realtime-session-v1`，两者都禁止任意 URL、命令或脚本；
+- Token、AI realtime、Network 三族 `repeatability_qualification@1.0.0` 均绑定同一 approved D-110 policy SHA，固定 Q1→Q2、禁止混池、每族每阶段 10 run，并保持正式基线权限为 false；
 - 业务轨迹禁止包含网络时延、丢包和实测 RTT。
 
 详细合同见：
@@ -77,6 +78,13 @@ python -m aneb_behavior_model.cli publish-runtime `
   --variant recovery `
   --seed 20260716 `
   --out ..\..\profiles\published\ai_realtime_voice_recovery
+
+python -m aneb_behavior_model.cli publish-qualification-runtime `
+  --family token_multimodal `
+  --source models\token_multimodal_hypothesis_v0.1.json `
+  --qualification-policy ..\..\spec\repeatability-policies\aneb-repeatability-qualification-balanced-v1.json `
+  --seed 20260716 `
+  --out ..\..\profiles\published\token_multimodal_repeatability_qualification
 ```
 
 普通 hypothesis 构建目录包含：`model.json`、`golden_trace.jsonl`、`profile.json`、

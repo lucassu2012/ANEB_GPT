@@ -56,8 +56,48 @@ class SpecCatalogTest(unittest.TestCase):
     def test_repository_catalog_and_all_references_validate(self):
         self.assertEqual([], VERIFY.validate_catalog(REPO_ROOT))
 
+    def test_repeatability_qualification_profiles_are_cataloged_and_policy_bound(self):
+        self.assertEqual("1.11.0", self.catalog["catalog_version"])
+        expected_ids = {
+            "token_multimodal_repeatability_qualification",
+            "ai_realtime_voice_repeatability_qualification",
+            "network_comprehensive_repeatability_qualification",
+        }
+        entries = {
+            entry["profile_id"]: entry
+            for entry in self.published["profiles"]
+            if entry.get("qualification_policy_ref") is not None
+        }
+        self.assertEqual(expected_ids, set(entries))
+        policy = json.loads(
+            (
+                REPO_ROOT
+                / "spec/repeatability-policies/aneb-repeatability-qualification-balanced-v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        for profile_id, entry in entries.items():
+            with self.subTest(profile_id=profile_id):
+                self.assertEqual(
+                    "aneb-repeatability-qualification-balanced-v1",
+                    entry["qualification_policy_ref"],
+                )
+                profile = json.loads((REPO_ROOT / entry["path"]).read_text(encoding="utf-8"))
+                runtime = json.loads(
+                    (REPO_ROOT / entry["runtime_plan_path"]).read_text(encoding="utf-8")
+                )
+                errors = []
+                VERIFY._validate_repeatability_qualification_binding(
+                    profile,
+                    runtime,
+                    policy,
+                    required=True,
+                    label=profile_id,
+                    errors=errors,
+                )
+                self.assertEqual([], errors)
+
     def test_execution_evidence_contracts_are_cataloged_and_source_bound(self):
-        self.assertEqual("1.8.0", self.catalog["catalog_version"])
+        self.assertEqual("1.11.0", self.catalog["catalog_version"])
         self.assertEqual(3, len(self.catalog["execution_evidence_contracts"]))
         by_id = {
             entry["contract_id"]: entry
@@ -263,7 +303,7 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual("canonical-json-sha256-v1", groups["behavior_runtime_bound"]["hash_strategy_id"])
         self.assertEqual("forbidden", groups["network_embedded_phases"]["runtime_manifest_policy"])
         self.assertIsNone(groups["network_embedded_phases"]["hash_strategy_id"])
-        self.assertEqual(7, len(runtime_bound))
+        self.assertEqual(10, len(runtime_bound))
         self.assertEqual(5, len(embedded_network))
         self.assertTrue(all("runtime_plan_path" in profile and "manifest_path" in profile for profile in runtime_bound))
         self.assertTrue(all("runtime_plan_path" not in profile and "manifest_path" not in profile for profile in embedded_network))
@@ -313,16 +353,22 @@ class SpecCatalogTest(unittest.TestCase):
         self.assertEqual(
             {
                 "token_multimodal_quick",
+                "token_multimodal_repeatability_qualification",
                 "ai_realtime_voice_quick",
+                "ai_realtime_voice_repeatability_qualification",
                 "network_comprehensive_quick",
+                "network_comprehensive_repeatability_qualification",
             },
             profiles_with_requirements,
         )
         self.assertEqual(
             {
                 "token_multimodal_quick",
+                "token_multimodal_repeatability_qualification",
                 "ai_realtime_voice_quick",
+                "ai_realtime_voice_repeatability_qualification",
                 "network_comprehensive_quick",
+                "network_comprehensive_repeatability_qualification",
             },
             policies,
         )

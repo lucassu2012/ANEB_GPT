@@ -312,7 +312,7 @@ object NetworkComprehensiveScorer {
     }
 
     private fun confidence(variant: String, metrics: Collection<NetworkMetricEvidence>): TokenConfidence {
-        if (variant == "quick") return TokenConfidence.LOW
+        if (variant == "quick" || variant == "repeatability_qualification") return TokenConfidence.LOW
         val coverage = metrics.map { it.sampleCount.toDouble() / it.minimumSampleCount }
         if (coverage.all { it >= 1.0 }) return TokenConfidence.HIGH
         if (coverage.all { it >= 0.50 }) return TokenConfidence.MEDIUM

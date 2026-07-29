@@ -25,6 +25,13 @@ class NetworkComprehensiveScorerTest {
         assertNotNull(result.totalScore)
     }
 
+    @Test fun singleRepeatabilityQualificationRunCannotRaiseConfidenceOrPass() {
+        val result = NetworkComprehensiveScorer.score(healthy("repeatability_qualification"))
+        assertEquals(TokenVerdict.INCONCLUSIVE, result.verdict)
+        assertEquals(TokenConfidence.LOW, result.confidence)
+        assertNotNull(result.totalScore)
+    }
+
     @Test fun udpUnavailableSuppressesTotalInsteadOfInventingLoss() {
         val result = NetworkComprehensiveScorer.score(
             healthy("standard").copy(udpReceivedSeqs = emptyList(), udpUnavailableReason = "no_response"),

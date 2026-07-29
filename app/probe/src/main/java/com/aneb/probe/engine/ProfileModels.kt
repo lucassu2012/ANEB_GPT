@@ -246,6 +246,24 @@ data class ProfileGatewayImpairment(
     val profileRef: String get() = "$gatewayProfileId@$gatewayProfileVersion"
 }
 
+/** Frozen D-110 campaign binding. It governs cohort execution, never a single-run score promotion. */
+@Serializable
+data class ProfileRepeatabilityQualification(
+    @SerialName("contract_version") val contractVersion: String,
+    @SerialName("policy_id") val policyId: String,
+    @SerialName("policy_version") val policyVersion: String,
+    @SerialName("decision_id") val decisionId: String,
+    @SerialName("policy_sha256") val policySha256: String,
+    @SerialName("stage_order") val stageOrder: List<String>,
+    @SerialName("transport_pooling") val transportPooling: String,
+    @SerialName("q2_requires_q1_pass") val q2RequiresQ1Pass: Boolean,
+    @SerialName("runs_per_family") val runsPerFamily: Int,
+    @SerialName("repeatability_and_quality_gates_independent")
+    val repeatabilityAndQualityGatesIndependent: Boolean,
+    @SerialName("formal_baseline_eligible") val formalBaselineEligible: Boolean,
+    @SerialName("single_run_confidence_unchanged") val singleRunConfidenceUnchanged: Boolean,
+)
+
 @Serializable
 data class ScenarioProfile(
     @SerialName("profile_id") val profileId: String,
@@ -266,6 +284,7 @@ data class ScenarioProfile(
     @SerialName("evidence_tier") val evidenceTier: String = "",
     @SerialName("execution_plan") val executionPlan: ProfileExecutionPlan? = null,
     @SerialName("execution_requirements") val executionRequirements: ProfileExecutionRequirements? = null,
+    val qualification: ProfileRepeatabilityQualification? = null,
     @SerialName("synthetic_impairment") val syntheticImpairment: ProfileSyntheticImpairment? = null,
     @SerialName("gateway_impairment") val gatewayImpairment: ProfileGatewayImpairment? = null,
     /** v1 兼容字段；v2 只能用于显示旧 Profile，不能替代 live_presentation/evaluation。 */
@@ -301,11 +320,14 @@ object ProfileParser {
         "published/token_multimodal_quick/profile.json",
         "published/token_multimodal_standard/profile.json",
         "published/token_multimodal_stress/profile.json",
+        "published/token_multimodal_repeatability_qualification/profile.json",
         "published/ai_realtime_voice_quick/profile.json",
         "published/ai_realtime_voice_standard/profile.json",
         "published/ai_realtime_voice_recovery/profile.json",
+        "published/ai_realtime_voice_repeatability_qualification/profile.json",
         "published/network_comprehensive_quick/profile.json",
         "published/network_comprehensive_standard/profile.json",
+        "published/network_comprehensive_repeatability_qualification/profile.json",
         "published/network_comprehensive_weak_capacity_latency/profile.json",
         "published/network_comprehensive_weak_recovery/profile.json",
         "published/network_comprehensive_gateway_loss/profile.json",
@@ -322,6 +344,20 @@ object ProfileParser {
     )
     private val contractRangeKeys = setOf("contract_id", "min_version", "max_version_exclusive")
     private val primitiveKeys = setOf("primitive_id", "wire_contract_id")
+    private val qualificationKeys = setOf(
+        "contract_version",
+        "policy_id",
+        "policy_version",
+        "decision_id",
+        "policy_sha256",
+        "stage_order",
+        "transport_pooling",
+        "q2_requires_q1_pass",
+        "runs_per_family",
+        "repeatability_and_quality_gates_independent",
+        "formal_baseline_eligible",
+        "single_run_confidence_unchanged",
+    )
 
 
     /** 解析 /api/v1/profiles 响应。缺任一必需场景即抛（profile 是两端共享合同，禁静默缺省）。 */
@@ -346,6 +382,11 @@ object ProfileParser {
     }
 
     private fun validateExecutionRequirementsKeys(profile: JsonObject) {
+        profile["qualification"]?.let { rawQualification ->
+            val qualification = rawQualification as? JsonObject
+                ?: invalidExecutionRequirements("qualification_not_object")
+            requireExactKeys(qualification, qualificationKeys, "qualification")
+        }
         val rawRequirements = profile["execution_requirements"] ?: return
         val requirements = rawRequirements as? JsonObject
             ?: invalidExecutionRequirements("execution_requirements_not_object")

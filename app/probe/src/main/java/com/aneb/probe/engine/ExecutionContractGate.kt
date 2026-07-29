@@ -135,7 +135,7 @@ internal object ExecutionContractGate {
             ?: if (profile.executionRequirements != null) {
                 reject(
                     "execution_requirements_profile_not_migrated",
-                    "execution_requirements 仅允许冻结的 Quick Profile 使用，测试已停止。",
+                    "execution_requirements 仅允许已冻结且已迁移的 Profile 使用，测试已停止。",
                 )
             } else {
                 reject(policy.profileIdentityReasonCode, policy.profileIdentityMessage)
@@ -154,13 +154,13 @@ internal object ExecutionContractGate {
         if (identity.requiresExecutionRequirements && profile.executionRequirements == null) {
             reject(
                 "execution_requirements_missing",
-                "Quick Profile 缺少执行要求合同，测试已停止。",
+                "当前 Profile 缺少执行要求合同，测试已停止。",
             )
         }
         if (!identity.requiresExecutionRequirements && profile.executionRequirements != null) {
             reject(
                 "execution_requirements_profile_not_migrated",
-                "execution_requirements 仅允许冻结的 Quick Profile 使用，测试已停止。",
+                "execution_requirements 仅允许已冻结且已迁移的 Profile 使用，测试已停止。",
             )
         }
         return identity
@@ -324,6 +324,14 @@ internal object RealtimeExecutionContractGate {
                 requiresExecutionRequirements = true,
             ),
             ExecutionProfileIdentity(
+                profileId = "ai_realtime_voice_repeatability_qualification",
+                profileVersion = "1.0.0",
+                modeId = ScenarioProfile.MODE_AI_REALTIME_SIMULATION,
+                executionTarget = "aneb_probe_simulator",
+                claimScope = "application_end_to_end_to_probe_node",
+                requiresExecutionRequirements = true,
+            ),
+            ExecutionProfileIdentity(
                 profileId = "ai_realtime_voice_standard",
                 profileVersion = "1.1.0",
                 modeId = ScenarioProfile.MODE_AI_REALTIME_SIMULATION,
@@ -341,7 +349,7 @@ internal object RealtimeExecutionContractGate {
             ),
         ),
         profileIdentityReasonCode = "realtime_profile_identity_not_allowed",
-        profileIdentityMessage = "AI 实时 Profile 不在冻结的 Quick 或 Legacy 接受集中，测试已停止。",
+        profileIdentityMessage = "AI 实时 Profile 不在冻结的 Quick、资格或 Legacy 接受集中，测试已停止。",
     )
 
     suspend fun authorize(

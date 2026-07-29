@@ -23,6 +23,7 @@ MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9_.-]+)$")
 EXPECTED_CONSUMERS = {"P1", "P2", "P3", "Profile"}
 EXECUTION_REQUIREMENTS_CONTRACT = ("aneb-execution-requirements", "1.0.0")
 SERVER_CAPABILITY_RECEIPT_CONTRACT = ("aneb-server-capability-receipt", "1.0.0")
+REPEATABILITY_POLICY_SHA256 = "505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa"
 EXECUTION_PROFILE_POLICIES = {
     "token_multimodal_quick": {
         "mode_id": "token_simulation",
@@ -50,8 +51,39 @@ EXECUTION_PROFILE_POLICIES = {
             "upload": "aneb-upload-v1",
         },
     },
+    "token_multimodal_repeatability_qualification": {
+        "mode_id": "token_simulation",
+        "client_engine": ("aneb-token-simulation-engine", "1.0.0"),
+        "primitives": {
+            "echo": "aneb-echo-v1",
+            "token_sim": "aneb-token-task-v1",
+            "download": "aneb-download-v1",
+        },
+    },
+    "ai_realtime_voice_repeatability_qualification": {
+        "mode_id": "ai_realtime_simulation",
+        "client_engine": ("aneb-realtime-simulation-engine", "1.0.0"),
+        "primitives": {
+            "realtime_sim": "aneb-realtime-session-v1",
+        },
+    },
+    "network_comprehensive_repeatability_qualification": {
+        "mode_id": "network_comprehensive",
+        "client_engine": ("aneb-network-comprehensive-engine", "1.0.0"),
+        "primitives": {
+            "download": "aneb-download-v1",
+            "echo": "aneb-echo-v1",
+            "udp_echo": "aneb-udp-echo-v2",
+            "upload": "aneb-upload-v1",
+        },
+    },
 }
 MIGRATED_EXECUTION_PROFILES = set(EXECUTION_PROFILE_POLICIES)
+REPEATABILITY_QUALIFICATION_PROFILES = {
+    "token_multimodal_repeatability_qualification": "token_simulation",
+    "ai_realtime_voice_repeatability_qualification": "ai_realtime_simulation",
+    "network_comprehensive_repeatability_qualification": "network_comprehensive",
+}
 
 
 class DuplicateJsonKey(ValueError):
@@ -254,6 +286,73 @@ def _validate_execution_requirements(
             )
     if seen != set(policy["primitives"]):
         errors.append(f"{primitive_label}: must declare exactly the supported primitive set")
+
+
+def _validate_repeatability_qualification_binding(
+    profile: dict[str, Any],
+    runtime: dict[str, Any],
+    policy: dict[str, Any],
+    *,
+    required: bool,
+    label: str,
+    errors: list[str],
+) -> None:
+    profile_binding = profile.get("qualification")
+    runtime_binding = runtime.get("qualification")
+    if profile_binding is None and runtime_binding is None:
+        if required:
+            errors.append(f"{label}.qualification: required by catalog policy")
+        return
+    if not required:
+        errors.append(f"{label}.qualification: profile is not in the qualification allowlist")
+    if not isinstance(profile_binding, dict) or not isinstance(runtime_binding, dict):
+        errors.append(f"{label}.qualification: profile and runtime bindings must be objects")
+        return
+    if profile_binding != runtime_binding:
+        errors.append(f"{label}: profile/runtime qualification mismatch")
+
+    profile_id = profile.get("profile_id")
+    family_id = REPEATABILITY_QUALIFICATION_PROFILES.get(profile_id)
+    if family_id is None:
+        errors.append(f"{label}.qualification: unsupported qualification profile")
+        return
+    stages = policy.get("stages") if isinstance(policy.get("stages"), dict) else {}
+    common = policy.get("common") if isinstance(policy.get("common"), dict) else {}
+    families = policy.get("families") if isinstance(policy.get("families"), dict) else {}
+    family = families.get(family_id) if isinstance(families.get(family_id), dict) else {}
+    expected = {
+        "contract_version": "aneb-repeatability-profile-binding-v1",
+        "policy_id": "aneb-repeatability-qualification-balanced-v1",
+        "policy_version": "1.0.0",
+        "decision_id": "D-110",
+        "policy_sha256": REPEATABILITY_POLICY_SHA256,
+        "stage_order": ["Q1_WIFI", "Q2_CELLULAR"],
+        "transport_pooling": "forbidden",
+        "q2_requires_q1_pass": True,
+        "runs_per_family": 10,
+        "repeatability_and_quality_gates_independent": True,
+        "formal_baseline_eligible": False,
+        "single_run_confidence_unchanged": True,
+    }
+    policy_identity_matches = (
+        policy.get("contract_version") == "aneb-repeatability-qualification-policy-v1"
+        and policy.get("policy_id") == expected["policy_id"]
+        and policy.get("version") == expected["policy_version"]
+        and policy.get("decision_id") == expected["decision_id"]
+        and policy.get("status") == "approved"
+        and stages.get("order") == expected["stage_order"]
+        and stages.get("transport_pooling") == expected["transport_pooling"]
+        and stages.get("q2_requires_q1_pass") is True
+        and common.get("runs_per_family") == expected["runs_per_family"]
+        and common.get("repeatability_and_quality_gates_independent") is True
+        and common.get("single_run_confidence_unchanged") is True
+        and common.get("formal_baseline_requires_additional_gates") is True
+        and family.get("qualification_profile_id") == profile_id
+        and family.get("qualification_profile_version") == profile.get("version")
+        and canonical_json_sha256(policy) == REPEATABILITY_POLICY_SHA256
+    )
+    if not policy_identity_matches or profile_binding != expected:
+        errors.append(f"{label}.qualification: qualification binding does not match approved policy")
 
 
 def _string_list(value: Any, label: str, errors: list[str], *, nonempty: bool = True) -> list[str]:
@@ -1131,6 +1230,104 @@ def _validate_execution_evidence_contracts(
     _check_inventory("execution evidence contract inventory", declared_paths, actual, errors)
 
 
+def _validate_repeatability_qualification_policies(
+    root: Path,
+    catalog: dict[str, Any],
+    schema_ids: set[str],
+    hash_strategy_ids: set[str],
+    errors: list[str],
+) -> None:
+    entries = catalog.get("repeatability_qualification_policies")
+    if not isinstance(entries, list) or len(entries) != 1:
+        errors.append(
+            "catalog.repeatability_qualification_policies: expected exactly one approved policy"
+        )
+        entries = entries if isinstance(entries, list) else []
+    required = {
+        "policy_id",
+        "version",
+        "decision_id",
+        "path",
+        "schema_ref",
+        "canonical_sha256",
+        "hash_strategy_id",
+        "consumers",
+    }
+    declared_paths: set[str] = set()
+    identities: set[tuple[str, str]] = set()
+    for index, entry in enumerate(entries):
+        label = f"catalog.repeatability_qualification_policies[{index}]"
+        if not _strict_keys(entry, required, set(), label, errors):
+            continue
+        policy_id = entry.get("policy_id")
+        version = entry.get("version")
+        _semver(version, f"{label}.version", errors)
+        identity = (
+            policy_id if isinstance(policy_id, str) else "",
+            version if isinstance(version, str) else "",
+        )
+        if identity in identities:
+            errors.append(f"{label}: duplicate policy id/version {identity}")
+        identities.add(identity)
+        expected_identity = (
+            "aneb-repeatability-qualification-balanced-v1",
+            "1.0.0",
+        )
+        if identity != expected_identity:
+            errors.append(f"{label}: unsupported policy id/version {identity}")
+        if entry.get("decision_id") != "D-110":
+            errors.append(f"{label}.decision_id: expected D-110")
+        expected_path = (
+            "spec/repeatability-policies/"
+            "aneb-repeatability-qualification-balanced-v1.json"
+        )
+        if entry.get("path") != expected_path:
+            errors.append(f"{label}.path: expected approved D-110 policy path")
+        schema_ref = entry.get("schema_ref")
+        if schema_ref != "aneb-repeatability-qualification-policy-v1":
+            errors.append(f"{label}.schema_ref: unsupported policy schema")
+        if schema_ref not in schema_ids:
+            errors.append(f"{label}.schema_ref: unknown schema")
+        if entry.get("hash_strategy_id") not in hash_strategy_ids:
+            errors.append(f"{label}.hash_strategy_id: unknown hash strategy")
+        digest = entry.get("canonical_sha256")
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+            errors.append(f"{label}.canonical_sha256: expected lowercase SHA-256")
+        elif digest != REPEATABILITY_POLICY_SHA256:
+            errors.append(f"{label}.canonical_sha256: unsupported D-110 policy digest")
+        consumers = set(_string_list(entry.get("consumers"), f"{label}.consumers", errors))
+        if consumers != {"P1", "P3", "Profile"}:
+            errors.append(f"{label}.consumers: expected P1, P3 and Profile")
+
+        ref = entry.get("path")
+        if isinstance(ref, str):
+            declared_paths.add(ref)
+        path = _resolve_file(root, ref, f"{label}.path", errors)
+        if path is None:
+            continue
+        document = load_json(path, str(ref), errors)
+        if not isinstance(document, dict):
+            continue
+        expected_document_identity = {
+            "contract_version": schema_ref,
+            "policy_id": policy_id,
+            "version": version,
+            "decision_id": entry.get("decision_id"),
+            "status": "approved",
+            "classification": "engineering_qualification_policy",
+            "claim_scope": "application_end_to_end_to_probe_node",
+        }
+        for key, expected in expected_document_identity.items():
+            if document.get(key) != expected:
+                errors.append(f"{label}: document {key} does not match catalog policy")
+        if digest != canonical_json_sha256(document):
+            errors.append(f"{label}.canonical_sha256 does not match policy")
+    actual = _relative_set(root, (root / "spec/repeatability-policies").glob("*.json"))
+    _check_inventory(
+        "repeatability qualification policy inventory", declared_paths, actual, errors
+    )
+
+
 def _validate_models(
     root: Path,
     catalog: dict[str, Any],
@@ -1227,6 +1424,8 @@ def _validate_runtime_bundle(
     profile: dict[str, Any],
     runtime_contracts: dict[str, dict[str, Any]],
     model_hashes: dict[tuple[str, str], str],
+    qualification_policy: dict[str, Any],
+    qualification_required: bool,
     label: str,
     errors: list[str],
 ) -> tuple[str | None, str | None]:
@@ -1245,6 +1444,14 @@ def _validate_runtime_bundle(
     runtime = load_json(runtime_path, runtime_ref, errors)
     if not isinstance(runtime, dict):
         return runtime_ref, manifest_ref
+    _validate_repeatability_qualification_binding(
+        profile,
+        runtime,
+        qualification_policy,
+        required=qualification_required,
+        label=label,
+        errors=errors,
+    )
     runtime_contract = runtime.get("contract_version")
     contract_entry = runtime_contracts.get(runtime_contract)
     if contract_entry is None:
@@ -1363,6 +1570,16 @@ def _validate_profiles(
     runtime_mode_counts: Counter[str] = Counter()
     execution_requirement_profiles: set[str] = set()
     execution_requirement_policies: set[str] = set()
+    qualification_profiles: set[str] = set()
+    qualification_policies: set[str] = set()
+    qualification_policy = load_json(
+        root
+        / "spec/repeatability-policies/aneb-repeatability-qualification-balanced-v1.json",
+        "approved repeatability qualification policy",
+        errors,
+    )
+    if not isinstance(qualification_policy, dict):
+        qualification_policy = {}
 
     for family_index, family in enumerate(families):
         family_label = f"catalog.profile_families[{family_index}]"
@@ -1486,7 +1703,12 @@ def _validate_profiles(
         for profile_index, entry in enumerate(profiles):
             label = f"{family_label}.profiles[{profile_index}]"
             base_keys = {"profile_id", "version", "path", "validation_group_id"}
-            optional_keys = {"runtime_plan_path", "manifest_path", "execution_requirements_policy"}
+            optional_keys = {
+                "runtime_plan_path",
+                "manifest_path",
+                "execution_requirements_policy",
+                "qualification_policy_ref",
+            }
             if not _strict_keys(entry, base_keys, optional_keys, label, errors):
                 continue
             profile_id = entry.get("profile_id")
@@ -1526,13 +1748,32 @@ def _validate_profiles(
                 label=profile_ref,
                 errors=errors,
             )
+            qualification_policy_ref = entry.get("qualification_policy_ref")
+            if qualification_policy_ref not in (
+                None,
+                "aneb-repeatability-qualification-balanced-v1",
+            ):
+                errors.append(f"{label}.qualification_policy_ref: unsupported policy")
+            qualification_required = qualification_policy_ref is not None
+            if qualification_required and isinstance(profile_id, str):
+                qualification_policies.add(profile_id)
+            if "qualification" in profile and isinstance(profile_id, str):
+                qualification_profiles.add(profile_id)
             _validate_profile_shape(profile, entry, family, group, profile_ref, errors)
             policy = group.get("runtime_manifest_policy")
             if policy == "required":
                 if "runtime_plan_path" not in entry or "manifest_path" not in entry:
                     errors.append(f"{label}: required runtime bundle references are missing")
                 runtime_ref, manifest_ref = _validate_runtime_bundle(
-                    root, entry, profile, runtime_contracts, model_hashes, profile_ref, errors
+                    root,
+                    entry,
+                    profile,
+                    runtime_contracts,
+                    model_hashes,
+                    qualification_policy,
+                    qualification_required,
+                    profile_ref,
+                    errors,
                 )
                 if runtime_ref:
                     declared_runtime_paths.add(runtime_ref)
@@ -1557,19 +1798,24 @@ def _validate_profiles(
         errors.append("execution requirements: profile migration set is not recognized")
     if execution_requirement_policies != MIGRATED_EXECUTION_PROFILES:
         errors.append("execution requirements: catalog policy set is not recognized")
+    qualification_profile_ids = set(REPEATABILITY_QUALIFICATION_PROFILES)
+    if qualification_profiles != qualification_profile_ids:
+        errors.append("repeatability qualification: profile set is not recognized")
+    if qualification_policies != qualification_profile_ids:
+        errors.append("repeatability qualification: catalog policy set is not recognized")
 
     expected_families = {"server-root-inline-profile-v1", "published-profile-v2"}
     if family_ids != expected_families:
         errors.append(f"profile families: expected exactly {sorted(expected_families)}")
     if group_counts[("server-root-inline-profile-v1", "server_root_inline_phases")] != 4:
         errors.append("server root validation group: expected 4 profiles")
-    if group_counts[("published-profile-v2", "behavior_runtime_bound")] != 7:
-        errors.append("runtime-bound validation group: expected 7 Token/AI realtime/Network profiles")
+    if group_counts[("published-profile-v2", "behavior_runtime_bound")] != 10:
+        errors.append("runtime-bound validation group: expected 10 Token/AI realtime/Network profiles")
     if runtime_mode_counts != Counter(
-        {"token_simulation": 3, "ai_realtime_simulation": 3, "network_comprehensive": 1}
+        {"token_simulation": 4, "ai_realtime_simulation": 4, "network_comprehensive": 2}
     ):
         errors.append(
-            "runtime-bound validation group: expected 3 Token, 3 AI realtime and 1 Network profile"
+            "runtime-bound validation group: expected 4 Token, 4 AI realtime and 2 Network profiles"
         )
     if group_counts[("published-profile-v2", "network_embedded_phases")] != 5:
         errors.append("embedded network validation group: expected 5 profiles")
@@ -1595,7 +1841,7 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
     required = {
         "catalog_id", "catalog_version", "compatibility", "consumers", "hash_strategies",
         "schemas", "runtime_contracts", "execution_evidence_contracts", "model_assets",
-        "profile_families",
+        "repeatability_qualification_policies", "profile_families",
     }
     if not _strict_keys(catalog, required, set(), "catalog", errors):
         return errors
@@ -1613,6 +1859,9 @@ def validate_catalog(root: Path, catalog_path: Path | None = None) -> list[str]:
     schema_ids = _validate_schemas(root, catalog, errors)
     runtime_contracts = _validate_runtime_contracts(root, catalog, hash_strategy_ids, errors)
     _validate_execution_evidence_contracts(root, catalog, hash_strategy_ids, errors)
+    _validate_repeatability_qualification_policies(
+        root, catalog, schema_ids, hash_strategy_ids, errors
+    )
     model_hashes = _validate_models(root, catalog, hash_strategy_ids, errors)
     _validate_profiles(root, catalog, schema_ids, hash_strategy_ids, runtime_contracts, model_hashes, errors)
     return errors
@@ -1651,7 +1900,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(profiles)} profiles, {len(runtime_bound)} runtime bundles, "
             f"{len(embedded_network)} embedded-network profiles, "
             f"{len(catalog['model_assets'])} behavior models, "
-            f"{len(catalog['execution_evidence_contracts'])} execution evidence contracts"
+            f"{len(catalog['execution_evidence_contracts'])} execution evidence contracts, "
+            f"{len(catalog['repeatability_qualification_policies'])} repeatability policy"
         )
     return 0
 

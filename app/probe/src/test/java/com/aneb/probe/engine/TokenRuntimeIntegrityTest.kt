@@ -12,7 +12,7 @@ class TokenRuntimeIntegrityTest {
 
     @Test
     fun `published token assets are executable and hash bound`() {
-        listOf("quick", "standard", "stress").forEach { variant ->
+        listOf("quick", "standard", "stress", "repeatability_qualification").forEach { variant ->
             val base = repositoryRoot().resolve("profiles/published/token_multimodal_$variant")
             val profileText = Files.readAllBytes(base.resolve("profile.json")).toString(Charsets.UTF_8)
             val planText = Files.readAllBytes(base.resolve("runtime_plan.json")).toString(Charsets.UTF_8)
@@ -24,6 +24,14 @@ class TokenRuntimeIntegrityTest {
             assertEquals(variant, profile.evidenceTier)
             assertEquals(variant, plan.variant)
             assertEquals(plan.taskCount, plan.tasks.size)
+            if (variant == "repeatability_qualification") {
+                val qualification = requireNotNull(profile.qualification)
+                assertEquals("aneb-repeatability-qualification-balanced-v1", qualification.policyId)
+                assertEquals("505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa", qualification.policySha256)
+                assertEquals(listOf("Q1_WIFI", "Q2_CELLULAR"), qualification.stageOrder)
+                assertEquals(10, qualification.runsPerFamily)
+                assertTrue(qualification.singleRunConfidenceUnchanged)
+            }
         }
     }
 

@@ -1,0 +1,61 @@
+{
+  "contract_version": "aneb-network-runtime-plan-v1",
+  "profile_id": "network_comprehensive_repeatability_qualification",
+  "profile_version": "1.0.0",
+  "seed": 20260727,
+  "phases": [
+    {
+      "type": "path_setup",
+      "attempts": 5
+    },
+    {
+      "type": "idle_latency",
+      "samples": 30
+    },
+    {
+      "type": "download_loaded",
+      "duration_ms": 15000,
+      "bytes": 33554432,
+      "chunk_kb": 256,
+      "parallel": 4,
+      "echo_interval_ms": 250
+    },
+    {
+      "type": "upload_loaded",
+      "duration_ms": 15000,
+      "bytes": 8388608,
+      "chunk_kb": 256,
+      "parallel": 2,
+      "echo_interval_ms": 250
+    },
+    {
+      "type": "udp_sequence",
+      "packets": 200,
+      "packet_bytes": 256,
+      "rate_per_second": 50
+    },
+    {
+      "type": "post_load_latency",
+      "samples": 20
+    }
+  ],
+  "claim": "deterministic application-layer measurement plan to the ANEB probe node",
+  "variant": "repeatability_qualification",
+  "qualification": {
+    "contract_version": "aneb-repeatability-profile-binding-v1",
+    "policy_id": "aneb-repeatability-qualification-balanced-v1",
+    "policy_version": "1.0.0",
+    "decision_id": "D-110",
+    "policy_sha256": "505276dc9e72eb68454461bb355b63db6227069274646835020d89a6646fedfa",
+    "stage_order": [
+      "Q1_WIFI",
+      "Q2_CELLULAR"
+    ],
+    "transport_pooling": "forbidden",
+    "q2_requires_q1_pass": true,
+    "runs_per_family": 10,
+    "repeatability_and_quality_gates_independent": true,
+    "formal_baseline_eligible": false,
+    "single_run_confidence_unchanged": true
+  }
+}

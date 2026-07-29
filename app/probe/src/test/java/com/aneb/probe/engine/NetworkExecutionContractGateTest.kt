@@ -25,6 +25,24 @@ class NetworkExecutionContractGateTest {
     }
 
     @Test
+    fun `repeatability qualification requires and accepts its exact capability receipt`() = runBlocking {
+        val profileId = "network_comprehensive_repeatability_qualification"
+        val version = "1.0.0"
+        val transport = FakeNetworkTransport(validReceipt(profileId, version))
+
+        val traffic = NetworkExecutionContractGate.authorize(
+            serverBase = "https://aneb.test",
+            profile = requiredProfile(profileId, version),
+            profileCanonicalSha256 = PROFILE_SHA,
+            transport = transport,
+        )
+
+        assertEquals(NetworkExecutionAuthorization.VALIDATED_RECEIPT, traffic.authorization)
+        assertEquals(1, transport.serverInfoRequests)
+        assertEquals(0, transport.businessRequests)
+    }
+
+    @Test
     fun `missing receipt rejects before any network business request`() = runBlocking {
         val transport = FakeNetworkTransport("""{"version":"aneb-server/test"}""")
 
@@ -115,9 +133,12 @@ class NetworkExecutionContractGateTest {
         }
     }
 
-    private fun requiredProfile() = ScenarioProfile(
-        profileId = "network_comprehensive_quick",
-        version = "1.2.0",
+    private fun requiredProfile(
+        profileId: String = "network_comprehensive_quick",
+        version: String = "1.2.0",
+    ) = ScenarioProfile(
+        profileId = profileId,
+        version = version,
         executionTarget = "aneb_probe_simulator",
         claimScope = "application_end_to_end_to_probe_node",
         contractVersion = ScenarioProfile.CONTRACT_V2,
@@ -140,7 +161,10 @@ class NetworkExecutionContractGateTest {
         ),
     )
 
-    private fun validReceipt(): String = """
+    private fun validReceipt(
+        profileId: String = "network_comprehensive_quick",
+        profileVersion: String = "1.2.0",
+    ): String = """
         {
           "version":"aneb-server/test",
           "execution_capabilities":{
@@ -154,8 +178,8 @@ class NetworkExecutionContractGateTest {
             ],
             "validated_profiles":[
               {
-                "profile_id":"network_comprehensive_quick",
-                "profile_version":"1.2.0",
+                "profile_id":"$profileId",
+                "profile_version":"$profileVersion",
                 "profile_sha256":"$PROFILE_SHA"
               }
             ]

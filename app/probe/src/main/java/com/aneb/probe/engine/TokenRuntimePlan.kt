@@ -70,7 +70,9 @@ class TokenRuntimeRepository(private val context: Context) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun load(variant: String): LoadedTokenRuntime = withContext(Dispatchers.IO) {
-        require(variant in setOf("quick", "standard", "stress")) { "unsupported_token_variant:$variant" }
+        require(variant in setOf("quick", "standard", "stress", "repeatability_qualification")) {
+            "unsupported_token_variant:$variant"
+        }
         val base = "published/token_multimodal_$variant"
         val profileText = context.assets.open("$base/profile.json").use { it.readBytes().toString(Charsets.UTF_8) }
         val planText = context.assets.open("$base/runtime_plan.json").use { it.readBytes().toString(Charsets.UTF_8) }

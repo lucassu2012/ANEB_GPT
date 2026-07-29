@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aneb:schema:repeatability-qualification-policy:v1",
+  "title": "ANEB repeatability qualification policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "policy_id",
+    "version",
+    "decision_id",
+    "status",
+    "classification",
+    "claim_scope",
+    "stages",
+    "common",
+    "radio_integrity",
+    "families"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "aneb-repeatability-qualification-policy-v1"
+    },
+    "policy_id": {
+      "const": "aneb-repeatability-qualification-balanced-v1"
+    },
+    "version": {
+      "const": "1.0.0"
+    },
+    "decision_id": {
+      "const": "D-110"
+    },
+    "status": {
+      "const": "approved"
+    },
+    "classification": {
+      "const": "engineering_qualification_policy"
+    },
+    "claim_scope": {
+      "const": "application_end_to_end_to_probe_node"
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "definitions",
+        "transport_pooling",
+        "q2_requires_q1_pass"
+      ],
+      "properties": {
+        "order": {
+          "const": [
+            "Q1_WIFI",
+            "Q2_CELLULAR"
+          ]
+        },
+        "definitions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Q1_WIFI",
+            "Q2_CELLULAR"
+          ],
+          "properties": {
+            "Q1_WIFI": {
+              "$ref": "#/$defs/wifiStage"
+            },
+            "Q2_CELLULAR": {
+              "$ref": "#/$defs/cellularStage"
+            }
+          }
+        },
+        "transport_pooling": {
+          "const": "forbidden"
+        },
+        "q2_requires_q1_pass": {
+          "const": true
+        }
+      }
+    },
+    "common": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runs_per_family",
+        "require_completed_valid",
+        "require_minimum_sample_count_per_run",
+        "minimum_sample_count_source",
+        "repeatability_and_quality_gates_independent",
+        "single_run_confidence_unchanged",
+        "formal_baseline_requires_additional_gates"
+      ],
+      "properties": {
+        "runs_per_family": {
+          "const": 10
+        },
+        "require_completed_valid": {
+          "const": true
+        },
+        "require_minimum_sample_count_per_run": {
+          "const": true
+        },
+        "minimum_sample_count_source": {
+          "const": "bound_profile"
+        },
+        "repeatability_and_quality_gates_independent": {
+          "const": true
+        },
+        "single_run_confidence_unchanged": {
+          "const": true
+        },
+        "formal_baseline_requires_additional_gates": {
+          "const": true
+        }
+      }
+    },
+    "radio_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_state",
+        "require_count_consistency",
+        "require_monotonic_timestamps",
+        "p95_gap_seconds_max_inclusive",
+        "max_gap_seconds_max_exclusive",
+        "stale_samples_max",
+        "subscription_switches_max",
+        "switch_policy"
+      ],
+      "properties": {
+        "required_state": {
+          "const": "collected"
+        },
+        "require_count_consistency": {
+          "const": true
+        },
+        "require_monotonic_timestamps": {
+          "const": true
+        },
+        "p95_gap_seconds_max_inclusive": {
+          "const": 1.25
+        },
+        "max_gap_seconds_max_exclusive": {
+          "const": 1.5
+        },
+        "stale_samples_max": {
+          "const": 0
+        },
+        "subscription_switches_max": {
+          "const": 0
+        },
+        "switch_policy": {
+          "const": "split_or_reject"
+        }
+      }
+    },
+    "families": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token_simulation",
+        "ai_realtime_simulation",
+        "network_comprehensive"
+      ],
+      "properties": {
+        "token_simulation": {
+          "$ref": "#/$defs/tokenFamily"
+        },
+        "ai_realtime_simulation": {
+          "$ref": "#/$defs/realtimeFamily"
+        },
+        "network_comprehensive": {
+          "$ref": "#/$defs/networkFamily"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "wifiStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "runs_per_family"
+      ],
+      "properties": {
+        "transport": {
+          "const": "wifi"
+        },
+        "runs_per_family": {
+          "const": 10
+        }
+      }
+    },
+    "cellularStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "runs_per_family"
+      ],
+      "properties": {
+        "transport": {
+          "const": "cellular"
+        },
+        "runs_per_family": {
+          "const": 10
+        }
+      }
+    },
+    "metricGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric_id",
+        "statistic",
+        "max_inclusive"
+      ],
+      "properties": {
+        "metric_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "statistic": {
+          "enum": [
+            "absolute_range",
+            "sample_cv"
+          ]
+        },
+        "max_inclusive": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "tokenFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qualification_profile_id",
+        "qualification_profile_version",
+        "batches",
+        "subcohort",
+        "pooled",
+        "overrun_action"
+      ],
+      "properties": {
+        "qualification_profile_id": {
+          "const": "token_multimodal_repeatability_qualification"
+        },
+        "qualification_profile_version": {
+          "const": "1.0.0"
+        },
+        "batches": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": {
+                "batch_id": "A",
+                "runs": 5
+              }
+            },
+            {
+              "const": {
+                "batch_id": "B",
+                "runs": 5
+              }
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "subcohort": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "max_start_span_minutes",
+            "metric_id",
+            "statistic",
+            "max_inclusive"
+          ],
+          "properties": {
+            "authority": {
+              "const": "D-58"
+            },
+            "max_start_span_minutes": {
+              "const": 30
+            },
+            "metric_id": {
+              "const": "TOK-B04"
+            },
+            "statistic": {
+              "const": "aligned_task_cv_median"
+            },
+            "max_inclusive": {
+              "const": 0.1
+            }
+          }
+        },
+        "pooled": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runs",
+            "max_start_span_minutes",
+            "metric_id",
+            "statistic",
+            "max_inclusive",
+            "max_task_cv_role"
+          ],
+          "properties": {
+            "runs": {
+              "const": 10
+            },
+            "max_start_span_minutes": {
+              "const": 90
+            },
+            "metric_id": {
+              "const": "TOK-B04"
+            },
+            "statistic": {
+              "const": "aligned_task_cv_median"
+            },
+            "max_inclusive": {
+              "const": 0.1
+            },
+            "max_task_cv_role": {
+              "const": "diagnostic_only"
+            }
+          }
+        },
+        "overrun_action": {
+          "const": "shorten_profile_not_d58"
+        }
+      }
+    },
+    "realtimeFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qualification_profile_id",
+        "qualification_profile_version",
+        "metrics",
+        "combine_policy"
+      ],
+      "properties": {
+        "qualification_profile_id": {
+          "const": "ai_realtime_voice_repeatability_qualification"
+        },
+        "qualification_profile_version": {
+          "const": "1.0.0"
+        },
+        "metrics": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": {
+                "metric_id": "LIVE-B05",
+                "statistic": "absolute_range",
+                "max_inclusive": 0.01
+              }
+            },
+            {
+              "const": {
+                "metric_id": "LIVE-N02",
+                "statistic": "sample_cv",
+                "max_inclusive": 0.15
+              }
+            },
+            {
+              "const": {
+                "metric_id": "LIVE-B08",
+                "statistic": "sample_cv",
+                "max_inclusive": 0.15
+              }
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "combine_policy": {
+          "const": "all"
+        }
+      }
+    },
+    "networkFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qualification_profile_id",
+        "qualification_profile_version",
+        "metrics",
+        "combine_policy"
+      ],
+      "properties": {
+        "qualification_profile_id": {
+          "const": "network_comprehensive_repeatability_qualification"
+        },
+        "qualification_profile_version": {
+          "const": "1.0.0"
+        },
+        "metrics": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": {
+                "metric_id": "NET-B01",
+                "statistic": "sample_cv",
+                "max_inclusive": 0.2
+              }
+            },
+            {
+              "const": {
+                "metric_id": "NET-B02",
+                "statistic": "sample_cv",
+                "max_inclusive": 0.2
+              }
+            },
+            {
+              "const": {
+                "metric_id": "NET-B04",
+                "statistic": "sample_cv",
+                "max_inclusive": 0.15
+              }
+            }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "combine_policy": {
+          "const": "all"
+        }
+      }
+    }
+  }
+}

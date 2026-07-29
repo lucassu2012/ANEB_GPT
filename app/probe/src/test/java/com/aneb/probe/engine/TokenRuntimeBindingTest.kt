@@ -12,7 +12,7 @@ class TokenRuntimeBindingTest {
 
     @Test
     fun `published token bundles bind every requested variant exactly`() {
-        listOf("quick", "standard", "stress").forEach { variant ->
+        listOf("quick", "standard", "stress", "repeatability_qualification").forEach { variant ->
             val (profile, plan) = bundle(variant)
             TokenRuntimeBinding.validate(profile, plan, variant)
         }

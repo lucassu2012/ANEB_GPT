@@ -1,0 +1,122 @@
+{
+  "contract_version": "aneb-repeatability-qualification-policy-v1",
+  "policy_id": "aneb-repeatability-qualification-balanced-v1",
+  "version": "1.0.0",
+  "decision_id": "D-110",
+  "status": "approved",
+  "classification": "engineering_qualification_policy",
+  "claim_scope": "application_end_to_end_to_probe_node",
+  "stages": {
+    "order": [
+      "Q1_WIFI",
+      "Q2_CELLULAR"
+    ],
+    "definitions": {
+      "Q1_WIFI": {
+        "transport": "wifi",
+        "runs_per_family": 10
+      },
+      "Q2_CELLULAR": {
+        "transport": "cellular",
+        "runs_per_family": 10
+      }
+    },
+    "transport_pooling": "forbidden",
+    "q2_requires_q1_pass": true
+  },
+  "common": {
+    "runs_per_family": 10,
+    "require_completed_valid": true,
+    "require_minimum_sample_count_per_run": true,
+    "minimum_sample_count_source": "bound_profile",
+    "repeatability_and_quality_gates_independent": true,
+    "single_run_confidence_unchanged": true,
+    "formal_baseline_requires_additional_gates": true
+  },
+  "radio_integrity": {
+    "required_state": "collected",
+    "require_count_consistency": true,
+    "require_monotonic_timestamps": true,
+    "p95_gap_seconds_max_inclusive": 1.25,
+    "max_gap_seconds_max_exclusive": 1.5,
+    "stale_samples_max": 0,
+    "subscription_switches_max": 0,
+    "switch_policy": "split_or_reject"
+  },
+  "families": {
+    "token_simulation": {
+      "qualification_profile_id": "token_multimodal_repeatability_qualification",
+      "qualification_profile_version": "1.0.0",
+      "batches": [
+        {
+          "batch_id": "A",
+          "runs": 5
+        },
+        {
+          "batch_id": "B",
+          "runs": 5
+        }
+      ],
+      "subcohort": {
+        "authority": "D-58",
+        "max_start_span_minutes": 30,
+        "metric_id": "TOK-B04",
+        "statistic": "aligned_task_cv_median",
+        "max_inclusive": 0.1
+      },
+      "pooled": {
+        "runs": 10,
+        "max_start_span_minutes": 90,
+        "metric_id": "TOK-B04",
+        "statistic": "aligned_task_cv_median",
+        "max_inclusive": 0.1,
+        "max_task_cv_role": "diagnostic_only"
+      },
+      "overrun_action": "shorten_profile_not_d58"
+    },
+    "ai_realtime_simulation": {
+      "qualification_profile_id": "ai_realtime_voice_repeatability_qualification",
+      "qualification_profile_version": "1.0.0",
+      "metrics": [
+        {
+          "metric_id": "LIVE-B05",
+          "statistic": "absolute_range",
+          "max_inclusive": 0.01
+        },
+        {
+          "metric_id": "LIVE-N02",
+          "statistic": "sample_cv",
+          "max_inclusive": 0.15
+        },
+        {
+          "metric_id": "LIVE-B08",
+          "statistic": "sample_cv",
+          "max_inclusive": 0.15
+        }
+      ],
+      "combine_policy": "all"
+    },
+    "network_comprehensive": {
+      "qualification_profile_id": "network_comprehensive_repeatability_qualification",
+      "qualification_profile_version": "1.0.0",
+      "metrics": [
+        {
+          "metric_id": "NET-B01",
+          "statistic": "sample_cv",
+          "max_inclusive": 0.2
+        },
+        {
+          "metric_id": "NET-B02",
+          "statistic": "sample_cv",
+          "max_inclusive": 0.2
+        },
+        {
+          "metric_id": "NET-B04",
+          "statistic": "sample_cv",
+          "max_inclusive": 0.15
+        }
+      ],
+      "combine_policy": "all"
+    }
+  }
+}

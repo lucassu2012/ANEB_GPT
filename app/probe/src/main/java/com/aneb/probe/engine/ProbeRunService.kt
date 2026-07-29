@@ -175,6 +175,8 @@ class ProbeRunService : Service() {
         val driveTest: Boolean,
         val gatewayBase: String? = null,
         val gatewayToken: String? = null,
+        val qualificationWire: RepeatabilityQualificationLaunchWireData =
+            RepeatabilityQualificationLaunchWireData(requested = false),
     )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -199,6 +201,11 @@ class ProbeRunService : Service() {
     }
 
     private fun startRun(intent: Intent) {
+        val qualificationWire = RepeatabilityQualificationServiceIntentBoundary.readAndRemove(
+            getBoolean = { key, default -> intent.getBooleanExtra(key, default) },
+            getString = { key -> intent.getStringExtra(key) },
+            remove = { key -> intent.removeExtra(key) },
+        )
         val gatewayCredentialHandle = intent.getStringExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
         val gatewayToken = GatewayCredentialVault.take(gatewayCredentialHandle)
         intent.removeExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
@@ -222,7 +229,20 @@ class ProbeRunService : Service() {
             driveTest = intent.getBooleanExtra(EXTRA_DRIVE_TEST, false),
             gatewayBase = intent.getStringExtra(EXTRA_GATEWAY_BASE).takeIf { BuildConfig.DEBUG },
             gatewayToken = gatewayToken.takeIf { BuildConfig.DEBUG },
+            qualificationWire = qualificationWire,
         )
+
+        _logs.value = emptyList()
+        val preparedQualification = try {
+            RepeatabilityQualificationServiceIntentBoundary.prepare(
+                debug = BuildConfig.DEBUG,
+                autorun = autorun,
+                config = config,
+            )
+        } catch (error: RuntimeException) {
+            addLog("RUN_PREPARE_FAILED error=${error.message}")
+            return failBeforeRun(autorun, RunFailureMessage.forError(error), testMode)
+        }
 
         startForeground(
             NOTIFICATION_ID,
@@ -230,7 +250,6 @@ class ProbeRunService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
         cancelRequested = false
-        _logs.value = emptyList()
         _telemetry.value = LiveTelemetry()
         _basicTelemetry.value = BasicSpeedTelemetry()
         _basicResult.value = null
@@ -292,14 +311,7 @@ class ProbeRunService : Service() {
                         engine.run(
                             NetworkSpeedEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = when (config.mode) {
-                                    TestEngine.Mode.QUICK -> "quick"
-                                    TestEngine.Mode.FORENSIC -> "standard"
-                                    TestEngine.Mode.STRESS -> "weak_capacity_latency"
-                                    TestEngine.Mode.NETWORK_RECOVERY -> "weak_recovery"
-                                    TestEngine.Mode.GATEWAY_LOSS -> "gateway_loss"
-                                    TestEngine.Mode.GATEWAY_RECOVERY -> "gateway_recovery"
-                                },
+                                variant = requireNotNull(preparedQualification).variant,
                                 transport = config.transport,
                                 gatewayBase = config.gatewayBase,
                                 gatewayToken = config.gatewayToken,
@@ -319,13 +331,7 @@ class ProbeRunService : Service() {
                         engine.run(
                             TokenSimulationEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = when (config.mode) {
-                                    TestEngine.Mode.QUICK -> "quick"
-                                    TestEngine.Mode.FORENSIC -> "standard"
-                                    TestEngine.Mode.STRESS -> "stress"
-                                    TestEngine.Mode.NETWORK_RECOVERY, TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY ->
-                                        error("network_lab_mode_requires_network_test")
-                                },
+                                variant = requireNotNull(preparedQualification).variant,
                                 transport = config.transport,
                             ),
                         )
@@ -343,13 +349,7 @@ class ProbeRunService : Service() {
                         engine.run(
                             RealtimeSimulationEngine.Config(
                                 serverBase = config.serverBase,
-                                variant = when (config.mode) {
-                                    TestEngine.Mode.QUICK -> "quick"
-                                    TestEngine.Mode.FORENSIC -> "standard"
-                                    TestEngine.Mode.STRESS -> "recovery"
-                                    TestEngine.Mode.NETWORK_RECOVERY, TestEngine.Mode.GATEWAY_LOSS, TestEngine.Mode.GATEWAY_RECOVERY ->
-                                        error("network_lab_mode_requires_network_test")
-                                },
+                                variant = requireNotNull(preparedQualification).variant,
                                 transport = config.transport,
                             ),
                         )
@@ -541,6 +541,11 @@ class ProbeRunService : Service() {
                 .putExtra(EXTRA_AUTORUN, autorun)
                 .putExtra(EXTRA_GATEWAY_BASE, config.gatewayBase)
                 .putExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE, gatewayCredentialHandle)
+            RepeatabilityQualificationServiceIntentBoundary.write(
+                wire = config.qualificationWire,
+                putBoolean = { key, value -> intent.putExtra(key, value) },
+                putString = { key, value -> intent.putExtra(key, value) },
+            )
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (error: Exception) {

@@ -8,7 +8,7 @@ import org.junit.Test
 
 class NetworkProfileIntegrityTest {
     @Test fun publishedNetworkProfilesAreExecutableAndKeepLoadedRttPrimary() {
-        listOf("quick", "standard").forEach { variant ->
+        listOf("quick", "standard", "repeatability_qualification").forEach { variant ->
             val path = repositoryRoot().resolve("profiles/published/network_comprehensive_$variant/profile.json")
             val profile = ProfileParser.parseSingle(Files.readAllBytes(path).toString(Charsets.UTF_8))
             assertTrue(ProfileCapability.assess(profile).executable)
@@ -16,6 +16,12 @@ class NetworkProfileIntegrityTest {
             assertEquals("LOADED_RTT_LIVE", profile.livePresentation.primaryMetricId)
             assertEquals("network-comprehensive-score-v1", profile.evaluation.scorePolicyId)
             assertTrue("NET-B10" in profile.evaluation.requiredMetricIds)
+            if (variant == "repeatability_qualification") {
+                val qualification = requireNotNull(profile.qualification)
+                assertEquals("forbidden", qualification.transportPooling)
+                assertTrue(qualification.q2RequiresQ1Pass)
+                assertTrue(qualification.singleRunConfidenceUnchanged)
+            }
         }
     }
 
