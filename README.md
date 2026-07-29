@@ -23,6 +23,8 @@
 
 ## 当前状态（2026-07-29，S3/M2 本地 qualification 合同 / E-01 0.8.2）
 
+- ［KNOWN｜HIGH］S3/M2 提交后事实更新：提交 `549b2b7aa55a1c6b11f91c98a38083b388461c50` 已推送，GitHub Actions run `30431802801` 七个 job 全部成功，本地 HEAD、远端分支与 CI head SHA 一致；CI 发布的 verified Debug artifact 为 `aneb-probe-debug-verified-549b2b7aa55a1c6b11f91c98a38083b388461c50`（artifact `8716100481`）。本节后文中的“候选二进制、clean commit/CI 仍未完成”仅是该提交前快照，已由本条取代。该 Android Debug artifact 不是 Linux `aneb-server/0.8.3` 候选，也不证明 actual Product Owner 公钥 pin、E-01 部署、P40 Q1/Q2 或 formal authority。
+
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
 - P3 行为模型已升级到 0.3.3：授权派生统计、主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算均保持硬门；新增 D-110 三族 qualification Profile/runtime 的统一确定性发布入口。仓库仍没有真实授权数据，4 个模型保持 hypothesis，不能声称厂商画像已校准。
