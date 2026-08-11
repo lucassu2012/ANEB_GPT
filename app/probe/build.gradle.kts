@@ -113,6 +113,20 @@ val verifyReleaseSigning by tasks.registering {
 tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" || it.name == "installRelease" }
     .configureEach { dependsOn(verifyReleaseSigning) }
 
+val originBoundOracleMode = providers.gradleProperty("aneb.routeA.originBoundOracle").orNull
+check(originBoundOracleMode == null || originBoundOracleMode == "true") {
+    "aneb.routeA.originBoundOracle accepts only the exact value true"
+}
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    if (name == "testDebugUnitTest") {
+        if (originBoundOracleMode == "true") {
+            filter.includeTestsMatching("com.aneb.probe.ui.MainActivityNewIntentOverloadGuardTest")
+        } else {
+            exclude("com/aneb/probe/ui/MainActivityNewIntentOverloadGuardTest.class")
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

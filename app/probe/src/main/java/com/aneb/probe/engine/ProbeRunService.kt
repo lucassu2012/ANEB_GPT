@@ -58,9 +58,31 @@ internal sealed interface ProbeRunSession {
 /** 只解析既有日志合同，不新增或改写任何测量日志 KEY。 */
 internal object ProbeRunLogParser {
     private val runId = Regex("(?:^|\\s)run_id=(\\S+)")
+    private val status = Regex("(?:^|\\s)status=(\\S+)")
 
     fun runId(line: String): String? =
         if (line.startsWith("RUN_START ") || line.startsWith("BASIC_START ") || line.startsWith("NET_V1_START ") || line.startsWith("TOKEN_V2_START ") || line.startsWith("REALTIME_V1_START ")) {
+            runId.find(line)?.groupValues?.get(1)
+        } else {
+            null
+        }
+
+    fun terminalStatus(line: String): String? =
+        if (line.startsWith("RUN_END ")) {
+            status.find(line)?.groupValues?.get(1)
+        } else {
+            null
+        }
+
+    fun localCommitRunId(line: String): String? =
+        if (line.startsWith("DB_WRITE ")) {
+            runId.find(line)?.groupValues?.get(1)
+        } else {
+            null
+        }
+
+    fun terminalRunId(line: String): String? =
+        if (line.startsWith("RUN_END ")) {
             runId.find(line)?.groupValues?.get(1)
         } else {
             null
@@ -90,6 +112,31 @@ internal object ProbeRunLogParser {
         line.startsWith("REALTIME_V1_SESSION_START ") -> "正在模拟双工语音会话"
         line.startsWith("REALTIME_V1_RESULT ") -> "正在生成实时交互结论"
         else -> null
+    }
+}
+
+internal object LegacyTestEngineTerminalPolicy {
+    fun afterFlow(
+        autorun: Boolean,
+        testMode: AnebTestMode,
+        runId: String?,
+        terminalStatus: String?,
+        committedRunId: String? = null,
+        terminalRunId: String? = runId,
+    ): ProbeRunSession = when {
+        terminalStatus == "local_persistence_failed" && runId != null && runId == terminalRunId ->
+            ProbeRunSession.Failed(
+                autorun = autorun,
+                message = "无法安全保存本次结果，因此未发送。",
+                testMode = testMode,
+            )
+
+        terminalStatus == "completed" &&
+            runId != null &&
+            runId == committedRunId &&
+            runId == terminalRunId -> ProbeRunSession.Completed(autorun, runId, testMode)
+
+        else -> ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", testMode)
     }
 }
 
@@ -261,6 +308,9 @@ class ProbeRunService : Service() {
 
         runJob = serviceScope.launch {
             var runId: String? = null
+            var committedRunId: String? = null
+            var terminalRunId: String? = null
+            var terminalStatus: String? = null
             var networkEngine: NetworkSpeedEngine? = null
             var tokenEngine: TokenSimulationEngine? = null
             var realtimeEngine: RealtimeSimulationEngine? = null
@@ -361,6 +411,15 @@ class ProbeRunService : Service() {
                         runId = id
                         _session.value = ProbeRunSession.Running(autorun, id, config.testMode)
                     }
+                    ProbeRunLogParser.terminalStatus(line)?.let { status ->
+                        terminalStatus = status
+                    }
+                    ProbeRunLogParser.localCommitRunId(line)?.let { id ->
+                        committedRunId = id
+                    }
+                    ProbeRunLogParser.terminalRunId(line)?.let { id ->
+                        terminalRunId = id
+                    }
                     ProbeRunLogParser.progressText(line)?.let(::updateNotification)
                 }
                 if (config.testMode.hasFormalDurableResult()) {
@@ -370,12 +429,14 @@ class ProbeRunService : Service() {
                         committedRunId = syncFormalResult()?.runId,
                     )
                 } else {
-                    val completedId = runId
-                    _session.value = if (completedId != null) {
-                        ProbeRunSession.Completed(autorun, completedId, config.testMode)
-                    } else {
-                        ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
-                    }
+                    _session.value = LegacyTestEngineTerminalPolicy.afterFlow(
+                        autorun = autorun,
+                        testMode = config.testMode,
+                        runId = runId,
+                        terminalStatus = terminalStatus,
+                        committedRunId = committedRunId,
+                        terminalRunId = terminalRunId,
+                    )
                 }
             } catch (e: CancellationException) {
                 if (config.testMode.hasFormalDurableResult()) {

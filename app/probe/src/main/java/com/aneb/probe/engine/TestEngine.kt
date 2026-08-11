@@ -62,7 +62,11 @@ import java.util.concurrent.atomic.AtomicReference
  * P1-C08；R-05 分数不改 validity）/ AQS_V02（run 级 v0.2 并列出分，阶段2 C03）/
  * DRIVE_TEST（GPS 路测开启时的打点器状态；坐标只入本地，绝不进上报体 §9.1）。
  */
-class TestEngine(private val context: Context) {
+class TestEngine internal constructor(
+    private val context: Context,
+    private val resultSubmissionCoordinator: ResultSubmissionCoordinator,
+) {
+    constructor(context: Context) : this(context, ResultSubmissionCoordinator())
 
     /**
      * 实时分层遥测只读通道（观测通道，与测量记录口径解耦，不参与测量，R-16）。
@@ -496,21 +500,45 @@ class TestEngine(private val context: Context) {
             if (bodyBytes > ResultReporter.MAX_REPORT_BYTES) {
                 log("REPORT_SIZE_WARN bytes=$bodyBytes limit=${ResultReporter.MAX_REPORT_BYTES}")
             }
-            val resp = client.postResults("$measureBase/api/v1/results", body)
-            reportStatus = "http=${resp.httpCode ?: "null"}"
-            if (resp.httpCode == 400) {
-                // 合同自检：服务端拒收即本端合同实现有错，errors 全量进日志
-                log("REPORT_CONTRACT_ERRORS body=${resp.body?.replace(' ', '_') ?: "empty"}")
-            }
-            log("REPORT http=${resp.httpCode ?: "null"} bytes=$bodyBytes error=${resp.error ?: "none"}")
-
-            persistRun(db, runEntity.copy(reportStatus = reportStatus))
-            // C07 导出源：上报体原样存档（与上报严格同构，导出禁止事后重算）
-            persistReportBody(db, runId, body)
-            log(
-                "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
-                    "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+            val submission = completeResultSubmission(
+                coordinator = resultSubmissionCoordinator,
+                localCommit = { localReportStatus ->
+                    persistFinalResult(
+                        db = db,
+                        run = runEntity.copy(reportStatus = localReportStatus),
+                        body = body,
+                    )
+                },
+                requestFactory = {
+                    ResultSubmissionRequest(
+                        url = "$measureBase/api/v1/results",
+                        jsonBody = body,
+                    )
+                },
+                transportFactory = {
+                    ResultSubmissionTransport { request ->
+                        client.postResults(request.url, request.jsonBody)
+                    }
+                },
             )
+            when (submission) {
+                ResultSubmissionOutcome.NotConsented -> {
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log(
+                        "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
+                            "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+                    )
+                }
+
+                ResultSubmissionOutcome.LocalPersistenceFailed -> {
+                    status = submission.reportStatus
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log("RUN_END run_id=$runId status=$status")
+                    return@channelFlow
+                }
+            }
             log("RUN_END run_id=$runId status=$status")
         } catch (e: CancellationException) {
             throw e // 外部取消（fail-closed：不吞取消）
@@ -631,12 +659,21 @@ class TestEngine(private val context: Context) {
         return out
     }
 
-    private suspend fun persistReportBody(db: AnebDatabase, runId: String, body: String) {
+    private suspend fun persistFinalResult(db: AnebDatabase, run: TestRun, body: String) {
         withContext(NonCancellable) {
-            runCatching { db.reportBodyDao().insert(com.aneb.probe.data.ReportBodyEntity(runId, body)) }
-                .onFailure {
-                    Log.e(LOG_TAG, "DB_WRITE_FAILED table=report_body reason=${it.toString().replace(' ', '_')}")
+            try {
+                db.withTransaction {
+                    db.testRunDao().insert(run)
+                    // C07 本地导出源：结果体原样存档，禁止事后重算。
+                    db.reportBodyDao().insert(com.aneb.probe.data.ReportBodyEntity(run.runId, body))
                 }
+            } catch (error: Exception) {
+                Log.e(
+                    LOG_TAG,
+                    "DB_WRITE_FAILED tables=test_runs,report_body reason=local_transaction_failed",
+                )
+                throw error
+            }
         }
     }
 
@@ -829,6 +866,17 @@ class TestEngine(private val context: Context) {
 
     companion object {
         const val KPI_SET = "agent-qoe-kpi-v0.2"
+
+        internal suspend fun completeResultSubmission(
+            coordinator: ResultSubmissionCoordinator,
+            localCommit: suspend (reportStatus: String) -> Unit,
+            requestFactory: () -> ResultSubmissionRequest,
+            transportFactory: () -> ResultSubmissionTransport,
+        ): ResultSubmissionOutcome = coordinator.submit(
+            localCommit = localCommit,
+            requestFactory = requestFactory,
+            transportFactory = transportFactory,
+        )
 
         /** 实时遥测采样节流间隔（ms）：观测通道节流上限，不影响任何测量计时 */
         private const val TELEMETRY_SAMPLE_MS = 100L
