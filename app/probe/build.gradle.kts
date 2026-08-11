@@ -140,5 +140,6 @@ dependencies {
     ksp(libs.room.compiler)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

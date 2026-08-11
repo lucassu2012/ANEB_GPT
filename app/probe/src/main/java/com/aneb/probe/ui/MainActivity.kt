@@ -8,7 +8,6 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -89,7 +88,7 @@ import java.util.Locale
  *   [--es transport auto|wifi|cellular] [--es inject truncate:50]
  * C07：手动 run 结束自动跳结果页；autorun 不跳（保持 logcat 自动化验收流程不变）。
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : ReleaseSafeComponentActivity() {
 
     private lateinit var radioCollector: RadioCollector
     private lateinit var db: AnebDatabase
@@ -202,6 +201,15 @@ class MainActivity : ComponentActivity() {
         radioCollector = RadioCollector(this)
         db = AnebDatabase.get(applicationContext)
         settingsStore = ProbeSettingsStore(applicationContext)
+        val publicReleaseLaunch = if (BuildConfig.DEBUG) {
+            null
+        } else {
+            resolvePublicReleaseLaunch(
+                saved = settingsStore.load(),
+                hasFullRadioEvidence = radioPermissionState().hasFullRadioEvidence,
+                scrubExternalLaunch = { intent?.replaceExtras(Bundle()) },
+            )
+        }
         intentServer = intent?.getStringExtra("server")
         intentQualificationHandoff.replace(
             RepeatabilityQualificationLaunchExtras.readAndRemoveForActivity(
@@ -260,7 +268,7 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
-        val launchSettings = resolveLaunchSettings(
+        val launchSettings = publicReleaseLaunch?.settings ?: resolveLaunchSettings(
             saved = settingsStore.load(),
             overrides = ProbeLaunchOverrides(
                 serverUrl = intentServer,
@@ -272,7 +280,7 @@ class MainActivity : ComponentActivity() {
             autorun = intentAutorun,
             hasFullRadioEvidence = radioPermissionState().hasFullRadioEvidence,
         )
-        val launchRequestedAutorun = intentAutorun
+        val launchRequestedAutorun = publicReleaseLaunch?.startRequested ?: intentAutorun
 
         setContent {
             AnebTheme {
