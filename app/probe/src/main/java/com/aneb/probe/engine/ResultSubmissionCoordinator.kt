@@ -46,6 +46,10 @@ internal sealed interface ResultSubmissionOutcome {
         override val reportStatus: String = "not_consented"
     }
 
+    data object AuthorizationChanged : ResultSubmissionOutcome {
+        override val reportStatus: String = "upload_authorization_changed"
+    }
+
     data object LocalPersistenceFailed : ResultSubmissionOutcome {
         override val reportStatus: String = "local_persistence_failed"
     }
@@ -100,6 +104,12 @@ internal class ResultSubmissionCoordinator(
         val permit = when (admissionDecision) {
             ResultUploadAdmissionDecision.NotConsented ->
                 return commitTerminalLocalOutcome(ResultSubmissionOutcome.NotConsented, localCommit)
+
+            ResultUploadAdmissionDecision.AuthorizationChanged ->
+                return commitTerminalLocalOutcome(
+                    ResultSubmissionOutcome.AuthorizationChanged,
+                    localCommit,
+                )
 
             ResultUploadAdmissionDecision.NotConfigured ->
                 return commitTerminalLocalOutcome(ResultSubmissionOutcome.NotConfigured, localCommit)

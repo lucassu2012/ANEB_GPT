@@ -545,6 +545,15 @@ class TestEngine internal constructor(
                     )
                 }
 
+                ResultSubmissionOutcome.AuthorizationChanged -> {
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log(
+                        "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
+                            "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+                    )
+                }
+
                 ResultSubmissionOutcome.AlreadyClaimed -> {
                     status = submission.reportStatus
                     reportStatus = submission.reportStatus

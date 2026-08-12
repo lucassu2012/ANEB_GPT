@@ -1,6 +1,7 @@
 package com.aneb.probe.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -9,7 +10,9 @@ import org.junit.Test
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CancellationException
 
 class ResultUploadConsentStoreTest {
     private val firstResultId = "11111111-1111-4111-8111-111111111111"
@@ -140,7 +143,7 @@ class ResultUploadConsentStoreTest {
 
         persistence.writeSucceeds = true
         assertEquals(
-            ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION,
+            ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
             first.grant(scope),
         )
         assertNull(first.openAdmission(firstResultId, scope).claim())
@@ -263,14 +266,363 @@ class ResultUploadConsentStoreTest {
         assertEquals(setOf(firstResultId), persistence.record.claimedResultIds)
     }
 
+    @Test
+    fun `invalid or overflowing consent epoch fails closed without rewriting persistence`() {
+        val negativeRecord = PersistedResultUploadConsent(
+            state = ResultUploadConsent.GRANTED.name,
+            recipient = scope.recipient,
+            purpose = scope.purpose.name,
+            policyVersion = scope.policyVersion,
+            consentEpoch = -1L,
+        )
+        val negativePersistence = MemoryConsentPersistence().apply { record = negativeRecord }
+        val negativeStore = ResultUploadConsentStore(
+            negativePersistence,
+            ResultUploadConsentProcessState(),
+        )
+
+        assertEquals(
+            ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED,
+            negativeStore.currentConsent(scope),
+        )
+        assertNull(negativeStore.openAdmission(firstResultId, scope).claim())
+        assertEquals(negativeRecord, negativePersistence.record)
+
+        val maxRecord = negativeRecord.copy(
+            state = ResultUploadConsent.REVOKED.name,
+            consentEpoch = Long.MAX_VALUE,
+        )
+        val maxPersistence = MemoryConsentPersistence().apply { record = maxRecord }
+        val maxStore = ResultUploadConsentStore(
+            maxPersistence,
+            ResultUploadConsentProcessState(),
+        )
+
+        assertEquals(
+            ResultUploadConsentMutationResult.PERSISTENCE_FAILED,
+            maxStore.grant(scope),
+        )
+        assertEquals(maxRecord, maxPersistence.record)
+        assertNull(maxStore.openAdmission(secondResultId, scope).claim())
+    }
+
+    @Test
+    fun `admission opened before revoke cannot be revived by a later grant epoch`() {
+        val persistence = MemoryConsentPersistence()
+        val store = ResultUploadConsentStore(persistence)
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val staleAdmission = store.openAdmission(firstResultId, scope)
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.revoke(scope))
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+
+        assertNull(staleAdmission.claim())
+        assertEquals(
+            secondResultId,
+            store.openAdmission(secondResultId, scope).claim()?.resultId,
+        )
+    }
+
+    @Test
+    fun `durable revoke completion cannot clear a permanent unavailable latch`() {
+        val persistence = MemoryConsentPersistence()
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val permit = checkNotNull(store.openAdmission(firstResultId, scope).claim())
+        persistence.record = persistence.record.copy(claimedResultIds = emptySet())
+        assertTrue(store.observePermit(permit).state == ResultUploadPermitState.STATE_UNAVAILABLE)
+
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.revoke(scope))
+        assertEquals(
+            ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+            store.grant(scope),
+        )
+    }
+
+    @Test
+    fun `preexisting corrupt scoped state is unavailable and cannot be overwritten by grant`() {
+        val persistence = MemoryConsentPersistence().apply {
+            record = PersistedResultUploadConsent(
+                state = "CORRUPT_STATE",
+                recipient = scope.recipient,
+                purpose = scope.purpose.name,
+                policyVersion = scope.policyVersion,
+                consentEpoch = 1L,
+            )
+        }
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED, store.currentConsent(scope))
+        assertEquals(
+            ResultUploadAdmissionDecision.PersistenceFailed,
+            store.openAdmission(firstResultId, scope).decide(adapterConfigured = true),
+        )
+        assertEquals(
+            ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+            store.grant(scope),
+        )
+        assertEquals("CORRUPT_STATE", persistence.record.state)
+    }
+
+    @Test
+    fun `grant refuses max minus one epoch instead of committing an invalid max epoch`() {
+        val original = PersistedResultUploadConsent(
+            state = ResultUploadConsent.REVOKED.name,
+            recipient = scope.recipient,
+            purpose = scope.purpose.name,
+            policyVersion = scope.policyVersion,
+            consentEpoch = Long.MAX_VALUE - 1L,
+        )
+        val persistence = MemoryConsentPersistence().apply { record = original }
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsentMutationResult.PERSISTENCE_FAILED, store.grant(scope))
+        assertEquals(original, persistence.record)
+        assertEquals(ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED, store.currentConsent(scope))
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.grant(scope))
+    }
+
+    @Test
+    fun `healthy pending revoke is observable without masquerading as persistence failure`() {
+        val persistence = MemoryConsentPersistence()
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val durableGrant = persistence.record
+        val revoke = store.beginRevoke(scope)
+
+        assertEquals(durableGrant, persistence.record)
+        assertEquals(ResultUploadConsent.REVOKING, store.currentConsent(scope))
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.completeRevoke(revoke))
+        assertEquals(ResultUploadConsent.REVOKED, store.currentConsent(scope))
+    }
+
+    @Test
+    fun `corrupt durable state dominates a pending revoke and permanently blocks the scope`() {
+        val corrupt = PersistedResultUploadConsent(
+            state = "CORRUPT_STATE",
+            recipient = scope.recipient,
+            purpose = scope.purpose.name,
+            policyVersion = scope.policyVersion,
+            consentEpoch = 1L,
+        )
+        val persistence = MemoryConsentPersistence().apply { record = corrupt }
+        val processState = ResultUploadConsentProcessState()
+        val store = ResultUploadConsentStore(persistence, processState)
+        val revoke = store.beginRevoke(scope)
+
+        assertEquals(
+            ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED,
+            store.currentConsent(scope),
+        )
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.grant(scope))
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.completeRevoke(revoke))
+        assertEquals(corrupt, persistence.record)
+    }
+
+    @Test
+    fun `idempotent grant cannot report committed after a revoke wave begins during its read`() {
+        val persistence = BlockingReadConsentPersistence()
+        val processState = ResultUploadConsentProcessState()
+        val store = ResultUploadConsentStore(persistence, processState)
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        persistence.blockNextRead = true
+        val grantResult = AtomicReference<ResultUploadConsentMutationResult>()
+        val grantThread = thread(start = true) {
+            grantResult.set(store.grant(scope))
+        }
+
+        assertTrue(persistence.readEntered.await(5, TimeUnit.SECONDS))
+        val revoke = store.beginRevoke(scope)
+        persistence.allowRead.countDown()
+        grantThread.join(5_000)
+
+        assertFalse(grantThread.isAlive)
+        assertEquals(
+            ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION,
+            grantResult.get(),
+        )
+        assertEquals(ResultUploadConsent.REVOKING, store.currentConsent(scope))
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.completeRevoke(revoke))
+    }
+
+    @Test
+    fun `overlapping same scope revokes remain blocked until each exact operation completes`() {
+        val persistence = MemoryConsentPersistence()
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val firstRevoke = store.beginRevoke(scope)
+        val secondRevoke = store.beginRevoke(scope)
+
+        assertEquals(
+            ResultUploadConsentMutationResult.COMMITTED,
+            store.completeRevoke(firstRevoke),
+        )
+        assertEquals(
+            ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION,
+            store.grant(scope),
+        )
+
+        assertEquals(
+            ResultUploadConsentMutationResult.COMMITTED,
+            store.completeRevoke(secondRevoke),
+        )
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+    }
+
+    @Test
+    fun `failed overlapping revoke retires every token and prevents a peer durable rewrite`() {
+        val persistence = MemoryConsentPersistence()
+        val processState = ResultUploadConsentProcessState()
+        val store = ResultUploadConsentStore(persistence, processState)
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val firstRevoke = store.beginRevoke(scope)
+        val secondRevoke = store.beginRevoke(scope)
+        persistence.writeSucceeds = false
+
+        assertEquals(
+            ResultUploadConsentMutationResult.PERSISTENCE_FAILED,
+            store.completeRevoke(firstRevoke),
+        )
+        assertEquals(
+            setOf(secondRevoke.operationId),
+            processState.pendingRevokeOperations[scope],
+        )
+        assertEquals(ResultUploadConsent.GRANTED.name, persistence.record.state)
+
+        persistence.writeSucceeds = true
+        val writesAfterFailure = persistence.writeCount
+        assertEquals(
+            ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+            store.completeRevoke(secondRevoke),
+        )
+        assertEquals(writesAfterFailure, persistence.writeCount)
+        assertFalse(processState.pendingRevokeOperations.containsKey(scope))
+        assertEquals(ResultUploadConsent.GRANTED.name, persistence.record.state)
+        assertEquals(ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED, store.currentConsent(scope))
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.grant(scope))
+    }
+
+    @Test
+    fun `cancelled revoke retires its token and propagates the same cancellation object`() {
+        val persistence = MemoryConsentPersistence()
+        val processState = ResultUploadConsentProcessState()
+        val store = ResultUploadConsentStore(persistence, processState)
+        val marker = CancellationException("revoke_persistence_cancel_marker")
+
+        assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
+        val revoke = store.beginRevoke(scope)
+        persistence.writeCancellation = marker
+        val cancellation = assertThrows(CancellationException::class.java) {
+            store.completeRevoke(revoke)
+        }
+
+        assertTrue(cancellation === marker)
+        assertFalse(processState.pendingRevokeOperations.containsKey(scope))
+        assertEquals(ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED, store.currentConsent(scope))
+        assertEquals(ResultUploadConsentMutationResult.STATE_UNAVAILABLE, store.grant(scope))
+    }
+
+    @Test
+    fun `corrupt persisted record shapes are absorbing before requested scope comparison`() {
+        val canonical = PersistedResultUploadConsent(
+            state = ResultUploadConsent.GRANTED.name,
+            recipient = scope.recipient,
+            purpose = scope.purpose.name,
+            policyVersion = scope.policyVersion,
+            consentEpoch = 1L,
+        )
+        val corruptRecords = listOf(
+            canonical.copy(recipient = null),
+            canonical.copy(purpose = null),
+            canonical.copy(policyVersion = null),
+            canonical.copy(state = null),
+            canonical.copy(claimedResultIds = setOf("not-a-canonical-result-id")),
+            canonical.copy(
+                state = "CORRUPT_STATE",
+                recipient = "aneb-node:foreign",
+            ),
+        )
+
+        corruptRecords.forEachIndexed { index, original ->
+            val persistence = MemoryConsentPersistence().apply { record = original }
+            val store = ResultUploadConsentStore(
+                persistence,
+                ResultUploadConsentProcessState(),
+            )
+
+            assertEquals(
+                "record[$index]",
+                ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED,
+                store.currentConsent(scope),
+            )
+            assertEquals(
+                "record[$index]",
+                ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+                store.grant(scope),
+            )
+            assertEquals("record[$index]", original, persistence.record)
+        }
+    }
+
+    @Test
+    fun `revoke as first observer cannot rewrite a corrupt record`() {
+        val original = PersistedResultUploadConsent(
+            state = "CORRUPT_STATE",
+            recipient = scope.recipient,
+            purpose = scope.purpose.name,
+            policyVersion = scope.policyVersion,
+            consentEpoch = 1L,
+        )
+        val persistence = MemoryConsentPersistence().apply { record = original }
+        val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
+
+        assertEquals(ResultUploadConsentMutationResult.PERSISTENCE_FAILED, store.revoke(scope))
+        assertEquals(original, persistence.record)
+        assertEquals(
+            ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+            store.grant(scope),
+        )
+    }
+
     private class MemoryConsentPersistence : ResultUploadConsentPersistence {
         var record = PersistedResultUploadConsent()
         var writeSucceeds = true
+        var writeCount = 0
+        var writeCancellation: CancellationException? = null
 
         override fun read(): PersistedResultUploadConsent = record
 
         override fun write(value: PersistedResultUploadConsent): Boolean {
+            writeCount += 1
+            writeCancellation?.let { throw it }
             if (!writeSucceeds) return false
+            record = value
+            return true
+        }
+    }
+
+    private class BlockingReadConsentPersistence : ResultUploadConsentPersistence {
+        var record = PersistedResultUploadConsent()
+        var blockNextRead = false
+        val readEntered = CountDownLatch(1)
+        val allowRead = CountDownLatch(1)
+
+        override fun read(): PersistedResultUploadConsent {
+            val snapshot = record
+            if (blockNextRead) {
+                blockNextRead = false
+                readEntered.countDown()
+                check(allowRead.await(5, TimeUnit.SECONDS))
+            }
+            return snapshot
+        }
+
+        override fun write(value: PersistedResultUploadConsent): Boolean {
             record = value
             return true
         }
