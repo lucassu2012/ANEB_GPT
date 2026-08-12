@@ -14,6 +14,9 @@ interface TestRunDao {
 
     @Query("SELECT * FROM test_run WHERE runId = :runId")
     suspend fun byId(runId: String): TestRun?
+
+    @Query("UPDATE test_run SET reportStatus = :reportStatus WHERE runId = :runId")
+    suspend fun updateReportStatus(runId: String, reportStatus: String): Int
 }
 
 @Dao

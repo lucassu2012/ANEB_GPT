@@ -2,6 +2,7 @@ package com.aneb.probe.engine
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProbeRunLogParserTest {
@@ -57,6 +58,22 @@ class ProbeRunLogParserTest {
                 terminalRunId = ProbeRunLogParser.terminalRunId(terminalLine),
                 terminalStatus = ProbeRunLogParser.terminalStatus(terminalLine),
             ),
+        )
+    }
+
+    @Test fun `already claimed duplicate can never become a completed public session`() {
+        val runId = "run-duplicate"
+        val terminalLine = "RUN_END run_id=$runId status=upload_already_claimed"
+
+        assertTrue(
+            LegacyTestEngineTerminalPolicy.afterFlow(
+                autorun = false,
+                testMode = AnebTestMode.TOKEN_EXPERIENCE,
+                runId = runId,
+                committedRunId = runId,
+                terminalRunId = ProbeRunLogParser.terminalRunId(terminalLine),
+                terminalStatus = ProbeRunLogParser.terminalStatus(terminalLine),
+            ) is ProbeRunSession.Failed,
         )
     }
 }

@@ -509,17 +509,14 @@ class TestEngine internal constructor(
                         body = body,
                     )
                 },
-                requestFactory = {
-                    ResultSubmissionRequest(
-                        url = "$measureBase/api/v1/results",
-                        jsonBody = body,
+                finalStatusCommit = { finalReportStatus ->
+                    persistFinalReportStatus(
+                        db = db,
+                        runId = runId,
+                        reportStatus = finalReportStatus,
                     )
                 },
-                transportFactory = {
-                    ResultSubmissionTransport { request ->
-                        client.postResults(request.url, request.jsonBody)
-                    }
-                },
+                adapter = null,
             )
             when (submission) {
                 ResultSubmissionOutcome.NotConsented -> {
@@ -537,6 +534,54 @@ class TestEngine internal constructor(
                     log("REPORT status=$reportStatus bytes=$bodyBytes")
                     log("RUN_END run_id=$runId status=$status")
                     return@channelFlow
+                }
+
+                ResultSubmissionOutcome.NotConfigured -> {
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log(
+                        "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
+                            "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+                    )
+                }
+
+                ResultSubmissionOutcome.AlreadyClaimed -> {
+                    status = submission.reportStatus
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log("RUN_END run_id=$runId status=$status")
+                    return@channelFlow
+                }
+
+                ResultSubmissionOutcome.AdmissionPersistenceFailed -> {
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log(
+                        "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
+                            "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+                    )
+                }
+
+                ResultSubmissionOutcome.FinalStatusPersistenceFailed -> {
+                    status = submission.reportStatus
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log("RUN_END run_id=$runId status=$status")
+                    return@channelFlow
+                }
+
+                is ResultSubmissionOutcome.Uploaded,
+                is ResultSubmissionOutcome.Rejected,
+                ResultSubmissionOutcome.TransportFailed,
+                ResultSubmissionOutcome.AdapterFailed,
+                ResultSubmissionOutcome.ScopeMismatch,
+                -> {
+                    reportStatus = submission.reportStatus
+                    log("REPORT status=$reportStatus bytes=$bodyBytes")
+                    log(
+                        "DB_WRITE run_id=$runId scenarios=${scenarioReports.size} " +
+                            "env_events_pending=${envBuf.size} radio_samples_pending=${radioBuf.size}"
+                    )
                 }
             }
             log("RUN_END run_id=$runId status=$status")
@@ -673,6 +718,18 @@ class TestEngine internal constructor(
                     "DB_WRITE_FAILED tables=test_runs,report_body reason=local_transaction_failed",
                 )
                 throw error
+            }
+        }
+    }
+
+    private suspend fun persistFinalReportStatus(
+        db: AnebDatabase,
+        runId: String,
+        reportStatus: String,
+    ) {
+        withContext(NonCancellable) {
+            check(db.testRunDao().updateReportStatus(runId, reportStatus) == 1) {
+                "result_submission_status_row_missing"
             }
         }
     }
@@ -870,12 +927,12 @@ class TestEngine internal constructor(
         internal suspend fun completeResultSubmission(
             coordinator: ResultSubmissionCoordinator,
             localCommit: suspend (reportStatus: String) -> Unit,
-            requestFactory: () -> ResultSubmissionRequest,
-            transportFactory: () -> ResultSubmissionTransport,
+            finalStatusCommit: suspend (reportStatus: String) -> Unit,
+            adapter: ResultSubmissionAdapter?,
         ): ResultSubmissionOutcome = coordinator.submit(
             localCommit = localCommit,
-            requestFactory = requestFactory,
-            transportFactory = transportFactory,
+            finalStatusCommit = finalStatusCommit,
+            adapter = adapter,
         )
 
         /** 实时遥测采样节流间隔（ms）：观测通道节流上限，不影响任何测量计时 */
