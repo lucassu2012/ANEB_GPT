@@ -21,6 +21,7 @@ ReadWritePaths=/opt/aneb/data
 MemoryMax=384M
 CPUQuota=120%
 TasksMax=256
+LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target

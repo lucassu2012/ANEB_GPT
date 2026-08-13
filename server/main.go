@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -87,6 +86,11 @@ func main() {
 		"",
 		"external regular file containing a dedicated 64-hex result-upload bearer; empty disables result upload",
 	)
+	hardenResultStorageOnly := flag.Bool(
+		"harden-result-storage-only",
+		false,
+		"harden existing result storage and exit without opening a listener",
+	)
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file (optional; default/LE cert for named SNI)")
 	tlsKey := flag.String("tls-key", "", "TLS key file (optional)")
 	// SNI 双通道：-tls-cert-ip/-tls-key-ip 指向自签 IP-SAN 证书（含 IP:120.79.148.0），
@@ -99,17 +103,6 @@ func main() {
 		"serve HTTP/3 (quic-go) on the same port over UDP in parallel with TCP — requires -tls-cert/-tls-key (fail-closed)")
 	udpEchoAddr := flag.String("udp-echo-addr", ":8443", "ANEB sequenced UDP echo address; may share the h3 UDP port")
 	flag.Parse()
-
-	var resultUploadAuth resultUploadAuthorization
-	if strings.TrimSpace(*resultUploadTokenFile) != "" {
-		var err error
-		resultUploadAuth, err = loadResultUploadAuthorizer(*resultUploadTokenFile)
-		if err != nil {
-			log.Fatalf("result upload auth: %v", err)
-		}
-	} else {
-		log.Printf("WARNING: result upload endpoint disabled; configure -result-upload-token-file to enable it")
-	}
 
 	// 配置级 fail-closed 校验放在一切资源加载之前：配错即刻退出。
 	altSvc := ""
@@ -155,6 +148,17 @@ func main() {
 	}
 	for _, profile := range executionCapabilities.ValidatedProfiles {
 		log.Printf("execution profile validated: %s v%s (%s)", profile.ProfileID, profile.ProfileVersion, profile.ProfileSHA256)
+	}
+	resultUploadAuth, err := initializeResultUpload(*dataDir, *resultUploadTokenFile)
+	if err != nil {
+		log.Fatalf("result upload initialization: %v", err)
+	}
+	if resultUploadAuth == nil {
+		log.Printf("WARNING: result upload endpoint disabled; configure -result-upload-token-file to enable it")
+	}
+	if *hardenResultStorageOnly {
+		log.Printf("result storage hardening completed")
+		return
 	}
 
 	// Use the process singleton so one instance identity, one worker, and one

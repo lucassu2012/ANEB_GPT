@@ -5,9 +5,11 @@ import hashlib
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -229,7 +231,7 @@ class DeployServerSafetyContractTest(unittest.TestCase):
         ):
             self.assertIn(relative, self.source)
 
-    def test_upgrade_and_rollback_contract_is_exactly_082_to_083(self) -> None:
+    def test_upgrade_contract_is_082_to_083_and_failed_upgrade_is_persistently_masked(self) -> None:
         self.assertIn(
             "validate_server_identity 'aneb-server/0.8.2' pre-switch",
             self.remote,
@@ -238,10 +240,9 @@ class DeployServerSafetyContractTest(unittest.TestCase):
             "validate_server_identity 'aneb-server/0.8.3' live",
             self.remote,
         )
-        self.assertIn(
-            "validate_server_identity 'aneb-server/0.8.2' rollback",
-            self.remote,
-        )
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n\n", 1)[0]
+        self.assertIn("ROLLBACK_SAFE_MASKED version=0.8.2", rollback)
+        self.assertNotIn("validate_server_identity 'aneb-server/0.8.2' rollback", rollback)
 
     def test_local_gates_precede_the_first_remote_connection(self) -> None:
         main = self.source.split("# No ssh/scp call is made before this function returns successfully.", 1)[1]
@@ -732,7 +733,7 @@ COMMIT
         self.assertIn("command -v awk >/dev/null", self.remote)
         self.assertIn("command -v cmp >/dev/null", self.remote)
 
-    def test_restart_or_smoke_failure_has_complete_rollback_surface(self) -> None:
+    def test_restart_or_smoke_failure_has_complete_safe_mask_restore_surface(self) -> None:
         self.assertIn("if [[ $rc -ne 0 && $LIVE_TOUCHED -eq 1 ]]", self.remote)
         expected = {
             "live-binary": "/opt/aneb/bin/aneb-server",
@@ -756,16 +757,81 @@ COMMIT
             variable = "BASE_" + label.replace("-", "_").upper() + "_SHA"
             self.assertIn(f'{variable}="$(path_fingerprint {path})"', self.remote)
             self.assertIn(f'"$(path_fingerprint {path})" == "${variable}"', self.remote)
-        self.assertIn("systemctl restart aneb-server", self.remote)
-        self.assertIn("ROLLBACK_OK", self.remote)
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n\n", 1)[0]
+        self.assertIn("systemctl stop aneb-server", rollback)
+        self.assertNotIn("systemctl restart aneb-server", rollback)
+        self.assertIn("ROLLBACK_SAFE_MASKED", rollback)
         self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", self.remote)
-        self.assertIn("validate_server_identity 'aneb-server/0.8.2' rollback", self.remote)
-        self.assertIn("validate_legacy_surface rollback-0.8 aneb1", self.remote)
+        self.assertNotIn("validate_server_identity 'aneb-server/0.8.2' rollback", rollback)
+        self.assertNotIn("validate_legacy_surface rollback-0.8 aneb1", rollback)
         self.assertIn("assert_restored_aneb_baseline", self.remote)
         self.assertIn("assert_shared_host_baseline rollback", self.remote)
-        self.assertIn("ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97", self.remote)
+        self.assertIn("ROLLBACK_FAILED verification=safe_masked+fingerprints exit=97", self.remote)
         self.assertIn("final_rc=97", self.remote)
         self.assertIn("result_status='rollback_failed'", self.remote)
+
+    def test_failed_upgrade_restores_artifacts_but_persistently_masks_legacy_anonymous_service(self) -> None:
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n\n", 1)[0]
+        self.assertIn("systemctl stop aneb-server", rollback)
+        self.assertIn("restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1", rollback)
+        self.assertIn("if assert_restored_aneb_baseline; then", rollback)
+        self.assertIn("assert_result_storage_content_baseline rollback", rollback)
+        self.assertIn("assert_shared_host_baseline rollback", rollback)
+        self.assertIn('runuser -u aneb -- "$STAGE/aneb-server-linux"', rollback)
+        self.assertIn("-harden-result-storage-only", rollback)
+        self.assertLess(
+            rollback.index("systemctl stop aneb-server"),
+            rollback.index("-harden-result-storage-only"),
+        )
+        self.assertLess(
+            rollback.index("-harden-result-storage-only"),
+            rollback.index("assert_result_storage_content_baseline rollback"),
+        )
+        self.assertIn("ln -s /dev/null /etc/systemd/system/aneb-server.service", rollback)
+        self.assertIn("readlink /etc/systemd/system/aneb-server.service", rollback)
+        self.assertNotIn("systemctl start aneb-server", rollback)
+        self.assertIn("ROLLBACK_SAFE_MASKED version=0.8.2", rollback)
+        self.assertIn("anonymous_ingress=closed service=masked", rollback)
+        self.assertNotIn("systemctl restart aneb-server", rollback)
+        self.assertNotIn("wait_live_server", rollback)
+        self.assertNotIn("validate_legacy_surface", rollback)
+        self.assertNotIn("ROLLBACK_OK", rollback)
+
+        cleanup = self.remote.split("\ncleanup() {", 1)[1].split(
+            "\n}\ntrap cleanup EXIT", 1
+        )[0]
+        self.assertIn("rollback_status='safe_masked'", cleanup)
+        evidence = self.remote.split("terminal_payloads()", 1)[1]
+        self.assertIn("rollback-service-quarantine.txt", evidence)
+        self.assertIn("rollback-restored-artifacts.txt", evidence)
+        self.assertIn("rollback-firewall.txt", evidence)
+        self.assertIn("rollback-firewall.sha256", evidence)
+        self.assertIn("rollback-fingerprints.txt", evidence)
+        self.assertIn("rollback safety evidence is incomplete", evidence)
+        self.assertIn("rollback service quarantine evidence mismatch", evidence)
+        self.assertIn("rollback restored-artifact evidence mismatch", evidence)
+
+    def test_rollback_restores_live_bytes_only_after_the_service_is_quiescent(self) -> None:
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n\n", 1)[0]
+        stop = rollback.index("if systemctl stop aneb-server")
+        state = rollback.index("--property=ActiveState --property=Job", stop)
+        inactive = rollback.index("rollback_quiesced=1", state)
+        guarded_restore = rollback.index("if [[ $rollback_quiesced -eq 1 ]]", inactive)
+        restore = rollback.index(
+            "restore_item live-binary /opt/aneb/bin/aneb-server",
+            guarded_restore,
+        )
+        mask = rollback.index(
+            "ln -s /dev/null /etc/systemd/system/aneb-server.service",
+            restore,
+        )
+
+        self.assertLess(stop, state)
+        self.assertLess(state, inactive)
+        self.assertLess(inactive, guarded_restore)
+        self.assertLess(guarded_restore, restore)
+        self.assertLess(restore, mask)
+        self.assertIn("ROLLBACK_QUIESCE_FAILED", rollback)
 
     def test_partial_ip_certificate_pair_is_rejected_locally(self) -> None:
         self.assertIn("$ipCertPresent -xor $ipKeyPresent", self.source)
@@ -846,8 +912,9 @@ COMMIT
         self.assertIn("elif wire == 'aneb2':", function)
         self.assertIn("packet = b'ANEB2' + uuid.UUID", function)
         self.assertIn("validate_legacy_surface pre-switch-0.8 aneb1", self.remote)
-        self.assertIn("validate_legacy_surface rollback-0.8 aneb1", self.remote)
         self.assertIn("validate_legacy_surface live-0.8 aneb2", self.remote)
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n\n", 1)[0]
+        self.assertNotIn("validate_legacy_surface", rollback)
 
     def test_staged_uploads_are_digest_bound_and_build_identity_is_reverified(self) -> None:
         for name in (
@@ -2198,6 +2265,320 @@ false
             events = trace.read_text(encoding="utf-8")
             self.assertIn("stage_remove_failed", events)
             self.assertNotIn("watchdog_cancel", events)
+
+    def test_default_disabled_result_ingestion_is_probed_without_body_or_storage_mutation(self) -> None:
+        self.assertIn("validate_disabled_result_upload() {", self.remote)
+        function = self.remote.split("validate_disabled_result_upload() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("Expect: 100-continue", function)
+        self.assertIn("Content-Length: 41", function)
+        self.assertIn("result upload unavailable\\n", function)
+        self.assertIn("result_storage_fingerprint", function)
+        self.assertIn("result_storage_permissions", function)
+        self.assertIn("interim 100 response is forbidden", function)
+        self.assertIn("disabled result upload changed storage", function)
+        self.assertIn("tracked_storage_mutation=0", function)
+        self.assertNotIn(" storage_mutation=0", function)
+        self.assertIn('$STAGE/$label-disabled-result-upload.txt', function)
+
+        staged = self.remote.index(
+            'validate_disabled_result_upload "http://127.0.0.1:$STAGE_PORT" '
+            '"$STAGE/data/results" staged'
+        )
+        staged_ready = self.remote.index("STAGE_READY -ne 1")
+        staged_stop = self.remote.index("stop_staged_server", staged)
+        self.assertLess(staged_ready, staged)
+        self.assertLess(staged, staged_stop)
+
+        live = self.remote.index(
+            "validate_disabled_result_upload 'https://127.0.0.1:8443' "
+            "'/opt/aneb/data/results' live"
+        )
+        live_ready = self.remote.index("if ! wait_live_server", staged_stop)
+        accepted = self.remote.index("DEPLOY_RESULT='success'", live)
+        self.assertLess(live_ready, live)
+        self.assertLess(live, accepted)
+
+        evidence = self.remote.split("persist_stage_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("staged-disabled-result-upload.txt", evidence)
+        self.assertIn("live-disabled-result-upload.txt", evidence)
+        verifier = self.remote.split("verify_terminal_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("staged-disabled-result-upload.txt", verifier)
+        self.assertIn("live-disabled-result-upload.txt", verifier)
+
+    def test_raw_disabled_result_probe_accepts_only_direct_503_and_sends_no_body(self) -> None:
+        function = self.remote.split("validate_disabled_result_upload() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        program = function.split("python3 - \"$base\" <<'PY'\n", 1)[1].split(
+            "\nPY", 1
+        )[0]
+
+        def run_server(response: bytes) -> tuple[subprocess.CompletedProcess[str], bytes]:
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(5)
+            port = listener.getsockname()[1]
+            captured: list[bytes] = []
+            failures: list[BaseException] = []
+
+            def serve() -> None:
+                try:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(5)
+                        request = bytearray()
+                        while b"\r\n\r\n" not in request:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            request.extend(chunk)
+                        captured.append(bytes(request))
+                        connection.sendall(response)
+                except BaseException as error:  # Preserve the server-side first error.
+                    failures.append(error)
+                finally:
+                    listener.close()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            completed = subprocess.run(
+                [sys.executable, "-c", program, f"http://127.0.0.1:{port}"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            thread.join(timeout=6)
+            self.assertFalse(thread.is_alive(), "probe fixture server did not terminate")
+            if failures:
+                raise failures[0]
+            self.assertEqual(1, len(captured))
+            return completed, captured[0]
+
+        body = b"result upload unavailable\n"
+        direct_503 = (
+            b"HTTP/1.1 503 Service Unavailable\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode("ascii")
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        accepted, request = run_server(direct_503)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        headers, separator, request_body = request.partition(b"\r\n\r\n")
+        self.assertEqual(b"\r\n\r\n", separator)
+        self.assertEqual(b"", request_body)
+        self.assertIn(b"POST /api/v1/results HTTP/1.1", headers)
+        self.assertIn(b"Content-Length: 41", headers)
+        self.assertIn(b"Expect: 100-continue", headers)
+
+        interim, _ = run_server(b"HTTP/1.1 100 Continue\r\n\r\n" + direct_503)
+        self.assertNotEqual(0, interim.returncode)
+        self.assertIn("interim 100 response is forbidden", interim.stderr)
+
+        wrong_status, _ = run_server(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        self.assertNotEqual(0, wrong_status.returncode)
+        self.assertIn("status was not 503", wrong_status.stderr)
+
+        malformed_protocol, _ = run_server(
+            b"NOT_HTTP 503 Service Unavailable\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode("ascii")
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        self.assertNotEqual(0, malformed_protocol.returncode)
+        self.assertIn("status was not 503", malformed_protocol.stderr)
+
+    def test_result_storage_content_is_frozen_and_permission_hardening_survives_rollback(self) -> None:
+        self.assertIn('BASE_RESULT_STORAGE_SHA=""', self.remote)
+        freeze = "freeze_live_baseline() {" + self.remote.split(
+            "freeze_live_baseline() {", 1
+        )[1].split("\n}\n\n", 1)[0]
+        self.assertIn(
+            'BASE_RESULT_STORAGE_SHA="$(result_storage_content_fingerprint /opt/aneb/data/results)"',
+            freeze,
+        )
+        self.assertIn(
+            '"result_storage_content_fingerprint=$BASE_RESULT_STORAGE_SHA"',
+            freeze,
+        )
+        freeze_call = self.remote.index("freeze_live_baseline")
+        live_boundary = self.remote.index("LIVE_TOUCHED=1", freeze_call)
+        self.assertLess(
+            self.remote.index(
+                'BASE_RESULT_STORAGE_SHA="$(result_storage_content_fingerprint /opt/aneb/data/results)"'
+            ),
+            live_boundary,
+        )
+
+        self.assertIn("assert_result_storage_content_baseline() {", self.remote)
+        helper = self.remote.split("assert_result_storage_content_baseline() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("result_storage_content_fingerprint /opt/aneb/data/results", helper)
+        self.assertIn("result_storage_permissions /opt/aneb/data/results", helper)
+        self.assertIn("result storage content changed", helper)
+
+        live = self.remote[self.remote.index("CURRENT_STAGE='live_validation'") :]
+        self.assertIn("assert_result_storage_content_baseline live", live)
+        rollback = self.remote.split("rollback_live() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn(
+            "if ! assert_result_storage_content_baseline rollback; then",
+            rollback,
+        )
+        self.assertIn("ROLLBACK_SAFE_MASKED", rollback)
+
+        helper = self.remote.split("assert_result_storage_content_baseline() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn('$STAGE/$label-result-storage.txt', helper)
+        evidence = self.remote.split("persist_stage_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("live-result-storage.txt", evidence)
+        self.assertIn("rollback-result-storage.txt", evidence)
+        verifier = self.remote.split("verify_terminal_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("live-result-storage.txt", verifier)
+        self.assertIn("rollback-result-storage.txt", verifier)
+
+    def test_failed_rollback_evidence_verifier_executes_against_latest_record(self) -> None:
+        function = self.remote.split("verify_terminal_evidence() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        program = function.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        payloads = {
+            "rollback-result-storage.txt": b"result_storage_baseline=match\n",
+            "rollback-service-quarantine.txt": (
+                b"rollback_service=masked version=0.8.2 load=masked active=inactive "
+                b"unit_file=masked anonymous_ingress=closed\n"
+            ),
+            "rollback-firewall.txt": b"firewall\n",
+            "rollback-firewall.sha256": b"digest\n",
+            "rollback-fingerprints.txt": b"fingerprints\n",
+            "rollback-restored-artifacts.txt": (
+                b"rollback_artifacts=restored fingerprints=match version=0.8.2\n"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            record = evidence / "records" / "record-000001-failed_rolled_back"
+            record.mkdir(parents=True)
+            manifest: dict[str, dict[str, object]] = {}
+            for name, data in payloads.items():
+                (record / name).write_bytes(data)
+                manifest[name] = {
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            (record / "COMPLETE").write_text(
+                "failed_rolled_back\n", encoding="ascii", newline="\n"
+            )
+            (record / "summary.json").write_text(
+                json.dumps(
+                    {"outcome": "failed_rolled_back", "files": manifest},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="ascii",
+                newline="\n",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", program, str(evidence), "failed_rolled_back"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_staged_candidate_exercises_legacy_permission_hardening_before_evidence(self) -> None:
+        fixture = self.remote.index(
+            'install -d -m 0755 -o aneb -g aneb "$STAGE/data/results"'
+        )
+        fixture_body = self.remote.index("ANEB_STAGED_RESULT_PERMISSION_FIXTURE", fixture)
+        fixture_mode = self.remote.index(
+            'chmod 0644 "$STAGE/data/results/20000101.jsonl"', fixture_body
+        )
+        start = self.remote.index('setsid runuser -u aneb -- "$STAGE/aneb-server-linux"')
+        ready = self.remote.index("STAGE_READY -ne 1", start)
+        content = self.remote.index(
+            'file_sha256 "$STAGE/data/results/20000101.jsonl"', ready
+        )
+        permissions = self.remote.index(
+            'result_storage_permissions "$STAGE/data/results"', content
+        )
+        probe = self.remote.index(
+            'validate_disabled_result_upload "http://127.0.0.1:$STAGE_PORT"',
+            permissions,
+        )
+        receipt = self.remote.index("validate_receipt", probe)
+        evidence = self.remote.index("persist_stage_evidence staged_validated", receipt)
+        live = self.remote.index("LIVE_TOUCHED=1", evidence)
+        self.assertLess(fixture, fixture_body)
+        self.assertLess(fixture_body, fixture_mode)
+        self.assertLess(fixture_mode, start)
+        self.assertLess(start, ready)
+        self.assertLess(ready, content)
+        self.assertLess(content, permissions)
+        self.assertLess(permissions, probe)
+        self.assertLess(probe, receipt)
+        self.assertLess(receipt, evidence)
+        self.assertLess(evidence, live)
+
+    def test_service_fd_limit_covers_bounded_startup_archive_handles(self) -> None:
+        service = (SCRIPT.parents[1] / "server" / "aneb-server.service").read_text(
+            encoding="utf-8"
+        )
+        startup = (SCRIPT.parents[1] / "server" / "results_storage_startup_linux.go").read_text(
+            encoding="utf-8"
+        )
+        limit_match = re.search(r"^LimitNOFILE=(\d+)$", service, flags=re.MULTILINE)
+        bound_match = re.search(
+            r"maximumPersistedResultArchives\s*=\s*(\d+)", startup
+        )
+        self.assertIsNotNone(limit_match)
+        self.assertIsNotNone(bound_match)
+        file_limit = int(limit_match.group(1))
+        archive_bound = int(bound_match.group(1))
+        self.assertGreaterEqual(file_limit, archive_bound + 1024)
+
+    def test_live_result_storage_is_quiesced_and_rechecked_before_replacement(self) -> None:
+        snapshot = self.remote.index("freeze_live_baseline")
+        backup = self.remote.index("snapshot_item service-unit", snapshot)
+        armed = self.remote.index("LIVE_TOUCHED=1", backup)
+        stop = self.remote.index("systemctl stop aneb-server", armed)
+        inactive = self.remote.index("systemctl is-active --quiet aneb-server", stop)
+        verify_inactive = self.remote.index("if [[ $LIVE_STOP_STATE_RC -ne 3 ]]", inactive)
+        recheck = self.remote.index("assert_result_storage_content_frozen pre-replace", verify_inactive)
+        replacement = self.remote.index(
+            'install -m 0755 "$STAGE/aneb-server-linux"', recheck
+        )
+        restart = self.remote.index("systemctl restart aneb-server", replacement)
+        self.assertLess(snapshot, backup)
+        self.assertLess(backup, armed)
+        self.assertLess(armed, stop)
+        self.assertLess(stop, inactive)
+        self.assertLess(inactive, verify_inactive)
+        self.assertLess(verify_inactive, recheck)
+        self.assertLess(recheck, replacement)
+        self.assertLess(replacement, restart)
+
+        helper = self.remote.split("assert_result_storage_content_frozen() {", 1)[1].split(
+            "\n}\n\n", 1
+        )[0]
+        self.assertIn("result_storage_content_fingerprint /opt/aneb/data/results", helper)
+        self.assertIn("result storage changed before replacement", helper)
 
     def test_script_has_no_host_network_or_co_tenant_mutation_commands(self) -> None:
         command_patterns = (

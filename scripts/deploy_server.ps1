@@ -471,6 +471,7 @@ STAGED_BINARY_SHA=""
 LIVE_BINARY_SHA=""
 STAGED_RECEIPT_SHA=""
 LIVE_RECEIPT_SHA=""
+STAGED_RESULT_FIXTURE_SHA=""
 BASE_BINARY_SHA=""
 BASE_ROOT_PROFILES_SHA=""
 BASE_QUICK_BUNDLE_SHA=""
@@ -488,6 +489,7 @@ BASE_IPTABLES_V4_FIREWALL_SHA=""
 BASE_IPTABLES_V6_FIREWALL_SHA=""
 BASE_NFT_FIREWALL_SHA=""
 BASE_FIREWALL_SHA=""
+BASE_RESULT_STORAGE_SHA=""
 DEPLOY_LOCK_PATH="/run/lock/aneb-deploy.lock"
 
 export LC_ALL=C
@@ -659,6 +661,261 @@ with path.open('rb') as handle:
         digest.update(chunk)
 print(digest.hexdigest())
 PY
+}
+
+result_storage_fingerprint() {
+    local path="${1:?result storage path required}"
+    python3 - "$path" <<'PY'
+import hashlib
+import grp
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import sys
+
+root = Path(sys.argv[1])
+try:
+    root_info = root.lstat()
+except FileNotFoundError:
+    print('absent')
+    raise SystemExit(0)
+if root.is_symlink() or not stat.S_ISDIR(root_info.st_mode):
+    raise SystemExit('unsafe result storage root')
+aneb_uid = pwd.getpwnam('aneb').pw_uid
+aneb_gid = grp.getgrnam('aneb').gr_gid
+if root_info.st_uid != aneb_uid or root_info.st_gid != aneb_gid:
+    raise SystemExit('result storage directory owner is not aneb:aneb')
+
+name_pattern = re.compile(r'[0-9]{8}\.jsonl')
+entries = []
+for entry in os.scandir(root):
+    entries.append(entry)
+    if len(entries) > 4096:
+        raise SystemExit('result storage exceeds archive count bound')
+digest = hashlib.sha256()
+digest.update(
+    f'dir\0{stat.S_IMODE(root_info.st_mode):04o}\0{root_info.st_uid}\0{root_info.st_gid}\n'.encode('ascii')
+)
+for entry in sorted(entries, key=lambda item: item.name):
+    if name_pattern.fullmatch(entry.name) is None or entry.is_symlink():
+        raise SystemExit('unsafe result storage entry')
+    info = entry.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SystemExit('unsafe result storage entry')
+    if info.st_uid != aneb_uid or info.st_gid != aneb_gid:
+        raise SystemExit('result storage file owner is not aneb:aneb')
+    content_digest = hashlib.sha256()
+    with open(entry.path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            content_digest.update(chunk)
+    digest.update(
+        (
+            f'{entry.name}\0{stat.S_IMODE(info.st_mode):04o}\0{info.st_uid}\0{info.st_gid}'
+            f'\0{info.st_size}\0{info.st_mtime_ns}\0{content_digest.hexdigest()}\n'
+        ).encode('ascii')
+    )
+print(digest.hexdigest())
+PY
+}
+
+result_storage_content_fingerprint() {
+    local path="${1:?result storage path required}"
+    python3 - "$path" <<'PY'
+import hashlib
+import grp
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import sys
+
+root = Path(sys.argv[1])
+try:
+    root_info = root.lstat()
+except FileNotFoundError:
+    print('absent')
+    raise SystemExit(0)
+if root.is_symlink() or not stat.S_ISDIR(root_info.st_mode):
+    raise SystemExit('unsafe result storage root')
+aneb_uid = pwd.getpwnam('aneb').pw_uid
+aneb_gid = grp.getgrnam('aneb').gr_gid
+if root_info.st_uid != aneb_uid or root_info.st_gid != aneb_gid:
+    raise SystemExit('result storage directory owner is not aneb:aneb')
+
+name_pattern = re.compile(r'[0-9]{8}\.jsonl')
+entries = []
+for entry in os.scandir(root):
+    entries.append(entry)
+    if len(entries) > 4096:
+        raise SystemExit('result storage exceeds archive count bound')
+digest = hashlib.sha256()
+digest.update(f'dir\0{root_info.st_uid}\0{root_info.st_gid}\n'.encode('ascii'))
+for entry in sorted(entries, key=lambda item: item.name):
+    if name_pattern.fullmatch(entry.name) is None or entry.is_symlink():
+        raise SystemExit('unsafe result storage entry')
+    info = entry.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SystemExit('unsafe result storage entry')
+    if info.st_uid != aneb_uid or info.st_gid != aneb_gid:
+        raise SystemExit('result storage file owner is not aneb:aneb')
+    content_digest = hashlib.sha256()
+    with open(entry.path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            content_digest.update(chunk)
+    digest.update(
+        (
+            f'{entry.name}\0{info.st_uid}\0{info.st_gid}\0{info.st_size}'
+            f'\0{content_digest.hexdigest()}\n'
+        ).encode('ascii')
+    )
+print(digest.hexdigest())
+PY
+}
+
+result_storage_permissions() {
+    local path="${1:?result storage path required}"
+    python3 - "$path" <<'PY'
+import grp
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import sys
+
+root = Path(sys.argv[1])
+try:
+    root_info = root.lstat()
+except FileNotFoundError:
+    raise SystemExit(0)
+if root.is_symlink() or not stat.S_ISDIR(root_info.st_mode):
+    raise SystemExit('unsafe result storage root')
+aneb_uid = pwd.getpwnam('aneb').pw_uid
+aneb_gid = grp.getgrnam('aneb').gr_gid
+if stat.S_IMODE(root_info.st_mode) != 0o700:
+    raise SystemExit('result storage directory mode is not 0700')
+if root_info.st_uid != aneb_uid or root_info.st_gid != aneb_gid:
+    raise SystemExit('result storage directory owner is not aneb:aneb')
+
+name_pattern = re.compile(r'[0-9]{8}\.jsonl')
+entries = []
+for entry in os.scandir(root):
+    entries.append(entry)
+    if len(entries) > 4096:
+        raise SystemExit('result storage exceeds archive count bound')
+for entry in entries:
+    if name_pattern.fullmatch(entry.name) is None or entry.is_symlink():
+        raise SystemExit('unsafe result storage entry')
+    info = entry.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise SystemExit('unsafe result storage entry')
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise SystemExit('result storage file mode is not 0600')
+    if info.st_uid != aneb_uid or info.st_gid != aneb_gid:
+        raise SystemExit('result storage file owner is not aneb:aneb')
+PY
+}
+
+validate_disabled_result_upload() {
+    local base="${1:?server base required}"
+    local results_path="${2:?result storage path required}"
+    local label="${3:?validation label required}"
+    local before after
+    [[ "$label" =~ ^[a-z0-9.-]+$ ]]
+    result_storage_permissions "$results_path"
+    before="$(result_storage_fingerprint "$results_path")"
+    python3 - "$base" <<'PY'
+import socket
+import ssl
+import sys
+from urllib.parse import urlsplit
+
+base = urlsplit(sys.argv[1])
+if base.scheme not in {'http', 'https'} or base.hostname != '127.0.0.1':
+    raise SystemExit('disabled result upload probe must use loopback HTTP(S)')
+if base.username is not None or base.password is not None or base.query or base.fragment:
+    raise SystemExit('unsafe disabled result upload probe base')
+if base.path not in {'', '/'} or base.port is None:
+    raise SystemExit('disabled result upload probe requires an explicit loopback port')
+
+request = (
+    'POST /api/v1/results HTTP/1.1\r\n'
+    f'Host: 127.0.0.1:{base.port}\r\n'
+    'Content-Type: application/json\r\n'
+    'Content-Length: 41\r\n'
+    'Expect: 100-continue\r\n'
+    'Connection: close\r\n'
+    '\r\n'
+).encode('ascii')
+
+with socket.create_connection(('127.0.0.1', base.port), timeout=3) as raw:
+    connection = raw
+    if base.scheme == 'https':
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        connection = context.wrap_socket(raw, server_hostname='127.0.0.1')
+    connection.settimeout(5)
+    connection.sendall(request)
+    response = bytearray()
+    while True:
+        chunk = connection.recv(4096)
+        if not chunk:
+            break
+        response.extend(chunk)
+        if len(response) > 65536:
+            raise SystemExit('disabled result upload response exceeded bound')
+
+wire = bytes(response)
+if wire.startswith(b'HTTP/1.1 100 ') or b'\r\n\r\nHTTP/1.1 100 ' in wire:
+    raise SystemExit('interim 100 response is forbidden')
+head, separator, body = wire.partition(b'\r\n\r\n')
+if not separator:
+    raise SystemExit('disabled result upload response was incomplete')
+status_line = head.split(b'\r\n', 1)[0]
+if status_line != b'HTTP/1.1 503 Service Unavailable':
+    raise SystemExit(f'disabled result upload status was not 503: {status_line!r}')
+expected_body = b'result upload unavailable\n'
+if body != expected_body:
+    raise SystemExit('disabled result upload response body mismatch')
+PY
+    after="$(result_storage_fingerprint "$results_path")"
+    if [[ "$after" != "$before" ]]; then
+        echo 'disabled result upload changed storage' >&2
+        return 1
+    fi
+    result_storage_permissions "$results_path"
+    printf '%s\n' \
+        "disabled_result_upload=verified label=$label status=503 interim_100=0 body_sent=0 tracked_storage_mutation=0" \
+        | tee "$STAGE/$label-disabled-result-upload.txt"
+}
+
+assert_result_storage_content_baseline() {
+    local label="${1:?result storage baseline label required}"
+    local current
+    current="$(result_storage_content_fingerprint /opt/aneb/data/results)"
+    if [[ "$current" != "$BASE_RESULT_STORAGE_SHA" ]]; then
+        echo "result storage content changed label=$label" >&2
+        return 1
+    fi
+    result_storage_permissions /opt/aneb/data/results || return 1
+    printf '%s\n' \
+        "result_storage_baseline=match label=$label result_storage_permissions=forward_only" \
+        | tee "$STAGE/$label-result-storage.txt"
+}
+
+assert_result_storage_content_frozen() {
+    local label="${1:?result storage frozen label required}"
+    local current
+    current="$(result_storage_content_fingerprint /opt/aneb/data/results)"
+    if [[ "$current" != "$BASE_RESULT_STORAGE_SHA" ]]; then
+        echo "result storage changed before replacement label=$label" >&2
+        return 1
+    fi
+    echo "result_storage_frozen=match label=$label"
 }
 
 validate_uploaded_artifacts() {
@@ -1635,6 +1892,7 @@ freeze_live_baseline() {
     BASE_REALTIME_QUALIFICATION_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification)"
     BASE_NETWORK_QUALIFICATION_BUNDLE_SHA="$(path_fingerprint /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification)"
     BASE_SERVICE_UNIT_SHA="$(path_fingerprint /etc/systemd/system/aneb-server.service)"
+    BASE_RESULT_STORAGE_SHA="$(result_storage_content_fingerprint /opt/aneb/data/results)"
     if [[ "$SHIP_IP_CERT" == "1" ]]; then
         BASE_IP_CERT_SHA="$(path_fingerprint /opt/aneb/tls/ip/cert.pem)"
         BASE_IP_KEY_SHA="$(path_fingerprint /opt/aneb/tls/ip/key.pem)"
@@ -1705,6 +1963,7 @@ freeze_live_baseline() {
         "iptables_v6_fingerprint=$BASE_IPTABLES_V6_FIREWALL_SHA" \
         "nft_ruleset_fingerprint=$BASE_NFT_FIREWALL_SHA" \
         "firewall_fingerprint=$BASE_FIREWALL_SHA" \
+        "result_storage_content_fingerprint=$BASE_RESULT_STORAGE_SHA" \
         > "$STAGE/pre-switch-fingerprints.txt"
     echo 'pre_switch_firewall_stability=verified samples=2'
     echo 'pre_switch_baseline=verified version=0.8.2 shared_host=frozen'
@@ -2047,47 +2306,105 @@ rollback_live() {
     echo 'ROLLBACK_BEGIN' >&2
     set +e
     local rollback_rc=0
-    systemctl stop aneb-server >/dev/null 2>&1
-    restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1
-    restore_item root-profiles /opt/aneb/profiles || rollback_rc=1
-    restore_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick || rollback_rc=1
-    restore_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick || rollback_rc=1
-    restore_item network-quick-bundle /opt/aneb/execution-profiles/network_comprehensive_quick || rollback_rc=1
-    restore_item token-qualification-bundle /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification || rollback_rc=1
-    restore_item realtime-qualification-bundle /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification || rollback_rc=1
-    restore_item network-qualification-bundle /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification || rollback_rc=1
-    restore_item service-unit /etc/systemd/system/aneb-server.service || rollback_rc=1
-    if [[ "$SHIP_IP_CERT" == "1" ]]; then
-        restore_item ip-cert /opt/aneb/tls/ip/cert.pem || rollback_rc=1
-        restore_item ip-key /opt/aneb/tls/ip/key.pem || rollback_rc=1
-    fi
-    systemctl daemon-reload || rollback_rc=1
-    systemctl restart aneb-server || rollback_rc=1
-    systemctl is-active --quiet aneb-server || rollback_rc=1
-    if [[ $rollback_rc -eq 0 ]]; then
-        wait_live_server || rollback_rc=1
-    fi
-    if [[ $rollback_rc -eq 0 ]]; then
-        validate_server_identity 'aneb-server/0.8.2' rollback || rollback_rc=1
-    fi
-    if [[ $rollback_rc -eq 0 ]]; then
-        ( set -Eeuo pipefail; validate_legacy_surface rollback-0.8 aneb1 )
-        local legacy_smoke_rc=$?
-        if [[ $legacy_smoke_rc -ne 0 ]]; then
+    local rollback_quiesced=0
+    local pre_restore_state pre_restore_active pre_restore_job
+    if systemctl stop aneb-server >/dev/null 2>&1; then
+        pre_restore_state="$(systemctl show --property=ActiveState --property=Job \
+            aneb-server 2>/dev/null)" || rollback_rc=1
+        pre_restore_active="$(printf '%s\n' "$pre_restore_state" | sed -n 's/^ActiveState=//p')"
+        pre_restore_job="$(printf '%s\n' "$pre_restore_state" | sed -n 's/^Job=//p')"
+        if [[ "$pre_restore_active" == 'inactive' && -z "$pre_restore_job" ]]; then
+            rollback_quiesced=1
+        else
+            echo "ROLLBACK_QUIESCE_FAILED active=${pre_restore_active:-unknown} job=${pre_restore_job:-unknown}" >&2
             rollback_rc=1
         fi
+    else
+        echo 'ROLLBACK_QUIESCE_FAILED stop=failed' >&2
+        rollback_rc=1
+    fi
+
+    # Never replace live bytes or touch result storage until the old process is
+    # mechanically inactive with no pending systemd job. A failed quiesce skips
+    # directly to the persistent mask below.
+    if [[ $rollback_quiesced -eq 1 ]]; then
+        restore_item live-binary /opt/aneb/bin/aneb-server || rollback_rc=1
+        restore_item root-profiles /opt/aneb/profiles || rollback_rc=1
+        restore_item quick-bundle /opt/aneb/execution-profiles/token_multimodal_quick || rollback_rc=1
+        restore_item realtime-quick-bundle /opt/aneb/execution-profiles/ai_realtime_voice_quick || rollback_rc=1
+        restore_item network-quick-bundle /opt/aneb/execution-profiles/network_comprehensive_quick || rollback_rc=1
+        restore_item token-qualification-bundle /opt/aneb/execution-profiles/token_multimodal_repeatability_qualification || rollback_rc=1
+        restore_item realtime-qualification-bundle /opt/aneb/execution-profiles/ai_realtime_voice_repeatability_qualification || rollback_rc=1
+        restore_item network-qualification-bundle /opt/aneb/execution-profiles/network_comprehensive_repeatability_qualification || rollback_rc=1
+        restore_item service-unit /etc/systemd/system/aneb-server.service || rollback_rc=1
+        if [[ "$SHIP_IP_CERT" == "1" ]]; then
+            restore_item ip-cert /opt/aneb/tls/ip/cert.pem || rollback_rc=1
+            restore_item ip-key /opt/aneb/tls/ip/key.pem || rollback_rc=1
+        fi
+        systemctl daemon-reload || rollback_rc=1
+        if [[ $rollback_rc -eq 0 ]]; then
+            if assert_restored_aneb_baseline; then
+                printf '%s\n' \
+                    'rollback_artifacts=restored fingerprints=match version=0.8.2' \
+                    | tee "$STAGE/rollback-restored-artifacts.txt"
+            else
+                rollback_rc=1
+            fi
+        fi
+        if [[ $rollback_rc -eq 0 ]]; then
+            # The live service may have failed before its normal startup hardening.
+            # Reuse the staged 0.8.3 binary in a no-listener mode while 0.8.2 stays
+            # stopped, then restore the old binary bytes only as a quarantined backup.
+            runuser -u aneb -- "$STAGE/aneb-server-linux" \
+                -profiles "$STAGE/root-profiles" \
+                -execution-profiles "$STAGE/execution-profiles" \
+                -data /opt/aneb/data \
+                -harden-result-storage-only || rollback_rc=1
+        fi
+        if [[ $rollback_rc -eq 0 ]]; then
+            if ! assert_result_storage_content_baseline rollback; then
+                rollback_rc=1
+            fi
+        fi
+        if [[ $rollback_rc -eq 0 ]]; then
+            assert_shared_host_baseline rollback || rollback_rc=1
+        fi
+    fi
+    # The restored 0.8.2 binary has an anonymous result writer. Preserve its
+    # bytes in the protected rollback backup, but persistently mask the unit so
+    # a manual start, dependency, or reboot cannot silently reopen that route.
+    rm -f -- /etc/systemd/system/aneb-server.service || rollback_rc=1
+    ln -s /dev/null /etc/systemd/system/aneb-server.service || rollback_rc=1
+    systemctl daemon-reload || rollback_rc=1
+    if [[ $rollback_quiesced -ne 1 ]]; then
+        systemctl stop aneb-server >/dev/null 2>&1 || rollback_rc=1
+    fi
+    local service_state load_state active_state service_job unit_file_state mask_target
+    service_state="$(systemctl show \
+        --property=LoadState --property=ActiveState --property=Job --property=UnitFileState \
+        aneb-server 2>/dev/null)" || rollback_rc=1
+    load_state="$(printf '%s\n' "$service_state" | sed -n 's/^LoadState=//p')"
+    active_state="$(printf '%s\n' "$service_state" | sed -n 's/^ActiveState=//p')"
+    service_job="$(printf '%s\n' "$service_state" | sed -n 's/^Job=//p')"
+    unit_file_state="$(printf '%s\n' "$service_state" | sed -n 's/^UnitFileState=//p')"
+    mask_target="$(readlink /etc/systemd/system/aneb-server.service 2>/dev/null)" || rollback_rc=1
+    if [[ "$mask_target" != '/dev/null' || \
+          "$load_state" != 'masked' || "$active_state" != 'inactive' || \
+          -n "$service_job" || "$unit_file_state" != 'masked' ]]; then
+        echo "ROLLBACK_SAFE_MASK_FAILED target=${mask_target:-none} load=$load_state active=$active_state job=${service_job:-none} unit_file=$unit_file_state" >&2
+        rollback_rc=1
     fi
     if [[ $rollback_rc -eq 0 ]]; then
-        assert_restored_aneb_baseline || rollback_rc=1
-    fi
-    if [[ $rollback_rc -eq 0 ]]; then
-        assert_shared_host_baseline rollback || rollback_rc=1
+        printf '%s\n' \
+            "rollback_service=masked version=0.8.2 load=masked active=inactive unit_file=masked anonymous_ingress=closed" \
+            | tee "$STAGE/rollback-service-quarantine.txt"
     fi
     if [[ $rollback_rc -ne 0 ]]; then
-        echo 'ROLLBACK_FAILED verification=identity+legacy_surface+fingerprints exit=97' >&2
+        systemctl stop aneb-server >/dev/null 2>&1 || true
+        echo 'ROLLBACK_FAILED verification=safe_masked+fingerprints exit=97' >&2
         return 1
     fi
-    echo 'ROLLBACK_OK version=0.8.2 legacy_surface=pass fingerprints=match' >&2
+    echo 'ROLLBACK_SAFE_MASKED version=0.8.2 anonymous_ingress=closed service=masked fingerprints=match' >&2
     return 0
 }
 
@@ -2256,6 +2573,9 @@ def base_payloads(*, staged_required):
             'staged-serverinfo.headers', 65536, required=staged_required
         ),
         'candidate.log': redacted_candidate_log(),
+        'staged-disabled-result-upload.txt': stage_payload(
+            'staged-disabled-result-upload.txt', 4096, required=staged_required
+        ),
         'artifact-manifest.sha256': checked_payload(
             'artifact-manifest.sha256', 262144
         ),
@@ -2272,9 +2592,32 @@ def terminal_payloads():
         'pre-switch-fingerprints.txt': 65536,
         'live-fingerprints.txt': 65536,
         'live-artifact-manifest.sha256': 262144,
+        'live-disabled-result-upload.txt': 4096,
     }.items():
         payloads[relative] = stage_payload(
             relative, limit, required=required
+        )
+    payloads['live-result-storage.txt'] = stage_payload(
+        'live-result-storage.txt', 4096, required=outcome == 'success'
+    )
+    payloads['rollback-result-storage.txt'] = stage_payload(
+        'rollback-result-storage.txt',
+        4096,
+        required=outcome == 'failed_rolled_back',
+    )
+    payloads['rollback-service-quarantine.txt'] = stage_payload(
+        'rollback-service-quarantine.txt',
+        4096,
+        required=outcome == 'failed_rolled_back',
+    )
+    for relative, limit in {
+        'rollback-firewall.txt': 1048576,
+        'rollback-firewall.sha256': 4096,
+        'rollback-fingerprints.txt': 65536,
+        'rollback-restored-artifacts.txt': 4096,
+    }.items():
+        payloads[relative] = stage_payload(
+            relative, limit, required=outcome == 'failed_rolled_back'
         )
     return payloads
 
@@ -2536,9 +2879,32 @@ if expected == 'success':
         'pre-switch-fingerprints.txt',
         'live-fingerprints.txt',
         'live-artifact-manifest.sha256',
+        'staged-disabled-result-upload.txt',
+        'live-disabled-result-upload.txt',
+        'live-result-storage.txt',
     }
     if not required.issubset(files):
         raise SystemExit('terminal success evidence is incomplete')
+elif expected == 'failed_rolled_back':
+    required = {
+        'rollback-result-storage.txt',
+        'rollback-service-quarantine.txt',
+        'rollback-firewall.txt',
+        'rollback-firewall.sha256',
+        'rollback-fingerprints.txt',
+        'rollback-restored-artifacts.txt',
+    }
+    if not required.issubset(files):
+        raise SystemExit('rollback safety evidence is incomplete')
+    quarantine = (latest / 'rollback-service-quarantine.txt').read_text(encoding='ascii')
+    if quarantine != (
+        'rollback_service=masked version=0.8.2 load=masked active=inactive '
+        'unit_file=masked anonymous_ingress=closed\n'
+    ):
+        raise SystemExit('rollback service quarantine evidence mismatch')
+    restored = (latest / 'rollback-restored-artifacts.txt').read_text(encoding='ascii')
+    if restored != 'rollback_artifacts=restored fingerprints=match version=0.8.2\n':
+        raise SystemExit('rollback restored-artifact evidence mismatch')
 PY
 }
 
@@ -2645,7 +3011,7 @@ cleanup() {
     fi
     if [[ $rc -ne 0 && $LIVE_TOUCHED -eq 1 ]]; then
         if ( rollback_live ); then
-            rollback_status='succeeded'
+            rollback_status='safe_masked'
         else
             ROLLBACK_FAILED=1
             rollback_status='failed'
@@ -3020,6 +3386,12 @@ test -f /etc/systemd/system/aneb-server.service
 chmod 0755 "$STAGE" "$STAGE/aneb-server-linux"
 chmod -R a+rX "$STAGE/root-profiles" "$STAGE/execution-profiles"
 install -d -m 0750 -o aneb -g aneb "$STAGE/data"
+install -d -m 0755 -o aneb -g aneb "$STAGE/data/results"
+printf '%s\n' 'ANEB_STAGED_RESULT_PERMISSION_FIXTURE' \
+    > "$STAGE/data/results/20000101.jsonl"
+chown aneb:aneb "$STAGE/data/results/20000101.jsonl"
+chmod 0644 "$STAGE/data/results/20000101.jsonl"
+STAGED_RESULT_FIXTURE_SHA="$(file_sha256 "$STAGE/data/results/20000101.jsonl")"
 
 CURRENT_STAGE='staged_candidate'
 STAGE_PORT="$(choose_loopback_port)"
@@ -3049,6 +3421,9 @@ if [[ $STAGE_READY -ne 1 ]]; then
     cat "$STAGE/candidate.log" >&2
     exit 1
 fi
+[[ "$(file_sha256 "$STAGE/data/results/20000101.jsonl")" == "$STAGED_RESULT_FIXTURE_SHA" ]]
+result_storage_permissions "$STAGE/data/results"
+validate_disabled_result_upload "http://127.0.0.1:$STAGE_PORT" "$STAGE/data/results" staged
 CURRENT_STAGE='staged_receipt'
 validate_receipt \
     "http://127.0.0.1:$STAGE_PORT" \
@@ -3109,6 +3484,19 @@ fi
 
 CURRENT_STAGE='live_mutation'
 LIVE_TOUCHED=1
+
+# Stop the legacy anonymous writer only after rollback is fully armed. Recheck
+# the frozen content while it is quiescent before replacing any live artifact.
+systemctl stop aneb-server
+set +e
+systemctl is-active --quiet aneb-server
+LIVE_STOP_STATE_RC=$?
+set -e
+if [[ $LIVE_STOP_STATE_RC -ne 3 ]]; then
+    echo "legacy server did not become inactive rc=$LIVE_STOP_STATE_RC" >&2
+    exit 1
+fi
+assert_result_storage_content_frozen pre-replace
 
 install -m 0755 "$STAGE/aneb-server-linux" \
     "/opt/aneb/bin/aneb-server.new-$DEPLOY_ID"
@@ -3207,6 +3595,8 @@ if ! wait_live_server; then
 fi
 
 validate_server_identity 'aneb-server/0.8.3' live
+assert_result_storage_content_baseline live
+validate_disabled_result_upload 'https://127.0.0.1:8443' '/opt/aneb/data/results' live
 validate_receipt \
     'https://127.0.0.1:8443' \
     /opt/aneb/execution-profiles/token_multimodal_quick/manifest.sha256 \

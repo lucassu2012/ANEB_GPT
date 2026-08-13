@@ -11,6 +11,51 @@ import (
 	"testing"
 )
 
+type countingResultBody struct {
+	reader    *bytes.Reader
+	readCalls int
+	readBytes int
+}
+
+func newCountingResultBody(payload []byte) *countingResultBody {
+	return &countingResultBody{reader: bytes.NewReader(payload)}
+}
+
+func (body *countingResultBody) Read(target []byte) (int, error) {
+	body.readCalls++
+	count, err := body.reader.Read(target)
+	body.readBytes += count
+	return count, err
+}
+
+func TestDisabledResultUploadRejectsBeforeReadingBodyOrTouchingStorage(t *testing.T) {
+	dataDir := t.TempDir()
+	app := &app{
+		profiles: map[string]*Profile{},
+		dataDir:  dataDir,
+	}
+	payload := []byte(`{"hostile":"RESULT_BODY_MUST_NOT_BE_READ"}`)
+	body := newCountingResultBody(payload)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/results", body)
+	request.ContentLength = int64(len(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Expect", "100-continue")
+	recorder := httptest.NewRecorder()
+
+	app.handleResults(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled result upload status = %d, want 503", recorder.Code)
+	}
+	if recorder.Body.String() != "result upload unavailable\n" {
+		t.Fatalf("disabled result upload body = %q", recorder.Body.String())
+	}
+	if body.readCalls != 0 || body.readBytes != 0 {
+		t.Fatalf("disabled result upload read calls/bytes = %d/%d, want 0/0", body.readCalls, body.readBytes)
+	}
+	assertResultsStorageAbsent(t, dataDir)
+}
+
 func TestResultsRequireConfiguredBearerBeforeStorage(t *testing.T) {
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	dataDir := t.TempDir()
