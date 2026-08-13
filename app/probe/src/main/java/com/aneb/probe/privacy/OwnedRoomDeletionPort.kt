@@ -26,6 +26,7 @@ internal enum class OwnedRoomTable(
     TOKEN_SIMULATION_RESULT("token_simulation_result"),
     REALTIME_SIMULATION_RESULT("realtime_simulation_result"),
     NETWORK_COMPREHENSIVE_RESULT("network_comprehensive_result"),
+    FORMAL_RESULT_UPLOAD_RECEIPT("formal_result_upload_receipt"),
     RESULT_ENVELOPE("result_envelope"),
     ;
 

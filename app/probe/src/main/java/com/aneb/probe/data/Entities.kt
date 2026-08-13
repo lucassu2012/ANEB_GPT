@@ -247,6 +247,22 @@ data class ResultEnvelopeEntity(
     val bodyJson: String,
 )
 
+/**
+ * Durable, body-free record of the exact verified result and consent scope used for one formal
+ * upload attempt. [recordedAtEpochMs] is the local persistence time, not a server receipt time.
+ */
+@Entity(tableName = "formal_result_upload_receipt")
+data class FormalResultUploadReceiptEntity(
+    @PrimaryKey val resultId: String,
+    val canonicalSha256: String,
+    val recipient: String,
+    val purpose: String,
+    val policyVersion: String,
+    val terminalCode: String,
+    val httpCode: Int?,
+    val recordedAtEpochMs: Long,
+)
+
 @Entity(
     tableName = "token_event",
     indices = [Index("runId"), Index(value = ["runId", "scenarioKey", "streamIndex", "seq"])],

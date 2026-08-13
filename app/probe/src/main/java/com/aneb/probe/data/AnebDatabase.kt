@@ -24,6 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RealtimeSimulationResultEntity::class,
         NetworkComprehensiveResultEntity::class,
         ResultEnvelopeEntity::class,
+        FormalResultUploadReceiptEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -46,7 +47,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
     // v17：合成恢复——冻结中断时长、恢复用时、失败探针数和恢复后成功率。
     // v19：新增统一 aneb-result-v1 结果信封；先由 Token 正式引擎写入纵向样板。
-    version = 20,
+    // v21: durable, body-free receipt for an explicitly confirmed formal result upload.
+    version = 21,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -493,6 +495,25 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_20_21_SQL = listOf(
+            "CREATE TABLE `formal_result_upload_receipt` (" +
+                "`resultId` TEXT NOT NULL, " +
+                "`canonicalSha256` TEXT NOT NULL, " +
+                "`recipient` TEXT NOT NULL, " +
+                "`purpose` TEXT NOT NULL, " +
+                "`policyVersion` TEXT NOT NULL, " +
+                "`terminalCode` TEXT NOT NULL, " +
+                "`httpCode` INTEGER, " +
+                "`recordedAtEpochMs` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`resultId`))",
+        )
+
+        internal val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_20_21_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -506,6 +527,7 @@ abstract class AnebDatabase : RoomDatabase() {
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
                         MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
+                        MIGRATION_20_21,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
                     .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)

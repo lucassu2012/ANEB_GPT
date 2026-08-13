@@ -32,7 +32,7 @@ class OwnedRoomDeletionPortTest {
     }
 
     @Test
-    fun `deletes all fifteen owned tables and their sequence metadata`() = runBlocking {
+    fun `deletes all sixteen owned tables and their sequence metadata`() = runBlocking {
         val sqlite = database.openHelper.writableDatabase
         OwnedRoomTable.entries.forEach { seedOneRow(sqlite, it.sqlName) }
 
