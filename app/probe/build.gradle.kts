@@ -1,4 +1,8 @@
 // ANEB Probe — :probe 模块（阶段 0：跑通一次 S1 并把全部时间戳打到屏幕日志）
+import java.io.File
+import java.security.KeyStore
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -21,6 +25,37 @@ val releaseSigningReady = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+
+// Activation requires a separate, Product-Owner-reviewed source change containing the public
+// certificate fingerprint. Never accept an expected fingerprint beside the keystore itself.
+val approvedLocalReleaseSigningCertificateSha256: Set<String> = emptySet()
+val releaseCertificateSha256Pattern = Regex("[0-9A-F]{64}")
+
+fun releaseSigningCertificateSha256(
+    storeFile: File,
+    storePassword: String,
+    keyAlias: String,
+): String {
+    val password = storePassword.toCharArray()
+    try {
+        val keyStore = listOf("JKS", "PKCS12").firstNotNullOfOrNull { storeType ->
+            runCatching {
+                KeyStore.getInstance(storeType).apply {
+                    storeFile.inputStream().use { input -> load(input, password) }
+                }
+            }.getOrNull()
+        } ?: error("RELEASE_SIGNING_KEYSTORE_UNREADABLE")
+        val certificate = keyStore.getCertificate(keyAlias)
+            ?: error("RELEASE_SIGNING_ALIAS_CERTIFICATE_MISSING")
+        return MessageDigest.getInstance("SHA-256")
+            .digest(certificate.encoded)
+            .joinToString(separator = "") { byte ->
+                "%02X".format(byte.toInt() and 0xFF)
+            }
+    } finally {
+        password.fill('\u0000')
+    }
+}
 
 android {
     namespace = "com.aneb.probe"
@@ -90,6 +125,10 @@ android {
             assets.srcDirs("../../profiles")
         }
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 ksp {
@@ -100,18 +139,57 @@ ksp {
 
 val verifyReleaseSigning by tasks.registering {
     group = "verification"
-    description = "Fail closed when release signing ownership has not been configured."
+    description = "Fail closed unless the configured release certificate is explicitly approved."
     doLast {
-        check(releaseSigningReady) {
-            "Release signing is not configured. Set ANEB_RELEASE_STORE_FILE, " +
-                "ANEB_RELEASE_STORE_PASSWORD, ANEB_RELEASE_KEY_ALIAS and ANEB_RELEASE_KEY_PASSWORD."
+        check(approvedLocalReleaseSigningCertificateSha256.isNotEmpty()) {
+            "PRODUCTION_RELEASE_SIGNER_UNPROVISIONED"
         }
-        check(file(releaseStorePath!!).isFile) { "Release keystore does not exist: $releaseStorePath" }
+        check(
+            approvedLocalReleaseSigningCertificateSha256.all {
+                releaseCertificateSha256Pattern.matches(it)
+            },
+        ) {
+            "RELEASE_SIGNING_ALLOWLIST_INVALID"
+        }
+        check(releaseSigningReady) {
+            "RELEASE_SIGNING_CREDENTIALS_INCOMPLETE"
+        }
+        val configuredPath = releaseStorePath!!
+        check(File(configuredPath).isAbsolute) {
+            "RELEASE_SIGNING_STORE_PATH_NOT_ABSOLUTE"
+        }
+        val storeFile = file(configuredPath).canonicalFile
+        check(storeFile.isFile) {
+            "RELEASE_SIGNING_STORE_NOT_FOUND"
+        }
+        val repositoryRoot = rootProject.projectDir.parentFile.canonicalFile.toPath()
+        check(!storeFile.toPath().startsWith(repositoryRoot)) {
+            "RELEASE_SIGNING_STORE_INSIDE_REPOSITORY"
+        }
+        val actualCertificateSha256 = releaseSigningCertificateSha256(
+            storeFile = storeFile,
+            storePassword = releaseStorePassword!!,
+            keyAlias = releaseKeyAlias!!,
+        )
+        check(actualCertificateSha256 in approvedLocalReleaseSigningCertificateSha256) {
+            "RELEASE_SIGNING_CERTIFICATE_NOT_APPROVED actual_sha256=$actualCertificateSha256"
+        }
     }
 }
 
-tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" || it.name == "installRelease" }
-    .configureEach { dependsOn(verifyReleaseSigning) }
+val releaseSigningGatedTaskNames = setOf(
+    "assembleRelease",
+    "bundleRelease",
+    "installRelease",
+    "packageRelease",
+    "packageReleaseBundle",
+    "signReleaseBundle",
+)
+
+tasks.matching { it.name in releaseSigningGatedTaskNames }
+    .configureEach {
+        dependsOn(verifyReleaseSigning)
+    }
 
 val originBoundOracleMode = providers.gradleProperty("aneb.routeA.originBoundOracle").orNull
 check(originBoundOracleMode == null || originBoundOracleMode == "true") {
@@ -125,6 +203,7 @@ tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
             exclude("com/aneb/probe/ui/MainActivityNewIntentOverloadGuardTest.class")
         }
     }
+
 }
 
 dependencies {

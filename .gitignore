@@ -7,6 +7,9 @@ app/.idea/
 *.aab
 *.jks
 *.keystore
+*.p12
+*.pfx
+*.pkcs12
 
 # Go
 server/aneb-server

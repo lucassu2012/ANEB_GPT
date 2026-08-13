@@ -60,6 +60,22 @@ class RepositorySecretScanTest(unittest.TestCase):
             binary.write_bytes(b"\0gh" + b"p_" + b"C" * 36)
             self.assertEqual([], scanner.scan_paths(root, [binary]))
 
+    def test_credential_container_files_are_rejected_before_binary_decoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for suffix in (".jks", ".keystore", ".p12", ".pfx", ".pkcs12"):
+                with self.subTest(suffix=suffix):
+                    container = root / f"production{suffix}"
+                    container.write_bytes(b"\0binary-credential-container")
+                    findings = scanner.scan_paths(root, [container])
+                    self.assertEqual(1, len(findings))
+                    self.assertEqual("credential_container_file", findings[0].rule_id)
+                    self.assertEqual(0, findings[0].line_number)
+                    self.assertNotIn(
+                        "binary-credential-container",
+                        scanner.format_finding(findings[0]),
+                    )
+
     def test_tracked_symlink_is_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

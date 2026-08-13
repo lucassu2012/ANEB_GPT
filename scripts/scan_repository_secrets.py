@@ -45,6 +45,8 @@ RULES: tuple[SecretRule, ...] = (
     ),
 )
 
+CREDENTIAL_CONTAINER_SUFFIXES = (".jks", ".keystore", ".p12", ".pfx", ".pkcs12")
+
 
 def scan_text(relative_path: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
@@ -85,6 +87,8 @@ def staged_relative_paths(root: Path) -> list[str]:
 
 
 def scan_bytes(relative_path: str, data: bytes) -> list[Finding]:
+    if relative_path.lower().endswith(CREDENTIAL_CONTAINER_SUFFIXES):
+        return [Finding("credential_container_file", relative_path, 0)]
     if b"\0" in data:
         return []
     return scan_text(relative_path, data.decode("utf-8", errors="replace"))
