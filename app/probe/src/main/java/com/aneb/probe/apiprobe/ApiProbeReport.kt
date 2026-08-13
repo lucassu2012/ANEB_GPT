@@ -1,6 +1,5 @@
 package com.aneb.probe.apiprobe
 
-import com.aneb.probe.data.ApiProbeResultEntity
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -15,9 +14,37 @@ import kotlinx.serialization.json.putJsonArray
  *  - `excluded_from_aqs: true` 显式声明不进 AQS（设计文档 §9 风险表）；
  *  - 只入本地导出；若阶段 3 需要上报，须先扩展服务端合同（TODO 见 ApiProbe KDoc）。
  *
- * **隐私红线**：所有自由文本字段（error/protocolError/guardMetadata）写入前再过一次
- * [ApiKeyRedactor]（defense-in-depth；入库时已过一次）。JVM 单测锚定输出不含 key。
+ * **隐私红线**：这是与 Room v20 实体解耦的旧版 formatter DTO。所有自由文本字段
+ * （error/protocolError/guardMetadata）输出前过 [ApiKeyRedactor]；不存在从当前 Room 实体
+ * 自动还原旧字段的 adapter。JVM 单测锚定输出不含 key。
  */
+data class LegacyApiProbeReportV1Row(
+    val startedAtEpochMs: Long,
+    val provider: String,
+    val protocolId: String,
+    val baseUrl: String,
+    val model: String,
+    val httpCode: Int?,
+    val error: String?,
+    val ttftMs: Double?,
+    val itlMedianMs: Double?,
+    val itlP95Ms: Double?,
+    val itlSampleCount: Int,
+    val tokenEventCount: Int,
+    val totalMs: Double?,
+    val totalTextChars: Int,
+    val inputTokens: Int?,
+    val outputTokens: Int?,
+    val stopReason: String?,
+    val parseErrors: Int,
+    val protocolError: String?,
+    val proxyDetected: Boolean,
+    val vpnDetected: Boolean,
+    val guardMetadata: String?,
+    val readCount: Int?,
+    val totalBytes: Long?,
+)
+
 object ApiProbeReport {
 
     const val CLAIM_SCOPE = "application_end_to_end_to_llm_api"
@@ -26,7 +53,7 @@ object ApiProbeReport {
     /**
      * @param apiKey 当前配置的 key（仅用于出口兜底替换，绝不写入输出）；null=不替换
      */
-    fun buildJson(results: List<ApiProbeResultEntity>, apiKey: String?): String = buildJsonObject {
+    fun buildJson(results: List<LegacyApiProbeReportV1Row>, apiKey: String?): String = buildJsonObject {
         put("claim_scope", CLAIM_SCOPE)
         put("schema_version", SCHEMA_VERSION)
         put("excluded_from_aqs", true)

@@ -1,6 +1,5 @@
 package com.aneb.probe.apiprobe
 
-import com.aneb.probe.data.ApiProbeResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.ResultReporter
 import com.aneb.probe.scoring.AqsScorer
@@ -17,13 +16,12 @@ class KeyRedactionTest {
 
     private val fakeKey = "sk-" + "ant-api03-FAKEKEY1234567890abcdef"
 
-    private fun probeEntity(error: String?, guardMetadata: String? = null) = ApiProbeResultEntity(
+    private fun legacyReportRow(error: String?, guardMetadata: String? = null) = LegacyApiProbeReportV1Row(
         startedAtEpochMs = 1770000000000L,
         provider = "anthropic",
         protocolId = "anthropic_messages",
         baseUrl = "https://api.anthropic.com",
         model = "claude-3-5-haiku-latest",
-        claimScope = ApiProbeReport.CLAIM_SCOPE,
         httpCode = 200,
         error = error,
         ttftMs = 512.3,
@@ -51,7 +49,7 @@ class KeyRedactionTest {
         // 导出层 defense-in-depth 必须兜底替换
         val json = ApiProbeReport.buildJson(
             listOf(
-                probeEntity(
+                legacyReportRow(
                     error = "http 401 invalid x-api-key: $fakeKey",
                     guardMetadata = "hdr=$fakeKey",
                 )
@@ -64,7 +62,7 @@ class KeyRedactionTest {
 
     @Test
     fun `apiprobe export carries independent claim scope and aqs exclusion`() {
-        val json = ApiProbeReport.buildJson(listOf(probeEntity(error = null)), apiKey = fakeKey)
+        val json = ApiProbeReport.buildJson(listOf(legacyReportRow(error = null)), apiKey = fakeKey)
         assertTrue(json.contains("\"claim_scope\":\"application_end_to_end_to_llm_api\""))
         assertTrue(json.contains("\"excluded_from_aqs\":true"))
         // 与仿真口径明确分开：绝不携带 probe_node claim scope

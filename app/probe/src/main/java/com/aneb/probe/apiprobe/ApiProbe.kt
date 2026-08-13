@@ -7,6 +7,11 @@ import com.aneb.probe.data.ApiProbeResultEntity
 import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.SseReader
 import com.aneb.probe.net.TimingEventListener
+import com.aneb.probe.privacy.LocalPrivacyOwnedRunExecutionBoundary
+import com.aneb.probe.privacy.LocalPrivacyOwnedRunExecutionResult
+import com.aneb.probe.privacy.LocalPrivacyProcessOperations
+import com.aneb.probe.privacy.OwnedRunBlockReason
+import com.aneb.probe.privacy.ProbeOwnedRun
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
@@ -42,14 +47,28 @@ import kotlin.coroutines.resumeWithException
  * **烧钱护栏**（设计文档 §9：真实 API 烧钱且波动大）：固定短 prompt（[PROMPT]）+
  * max_tokens=[MAX_TOKENS] 硬顶；单次手动触发，无自动重试（retryOnConnectionFailure=false）。
  *
- * **隐私红线**：key 只进请求 header；所有出口文本（日志/入库/导出）过 [ApiKeyRedactor]。
+ * **隐私红线**：key 只进请求 header；持久化和结果日志只使用闭集分类码，不保留请求 URL、
+ * model、响应错误文本、协议错误文本或守卫自由文本。
  *
  * 日志合同（logcat 自动化验收）：`APIPROBE_RESULT provider=.. protocol=.. http_code=..
  * ttft_ms=.. itl_median_ms=.. itl_p95_ms=.. itl_samples=.. tokens=.. total_ms=..
- * out_tokens=.. stop=.. parse_errors=.. proxy_detected=.. vpn_detected=..
- * claim_scope=application_end_to_end_to_llm_api error=..`
+ * out_tokens=.. parse_errors=.. proxy_detected=.. vpn_detected=..
+ * claim_scope=application_end_to_end_to_llm_api result_code=.. transport_class=..
+ * completion_class=.. error_body_byte_count=.. error_body_sha256=..
+ * error_body_digest_scope=.. error_body_truncated=..`
  */
-class ApiProbe(private val context: Context) {
+internal class ApiProbeRunBlockedException(
+    val reason: OwnedRunBlockReason,
+) : IllegalStateException(reason.name)
+
+class ApiProbe internal constructor(
+    private val context: Context,
+    private val runBoundary: LocalPrivacyOwnedRunExecutionBoundary,
+) {
+    constructor(context: Context) : this(
+        context = context,
+        runBoundary = LocalPrivacyProcessOperations.ownedRunExecutionBoundary,
+    )
 
     data class Config(
         val provider: LlmProvider,
@@ -64,6 +83,8 @@ class ApiProbe(private val context: Context) {
     // 系统默认网络（含系统代理）——探针豁免 D-16，理由见类 KDoc；不复用 AnebClient
     // （其 Proxy.NO_PROXY 是仿真测量红线，绝不放宽，故这里独立建 client）。
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
         .retryOnConnectionFailure(false) // 重试会掩盖失败且重复烧钱
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS) // 真实 API 排队+推理可远超仿真节点 30s
@@ -75,18 +96,34 @@ class ApiProbe(private val context: Context) {
      *
      * @param log 行日志回调（已保证不含 key）
      */
-    suspend fun run(config: Config, log: suspend (String) -> Unit): ApiProbeResultEntity {
+    suspend fun run(config: Config, log: suspend (String) -> Unit): ApiProbeResultEntity =
+        when (
+            val result = runBoundary.execute(ProbeOwnedRun.API_PROBE) {
+                runOwned(config, log)
+            }
+        ) {
+            is LocalPrivacyOwnedRunExecutionResult.Completed -> result.value
+            LocalPrivacyOwnedRunExecutionResult.DeletionInProgress ->
+                throw ApiProbeRunBlockedException(
+                    OwnedRunBlockReason.PRIVACY_DELETION_IN_PROGRESS,
+                )
+
+            LocalPrivacyOwnedRunExecutionResult.RunAlreadyActive ->
+                throw ApiProbeRunBlockedException(
+                    OwnedRunBlockReason.ANOTHER_OWNED_RUN_ACTIVE,
+                )
+        }
+
+    private suspend fun runOwned(
+        config: Config,
+        log: suspend (String) -> Unit,
+    ): ApiProbeResultEntity {
         val key = config.apiKey
-        fun clean(s: String?): String? = ApiKeyRedactor.redact(s, key)
 
         // ---- 守卫：只记元数据不拒测（探针豁免，见类 KDoc） ----
         val guard = NetGuard.guardCheck(context)
         val proxyDetected = guard.reasons.any { it.startsWith("http_proxy") }
         val vpnDetected = guard.reasons.any { it.startsWith("vpn_active") }
-        val guardMeta = clean(
-            (guard.metadata.entries.joinToString(";") { "${it.key}=${it.value}" } +
-                if (guard.reasons.isEmpty()) "" else ";reasons=" + guard.reasons.joinToString(","))
-        )
         log(
             "APIPROBE_GUARD proxy_detected=$proxyDetected vpn_detected=$vpnDetected " +
                 "note=recorded_not_rejected(probe_exemption)"
@@ -96,43 +133,43 @@ class ApiProbe(private val context: Context) {
             LlmProvider.ANTHROPIC -> AnthropicSseAdapter()
             LlmProvider.OPENAI_COMPAT -> OpenAiSseAdapter()
         }
-        val base = config.baseUrl.trim().trimEnd('/')
-        val url = base + endpointPath(config.provider)
-        val bodyJson = requestBodyJson(config.provider, config.model)
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .post(bodyJson.toRequestBody("application/json".toMediaType()))
-            .header("Accept", "text/event-stream")
-        when (config.provider) {
-            LlmProvider.ANTHROPIC -> {
-                requestBuilder.header("x-api-key", key)
-                requestBuilder.header("anthropic-version", ANTHROPIC_VERSION)
-            }
-            LlmProvider.OPENAI_COMPAT -> requestBuilder.header("Authorization", "Bearer $key")
-        }
-        val call = client.newCall(requestBuilder.build())
-
         val startedAtEpochMs = System.currentTimeMillis()
         val requestStartNanos = SystemClock.elapsedRealtimeNanos()
-        log("APIPROBE_START provider=${config.provider.id} protocol=${adapter.protocolId} model=${config.model}")
+        log("APIPROBE_START provider=${config.provider.id} protocol=${adapter.protocolId}")
 
         var httpCode: Int? = null
-        var error: String? = null
         var parse: LlmParseResult? = null
         var kpis: ApiProbeKpi.Kpis? = null
         var readCount: Int? = null
         var totalBytes: Long? = null
-        try {
-            executeCancellable(call) { resp ->
+        var call: Call? = null
+        val persistenceOutcome: ApiProbePersistenceContract.Outcome = try {
+            val base = config.baseUrl.trim().trimEnd('/')
+            val url = base + endpointPath(config.provider)
+            val bodyJson = requestBodyJson(config.provider, config.model)
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .post(bodyJson.toRequestBody("application/json".toMediaType()))
+                .header("Accept", "text/event-stream")
+            when (config.provider) {
+                LlmProvider.ANTHROPIC -> {
+                    requestBuilder.header("x-api-key", key)
+                    requestBuilder.header("anthropic-version", ANTHROPIC_VERSION)
+                }
+
+                LlmProvider.OPENAI_COMPAT -> requestBuilder.header("Authorization", "Bearer $key")
+            }
+            val activeCall = client.newCall(requestBuilder.build())
+            call = activeCall
+            executeCancellable(activeCall) { resp ->
                 httpCode = resp.code
                 if (!resp.isSuccessful) {
-                    // 错误 body 截断 300 字符（含服务商错误说明），过 redactor 后入库
-                    val bodyHead = try {
-                        resp.body?.string()?.take(300)
-                    } catch (e: Exception) {
-                        null
-                    }
-                    error = "http ${resp.code}" + (bodyHead?.let { " $it" } ?: "")
+                    ApiProbePersistenceContract.Outcome.Http(
+                        statusCode = resp.code,
+                        streamTailTruncated = false,
+                        protocolErrorPresent = false,
+                        untrustedDetail = null,
+                    )
                 } else {
                     val raw = sseReader.readRaw(checkNotNull(resp.body) { "empty body for 2xx" }.source())
                     readCount = raw.readCount
@@ -140,19 +177,34 @@ class ApiProbe(private val context: Context) {
                     val p = adapter.parse(raw.events)
                     parse = p
                     kpis = ApiProbeKpi.compute(requestStartNanos, p.arrivals, raw.eofNanos)
-                    if (raw.truncatedTail) {
-                        error = "truncated_tail"
-                    }
+                    ApiProbePersistenceContract.Outcome.Http(
+                        statusCode = resp.code,
+                        streamTailTruncated = raw.truncatedTail,
+                        protocolErrorPresent = p.protocolError != null,
+                        untrustedDetail = p.protocolError,
+                    )
                 }
             }
         } catch (e: CancellationException) {
-            timingFactory.recordFor(call) // 取走防泄漏（Factory 每 call 一份记录）
+            call?.let { timingFactory.recordFor(it) }
             throw e // 不吞取消（fail-closed §4.6/§4.7）
         } catch (e: Exception) {
-            error = clean(e.toString())
+            if (e is IOException) {
+                ApiProbePersistenceContract.Outcome.Failed(
+                    failure = ApiProbePersistenceContract.Failure.IO,
+                    untrustedDetail = null,
+                )
+            } else {
+                ApiProbePersistenceContract.Outcome.Failed(
+                    failure = ApiProbePersistenceContract.Failure.LOCAL,
+                    untrustedDetail = null,
+                )
+            }
         }
+        val classification = ApiProbePersistenceContract.classify(persistenceOutcome)
         // 传输层计时点（DNS/TLS/TTFB 分量，辅助诊断；取走即移除防泄漏）
-        timingFactory.recordFor(call)?.let { log("APIPROBE_TIMING ${it.summarize().replace(' ', '_')}") }
+        call?.let { timingFactory.recordFor(it) }
+            ?.let { log("APIPROBE_TIMING ${it.summarize().replace(' ', '_')}") }
 
         val k = kpis
         val p = parse
@@ -160,11 +212,8 @@ class ApiProbe(private val context: Context) {
             startedAtEpochMs = startedAtEpochMs,
             provider = config.provider.id,
             protocolId = adapter.protocolId,
-            baseUrl = clean(base) ?: base,
-            model = config.model,
             claimScope = CLAIM_SCOPE,
             httpCode = httpCode,
-            error = clean(error),
             ttftMs = k?.ttftMs,
             itlMedianMs = k?.itlMedianMs,
             itlP95Ms = k?.itlP95Ms,
@@ -174,14 +223,18 @@ class ApiProbe(private val context: Context) {
             totalTextChars = k?.totalTextChars ?: 0,
             inputTokens = p?.inputTokens,
             outputTokens = p?.outputTokens,
-            stopReason = p?.stopReason,
             parseErrors = p?.parseErrors ?: 0,
-            protocolError = clean(p?.protocolError),
             proxyDetected = proxyDetected,
             vpnDetected = vpnDetected,
-            guardMetadata = guardMeta,
             readCount = readCount,
             totalBytes = totalBytes,
+            resultCode = classification.resultCode.wireValue,
+            transportClass = classification.transportClass.wireValue,
+            errorBodyByteCount = classification.errorBodyByteCount,
+            errorBodySha256 = classification.errorBodySha256,
+            errorBodyDigestScope = classification.errorBodyDigestScope.wireValue,
+            errorBodyTruncated = classification.errorBodyTruncated,
+            completionClass = classification.completionClass.wireValue,
         )
         AnebDatabase.get(context).apiProbeResultDao().insert(entity)
 
@@ -192,10 +245,14 @@ class ApiProbe(private val context: Context) {
                 "itl_median_ms=${fmt(entity.itlMedianMs)} itl_p95_ms=${fmt(entity.itlP95Ms)} " +
                 "itl_samples=${entity.itlSampleCount} tokens=${entity.tokenEventCount} " +
                 "total_ms=${fmt(entity.totalMs)} out_tokens=${entity.outputTokens ?: "null"} " +
-                "stop=${entity.stopReason ?: "null"} parse_errors=${entity.parseErrors} " +
+                "parse_errors=${entity.parseErrors} " +
                 "proxy_detected=${entity.proxyDetected} vpn_detected=${entity.vpnDetected} " +
-                "claim_scope=${entity.claimScope} " +
-                "error=${entity.error?.replace(' ', '_') ?: "none"}"
+                "claim_scope=${entity.claimScope} result_code=${entity.resultCode} " +
+                "transport_class=${entity.transportClass} completion_class=${entity.completionClass} " +
+                "error_body_byte_count=${entity.errorBodyByteCount} " +
+                "error_body_sha256=${entity.errorBodySha256 ?: "null"} " +
+                "error_body_digest_scope=${entity.errorBodyDigestScope} " +
+                "error_body_truncated=${entity.errorBodyTruncated}"
         )
         return entity
     }

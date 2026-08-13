@@ -46,7 +46,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v16：合成弱网——冻结声明参数、排除项与服务器确认状态，不改历史结果。
     // v17：合成恢复——冻结中断时长、恢复用时、失败探针数和恢复后成功率。
     // v19：新增统一 aneb-result-v1 结果信封；先由 Token 正式引擎写入纵向样板。
-    version = 19,
+    version = 20,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -65,6 +65,18 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun realtimeSimulationResultDao(): RealtimeSimulationResultDao
     abstract fun networkComprehensiveResultDao(): NetworkComprehensiveResultDao
     abstract fun resultEnvelopeDao(): ResultEnvelopeDao
+
+    override fun close() {
+        synchronized(Companion) {
+            try {
+                super.close()
+            } finally {
+                if (instance === this) {
+                    instance = null
+                }
+            }
+        }
+    }
 
     companion object {
         @Volatile
@@ -434,8 +446,67 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        internal val MIGRATION_19_20_SQL = listOf(
+            "CREATE TABLE `api_probe_result_v20_migration` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`startedAtEpochMs` INTEGER NOT NULL, " +
+                "`provider` TEXT NOT NULL, " +
+                "`protocolId` TEXT NOT NULL, " +
+                "`claimScope` TEXT NOT NULL, " +
+                "`httpCode` INTEGER, " +
+                "`ttftMs` REAL, " +
+                "`itlMedianMs` REAL, " +
+                "`itlP95Ms` REAL, " +
+                "`itlSampleCount` INTEGER NOT NULL, " +
+                "`tokenEventCount` INTEGER NOT NULL, " +
+                "`totalMs` REAL, " +
+                "`totalTextChars` INTEGER NOT NULL, " +
+                "`inputTokens` INTEGER, " +
+                "`outputTokens` INTEGER, " +
+                "`parseErrors` INTEGER NOT NULL, " +
+                "`proxyDetected` INTEGER NOT NULL, " +
+                "`vpnDetected` INTEGER NOT NULL, " +
+                "`readCount` INTEGER, " +
+                "`totalBytes` INTEGER, " +
+                "`resultCode` TEXT NOT NULL, " +
+                "`transportClass` TEXT NOT NULL, " +
+                "`errorBodyByteCount` INTEGER NOT NULL, " +
+                "`errorBodySha256` TEXT, " +
+                "`errorBodyDigestScope` TEXT NOT NULL, " +
+                "`errorBodyTruncated` INTEGER NOT NULL, " +
+                "`completionClass` TEXT NOT NULL)",
+            "INSERT INTO `api_probe_result_v20_migration` (" +
+                "`id`, `startedAtEpochMs`, `provider`, `protocolId`, `claimScope`, `httpCode`, " +
+                "`ttftMs`, `itlMedianMs`, `itlP95Ms`, `itlSampleCount`, `tokenEventCount`, " +
+                "`totalMs`, `totalTextChars`, `inputTokens`, `outputTokens`, `parseErrors`, " +
+                "`proxyDetected`, `vpnDetected`, `readCount`, `totalBytes`, `resultCode`, " +
+                "`transportClass`, `errorBodyByteCount`, `errorBodySha256`, " +
+                "`errorBodyDigestScope`, `errorBodyTruncated`, `completionClass`) " +
+                "SELECT `id`, `startedAtEpochMs`, " +
+                "CASE WHEN `provider` IN ('anthropic', 'openai_compat') " +
+                "THEN `provider` ELSE 'legacy_unknown' END, " +
+                "CASE WHEN `protocolId` IN ('anthropic_messages', 'openai_chat') " +
+                "THEN `protocolId` ELSE 'legacy_unknown' END, " +
+                "'application_end_to_end_to_llm_api', " +
+                "CASE WHEN `httpCode` BETWEEN 100 AND 599 THEN `httpCode` ELSE NULL END, " +
+                "`ttftMs`, `itlMedianMs`, `itlP95Ms`, `itlSampleCount`, `tokenEventCount`, " +
+                "`totalMs`, `totalTextChars`, `inputTokens`, `outputTokens`, `parseErrors`, " +
+                "CASE WHEN `proxyDetected` = 0 THEN 0 ELSE 1 END, " +
+                "CASE WHEN `vpnDetected` = 0 THEN 0 ELSE 1 END, " +
+                "`readCount`, `totalBytes`, 'LEGACY_UNCLASSIFIED', 'NONE', 0, NULL, 'NONE', 0, " +
+                "'LEGACY_UNCLASSIFIED' FROM `api_probe_result`",
+            "DROP TABLE `api_probe_result`",
+            "ALTER TABLE `api_probe_result_v20_migration` RENAME TO `api_probe_result`",
+        )
+
+        internal val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_19_20_SQL.forEach(db::execSQL)
+            }
+        }
+
         fun get(context: Context): AnebDatabase =
-            instance ?: synchronized(this) {
+            synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AnebDatabase::class.java,
@@ -446,10 +517,10 @@ abstract class AnebDatabase : RoomDatabase() {
                     .addMigrations(
                         MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                         MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-                        MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+                        MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
                     )
                     // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
                     .build()
                     .also { instance = it }
             }

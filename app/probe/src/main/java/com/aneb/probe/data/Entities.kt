@@ -453,9 +453,9 @@ data class ContinuityResultEntity(
  *
  * - claimScope 恒为 `application_end_to_end_to_llm_api`（与仿真节点口径
  *   application_end_to_end_to_probe_node 明确分开）；**不进 AQS、不进 /results 上报**
- *   （若上报需扩展合同，留 TODO 阶段 3），仅本地 Room + 导出单独归类。
- * - 数值字段全部可空：失败记 null，禁 0/哨兵值（R-10）。
- * - 本行**绝不含 API key**：错误消息等自由文本入库前经 ApiKeyRedactor 兜底（单测锚定）。
+ *   （若上报需扩展合同，留 TODO 阶段 3），当前仅写本地 Room；尚无 v20 导出合同。
+ * - 不可取得的 KPI 保持 null；计数和闭集分类字段使用各自明确语义。
+ * - 本行不持久化 URL、model、错误消息、协议错误或守卫自由文本；结果状态只来自闭集 wire value。
  */
 @Entity(tableName = "api_probe_result")
 data class ApiProbeResultEntity(
@@ -465,14 +465,9 @@ data class ApiProbeResultEntity(
     val provider: String,
     /** anthropic_messages / openai_chat（适配器 protocolId） */
     val protocolId: String,
-    /** 请求 base URL（不含 path/query；key 走 header 绝不入 URL） */
-    val baseUrl: String,
-    val model: String,
     /** 常量 application_end_to_end_to_llm_api（导出合同字段） */
     val claimScope: String,
     val httpCode: Int?,
-    /** 传输/协议错误摘要（已过 ApiKeyRedactor）；成功 null */
-    val error: String?,
     // ---- 端到端 KPI（对照列口径，不进 AQS） ----
     val ttftMs: Double?,
     val itlMedianMs: Double?,
@@ -481,20 +476,24 @@ data class ApiProbeResultEntity(
     val tokenEventCount: Int,
     val totalMs: Double?,
     val totalTextChars: Int,
-    // ---- 服务端 usage / 结束原因 ----
+    // ---- 服务端 usage ----
     val inputTokens: Int?,
     val outputTokens: Int?,
-    val stopReason: String?,
     val parseErrors: Int,
-    /** 协议层错误（anthropic event:error 等，已过 redactor）；无 null */
-    val protocolError: String?,
-    // ---- 环境元数据（探针豁免：记录但不拒测，见 ApiProbe KDoc） ----
+    // ---- 环境布尔元数据（探针豁免：记录但不拒测，见 ApiProbe KDoc） ----
     val proxyDetected: Boolean,
     val vpnDetected: Boolean,
-    val guardMetadata: String?,
     // ---- 读层自监控 ----
     val readCount: Int?,
     val totalBytes: Long?,
+    // ---- 闭集持久化结果合同 ----
+    val resultCode: String,
+    val transportClass: String,
+    val errorBodyByteCount: Long,
+    val errorBodySha256: String?,
+    val errorBodyDigestScope: String,
+    val errorBodyTruncated: Boolean,
+    val completionClass: String,
 )
 
 // ---------------------------------------------------------------------------
