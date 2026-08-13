@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,7 @@ type app struct {
 	executionCapabilities serverCapabilityReceipt
 	requestAudit          requestAuditEmitter
 	realtimeSummary       realtimeProtocolSummaryEmitter
+	resultUploadAuth      resultUploadAuthorization
 	// allowInject 放行 /stream 的 &inject= 故障注入钩子（P0-C13 前置：
 	// 客户端 seq join/截断/畸形 event 健壮性验收需要服务端可控注入）。
 	// 默认 false；生产/取证部署绝不开启——注入流不是测量数据。
@@ -80,6 +82,11 @@ func main() {
 	profilesDir := flag.String("profiles", "../profiles", "profiles directory (versioned scenario JSON)")
 	executionProfilesDir := flag.String("execution-profiles", "../profiles/published", "published Profile bundles used for execution capability preflight")
 	dataDir := flag.String("data", "./data", "data directory (results JSONL)")
+	resultUploadTokenFile := flag.String(
+		"result-upload-token-file",
+		"",
+		"external regular file containing a dedicated 64-hex result-upload bearer; empty disables result upload",
+	)
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file (optional; default/LE cert for named SNI)")
 	tlsKey := flag.String("tls-key", "", "TLS key file (optional)")
 	// SNI 双通道：-tls-cert-ip/-tls-key-ip 指向自签 IP-SAN 证书（含 IP:120.79.148.0），
@@ -92,6 +99,17 @@ func main() {
 		"serve HTTP/3 (quic-go) on the same port over UDP in parallel with TCP — requires -tls-cert/-tls-key (fail-closed)")
 	udpEchoAddr := flag.String("udp-echo-addr", ":8443", "ANEB sequenced UDP echo address; may share the h3 UDP port")
 	flag.Parse()
+
+	var resultUploadAuth resultUploadAuthorization
+	if strings.TrimSpace(*resultUploadTokenFile) != "" {
+		var err error
+		resultUploadAuth, err = loadResultUploadAuthorizer(*resultUploadTokenFile)
+		if err != nil {
+			log.Fatalf("result upload auth: %v", err)
+		}
+	} else {
+		log.Printf("WARNING: result upload endpoint disabled; configure -result-upload-token-file to enable it")
+	}
 
 	// 配置级 fail-closed 校验放在一切资源加载之前：配错即刻退出。
 	altSvc := ""
@@ -147,6 +165,7 @@ func main() {
 		dataDir:               *dataDir,
 		executionCapabilities: executionCapabilities,
 		requestAudit:          auditSink,
+		resultUploadAuth:      resultUploadAuth,
 		allowInject:           *allowInject,
 		h3Enabled:             *h3Enabled,
 	}

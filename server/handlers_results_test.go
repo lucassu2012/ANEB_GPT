@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -20,17 +21,122 @@ const contractFields = `"claim_scope":"application_end_to_end_to_probe_node",` +
 	`"kpi_set":"agent-qoe-kpi-v0.1","aqs_version":"aqs-v0.1",` +
 	`"profile_versions":"s1=0.2.0;s2=0.2.0;s3=0.2.0","schema_version":"1.0"`
 
+type allowResultsTestAuthorizer struct{}
+
+func (allowResultsTestAuthorizer) authorized(*http.Request) bool { return true }
+
+func newResultsTestApp(dataDir string) *app {
+	return &app{
+		profiles:         map[string]*Profile{},
+		dataDir:          dataDir,
+		resultUploadAuth: allowResultsTestAuthorizer{},
+	}
+}
+
+func postResultForTest(t *testing.T, endpoint string, body []byte) *http.Response {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	var document map[string]any
+	if json.Unmarshal(body, &document) == nil {
+		if runID := resultDocumentRunID(document); runID != "" {
+			request.Header.Set("Idempotency-Key", runID)
+		}
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestResultsAcceptsCurrentTokenV2EnvelopeExactlyOnce(t *testing.T) {
+	dataDir := t.TempDir()
+	a := newResultsTestApp(dataDir)
+	body := currentTokenV2Envelope(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/results", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", resultDocumentRunID(mapFromJSON(t, body)))
+	recorder := httptest.NewRecorder()
+	a.handleResults(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("current Token v2 result: status %d, want 200 (body %q)", recorder.Code, recorder.Body.String())
+	}
+
+	path := filepath.Join(dataDir, "results", time.Now().Format("20060102")+".jsonl")
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read persisted Token v2 result: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(persisted), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("persisted Token v2 lines = %d, want exactly 1", len(lines))
+	}
+	var submittedDoc any
+	var persistedDoc any
+	if err := json.Unmarshal(body, &submittedDoc); err != nil {
+		t.Fatalf("decode submitted Token v2 fixture: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &persistedDoc); err != nil {
+		t.Fatalf("decode persisted Token v2 result: %v", err)
+	}
+	if !reflect.DeepEqual(submittedDoc, persistedDoc) {
+		t.Fatal("persisted Token v2 result differs from the submitted document")
+	}
+}
+
+func currentTokenV2Envelope(t *testing.T) []byte {
+	t.Helper()
+	fixturePath := filepath.Join(
+		"..", "spec", "examples", "aneb-result-v1",
+		"token_simulation.not-computable.valid-schema.json",
+	)
+	frozenV1, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read frozen Token fixture: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(frozenV1, &doc); err != nil {
+		t.Fatalf("decode frozen Token fixture: %v", err)
+	}
+	doc["schema_version"] = "aneb-result-v2"
+	producer := doc["producer"].(map[string]any)
+	producer["component"] = "aneb-probe-android"
+	producer["exporter_version"] = "aneb-result-exporter-v2"
+	run := doc["run"].(map[string]any)
+	run["source_record_version"] = "room-v19-token-envelope-v1"
+	category := doc["category_payload"].(map[string]any)
+	rawEvidence := category["raw_evidence"].(map[string]any)
+	rawEvidence["tasks"] = []any{map[string]any{
+		"workload_kind":        "text",
+		"upload_bytes":         float64(8192),
+		"success":              true,
+		"network_failure":      false,
+		"task_id":              "quick-text-0",
+		"server_processing_ms": float64(300),
+		"ttft_ms":              float64(340),
+		"request_count":        float64(1),
+		"failed_request_count": float64(0),
+	}}
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode current Token v2 fixture: %v", err)
+	}
+	return body
+}
+
 func TestResultsAppendJsonl(t *testing.T) {
 	dataDir := t.TempDir()
-	a := &app{profiles: map[string]*Profile{}, dataDir: dataDir}
+	a := newResultsTestApp(dataDir)
 	srv := httptest.NewServer(a.routes())
 	defer srv.Close()
 
 	post := func(body string) *http.Response {
-		resp, err := http.Post(srv.URL+"/api/v1/results", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
+		resp := postResultForTest(t, srv.URL+"/api/v1/results", []byte(body))
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
@@ -61,15 +167,12 @@ func TestResultsAppendJsonl(t *testing.T) {
 }
 
 func TestResultsRejectsInvalid(t *testing.T) {
-	a := &app{profiles: map[string]*Profile{}, dataDir: t.TempDir()}
+	a := newResultsTestApp(t.TempDir())
 	srv := httptest.NewServer(a.routes())
 	defer srv.Close()
 
 	// 非 JSON。
-	resp, err := http.Post(srv.URL+"/api/v1/results", "application/json", strings.NewReader("not json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := postResultForTest(t, srv.URL+"/api/v1/results", []byte("not json"))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid JSON: status %d, want 400", resp.StatusCode)
@@ -77,10 +180,7 @@ func TestResultsRejectsInvalid(t *testing.T) {
 
 	// 超过 1MB。
 	big := bytes.Repeat([]byte("a"), (1<<20)+100)
-	resp, err = http.Post(srv.URL+"/api/v1/results", "application/json", bytes.NewReader(big))
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp = postResultForTest(t, srv.URL+"/api/v1/results", big)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized: status %d, want 413", resp.StatusCode)
@@ -91,15 +191,12 @@ func TestResultsRejectsInvalid(t *testing.T) {
 // claim_scope 篡改 400 并点名。
 func TestResultsContract(t *testing.T) {
 	dataDir := t.TempDir()
-	a := &app{profiles: map[string]*Profile{}, dataDir: dataDir}
+	a := newResultsTestApp(dataDir)
 	srv := httptest.NewServer(a.routes())
 	defer srv.Close()
 
 	post := func(body string) (int, string) {
-		resp, err := http.Post(srv.URL+"/api/v1/results", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
+		resp := postResultForTest(t, srv.URL+"/api/v1/results", []byte(body))
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -167,7 +264,7 @@ func TestResultsContract(t *testing.T) {
 // 10 行、每行可独立 json.Unmarshal（无交织/截断）、run_id 各出现一次。
 func TestResultsConcurrent(t *testing.T) {
 	dataDir := t.TempDir()
-	a := &app{profiles: map[string]*Profile{}, dataDir: dataDir}
+	a := newResultsTestApp(dataDir)
 	srv := httptest.NewServer(a.routes())
 	defer srv.Close()
 
@@ -181,7 +278,18 @@ func TestResultsConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			body := fmt.Sprintf(`{"run_id":"concurrent-%d","idx":%d,"pad":%q,`+contractFields+`}`, i, i, pad)
-			resp, err := http.Post(srv.URL+"/api/v1/results", "application/json", strings.NewReader(body))
+			request, err := http.NewRequest(
+				http.MethodPost,
+				srv.URL+"/api/v1/results",
+				strings.NewReader(body),
+			)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", fmt.Sprintf("concurrent-%d", i))
+			resp, err := http.DefaultClient.Do(request)
 			if err != nil {
 				errs[i] = err
 				return
@@ -226,4 +334,13 @@ func TestResultsConcurrent(t *testing.T) {
 		}
 		seen[obj.RunID] = true
 	}
+}
+
+func mapFromJSON(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
 }
