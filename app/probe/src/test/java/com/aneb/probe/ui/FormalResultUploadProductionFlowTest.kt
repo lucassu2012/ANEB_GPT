@@ -124,10 +124,10 @@ class FormalResultUploadProductionFlowTest {
             assertEquals(selectedId, requests.single().idempotencyKey)
             assertEquals(
                 listOf(
-                    FormalResultUploadReceipt(
-                        resultId = selectedId,
-                        terminal = FormalResultUploadReceiptTerminal.ACCEPTED,
-                        httpCode = 201,
+                    FormalResultUploadReceipt.from(
+                        delivery = FormalResultDelivery.Accepted(201),
+                        envelope = envelopes.getValue(selectedId),
+                        scope = scope,
                     ),
                 ),
                 receipts,

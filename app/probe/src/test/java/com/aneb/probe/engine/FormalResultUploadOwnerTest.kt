@@ -90,10 +90,10 @@ class FormalResultUploadOwnerTest {
         assertEquals(token, capturedRequest.bearerToken)
         assertEquals(
             listOf(
-                FormalResultUploadReceipt(
-                    resultId = runId,
-                    terminal = FormalResultUploadReceiptTerminal.ACCEPTED,
-                    httpCode = 201,
+                FormalResultUploadReceipt.from(
+                    delivery = FormalResultDelivery.Accepted(201),
+                    envelope = envelope,
+                    scope = scope,
                 ),
             ),
             receipts,

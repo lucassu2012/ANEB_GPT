@@ -7,6 +7,11 @@ import com.aneb.probe.privacy.LocalPrivacyOwnedMutationResult
 import kotlinx.coroutines.CancellationException
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
+private val FORMAL_RESULT_ID = Regex(
+    "^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+)
+private val FORMAL_CANONICAL_SHA256 = Regex("^sha256:[0-9a-f]{64}$")
+
 internal fun interface FormalResultEnvelopeSource {
     suspend fun byId(resultId: String): ResultEnvelopeEntity?
 }
@@ -61,16 +66,13 @@ internal class FormalResultUploadRequest(
     val idempotencyKey: String,
 ) {
     init {
-        require(RESULT_ID.matches(idempotencyKey)) { "formal_result_upload_idempotency_key_invalid" }
+        require(FORMAL_RESULT_ID.matches(idempotencyKey)) {
+            "formal_result_upload_idempotency_key_invalid"
+        }
     }
 
     override fun toString(): String = "FormalResultUploadRequest(redacted)"
 
-    private companion object {
-        val RESULT_ID = Regex(
-            "^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        )
-    }
 }
 
 internal sealed interface FormalResultDelivery {
@@ -89,17 +91,92 @@ internal sealed interface FormalResultDelivery {
     data object Failed : FormalResultDelivery
 }
 
-internal enum class FormalResultUploadReceiptTerminal {
-    ACCEPTED,
-    REJECTED,
-    FAILED,
+internal enum class FormalResultUploadReceiptTerminal(val wireValue: String) {
+    ACCEPTED("accepted"),
+    REJECTED("rejected"),
+    DELIVERY_UNCONFIRMED("delivery_unconfirmed"),
 }
 
-internal data class FormalResultUploadReceipt(
+internal class FormalResultUploadReceipt private constructor(
     val resultId: String,
+    val canonicalSha256: String,
+    val scope: ResultUploadConsentScope,
     val terminal: FormalResultUploadReceiptTerminal,
     val httpCode: Int?,
-)
+) {
+    val recipient: String get() = scope.recipient
+    val purposeCode: String get() = when (scope.purpose) {
+        ResultUploadPurpose.RESULT_SUBMISSION -> "result_submission"
+    }
+    val policyVersion: String get() = scope.policyVersion
+    val terminalCode: String get() = terminal.wireValue
+
+    init {
+        require(FORMAL_RESULT_ID.matches(resultId)) { "formal_result_upload_receipt_result_id_invalid" }
+        require(FORMAL_CANONICAL_SHA256.matches(canonicalSha256)) {
+            "formal_result_upload_receipt_digest_invalid"
+        }
+        when (terminal) {
+            FormalResultUploadReceiptTerminal.ACCEPTED ->
+                require(httpCode != null && httpCode in 200..299)
+
+            FormalResultUploadReceiptTerminal.REJECTED ->
+                require(httpCode != null && httpCode in 300..599)
+
+            FormalResultUploadReceiptTerminal.DELIVERY_UNCONFIRMED -> require(httpCode == null)
+        }
+    }
+
+    override fun toString(): String = "FormalResultUploadReceipt(redacted)"
+
+    override fun equals(other: Any?): Boolean = other is FormalResultUploadReceipt &&
+        resultId == other.resultId &&
+        canonicalSha256 == other.canonicalSha256 &&
+        scope == other.scope &&
+        terminal == other.terminal &&
+        httpCode == other.httpCode
+
+    override fun hashCode(): Int {
+        var result = resultId.hashCode()
+        result = 31 * result + canonicalSha256.hashCode()
+        result = 31 * result + scope.hashCode()
+        result = 31 * result + terminal.hashCode()
+        result = 31 * result + (httpCode ?: 0)
+        return result
+    }
+
+    companion object {
+        fun from(
+            delivery: FormalResultDelivery,
+            envelope: ResultEnvelopeEntity,
+            scope: ResultUploadConsentScope,
+        ): FormalResultUploadReceipt = when (delivery) {
+            is FormalResultDelivery.Accepted -> FormalResultUploadReceipt(
+                resultId = envelope.runId,
+                canonicalSha256 = envelope.canonicalSha256,
+                scope = scope,
+                terminal = FormalResultUploadReceiptTerminal.ACCEPTED,
+                httpCode = delivery.httpCode,
+            )
+
+            is FormalResultDelivery.Rejected -> FormalResultUploadReceipt(
+                resultId = envelope.runId,
+                canonicalSha256 = envelope.canonicalSha256,
+                scope = scope,
+                terminal = FormalResultUploadReceiptTerminal.REJECTED,
+                httpCode = delivery.httpCode,
+            )
+
+            FormalResultDelivery.Failed -> FormalResultUploadReceipt(
+                resultId = envelope.runId,
+                canonicalSha256 = envelope.canonicalSha256,
+                scope = scope,
+                terminal = FormalResultUploadReceiptTerminal.DELIVERY_UNCONFIRMED,
+                httpCode = null,
+            )
+        }
+    }
+}
 
 internal sealed interface FormalResultUploadOutcome {
     data object Disabled : FormalResultUploadOutcome
@@ -203,7 +280,7 @@ internal class FormalResultUploadOwner(
                 }
             },
             finalize = { delivery ->
-                if (receiptStore.commit(delivery.toReceipt(envelope.runId))) {
+                if (receiptStore.commit(FormalResultUploadReceipt.from(delivery, envelope, credential.scope))) {
                     ResultUploadFinalStatusCommit.COMMITTED
                 } else {
                     ResultUploadFinalStatusCommit.NOT_COMMITTED
@@ -212,27 +289,6 @@ internal class FormalResultUploadOwner(
         )
         return attempt.toOutcome()
     }
-
-    private fun FormalResultDelivery.toReceipt(resultId: String): FormalResultUploadReceipt =
-        when (this) {
-            is FormalResultDelivery.Accepted -> FormalResultUploadReceipt(
-                resultId = resultId,
-                terminal = FormalResultUploadReceiptTerminal.ACCEPTED,
-                httpCode = httpCode,
-            )
-
-            is FormalResultDelivery.Rejected -> FormalResultUploadReceipt(
-                resultId = resultId,
-                terminal = FormalResultUploadReceiptTerminal.REJECTED,
-                httpCode = httpCode,
-            )
-
-            FormalResultDelivery.Failed -> FormalResultUploadReceipt(
-                resultId = resultId,
-                terminal = FormalResultUploadReceiptTerminal.FAILED,
-                httpCode = null,
-            )
-        }
 
     private fun ResultUploadAttemptResult<FormalResultDelivery>.toOutcome(): FormalResultUploadOutcome =
         when (this) {
