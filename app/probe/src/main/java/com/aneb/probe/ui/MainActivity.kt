@@ -38,6 +38,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.aneb.probe.BuildConfig
+import com.aneb.probe.AnebProbeApplication
 import com.aneb.probe.apiprobe.AiReachabilityProbe
 import com.aneb.probe.apiprobe.ProviderPresets
 import com.aneb.probe.data.AnebDatabase
@@ -64,6 +65,7 @@ import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.radio.RadioCollector
+import com.aneb.probe.privacy.LocalPrivacyDeletionOperationState
 import com.aneb.probe.ui.components.AnebTabBar
 import com.aneb.probe.ui.components.MainTab
 import com.aneb.probe.ui.theme.AnebTheme
@@ -321,6 +323,32 @@ class MainActivity : ReleaseSafeComponentActivity() {
                     var testMode by rememberSaveable { mutableStateOf(launchSettings.testMode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
                     var driveTest by rememberSaveable { mutableStateOf(launchSettings.driveTest) }
+                    val privacyDeletionOwner = remember {
+                        (application as AnebProbeApplication).localPrivacyDeletionOperationOwner
+                    }
+                    val privacyDeletionState by
+                        privacyDeletionOwner.state.collectAsStateWithLifecycle()
+                    val privacyDeletionCopy = LocalPrivacyDeletionUiMapper.map(
+                        privacyDeletionState,
+                    )
+                    val privacyDeletionRunning =
+                        privacyDeletionState == LocalPrivacyDeletionOperationState.Running
+                    val privacyDeletionStatus =
+                        if (privacyDeletionState == LocalPrivacyDeletionOperationState.Idle) {
+                            null
+                        } else {
+                            privacyDeletionCopy.statusText
+                        }
+                    LaunchedEffect(privacyDeletionState) {
+                        if (privacyDeletionOwner.claimSettingsReset()) {
+                            val defaults = ProbeSettings()
+                            serverUrl = defaults.serverUrl
+                            testMode = defaults.testMode
+                            mode = defaults.mode
+                            transport = defaults.transport
+                            driveTest = defaults.driveTest
+                        }
+                    }
                     val runSession by ProbeRunService.session.collectAsStateWithLifecycle()
                     val serviceLogs by ProbeRunService.logs.collectAsStateWithLifecycle()
                     val serviceTelemetry by ProbeRunService.telemetry.collectAsStateWithLifecycle()
@@ -346,6 +374,10 @@ class MainActivity : ReleaseSafeComponentActivity() {
                     // ---- 主 run 由前台 Service 持有；Activity 只发配置并观察状态 ----
                     fun startRun(fromAutorun: Boolean) {
                         if (running) return
+                        if (privacyDeletionRunning) {
+                            homeNotice = "正在清除本机数据，完成后才能开始测试"
+                            return
+                        }
                         homeNotice = null
                         radioEvidenceLimited = !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
@@ -643,8 +675,11 @@ class MainActivity : ReleaseSafeComponentActivity() {
                                         injectActive = intentInject,
                                         exportRunning = bulkExportRunning,
                                         exportStatus = bulkExportStatus,
+                                        privacyDeletionRunning = privacyDeletionRunning,
+                                        privacyDeletionStatus = privacyDeletionStatus,
+                                        privacyDeletionIssueLines = privacyDeletionCopy.issueLines,
                                         onExportAllResults = {
-                                            if (!bulkExportRunning) {
+                                            if (!bulkExportRunning && !privacyDeletionRunning) {
                                                 bulkExportRunning = true
                                                 bulkExportStatus = "正在校验并导出…"
                                                 doExportAllUnifiedResults { status ->
@@ -652,6 +687,10 @@ class MainActivity : ReleaseSafeComponentActivity() {
                                                     bulkExportRunning = false
                                                 }
                                             }
+                                        },
+                                        onConfirmPrivacyDeletion = {
+                                            intentGatewayToken = null
+                                            privacyDeletionOwner.requestConfirmedDeletion()
                                         },
                                         onOpenServer = ::openServerScreen,
                                         // 可达性看板已降为设置二级入口（下钻屏）。

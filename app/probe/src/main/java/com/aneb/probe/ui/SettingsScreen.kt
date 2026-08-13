@@ -76,6 +76,10 @@ fun SettingsScreen(
     exportRunning: Boolean,
     exportStatus: String?,
     onExportAllResults: () -> Unit,
+    privacyDeletionRunning: Boolean,
+    privacyDeletionStatus: String?,
+    privacyDeletionIssueLines: List<String>,
+    onConfirmPrivacyDeletion: () -> Unit,
     onOpenServer: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -84,6 +88,7 @@ fun SettingsScreen(
 ) {
     val colors = AnebTheme.colors
     var confirmDrive by remember { mutableStateOf(false) }
+    var confirmPrivacyDeletion by remember { mutableStateOf(false) }
 
     if (!showBack) {
         SettingsRootScreen(
@@ -100,6 +105,10 @@ fun SettingsScreen(
             exportRunning = exportRunning,
             exportStatus = exportStatus,
             onExportAllResults = onExportAllResults,
+            privacyDeletionRunning = privacyDeletionRunning,
+            privacyDeletionStatus = privacyDeletionStatus,
+            privacyDeletionIssueLines = privacyDeletionIssueLines,
+            onRequestPrivacyDeletion = { confirmPrivacyDeletion = true },
             onOpenServer = onOpenServer,
             onOpenReachBoard = onOpenReachBoard,
             onOpenProfiles = onOpenProfiles,
@@ -108,6 +117,15 @@ fun SettingsScreen(
             DriveTestConfirmation(
                 onConfirm = { onDriveTestChange(true); confirmDrive = false },
                 onDismiss = { confirmDrive = false },
+            )
+        }
+        if (confirmPrivacyDeletion) {
+            PrivacyDeletionConfirmation(
+                onConfirm = {
+                    confirmPrivacyDeletion = false
+                    onConfirmPrivacyDeletion()
+                },
+                onDismiss = { confirmPrivacyDeletion = false },
             )
         }
         return
@@ -280,6 +298,14 @@ fun SettingsScreen(
                 showChevron = true,
                 onClick = onExportAllResults,
             )
+            HorizontalDivider(color = colors.hairline)
+            PrivacyDeletionSettingsRow(
+                running = privacyDeletionRunning,
+                status = privacyDeletionStatus,
+                issueLines = privacyDeletionIssueLines,
+                enabled = !exportRunning,
+                onClick = { confirmPrivacyDeletion = true },
+            )
         }
         exportStatus?.let {
             Text(
@@ -322,6 +348,15 @@ fun SettingsScreen(
             },
         )
     }
+    if (confirmPrivacyDeletion) {
+        PrivacyDeletionConfirmation(
+            onConfirm = {
+                confirmPrivacyDeletion = false
+                onConfirmPrivacyDeletion()
+            },
+            onDismiss = { confirmPrivacyDeletion = false },
+        )
+    }
 }
 
 private data class ServerPreset(val label: String, val url: String)
@@ -341,6 +376,10 @@ private fun SettingsRootScreen(
     exportRunning: Boolean,
     exportStatus: String?,
     onExportAllResults: () -> Unit,
+    privacyDeletionRunning: Boolean,
+    privacyDeletionStatus: String?,
+    privacyDeletionIssueLines: List<String>,
+    onRequestPrivacyDeletion: () -> Unit,
     onOpenServer: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
@@ -476,6 +515,14 @@ private fun SettingsRootScreen(
                     color = if (exportRunning) colors.faint else colors.brand2,
                 )
             }
+            HairlineDivider()
+            PrivacyDeletionSettingsRow(
+                running = privacyDeletionRunning,
+                status = privacyDeletionStatus,
+                issueLines = privacyDeletionIssueLines,
+                enabled = !exportRunning,
+                onClick = onRequestPrivacyDeletion,
+            )
         }
         com.aneb.probe.ui.components.AnebSectionTitle(
             "高级",
@@ -559,6 +606,75 @@ private fun SettingsDesignRow(
         }
         trailing()
     }
+}
+
+@Composable
+private fun PrivacyDeletionSettingsRow(
+    running: Boolean,
+    status: String?,
+    issueLines: List<String>,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    Column {
+        SettingsDesignRow(
+            icon = "⌫",
+            tint = colors.poor,
+            title = "清除本机 ANEB 数据",
+            subtitle = when {
+                running -> "正在逐项清除并核验 8 个本机范围"
+                status != null -> status
+                else -> "清除应用持有的测试记录、设置、诊断日志和临时状态"
+            },
+            onClick = if (enabled && !running) onClick else null,
+        ) {
+            Text(
+                if (running) "清除中…" else "清除  ›",
+                fontSize = 10.sp,
+                color = if (enabled && !running) colors.poor else colors.faint,
+            )
+        }
+        issueLines.forEach { issue ->
+            Text(
+                issue,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                color = colors.fair,
+                modifier = Modifier.padding(horizontal = 49.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrivacyDeletionConfirmation(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("清除本机 ANEB 数据？", color = colors.ink) },
+        text = {
+            Text(
+                "将清除结果上传授权、本机测试数据库、本机设置、内部与外部诊断日志、" +
+                    "网关凭据、主测试运行状态和专项测试运行状态。" +
+                    "系统下载目录中的导出文件、相册分享图和服务器副本不在本次范围内。" +
+                    "开始后可离开此页面，但请不要强制结束应用。",
+                color = colors.muted,
+                fontSize = 12.sp,
+            )
+        },
+        containerColor = colors.surface,
+        shape = AnebShapes.card,
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("确认清除", color = colors.poor) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = colors.muted) }
+        },
+    )
 }
 
 @Composable
