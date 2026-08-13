@@ -66,10 +66,31 @@ internal interface ResultUploadConsentPersistence {
     fun write(value: PersistedResultUploadConsent): Boolean
 }
 
+internal interface ResultUploadConsentPrivacyResetPersistence {
+    fun isPhysicallyEmpty(): Boolean
+
+    fun clearAndCommit(): Boolean
+}
+
+internal sealed interface ResultUploadPrivacyResetResult {
+    data object Cleared : ResultUploadPrivacyResetResult
+    data object AlreadyEmpty : ResultUploadPrivacyResetResult
+    data object BlockedByActiveAttempt : ResultUploadPrivacyResetResult
+    data object BlockedByPendingRevoke : ResultUploadPrivacyResetResult
+    data object ResetInProgress : ResultUploadPrivacyResetResult
+    data object StateUnavailable : ResultUploadPrivacyResetResult
+}
+
 internal class ResultUploadRevokeToken internal constructor(
     val operationId: String,
     val scope: ResultUploadConsentScope,
+    internal val capabilityGeneration: Any,
 )
+
+internal sealed interface ResultUploadRevokeStart {
+    data class Started(val token: ResultUploadRevokeToken) : ResultUploadRevokeStart
+    data object StateUnavailable : ResultUploadRevokeStart
+}
 
 /** Process-local fail-closed state shared by every production store reconstruction. */
 internal class ResultUploadConsentProcessState {
@@ -80,6 +101,11 @@ internal class ResultUploadConsentProcessState {
         mutableMapOf<ResultUploadConsentScope, MutableSet<String>>()
     internal var authorizationRevision = 0L
     internal var revisionExhausted = false
+    internal var capabilityGeneration: Any = Any()
+    internal var privacyResetToken: Any? = null
+    internal var privacyResetUnavailable = false
+    internal val activeDirectPermitAttempts = mutableSetOf<Any>()
+    internal val activeConsentMutationTokens = mutableSetOf<Any>()
 }
 
 /**
@@ -92,6 +118,9 @@ internal class ResultUploadConsentStore internal constructor(
 ) {
     internal val attemptRegistry: ResultUploadAttemptRegistry
         get() = processState.attemptRegistry
+
+    private val privacyResetPersistence: ResultUploadConsentPrivacyResetPersistence?
+        get() = persistence as? ResultUploadConsentPrivacyResetPersistence
 
     constructor(context: Context) : this(
         SharedPreferencesConsentPersistence(context),
@@ -106,7 +135,9 @@ internal class ResultUploadConsentStore internal constructor(
             }
             synchronized(processState.attemptRegistry.lock) {
                 when {
-                    processState.revisionExhausted ||
+                    processState.privacyResetUnavailable ||
+                        processState.privacyResetToken != null ||
+                        processState.revisionExhausted ||
                         scope in processState.permanentlyUnavailableScopes ->
                         ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED
 
@@ -130,7 +161,10 @@ internal class ResultUploadConsentStore internal constructor(
         synchronized(processState.persistenceIoLock) observation@{
             val revisionBeforeRead = synchronized(processState.attemptRegistry.lock) {
                 when {
-                    permit.scope in processState.permanentlyUnavailableScopes ||
+                    processState.privacyResetUnavailable ||
+                        processState.privacyResetToken != null ||
+                        permit.capabilityGeneration !== processState.capabilityGeneration ||
+                        permit.scope in processState.permanentlyUnavailableScopes ||
                         processState.revisionExhausted ->
                         return@observation ResultUploadPermitObservation(
                             ResultUploadPermitState.STATE_UNAVAILABLE,
@@ -195,7 +229,9 @@ internal class ResultUploadConsentStore internal constructor(
             "result_upload_registry_lock_required"
         }
         return when {
-            scope in processState.permanentlyUnavailableScopes ||
+            processState.privacyResetUnavailable ||
+                processState.privacyResetToken != null ||
+                scope in processState.permanentlyUnavailableScopes ||
                 processState.revisionExhausted -> ResultUploadPermitState.STATE_UNAVAILABLE
 
             processState.isRevoking(scope) -> ResultUploadPermitState.CONSENT_CHANGED
@@ -216,16 +252,21 @@ internal class ResultUploadConsentStore internal constructor(
 
     fun grant(scope: ResultUploadConsentScope): ResultUploadConsentMutationResult =
         synchronized(processState.persistenceIoLock) grant@{
-            val revisionBeforeRead = synchronized(processState.attemptRegistry.lock) {
+            val policyBeforeRead = synchronized(processState.attemptRegistry.lock) {
                 when {
-                    processState.revisionExhausted ||
+                    processState.privacyResetUnavailable ||
+                        processState.privacyResetToken != null ||
+                        processState.revisionExhausted ||
                         scope in processState.permanentlyUnavailableScopes ->
                         return@grant ResultUploadConsentMutationResult.STATE_UNAVAILABLE
 
                     processState.hasPendingRevoke() ->
                         return@grant ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION
 
-                    else -> processState.authorizationRevision
+                    else -> GrantPolicySnapshot(
+                        authorizationRevision = processState.authorizationRevision,
+                        capabilityGeneration = processState.capabilityGeneration,
+                    )
                 }
             }
             val stored = readPersistenceOrNull() ?: run {
@@ -241,12 +282,17 @@ internal class ResultUploadConsentStore internal constructor(
                 ResultUploadConsent.GRANTED -> {
                     val idempotentBlock = synchronized(processState.attemptRegistry.lock) {
                         when {
-                            processState.revisionExhausted ||
+                            processState.privacyResetUnavailable ||
+                                processState.privacyResetToken != null ||
+                                processState.capabilityGeneration !==
+                                policyBeforeRead.capabilityGeneration ||
+                                processState.revisionExhausted ||
                                 scope in processState.permanentlyUnavailableScopes ->
                                 ResultUploadConsentMutationResult.STATE_UNAVAILABLE
 
                             processState.hasPendingRevoke() ||
-                                processState.authorizationRevision != revisionBeforeRead ->
+                                processState.authorizationRevision !=
+                                policyBeforeRead.authorizationRevision ->
                                 ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION
 
                             else -> null
@@ -265,14 +311,20 @@ internal class ResultUploadConsentStore internal constructor(
                 markPermanentlyUnavailable(scope)
                 return@grant ResultUploadConsentMutationResult.PERSISTENCE_FAILED
             }
+            val writeToken = Any()
             val revisionBlock = synchronized(processState.attemptRegistry.lock) {
                 when {
-                    processState.revisionExhausted ||
+                    processState.privacyResetUnavailable ||
+                        processState.privacyResetToken != null ||
+                        processState.capabilityGeneration !==
+                        policyBeforeRead.capabilityGeneration ||
+                        processState.revisionExhausted ||
                         scope in processState.permanentlyUnavailableScopes ->
                         ResultUploadConsentMutationResult.STATE_UNAVAILABLE
 
                     processState.hasPendingRevoke() ||
-                        processState.authorizationRevision != revisionBeforeRead ->
+                        processState.authorizationRevision !=
+                        policyBeforeRead.authorizationRevision ->
                         ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION
 
                     !advanceRevisionLocked() -> {
@@ -280,47 +332,138 @@ internal class ResultUploadConsentStore internal constructor(
                         ResultUploadConsentMutationResult.STATE_UNAVAILABLE
                     }
 
-                    else -> null
+                    else -> {
+                        processState.activeConsentMutationTokens += writeToken
+                        null
+                    }
                 }
             }
             if (revisionBlock != null) return@grant revisionBlock
-            if (persistForScope(
-                    scope,
-                    scope.persisted(
-                        state = ResultUploadConsent.GRANTED,
-                        consentEpoch = stored.consentEpoch + 1L,
-                        claimedResultIds = stored.claimedResultIds,
-                    ),
-                )
-            ) {
-                ResultUploadConsentMutationResult.COMMITTED
-            } else {
-                markPermanentlyUnavailable(scope)
-                ResultUploadConsentMutationResult.PERSISTENCE_FAILED
+            try {
+                if (persistForScope(
+                        scope,
+                        scope.persisted(
+                            state = ResultUploadConsent.GRANTED,
+                            consentEpoch = stored.consentEpoch + 1L,
+                            claimedResultIds = stored.claimedResultIds,
+                        ),
+                    )
+                ) {
+                    ResultUploadConsentMutationResult.COMMITTED
+                } else {
+                    markPermanentlyUnavailable(scope)
+                    ResultUploadConsentMutationResult.PERSISTENCE_FAILED
+                }
+            } finally {
+                synchronized(processState.attemptRegistry.lock) {
+                    processState.activeConsentMutationTokens.remove(writeToken)
+                }
             }
         }
 
     fun revoke(scope: ResultUploadConsentScope): ResultUploadConsentMutationResult {
-        val token = beginRevoke(scope)
-        return completeRevoke(token)
+        return when (val start = beginRevoke(scope)) {
+            is ResultUploadRevokeStart.Started -> completeRevoke(start.token)
+            ResultUploadRevokeStart.StateUnavailable ->
+                ResultUploadConsentMutationResult.STATE_UNAVAILABLE
+        }
+    }
+
+    internal fun resetForPrivacyDeletion(): ResultUploadPrivacyResetResult {
+        val resetPersistence = privacyResetPersistence
+            ?: return ResultUploadPrivacyResetResult.StateUnavailable
+        val token = Any()
+        val blocked = synchronized(processState.attemptRegistry.lock) {
+            when {
+                processState.privacyResetToken != null ->
+                    ResultUploadPrivacyResetResult.ResetInProgress
+
+                processState.attemptRegistry.activeAttempts.isNotEmpty() ||
+                    processState.activeDirectPermitAttempts.isNotEmpty() ||
+                    processState.activeConsentMutationTokens.isNotEmpty() ->
+                    ResultUploadPrivacyResetResult.BlockedByActiveAttempt
+
+                processState.hasPendingRevoke() ->
+                    ResultUploadPrivacyResetResult.BlockedByPendingRevoke
+
+                else -> {
+                    processState.privacyResetToken = token
+                    processState.capabilityGeneration = Any()
+                    null
+                }
+            }
+        }
+        if (blocked != null) return blocked
+
+        var resetSucceeded = false
+        val result = try {
+            synchronized(processState.persistenceIoLock) {
+                val wasEmpty = resetPersistence.isPhysicallyEmpty()
+                when {
+                    !resetPersistence.clearAndCommit() ->
+                        ResultUploadPrivacyResetResult.StateUnavailable
+
+                    !resetPersistence.isPhysicallyEmpty() ->
+                        ResultUploadPrivacyResetResult.StateUnavailable
+
+                    wasEmpty -> {
+                        resetSucceeded = true
+                        ResultUploadPrivacyResetResult.AlreadyEmpty
+                    }
+
+                    else -> {
+                        resetSucceeded = true
+                        ResultUploadPrivacyResetResult.Cleared
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            synchronized(processState.attemptRegistry.lock) {
+                if (processState.privacyResetToken === token) {
+                    processState.privacyResetToken = null
+                    processState.privacyResetUnavailable = true
+                }
+            }
+            throw cancelled
+        } catch (_: Exception) {
+            ResultUploadPrivacyResetResult.StateUnavailable
+        }
+
+        synchronized(processState.attemptRegistry.lock) {
+            if (processState.privacyResetToken === token) {
+                processState.privacyResetToken = null
+                if (resetSucceeded) {
+                    processState.privacyResetUnavailable = false
+                    processState.permanentlyUnavailableScopes.clear()
+                    processState.revisionExhausted = false
+                    processState.authorizationRevision = 0L
+                } else {
+                    processState.privacyResetUnavailable = true
+                }
+            }
+        }
+        return result
     }
 
     /** Installs the process-local off latch without performing persistence I/O. */
-    internal fun beginRevoke(scope: ResultUploadConsentScope): ResultUploadRevokeToken {
-        val token = ResultUploadRevokeToken(
-            operationId = UUID.randomUUID().toString(),
-            scope = scope,
-        )
+    internal fun beginRevoke(scope: ResultUploadConsentScope): ResultUploadRevokeStart =
         synchronized(processState.attemptRegistry.lock) {
+            if (processState.privacyResetToken != null || processState.privacyResetUnavailable) {
+                return@synchronized ResultUploadRevokeStart.StateUnavailable
+            }
+            val token = ResultUploadRevokeToken(
+                operationId = UUID.randomUUID().toString(),
+                scope = scope,
+                capabilityGeneration = processState.capabilityGeneration,
+            )
             processState.pendingRevokeOperations
                 .getOrPut(scope) { mutableSetOf() }
                 .add(token.operationId)
             if (!advanceRevisionLocked()) {
                 processState.permanentlyUnavailableScopes += scope
             }
+            ResultUploadRevokeStart.Started(token)
         }
-        return token
-    }
 
     internal fun hasPendingRevokeLocked(scope: ResultUploadConsentScope): Boolean {
         check(Thread.holdsLock(processState.attemptRegistry.lock)) {
@@ -336,6 +479,18 @@ internal class ResultUploadConsentStore internal constructor(
         var retireToken = false
         try {
             val scope = token.scope
+            val blockedByPrivacyReset = synchronized(processState.attemptRegistry.lock) {
+                processState.privacyResetToken != null || processState.privacyResetUnavailable
+            }
+            if (blockedByPrivacyReset) {
+                return@complete ResultUploadConsentMutationResult.STATE_UNAVAILABLE
+            }
+            val generationChanged = synchronized(processState.attemptRegistry.lock) {
+                token.capabilityGeneration !== processState.capabilityGeneration
+            }
+            if (generationChanged) {
+                return@complete ResultUploadConsentMutationResult.STATE_UNAVAILABLE
+            }
             val tokenIsPending = synchronized(processState.attemptRegistry.lock) {
                 token.operationId in processState.pendingRevokeOperations[scope].orEmpty()
             }
@@ -461,7 +616,9 @@ internal class ResultUploadConsentStore internal constructor(
         }
         synchronized(processState.attemptRegistry.lock) {
             when {
-                scope in processState.permanentlyUnavailableScopes ||
+                processState.privacyResetUnavailable ||
+                    processState.privacyResetToken != null ||
+                    scope in processState.permanentlyUnavailableScopes ||
                     processState.revisionExhausted -> PreparedAdmissionSnapshot(
                     terminalDecision = ResultUploadAdmissionDecision.PersistenceFailed,
                 )
@@ -494,7 +651,10 @@ internal class ResultUploadConsentStore internal constructor(
                     )
 
                     ResultUploadConsent.GRANTED -> {
-                        PreparedAdmissionSnapshot(expectedConsentEpoch = stored.consentEpoch)
+                        PreparedAdmissionSnapshot(
+                            expectedConsentEpoch = stored.consentEpoch,
+                            capabilityGeneration = processState.capabilityGeneration,
+                        )
                     }
                 }
             }
@@ -516,6 +676,13 @@ internal class ResultUploadConsentStore internal constructor(
         }
         val preWriteDecision = synchronized(processState.attemptRegistry.lock) {
             when {
+                processState.privacyResetUnavailable ||
+                    processState.privacyResetToken != null ->
+                    ResultUploadAdmissionDecision.PersistenceFailed
+
+                snapshot.capabilityGeneration !== processState.capabilityGeneration ->
+                    ResultUploadAdmissionDecision.AuthorizationChanged
+
                 scope in processState.permanentlyUnavailableScopes ||
                     processState.revisionExhausted ->
                     ResultUploadAdmissionDecision.PersistenceFailed
@@ -578,6 +745,8 @@ internal class ResultUploadConsentStore internal constructor(
                 resultId = resultId,
                 scope = scope,
                 consentEpoch = stored.consentEpoch,
+                capabilityGeneration = checkNotNull(snapshot.capabilityGeneration),
+                processState = processState,
             ),
         )
     }
@@ -756,6 +925,12 @@ internal class ResultUploadConsentStore internal constructor(
     private data class PreparedAdmissionSnapshot(
         val terminalDecision: ResultUploadAdmissionDecision? = null,
         val expectedConsentEpoch: Long? = null,
+        val capabilityGeneration: Any? = null,
+    )
+
+    private data class GrantPolicySnapshot(
+        val authorizationRevision: Long,
+        val capabilityGeneration: Any,
     )
 
     private enum class PersistedConsentRecordShape {
@@ -766,7 +941,8 @@ internal class ResultUploadConsentStore internal constructor(
     }
 
     private class SharedPreferencesConsentPersistence(context: Context) :
-        ResultUploadConsentPersistence {
+        ResultUploadConsentPersistence,
+        ResultUploadConsentPrivacyResetPersistence {
         private val prefs = context.applicationContext.getSharedPreferences(
             PREFS_NAME,
             Context.MODE_PRIVATE,
@@ -791,6 +967,10 @@ internal class ResultUploadConsentStore internal constructor(
             .putLong(KEY_CONSENT_EPOCH, value.consentEpoch)
             .putStringSet(KEY_CLAIMED_RESULT_IDS, value.claimedResultIds.toSet())
             .commit()
+
+        override fun isPhysicallyEmpty(): Boolean = prefs.all.isEmpty()
+
+        override fun clearAndCommit(): Boolean = prefs.edit().clear().commit()
     }
 
     private companion object {
@@ -850,19 +1030,45 @@ internal class ResultUploadPreparedAdmission internal constructor(
     ): ResultUploadAdmissionDecision = decidePrepared(adapterConfigured, beforeClaim)
 }
 
+internal sealed interface ResultUploadPermitAttemptResult<out T> {
+    data class Executed<T>(val value: T) : ResultUploadPermitAttemptResult<T>
+    data object AuthorizationInvalidated : ResultUploadPermitAttemptResult<Nothing>
+}
+
 /** The permit itself is also one-shot, protecting against duplicate internal continuations. */
 internal class ResultUploadPermit internal constructor(
     val attemptId: String,
     val resultId: String,
     val scope: ResultUploadConsentScope,
     val consentEpoch: Long,
+    internal val capabilityGeneration: Any,
+    private val processState: ResultUploadConsentProcessState,
 ) {
     private val attempted = AtomicBoolean(false)
 
-    suspend fun <T> attempt(block: suspend () -> T): T {
+    suspend fun <T> attempt(block: suspend () -> T): ResultUploadPermitAttemptResult<T> {
         check(attempted.compareAndSet(false, true)) {
             "result_upload_attempt_already_owned"
         }
-        return block()
+        val activeToken = Any()
+        val valid = synchronized(processState.attemptRegistry.lock) {
+            if (capabilityGeneration !== processState.capabilityGeneration ||
+                processState.privacyResetToken != null ||
+                processState.privacyResetUnavailable
+            ) {
+                false
+            } else {
+                processState.activeDirectPermitAttempts += activeToken
+                true
+            }
+        }
+        if (!valid) return ResultUploadPermitAttemptResult.AuthorizationInvalidated
+        return try {
+            ResultUploadPermitAttemptResult.Executed(block())
+        } finally {
+            synchronized(processState.attemptRegistry.lock) {
+                processState.activeDirectPermitAttempts.remove(activeToken)
+            }
+        }
     }
 }

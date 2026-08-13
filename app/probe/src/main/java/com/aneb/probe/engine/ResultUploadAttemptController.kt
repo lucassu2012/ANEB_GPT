@@ -88,13 +88,23 @@ internal class ResultUploadAttemptController(
     fun grant(scope: ResultUploadConsentScope): ResultUploadConsentMutationResult =
         consentStore.grant(scope)
 
+    fun resetForPrivacyDeletion(): ResultUploadPrivacyResetResult =
+        consentStore.resetForPrivacyDeletion()
+
     fun revoke(scope: ResultUploadConsentScope): ResultUploadRevokeResult {
         var disposition: ResultUploadRevokeDisposition
         val cancellations = mutableListOf<Pair<Job, ResultUploadRevokedCancellationException>>()
         lateinit var revokeToken: ResultUploadRevokeToken
         synchronized(registry.lock) {
             val waveWasOpen = consentStore.hasPendingRevokeLocked(scope)
-            revokeToken = consentStore.beginRevoke(scope)
+            when (val start = consentStore.beginRevoke(scope)) {
+                is ResultUploadRevokeStart.Started -> revokeToken = start.token
+                ResultUploadRevokeStart.StateUnavailable ->
+                    return ResultUploadRevokeResult(
+                        consentMutation = ResultUploadConsentMutationResult.STATE_UNAVAILABLE,
+                        attemptDisposition = ResultUploadRevokeDisposition.NO_ACTIVE,
+                    )
+            }
             disposition = if (waveWasOpen) {
                 registry.revokeWaveDispositions[scope]
                     ?: ResultUploadRevokeDisposition.NO_ACTIVE

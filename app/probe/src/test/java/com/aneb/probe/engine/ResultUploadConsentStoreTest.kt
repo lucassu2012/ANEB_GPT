@@ -390,7 +390,7 @@ class ResultUploadConsentStoreTest {
 
         assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
         val durableGrant = persistence.record
-        val revoke = store.beginRevoke(scope)
+        val revoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
 
         assertEquals(durableGrant, persistence.record)
         assertEquals(ResultUploadConsent.REVOKING, store.currentConsent(scope))
@@ -411,7 +411,7 @@ class ResultUploadConsentStoreTest {
         val persistence = MemoryConsentPersistence().apply { record = corrupt }
         val processState = ResultUploadConsentProcessState()
         val store = ResultUploadConsentStore(persistence, processState)
-        val revoke = store.beginRevoke(scope)
+        val revoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
 
         assertEquals(
             ResultUploadConsent.PERSISTENCE_FAILURE_BLOCKED,
@@ -435,7 +435,7 @@ class ResultUploadConsentStoreTest {
         }
 
         assertTrue(persistence.readEntered.await(5, TimeUnit.SECONDS))
-        val revoke = store.beginRevoke(scope)
+        val revoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
         persistence.allowRead.countDown()
         grantThread.join(5_000)
 
@@ -454,8 +454,8 @@ class ResultUploadConsentStoreTest {
         val store = ResultUploadConsentStore(persistence, ResultUploadConsentProcessState())
 
         assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
-        val firstRevoke = store.beginRevoke(scope)
-        val secondRevoke = store.beginRevoke(scope)
+        val firstRevoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
+        val secondRevoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
 
         assertEquals(
             ResultUploadConsentMutationResult.COMMITTED,
@@ -480,8 +480,8 @@ class ResultUploadConsentStoreTest {
         val store = ResultUploadConsentStore(persistence, processState)
 
         assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
-        val firstRevoke = store.beginRevoke(scope)
-        val secondRevoke = store.beginRevoke(scope)
+        val firstRevoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
+        val secondRevoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
         persistence.writeSucceeds = false
 
         assertEquals(
@@ -515,7 +515,7 @@ class ResultUploadConsentStoreTest {
         val marker = CancellationException("revoke_persistence_cancel_marker")
 
         assertEquals(ResultUploadConsentMutationResult.COMMITTED, store.grant(scope))
-        val revoke = store.beginRevoke(scope)
+        val revoke = (store.beginRevoke(scope) as ResultUploadRevokeStart.Started).token
         persistence.writeCancellation = marker
         val cancellation = assertThrows(CancellationException::class.java) {
             store.completeRevoke(revoke)

@@ -126,69 +126,76 @@ internal class ResultSubmissionCoordinator(
             is ResultUploadAdmissionDecision.Permitted -> admissionDecision.permit
         }
 
-        try {
-            localCommit("upload_authorized_local")
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            return ResultSubmissionOutcome.LocalPersistenceFailed
-        }
-
         val configuredAdapter = requireNotNull(adapter)
-        val attemptedOutcome = try {
+        val permitAttempt = try {
             permit.attempt {
-                val request = try {
-                    configuredAdapter.requestFactory()
+                try {
+                    localCommit("upload_authorized_local")
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    return@attempt ResultSubmissionOutcome.AdapterFailed
+                    return@attempt ResultSubmissionOutcome.LocalPersistenceFailed
                 }
-                if (request.resultId != permit.resultId || request.scope != permit.scope) {
-                    return@attempt ResultSubmissionOutcome.ScopeMismatch
+                val attemptedOutcome = run uploadAttempt@{
+                    val request = try {
+                        configuredAdapter.requestFactory()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        return@uploadAttempt ResultSubmissionOutcome.AdapterFailed
+                    }
+                    if (request.resultId != permit.resultId || request.scope != permit.scope) {
+                        return@uploadAttempt ResultSubmissionOutcome.ScopeMismatch
+                    }
+                    val transport = try {
+                        configuredAdapter.transportFactory()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        return@uploadAttempt ResultSubmissionOutcome.AdapterFailed
+                    }
+                    val transportOutcome = try {
+                        transport.submit(request)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        return@uploadAttempt ResultSubmissionOutcome.TransportFailed
+                    }
+                    when (transportOutcome) {
+                        is ResultUploadTransportOutcome.Accepted ->
+                            ResultSubmissionOutcome.Uploaded(transportOutcome.statusCode)
+
+                        is ResultUploadTransportOutcome.Rejected4xx ->
+                            ResultSubmissionOutcome.Rejected(transportOutcome.statusCode)
+
+                        is ResultUploadTransportOutcome.Rejected5xx ->
+                            ResultSubmissionOutcome.Rejected(transportOutcome.statusCode)
+
+                        ResultUploadTransportOutcome.IoFailure ->
+                            ResultSubmissionOutcome.TransportFailed
+                    }
                 }
-                val transport = try {
-                    configuredAdapter.transportFactory()
+                try {
+                    finalStatusCommit(attemptedOutcome.reportStatus)
+                    attemptedOutcome
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    return@attempt ResultSubmissionOutcome.AdapterFailed
-                }
-                val transportOutcome = try {
-                    transport.submit(request)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    return@attempt ResultSubmissionOutcome.TransportFailed
-                }
-                when (transportOutcome) {
-                    is ResultUploadTransportOutcome.Accepted ->
-                        ResultSubmissionOutcome.Uploaded(transportOutcome.statusCode)
-
-                    is ResultUploadTransportOutcome.Rejected4xx ->
-                        ResultSubmissionOutcome.Rejected(transportOutcome.statusCode)
-
-                    is ResultUploadTransportOutcome.Rejected5xx ->
-                        ResultSubmissionOutcome.Rejected(transportOutcome.statusCode)
-
-                    ResultUploadTransportOutcome.IoFailure ->
-                        ResultSubmissionOutcome.TransportFailed
+                    ResultSubmissionOutcome.FinalStatusPersistenceFailed
                 }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            ResultSubmissionOutcome.AdapterFailed
+            ResultUploadPermitAttemptResult.Executed(ResultSubmissionOutcome.AdapterFailed)
         }
+        val attemptedOutcome = when (permitAttempt) {
+            ResultUploadPermitAttemptResult.AuthorizationInvalidated ->
+                return ResultSubmissionOutcome.AuthorizationChanged
 
-        return try {
-            finalStatusCommit(attemptedOutcome.reportStatus)
-            attemptedOutcome
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            ResultSubmissionOutcome.FinalStatusPersistenceFailed
+            is ResultUploadPermitAttemptResult.Executed -> permitAttempt.value
         }
+        return attemptedOutcome
     }
 
     suspend fun submit(
