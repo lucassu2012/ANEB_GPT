@@ -61,6 +61,46 @@ class LocalPrivacyRunStartBoundaryTest {
     }
 
     @Test
+    fun `claimed reservation keeps its run lease when the old delivery timer reaches its deadline`() = runBlocking {
+        val time = FakePendingDeliveryTime()
+        val operationGate = LocalPrivacyOperationGate()
+        val boundary = LocalPrivacyRunStartBoundary(
+            operationGate = operationGate,
+            nowNanos = time::nowNanos,
+            pendingDeliveryTtlNanos = 60L,
+            schedulePendingDeliveryExpiry = time::schedule,
+        )
+        val reserved = boundary.reserve(ProbeOwnedRun.PRIMARY)
+            as LocalPrivacyRunReservationResult.Reserved
+        var cleanupCalls = 0
+        assertTrue(
+            boundary.armPendingDelivery(ProbeOwnedRun.PRIMARY, reserved.handle) {
+                cleanupCalls += 1
+            },
+        )
+
+        time.advanceBy(59L)
+        val ownedJob = Job()
+        val started = boundary.claimAndStart(ProbeOwnedRun.PRIMARY, reserved.handle) {
+            ownedJob
+        }
+        assertTrue(started is LocalPrivacyRunStartResult.Started)
+
+        time.advanceBy(1L)
+        assertEquals(0, cleanupCalls)
+        assertTrue(
+            operationGate.tryAcquireDeletion() is
+                LocalPrivacyDeletionAdmission.BlockedByActiveRun,
+        )
+
+        ownedJob.complete()
+        (started as LocalPrivacyRunStartResult.Started).job.join()
+        val deletion = operationGate.tryAcquireDeletion()
+        assertTrue(deletion is LocalPrivacyDeletionAdmission.Acquired)
+        (deletion as LocalPrivacyDeletionAdmission.Acquired).lease.close()
+    }
+
+    @Test
     fun `unarmed reservation cannot be claimed before delivery ownership is registered`() = runBlocking {
         val operationGate = LocalPrivacyOperationGate()
         val boundary = LocalPrivacyRunStartBoundary(operationGate)
