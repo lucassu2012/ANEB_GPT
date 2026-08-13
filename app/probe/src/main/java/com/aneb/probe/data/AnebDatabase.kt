@@ -67,6 +67,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun realtimeSimulationResultDao(): RealtimeSimulationResultDao
     abstract fun networkComprehensiveResultDao(): NetworkComprehensiveResultDao
     abstract fun resultEnvelopeDao(): ResultEnvelopeDao
+    abstract fun formalResultUploadReceiptDao(): FormalResultUploadReceiptDao
 
     companion object {
         @Volatile

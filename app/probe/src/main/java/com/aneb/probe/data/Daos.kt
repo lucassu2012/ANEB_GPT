@@ -2,6 +2,7 @@ package com.aneb.probe.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 
 @Dao
@@ -77,6 +78,15 @@ interface ResultEnvelopeDao {
 
     @Query("SELECT * FROM result_envelope WHERE runId = :runId")
     suspend fun byId(runId: String): ResultEnvelopeEntity?
+}
+
+@Dao
+interface FormalResultUploadReceiptDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(receipt: FormalResultUploadReceiptEntity): Long
+
+    @Query("SELECT * FROM formal_result_upload_receipt WHERE resultId = :resultId")
+    suspend fun byId(resultId: String): FormalResultUploadReceiptEntity?
 }
 
 @Dao
