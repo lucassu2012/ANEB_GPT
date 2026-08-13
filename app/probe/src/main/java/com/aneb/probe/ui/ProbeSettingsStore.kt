@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.core.content.edit
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.privacy.LocalPrivacyOwnedMutationBoundary
+import com.aneb.probe.privacy.LocalPrivacyOwnedMutationResult
+import com.aneb.probe.privacy.LocalPrivacyProcessOperations
 
 /** 可跨进程重启恢复的非敏感测量设置。API key 仍由独立的加密存储负责。 */
 internal data class ProbeSettings(
@@ -98,22 +101,37 @@ internal fun resolveLaunchSettings(
     )
 }
 
-internal class ProbeSettingsStore(context: Context) {
+internal object ProbeSettingsProcessState {
+    val lock = Any()
+}
+
+internal enum class ProbeSettingsSaveResult {
+    Saved,
+    DeletionInProgress,
+}
+
+internal class ProbeSettingsStore(
+    context: Context,
+    private val ownedMutationBoundary: LocalPrivacyOwnedMutationBoundary =
+        LocalPrivacyProcessOperations.ownedMutationBoundary,
+) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun load(): ProbeSettings {
+    fun load(): ProbeSettings = synchronized(ProbeSettingsProcessState.lock) {
         val migrationApplied = prefs.getBoolean(KEY_SERVER_DEFAULT_V2_MIGRATED, false)
         val storedServerUrl = prefs.getString(KEY_SERVER_URL, null)
         val migratedServerUrl = migrateLegacyDefaultServerUrl(storedServerUrl, migrationApplied)
         if (!migrationApplied) {
-            prefs.edit {
-                putBoolean(KEY_SERVER_DEFAULT_V2_MIGRATED, true)
-                if (migratedServerUrl != storedServerUrl && migratedServerUrl != null) {
-                    putString(KEY_SERVER_URL, migratedServerUrl)
+            ownedMutationBoundary.execute {
+                prefs.edit {
+                    putBoolean(KEY_SERVER_DEFAULT_V2_MIGRATED, true)
+                    if (migratedServerUrl != storedServerUrl && migratedServerUrl != null) {
+                        putString(KEY_SERVER_URL, migratedServerUrl)
+                    }
                 }
             }
         }
-        return ProbeSettingsCodec.decode(
+        ProbeSettingsCodec.decode(
             serverUrl = migratedServerUrl,
             mode = prefs.getString(KEY_MODE, null),
             transport = prefs.getString(KEY_TRANSPORT, null),
@@ -122,27 +140,38 @@ internal class ProbeSettingsStore(context: Context) {
         )
     }
 
-    fun saveServerUrl(value: String) {
-        prefs.edit { putString(KEY_SERVER_URL, value.trim()) }
+    fun saveServerUrl(value: String): ProbeSettingsSaveResult = save {
+            prefs.edit { putString(KEY_SERVER_URL, value.trim()) }
     }
 
-    fun saveMode(value: TestEngine.Mode) {
-        prefs.edit { putString(KEY_MODE, value.name) }
+    fun saveMode(value: TestEngine.Mode): ProbeSettingsSaveResult = save {
+            prefs.edit { putString(KEY_MODE, value.name) }
     }
 
-    fun saveTestMode(value: AnebTestMode) {
-        prefs.edit { putString(KEY_TEST_MODE, value.name) }
+    fun saveTestMode(value: AnebTestMode): ProbeSettingsSaveResult = save {
+            prefs.edit { putString(KEY_TEST_MODE, value.name) }
     }
 
-    fun saveTransport(value: TestEngine.TransportMode) {
-        prefs.edit { putString(KEY_TRANSPORT, value.name) }
+    fun saveTransport(value: TestEngine.TransportMode): ProbeSettingsSaveResult = save {
+            prefs.edit { putString(KEY_TRANSPORT, value.name) }
     }
 
-    fun saveDriveTest(value: Boolean) {
-        prefs.edit { putBoolean(KEY_DRIVE_TEST, value) }
+    fun saveDriveTest(value: Boolean): ProbeSettingsSaveResult = save {
+            prefs.edit { putBoolean(KEY_DRIVE_TEST, value) }
     }
 
-    private companion object {
+    private inline fun save(crossinline mutation: () -> Unit): ProbeSettingsSaveResult =
+        when (
+            ownedMutationBoundary.execute {
+                synchronized(ProbeSettingsProcessState.lock) { mutation() }
+            }
+        ) {
+            is LocalPrivacyOwnedMutationResult.Completed -> ProbeSettingsSaveResult.Saved
+            LocalPrivacyOwnedMutationResult.DeletionInProgress ->
+                ProbeSettingsSaveResult.DeletionInProgress
+        }
+
+    internal companion object {
         const val PREFS_NAME = "probe_settings_v1"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_MODE = "mode"

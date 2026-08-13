@@ -14,9 +14,15 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.aneb.probe.BuildConfig
 import com.aneb.probe.R
+import com.aneb.probe.privacy.LocalPrivacyProcessOperations
+import com.aneb.probe.privacy.LocalPrivacyRunStartResult
+import com.aneb.probe.privacy.OwnedServiceLaunchBoundary
+import com.aneb.probe.privacy.OwnedRunBlockReason
+import com.aneb.probe.privacy.ProbeOwnedRun
 import com.aneb.probe.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +38,11 @@ internal sealed interface SpecialRunSession {
     data object Idle : SpecialRunSession
     data class Running(val kind: SpecialRunKind) : SpecialRunSession
     data class Completed(val kind: SpecialRunKind) : SpecialRunSession
-    data class Failed(val kind: SpecialRunKind, val message: String) : SpecialRunSession
+    data class Failed(
+        val kind: SpecialRunKind,
+        val message: String,
+        val blockReason: OwnedRunBlockReason? = null,
+    ) : SpecialRunSession
     data class Cancelled(val kind: SpecialRunKind) : SpecialRunSession
 }
 
@@ -62,7 +72,16 @@ class ProbeSpecialRunService : Service() {
     }
 
     private fun startContinuity(intent: Intent) {
-        if (job?.isActive == true) return
+        if (job?.isActive == true) {
+            abandonRunReservation(intent)
+            return
+        }
+        startOwnedRunThroughGate(SpecialRunKind.CONTINUITY, intent) {
+            createContinuityJob(intent)
+        }
+    }
+
+    private fun createContinuityJob(intent: Intent): Job? {
         val server = intent.getStringExtra(EXTRA_SERVER)?.takeIf { it.isNotBlank() }
             ?: return failBeforeRun(SpecialRunKind.CONTINUITY, "测试节点地址为空。")
         val transport = enumValueOrDefault(
@@ -72,7 +91,7 @@ class ProbeSpecialRunService : Service() {
         val tokens = intent.getIntExtra(EXTRA_TOKENS, ContinuityRunner.DEFAULT_TOKENS).coerceAtLeast(1)
         val idle = intent.getIntArrayExtra(EXTRA_C3_IDLE)?.toList().orEmpty()
             .filter { it > 0 }.ifEmpty { ContinuityRunner.DEFAULT_C3_IDLE_S }
-        startOwnedRun(SpecialRunKind.CONTINUITY, "正在执行连续性测试") {
+        return createOwnedRunJob(SpecialRunKind.CONTINUITY, "正在执行连续性测试") {
             emitLog(">>> CONTINUITY transport=${transport.name.lowercase()} -> $server")
             ContinuityRunner(applicationContext).run(
                 ContinuityRunner.Config(
@@ -86,12 +105,21 @@ class ProbeSpecialRunService : Service() {
     }
 
     private fun startAb(intent: Intent) {
-        if (job?.isActive == true) return
+        if (job?.isActive == true) {
+            abandonRunReservation(intent)
+            return
+        }
+        startOwnedRunThroughGate(SpecialRunKind.PROTOCOL_AB, intent) {
+            createAbJob(intent)
+        }
+    }
+
+    private fun createAbJob(intent: Intent): Job? {
         val server = intent.getStringExtra(EXTRA_SERVER)?.takeIf { it.isNotBlank() }
             ?: return failBeforeRun(SpecialRunKind.PROTOCOL_AB, "测试节点地址为空。")
         val pairs = intent.getIntExtra(EXTRA_PAIRS, AbRunner.DEFAULT_PAIRS).coerceAtLeast(1)
         val netlog = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_NETLOG, false)
-        startOwnedRun(SpecialRunKind.PROTOCOL_AB, "正在执行协议 A/B 测试") {
+        return createOwnedRunJob(SpecialRunKind.PROTOCOL_AB, "正在执行协议 A/B 测试") {
             emitLog(">>> AB pairs=$pairs -> $server")
             AbRunner(applicationContext).run(
                 AbRunner.Config(
@@ -103,7 +131,11 @@ class ProbeSpecialRunService : Service() {
         }
     }
 
-    private fun startOwnedRun(kind: SpecialRunKind, notificationText: String, block: suspend () -> Unit) {
+    private fun createOwnedRunJob(
+        kind: SpecialRunKind,
+        notificationText: String,
+        block: suspend () -> Unit,
+    ): Job {
         startForeground(
             NOTIFICATION_ID,
             buildNotification(notificationText),
@@ -112,7 +144,7 @@ class ProbeSpecialRunService : Service() {
         cancelRequested = false
         _logs.value = emptyList()
         _session.value = SpecialRunSession.Running(kind)
-        job = scope.launch {
+        return scope.launch(start = CoroutineStart.LAZY) {
             try {
                 block()
                 _session.value = SpecialRunSession.Completed(kind)
@@ -131,14 +163,60 @@ class ProbeSpecialRunService : Service() {
         }
     }
 
+    private fun startOwnedRunThroughGate(
+        kind: SpecialRunKind,
+        intent: Intent,
+        createJob: () -> Job?,
+    ) {
+        val reservationHandle = intent.getStringExtra(EXTRA_RUN_RESERVATION_HANDLE)
+        intent.removeExtra(EXTRA_RUN_RESERVATION_HANDLE)
+        if (reservationHandle == null) {
+            stopSelf()
+            return
+        }
+        val startResult = LocalPrivacyProcessOperations.runStartBoundary.claimAndStart(
+            kind.ownedRun,
+            reservationHandle,
+            createJob,
+        )
+        when (startResult) {
+            is LocalPrivacyRunStartResult.Started -> {
+                job = startResult.job
+                startResult.job.start()
+            }
+
+            LocalPrivacyRunStartResult.DeletionInProgress -> stopSelf()
+
+            LocalPrivacyRunStartResult.RunAlreadyActive -> failBeforeRun(
+                kind = kind,
+                message = "另一项测试正在运行，请稍后重试。",
+                blockReason = OwnedRunBlockReason.ANOTHER_OWNED_RUN_ACTIVE,
+            )
+
+            LocalPrivacyRunStartResult.RejectedBeforeStart -> Unit
+        }
+    }
+
+    private fun abandonRunReservation(intent: Intent) {
+        intent.getStringExtra(EXTRA_RUN_RESERVATION_HANDLE)?.let {
+            LocalPrivacyProcessOperations.runStartBoundary.abandon(it)
+        }
+        intent.removeExtra(EXTRA_RUN_RESERVATION_HANDLE)
+    }
+
     private fun cancelRun() {
         cancelRequested = true
         job?.cancel(CancellationException("user_cancelled")) ?: stopSelf()
     }
 
-    private fun failBeforeRun(kind: SpecialRunKind, message: String) {
-        _session.value = SpecialRunSession.Failed(kind, message)
+    private fun failBeforeRun(
+        kind: SpecialRunKind,
+        message: String,
+        blockReason: OwnedRunBlockReason? = null,
+    ): Job? {
+        _session.value = SpecialRunSession.Failed(kind, message, blockReason)
         stopSelf()
+        return null
     }
 
     private fun emitLog(line: String) {
@@ -203,6 +281,7 @@ class ProbeSpecialRunService : Service() {
         private const val EXTRA_C3_IDLE = "c3_idle"
         private const val EXTRA_PAIRS = "pairs"
         private const val EXTRA_NETLOG = "netlog"
+        private const val EXTRA_RUN_RESERVATION_HANDLE = "privacy_run_reservation_handle"
         private const val CHANNEL_ID = "probe_special_measurement"
         private const val NOTIFICATION_ID = 4102
 
@@ -211,6 +290,15 @@ class ProbeSpecialRunService : Service() {
         private val _logs = MutableStateFlow<List<String>>(emptyList())
         internal val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+        internal fun retainedStateIsPrivacyDefault(): Boolean =
+            _session.value == SpecialRunSession.Idle && _logs.value.isEmpty()
+
+        internal fun clearRetainedStateForPrivacyDeletion() {
+            _logs.value = emptyList()
+            _session.value = SpecialRunSession.Idle
+        }
+
+
         internal fun startContinuity(
             context: Context,
             server: String,
@@ -218,22 +306,70 @@ class ProbeSpecialRunService : Service() {
             tokens: Int,
             c3IdleSeconds: List<Int>,
         ) {
+            val reservation = LocalPrivacyProcessOperations.runStartBoundary.reserve(
+                ProbeOwnedRun.SPECIAL_CONTINUITY,
+            )
+            if (reservation !is com.aneb.probe.privacy.LocalPrivacyRunReservationResult.Reserved) {
+                return
+            }
+            if (
+                !LocalPrivacyProcessOperations.runStartBoundary.armPendingDelivery(
+                    owner = ProbeOwnedRun.SPECIAL_CONTINUITY,
+                    handle = reservation.handle,
+                    cleanup = {},
+                )
+            ) {
+                return
+            }
             val intent = Intent(context, ProbeSpecialRunService::class.java)
                 .setAction(ACTION_CONTINUITY)
                 .putExtra(EXTRA_SERVER, server)
                 .putExtra(EXTRA_TRANSPORT, transport.name)
                 .putExtra(EXTRA_TOKENS, tokens)
                 .putExtra(EXTRA_C3_IDLE, c3IdleSeconds.toIntArray())
-            ContextCompat.startForegroundService(context, intent)
+                .putExtra(EXTRA_RUN_RESERVATION_HANDLE, reservation.handle)
+            try {
+                val launched = OwnedServiceLaunchBoundary.start(context, intent)
+                if (launched == null) {
+                    LocalPrivacyProcessOperations.runStartBoundary.abandon(reservation.handle)
+                }
+            } catch (error: Throwable) {
+                LocalPrivacyProcessOperations.runStartBoundary.abandon(reservation.handle)
+                throw error
+            }
         }
 
         internal fun startAb(context: Context, server: String, pairs: Int, netlog: Boolean) {
+            val reservation = LocalPrivacyProcessOperations.runStartBoundary.reserve(
+                ProbeOwnedRun.SPECIAL_PROTOCOL_AB,
+            )
+            if (reservation !is com.aneb.probe.privacy.LocalPrivacyRunReservationResult.Reserved) {
+                return
+            }
+            if (
+                !LocalPrivacyProcessOperations.runStartBoundary.armPendingDelivery(
+                    owner = ProbeOwnedRun.SPECIAL_PROTOCOL_AB,
+                    handle = reservation.handle,
+                    cleanup = {},
+                )
+            ) {
+                return
+            }
             val intent = Intent(context, ProbeSpecialRunService::class.java)
                 .setAction(ACTION_AB)
                 .putExtra(EXTRA_SERVER, server)
                 .putExtra(EXTRA_PAIRS, pairs)
                 .putExtra(EXTRA_NETLOG, netlog)
-            ContextCompat.startForegroundService(context, intent)
+                .putExtra(EXTRA_RUN_RESERVATION_HANDLE, reservation.handle)
+            try {
+                val launched = OwnedServiceLaunchBoundary.start(context, intent)
+                if (launched == null) {
+                    LocalPrivacyProcessOperations.runStartBoundary.abandon(reservation.handle)
+                }
+            } catch (error: Throwable) {
+                LocalPrivacyProcessOperations.runStartBoundary.abandon(reservation.handle)
+                throw error
+            }
         }
 
         internal fun cancel(context: Context) {
@@ -244,3 +380,9 @@ class ProbeSpecialRunService : Service() {
             enumValues<T>().firstOrNull { it.name == raw } ?: fallback
     }
 }
+
+private val SpecialRunKind.ownedRun: ProbeOwnedRun
+    get() = when (this) {
+        SpecialRunKind.CONTINUITY -> ProbeOwnedRun.SPECIAL_CONTINUITY
+        SpecialRunKind.PROTOCOL_AB -> ProbeOwnedRun.SPECIAL_PROTOCOL_AB
+    }

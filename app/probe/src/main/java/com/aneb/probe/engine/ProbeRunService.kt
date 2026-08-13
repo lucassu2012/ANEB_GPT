@@ -17,19 +17,28 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.aneb.probe.BuildConfig
 import com.aneb.probe.R
+import com.aneb.probe.privacy.LocalPrivacyProcessOperations
+import com.aneb.probe.privacy.LocalPrivacyRunStartResult
+import com.aneb.probe.privacy.OwnedServiceLaunchBoundary
+import com.aneb.probe.privacy.OwnedRunBlockReason
+import com.aneb.probe.privacy.ProbeOwnedRun
 import com.aneb.probe.ui.MainActivity
 import com.aneb.probe.ui.RunFailureMessage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Activity 可重建、应用切后台时仍可观察的主测量会话状态。 */
 internal sealed interface ProbeRunSession {
@@ -48,6 +57,7 @@ internal sealed interface ProbeRunSession {
         val autorun: Boolean,
         val message: String,
         val testMode: AnebTestMode = AnebTestMode.TOKEN_SIMULATION,
+        val blockReason: OwnedRunBlockReason? = null,
     ) : ProbeRunSession
     data class Cancelled(
         val autorun: Boolean,
@@ -208,6 +218,14 @@ private fun AnebTestMode.hasFormalDurableResult(): Boolean = when (this) {
     AnebTestMode.TOKEN_EXPERIENCE -> false
 }
 
+internal suspend fun cancelOwnedCollectorsAndJoin(vararg jobs: Job?) {
+    val ownedJobs = jobs.filterNotNull()
+    withContext(NonCancellable) {
+        ownedJobs.forEach(Job::cancel)
+        ownedJobs.joinAll()
+    }
+}
+
 /**
  * V1 主测量前台 Service。它拥有 [TestEngine] 与协程作用域；Activity 只订阅 StateFlow，
  * 因此切后台和配置重建不会取消 run。通知提供明确的“取消测试”动作。
@@ -248,19 +266,88 @@ class ProbeRunService : Service() {
     }
 
     private fun startRun(intent: Intent) {
-        val qualificationWire = RepeatabilityQualificationServiceIntentBoundary.readAndRemove(
-            getBoolean = { key, default -> intent.getBooleanExtra(key, default) },
-            getString = { key -> intent.getStringExtra(key) },
-            remove = { key -> intent.removeExtra(key) },
-        )
-        val gatewayCredentialHandle = intent.getStringExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
-        val gatewayToken = GatewayCredentialVault.take(gatewayCredentialHandle)
-        intent.removeExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
-        if (runJob?.isActive == true) return
+        if (runJob?.isActive == true) {
+            discardGatewayCredential(
+                intent,
+                intent.getStringExtra(EXTRA_RUN_RESERVATION_HANDLE),
+            )
+            abandonRunReservation(intent)
+            return
+        }
         val autorun = intent.getBooleanExtra(EXTRA_AUTORUN, false)
         val testMode = enumValueOrDefault(
             intent.getStringExtra(EXTRA_TEST_MODE),
             AnebTestMode.TOKEN_SIMULATION,
+        )
+        val reservationHandle = intent.getStringExtra(EXTRA_RUN_RESERVATION_HANDLE)
+        intent.removeExtra(EXTRA_RUN_RESERVATION_HANDLE)
+        if (reservationHandle == null) {
+            discardGatewayCredential(intent, reservationHandle = null)
+            stopSelf()
+            return
+        }
+        val startResult = LocalPrivacyProcessOperations.runStartBoundary.claimAndStart(
+            ProbeOwnedRun.PRIMARY,
+            reservationHandle,
+        ) { createRunJob(intent, autorun, testMode, reservationHandle) }
+        when (startResult) {
+            is LocalPrivacyRunStartResult.Started -> {
+                runJob = startResult.job
+                startResult.job.start()
+            }
+
+            LocalPrivacyRunStartResult.DeletionInProgress -> {
+                discardGatewayCredential(intent, reservationHandle)
+                stopSelf()
+            }
+
+            LocalPrivacyRunStartResult.RunAlreadyActive -> {
+                discardGatewayCredential(intent, reservationHandle)
+                failBeforeRun(
+                    autorun = autorun,
+                    message = "另一项测试正在运行，请稍后重试。",
+                    testMode = testMode,
+                    blockReason = OwnedRunBlockReason.ANOTHER_OWNED_RUN_ACTIVE,
+                )
+            }
+
+            LocalPrivacyRunStartResult.RejectedBeforeStart -> {
+                discardGatewayCredential(intent, reservationHandle)
+                stopSelf()
+            }
+        }
+    }
+
+    private fun abandonRunReservation(intent: Intent) {
+        intent.getStringExtra(EXTRA_RUN_RESERVATION_HANDLE)?.let {
+            LocalPrivacyProcessOperations.runStartBoundary.abandon(it)
+        }
+        intent.removeExtra(EXTRA_RUN_RESERVATION_HANDLE)
+    }
+
+    private fun createRunJob(
+        intent: Intent,
+        autorun: Boolean,
+        testMode: AnebTestMode,
+        reservationHandle: String,
+    ): Job? {
+        val hasGatewayCredentialHandle = intent.hasExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
+        val gatewayCredentialHandle = intent.getStringExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
+        val gatewayToken = if (hasGatewayCredentialHandle) {
+            GatewayCredentialVault.takeForReservation(
+                gatewayCredentialHandle,
+                reservationHandle,
+            )
+        } else {
+            null
+        }
+        intent.removeExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
+        if (hasGatewayCredentialHandle && gatewayToken == null) return null
+
+        val qualificationWire = RepeatabilityQualificationServiceIntentBoundary.readAndRemove(
+            getBoolean = { key, default -> intent.getBooleanExtra(key, default) },
+            getString = { key -> intent.getStringExtra(key) },
+            remove = { key -> intent.removeExtra(key) },
         )
         val config = Config(
             serverBase = intent.getStringExtra(EXTRA_SERVER)
@@ -306,7 +393,7 @@ class ProbeRunService : Service() {
         _realtimeSimulationResult.value = null
         _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
 
-        runJob = serviceScope.launch {
+        return serviceScope.launch(start = CoroutineStart.LAZY) {
             var runId: String? = null
             var committedRunId: String? = null
             var terminalRunId: String? = null
@@ -466,9 +553,8 @@ class ProbeRunService : Service() {
                     ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e), config.testMode)
                 }
             } finally {
-                telemetryJob?.cancel()
+                cancelOwnedCollectorsAndJoin(telemetryJob, resultJob)
                 telemetryJob = null
-                resultJob?.cancel()
                 resultJob = null
                 runJob = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -482,9 +568,21 @@ class ProbeRunService : Service() {
         runJob?.cancel(CancellationException("user_cancelled")) ?: stopSelf()
     }
 
-    private fun failBeforeRun(autorun: Boolean, message: String, testMode: AnebTestMode) {
-        _session.value = ProbeRunSession.Failed(autorun, message, testMode)
+    private fun failBeforeRun(
+        autorun: Boolean,
+        message: String,
+        testMode: AnebTestMode,
+        blockReason: OwnedRunBlockReason? = null,
+    ): Job? {
+        _session.value = ProbeRunSession.Failed(autorun, message, testMode, blockReason)
         stopSelf()
+        return null
+    }
+
+    private fun discardGatewayCredential(intent: Intent, reservationHandle: String?) {
+        val handle = intent.getStringExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
+        GatewayCredentialVault.discardForReservation(handle, reservationHandle)
+        intent.removeExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE)
     }
 
     private fun addLog(line: String) {
@@ -551,7 +649,6 @@ class ProbeRunService : Service() {
                 running.testMode,
             )
         }
-        GatewayCredentialVault.clear()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -568,6 +665,7 @@ class ProbeRunService : Service() {
         private const val EXTRA_AUTORUN = "autorun"
         private const val EXTRA_GATEWAY_BASE = "gateway_base"
         private const val EXTRA_GATEWAY_CREDENTIAL_HANDLE = "gateway_credential_handle"
+        private const val EXTRA_RUN_RESERVATION_HANDLE = "privacy_run_reservation_handle"
         private const val CHANNEL_ID = "probe_measurement"
         private const val NOTIFICATION_ID = 4101
 
@@ -589,8 +687,58 @@ class ProbeRunService : Service() {
         internal val realtimeSimulationTelemetry: StateFlow<RealtimeSimulationTelemetry> = _realtimeSimulationTelemetry.asStateFlow()
         private val _realtimeSimulationResult = MutableStateFlow<RealtimeSimulationResult?>(null)
         internal val realtimeSimulationResult: StateFlow<RealtimeSimulationResult?> = _realtimeSimulationResult.asStateFlow()
+
+        internal fun retainedStateIsPrivacyDefault(): Boolean =
+            _session.value == ProbeRunSession.Idle &&
+                _logs.value.isEmpty() &&
+                _telemetry.value == LiveTelemetry() &&
+                _basicTelemetry.value == BasicSpeedTelemetry() &&
+                _basicResult.value == null &&
+                _tokenSimulationTelemetry.value == TokenSimulationTelemetry() &&
+                _tokenSimulationResult.value == null &&
+                _realtimeSimulationTelemetry.value == RealtimeSimulationTelemetry() &&
+                _realtimeSimulationResult.value == null
+
+        internal fun clearRetainedStateForPrivacyDeletion() {
+            _basicResult.value = null
+            _tokenSimulationResult.value = null
+            _realtimeSimulationResult.value = null
+            _telemetry.value = LiveTelemetry()
+            _basicTelemetry.value = BasicSpeedTelemetry()
+            _tokenSimulationTelemetry.value = TokenSimulationTelemetry()
+            _realtimeSimulationTelemetry.value = RealtimeSimulationTelemetry()
+            _logs.value = emptyList()
+            _session.value = ProbeRunSession.Idle
+        }
+
         internal fun start(context: Context, config: Config, autorun: Boolean) {
-            val gatewayCredentialHandle = config.gatewayToken?.let(GatewayCredentialVault::put)
+            val reservation = LocalPrivacyProcessOperations.runStartBoundary.reserve(
+                ProbeOwnedRun.PRIMARY,
+            )
+            if (reservation !is com.aneb.probe.privacy.LocalPrivacyRunReservationResult.Reserved) {
+                return
+            }
+            val reservationHandle = reservation.handle
+            var gatewayCredentialHandle: String? = null
+            try {
+                val armed = LocalPrivacyProcessOperations.runStartBoundary.armPendingDelivery(
+                    owner = ProbeOwnedRun.PRIMARY,
+                    handle = reservationHandle,
+                    prepare = {
+                        gatewayCredentialHandle = config.gatewayToken?.let {
+                            GatewayCredentialVault.putForReservation(it, reservationHandle)
+                        }
+                    },
+                    cleanup = {
+                        GatewayCredentialVault.discardForReservation(
+                            gatewayCredentialHandle,
+                            reservationHandle,
+                        )
+                    },
+                )
+                if (!armed) {
+                    return
+                }
             val intent = Intent(context, ProbeRunService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SERVER, config.serverBase)
@@ -601,16 +749,31 @@ class ProbeRunService : Service() {
                 .putExtra(EXTRA_DRIVE_TEST, config.driveTest)
                 .putExtra(EXTRA_AUTORUN, autorun)
                 .putExtra(EXTRA_GATEWAY_BASE, config.gatewayBase)
-                .putExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE, gatewayCredentialHandle)
+                .putExtra(EXTRA_RUN_RESERVATION_HANDLE, reservationHandle)
+                .apply {
+                    if (gatewayCredentialHandle != null) {
+                        putExtra(EXTRA_GATEWAY_CREDENTIAL_HANDLE, gatewayCredentialHandle)
+                    }
+                }
             RepeatabilityQualificationServiceIntentBoundary.write(
                 wire = config.qualificationWire,
                 putBoolean = { key, value -> intent.putExtra(key, value) },
                 putString = { key, value -> intent.putExtra(key, value) },
             )
-            try {
-                ContextCompat.startForegroundService(context, intent)
-            } catch (error: Exception) {
-                GatewayCredentialVault.discard(gatewayCredentialHandle)
+                val launched = OwnedServiceLaunchBoundary.start(context, intent)
+                if (launched == null) {
+                    GatewayCredentialVault.discardForReservation(
+                        gatewayCredentialHandle,
+                        reservationHandle,
+                    )
+                    LocalPrivacyProcessOperations.runStartBoundary.abandon(reservationHandle)
+                }
+            } catch (error: Throwable) {
+                GatewayCredentialVault.discardForReservation(
+                    gatewayCredentialHandle,
+                    reservationHandle,
+                )
+                LocalPrivacyProcessOperations.runStartBoundary.abandon(reservationHandle)
                 throw error
             }
         }
