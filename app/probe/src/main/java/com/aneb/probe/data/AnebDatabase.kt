@@ -66,18 +66,6 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun networkComprehensiveResultDao(): NetworkComprehensiveResultDao
     abstract fun resultEnvelopeDao(): ResultEnvelopeDao
 
-    override fun close() {
-        synchronized(Companion) {
-            try {
-                super.close()
-            } finally {
-                if (instance === this) {
-                    instance = null
-                }
-            }
-        }
-    }
-
     companion object {
         @Volatile
         private var instance: AnebDatabase? = null
@@ -506,7 +494,7 @@ abstract class AnebDatabase : RoomDatabase() {
         }
 
         fun get(context: Context): AnebDatabase =
-            synchronized(this) {
+            instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AnebDatabase::class.java,
