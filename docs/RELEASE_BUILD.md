@@ -1,4 +1,14 @@
-# ANEB Probe 0.5.10 release build
+# ANEB Probe 0.5.14 release build contract
+
+## Current release state
+
+- Source coordinates: `0.5.14` (`versionCode=46`)
+- Room schema: version 20, exported under `app/probe/schemas/`
+- Production signer: `UNPROVISIONED`
+- Approved production certificate SHA-256 allowlist: empty (`NONE`)
+- Signed Release APK/AAB: `NOT PRODUCED`
+
+These are source coordinates, not a public Release receipt. Release packaging is intentionally fail-closed until the Product Owner provisions the established production signing identity and approves its public certificate SHA-256 in a reviewed source change. Do not generate a substitute key, reuse the Android Debug key, or reuse the ANEB Android Echo validation key.
 
 ## Ownership boundary
 
@@ -15,9 +25,9 @@ Equivalent Gradle properties are `aneb.release.storeFile`, `aneb.release.storePa
 
 Run `python scripts/scan_repository_secrets.py` before committing. The local quality gate and cloud candidate workflow also enforce it. A token pasted into chat or another durable collaboration record must be revoked even if the repository scan is clean; see `SECURITY.md`.
 
-## Build and verify
+## Build and verify after signer provisioning
 
-From `app/`:
+From `app/`, after the Product Owner has provisioned the external keystore and approved certificate fingerprint:
 
 ```powershell
 .\gradlew.bat :probe:verifyReleaseSigning :probe:bundleRelease
@@ -29,7 +39,7 @@ For a directly installable signed APK:
 .\gradlew.bat :probe:assembleRelease
 ```
 
-Before distribution, verify the certificate owner and SHA-256 fingerprint with Android `apksigner verify --print-certs`, then retain the fingerprint with the release evidence. Losing the signing key prevents seamless updates; leaking it compromises every future release.
+Before distribution, verify the certificate owner and SHA-256 fingerprint with Android `apksigner verify --print-certs`, then require an exact match with the reviewed source allowlist and retain the fingerprint with the release evidence. With the current empty allowlist, `verifyReleaseSigning` and every Release packaging task must fail with `PRODUCTION_RELEASE_SIGNER_UNPROVISIONED`. Losing the established signing key prevents seamless updates; leaking it compromises every future release.
 
 ## Network trust boundary
 
@@ -38,12 +48,12 @@ Before distribution, verify the certificate owner and SHA-256 fingerprint with A
 - The bundled CA certificate is public material, expires in October 2028, and must be rotated together with the E-01 server certificate before expiry.
 - Debug-only local cleartext and local CA trust remain under `src/debug` and do not enter release builds.
 
-## Current artifacts
+## Historical Debug artifacts (not current Release evidence)
 
 - Debug package: `com.aneb.probe.codex`
 - Release package: `com.aneb.probe`
-- Version: `0.5.10` (`versionCode=42`; Debug reports `0.5.10-codex`)
-- Room schema: version 19, exported under `app/probe/schemas/`
+- Historical version: `0.5.10` (`versionCode=42`; Debug reports `0.5.10-codex`)
+- Historical Room schema: version 19
 - Final debug APK: `app/probe/build/outputs/apk/debug/probe-debug.apk`
 - Debug APK SHA-256: `82A1A3C45A3ECD5C695417F65BFCF67311C94A571467EFB2E79525C8EBE5BB1F` (`0.5.10-codex`; 61,850,452 bytes; Android Debug certificate SHA-256 `6644DDCF728B5BC9EFAA07361FC828B9F419D977681000F2E4136C24340B89D9`; debug artifacts are not release evidence).
 - Quality baseline: 551 JVM tests in 90 suites, 0 failures/0 errors/0 skipped; Android Lint 0 errors (11 dependency/SDK/API notices); 12 measurement/result tests, 8 candidate-packaging tests, 6 credential-safety tests, behavior model 31 tests and Go server/gateway tests pass. Profile catalog 1.3.1 contains 8 schemas, 2 families, 16 profiles, 6 hash-bound runtime bundles, 6 embedded-network profiles and 4 behavior models.

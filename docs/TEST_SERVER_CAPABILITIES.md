@@ -29,9 +29,16 @@
 - ［KNOWN｜HIGH］本次部署来源 commit=`33434dc4006cc4dfb41835f88e052dd57840bebd`，deployment ID=`20260727080647-d93d8d65d9704e688e6c0f1accbb93f0`，artifact manifest SHA-256=`8a525aa279c6c5030a1f2fc48bfebfc95a9618fe4c82c2b83a1977996bc3f9e0`，staged/live receipt SHA-256=`8229e5c039eb03f694bb404824ff499de6562e2bee822ab6c335d44e7b12f987`。受保护切换在锁内验证三份运行包、六项能力、HTTP/UDP smoke、共享主机指纹与完整 0.8.1 回滚面后才提交成功。
 - ［KNOWN｜HIGH］切换前后共享指纹一致：Docker=`2175cb68233763ebc1724fc37126d43d8a8372ab4f3324a53a348c2194b86c27`、eth0 qdisc=`e9455ff1a3a44f3b5979ee068f8c4e3fe90aa0ebdd30e89add8299403958cbac`、IPv4=`4580dc17c402f6cbe6730cd0e2b8ee4518abe4328e9dad5ba8f394952d60fd95`、IPv6=`192a359dda179d478c0e99eb3b0817894794ce62495afd489ed12a5e433c395e`、nft=`3a941c6d9776ff39234a1918654eafce570d22410f6c428fc4c5bfe61a1608eb`、full firewall=`dc8cc094543ae04272ed13837a9afc0e1f62e6661d4b0715062ef134ffd569f3`。
 
-### 1.2 `aneb-server/0.8.0` 历史部署记录
+### 1.2 `aneb-server/0.8.3` 本地候选（未部署）
 
-> ［KNOWN｜HIGH］本小节保留 2026-07-19 的 0.8.0 历史切换证据，不描述当前 E-01 现态；当前现态以上表 0.8.1 为准。
+- ［KNOWN｜HIGH］当前工作树中的 0.8.3 候选为 `/api/v1/results` 增加了默认关闭的 Bearer 认证与 `Idempotency-Key` 约束；认证发生在读取请求体或修改结果存储之前。
+- ［KNOWN｜HIGH］仓库中的生产 systemd unit 故意不传 `-result-upload-token-file`。因此即使部署该候选，按当前 unit 启动时结果写入端点也会在读取请求体和修改存储之前返回 503。
+- ［KNOWN｜HIGH］0.8.3 尚无候选二进制 SHA-256、受保护部署回执或外部 secret provisioning 回执；本节不得解释为 E-01 已升级。仓库和本文均不得保存 Bearer、Bearer 摘要或实际 secret 文件路径。
+- ［KNOWN｜HIGH］当前认证模型仅是一枚部署级共享 Bearer，不提供账户/设备身份、逐邀请撤销、轮换、配额或速率限制；在这些产品能力完成前，正式结果上传保持不可见且默认关闭。
+
+### 1.3 `aneb-server/0.8.0` 历史部署记录
+
+> ［KNOWN｜HIGH］本小节保留 2026-07-19 的 0.8.0 历史切换证据，不描述当前 E-01 现态；当前现态以上表 0.8.2 为准。
 
 > ［KNOWN｜HIGH］2026-07-18 首次 0.8.0 切换尝试中，候选能力回执和全量旧端点 smoke
 > 均通过；旧部署器随后因把 `iptables-save`/`ip6tables-save` 每次运行产生的
@@ -151,7 +158,7 @@
 | `POST /api/v1/upload` | 上行突发 | 请求体 ≤64MiB；服务端返回 64KiB 读块到达时间 |
 | `GET /api/v1/download` | 下行大对象 | `bytes` 1B–1GiB；`chunk_kb` 1–1024，默认 64MiB/256KiB；固定长度、禁缓存/压缩 |
 | `POST /api/v1/toolloop` | 工具调用往返 | 上行 ≤64MiB；处理等待 0–60000ms；下行 0–16MiB |
-| `POST /api/v1/results` | 旧版结果合同落盘 | JSON ≤1MiB；`claim_scope` 固定为 `application_end_to_end_to_probe_node`；schema `1.0` |
+| `POST /api/v1/results` | live 0.8.2 旧版结果合同落盘 | JSON ≤1MiB；`claim_scope` 固定为 `application_end_to_end_to_probe_node`；schema `1.0`。本行不描述未部署的 0.8.3 候选。 |
 | `GET /api/v1/serverinfo` | 节点版本、运行时快照与执行能力回执 | 版本、uptime、H3 开关、TCP slow-start-after-idle、拥塞控制及 `execution_capabilities`；审计只证明 request entry，不证明 handler/客户端下载成功 |
 | `GET /api/v1/impairments` | 已部署合成弱网合同目录 | 返回 `network_comprehensive_weak_capacity_latency@1.1.0` 与 `network_comprehensive_weak_recovery@1.1.0` |
 | `/synthetic/weak-capacity-latency-v1/api/v1/{echo,download,upload}` | 逐 run 隔离的用户态弱网路径 | 必须携带 `impair_run/impair_seed/impair_seq`；只支持这 3 个端点；正常 `/api/v1/*` 路径不整形 |

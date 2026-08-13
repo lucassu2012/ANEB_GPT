@@ -23,6 +23,8 @@
 
 ## 当前状态（2026-07-29，S3/M2 本地 qualification 合同 / E-01 0.8.2）
 
+> ［KNOWN｜HIGH］2026-08-14 当前源码坐标为 Android `0.5.14`（versionCode 46）与 Room 20。生产 signer 仍为 `UNPROVISIONED`，已批准生产证书 SHA-256 allowlist 为空，因此没有正式 Release APK/AAB；下文 0.5.10/Room v19/旧测试计数只保留为历史冻结证据，不认证当前工作树。E-01 live 现态仍是 0.8.2；0.8.3 只是本地、未部署候选，结果写入按仓库生产 unit 默认返回 503。
+
 - Android 客户端已按 `ANEB_UI` 重构，并提供“网络综合 / Token 仿真 / AI 实时”三类正式测试、SpeedTest 风格动态仪表、独立评分与结论、统一历史、真实 GPS 地图和新版图标。
 - App 只在自建 ANEB 节点上模拟 AI 应用行为，不调用 Kimi、DeepSeek、千问等真实 API；行为模型在 `tools/aneb-ai-behavior-model/` 独立生成可审计运行计划。
 - P3 行为模型已升级到 0.3.3：授权派生统计、主体隔离训练/留出、固定误差门限、候选/报告/数据摘要绑定和 validated 发布复算均保持硬门；新增 D-110 三族 qualification Profile/runtime 的统一确定性发布入口。仓库仍没有真实授权数据，4 个模型保持 hypothesis，不能声称厂商画像已校准。
