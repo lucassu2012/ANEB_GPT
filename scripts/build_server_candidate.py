@@ -572,7 +572,15 @@ def _assert_build_sources_tracked(
     environment: Mapping[str, str],
 ) -> tuple[Path, ...]:
     listed = _run(
-        [go, "list", "-deps", "-mod=readonly", "-json", "."],
+        [
+            go,
+            "list",
+            "-deps",
+            "-mod=readonly",
+            "-buildvcs=false",
+            "-json",
+            ".",
+        ],
         cwd=paths.server_dir,
         environment=environment,
         failure_code="go_source_list_failed",

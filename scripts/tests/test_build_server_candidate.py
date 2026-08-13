@@ -311,6 +311,49 @@ class BuildServerCandidateTest(unittest.TestCase):
                 artifact_snapshot.joinpath(*name.split("/")).read_bytes(),
             )
 
+    def test_worktree_nested_below_an_unrelated_git_marker_still_builds_exact_head(self) -> None:
+        primary_repo = self.repo
+        primary_server = self.server
+        outer = self.base / "unrelated-outer"
+        (outer / ".git" / "info").mkdir(parents=True)
+        worktree = outer / "nested-worktree"
+        self._run(
+            [
+                "git",
+                "-C",
+                str(primary_repo),
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                str(worktree),
+                "HEAD",
+            ]
+        )
+        self.repo = worktree
+        self.server = worktree / "server"
+        try:
+            stage = self.base / "nested-worktree-candidate"
+            result = self._invoke_candidate(stage)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("OK schema=aneb-server-build-provenance-v1", result.stdout)
+            self.assertTrue((stage / "aneb-server-linux").is_file())
+        finally:
+            self.repo = primary_repo
+            self.server = primary_server
+            self._run(
+                [
+                    "git",
+                    "-C",
+                    str(primary_repo),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    str(worktree),
+                ]
+            )
+
     def test_external_gofips_poison_is_overridden_and_recorded(self) -> None:
         stage = self.base / "gofips-poison"
         environment = os.environ.copy()
