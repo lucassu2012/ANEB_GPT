@@ -88,6 +88,11 @@ internal class ResultUploadAttemptController(
     fun grant(scope: ResultUploadConsentScope): ResultUploadConsentMutationResult =
         consentStore.grant(scope)
 
+    fun grantForResult(
+        resultId: String,
+        scope: ResultUploadConsentScope,
+    ): ResultUploadConsentMutationResult = consentStore.grantForResult(resultId, scope)
+
     fun resetForPrivacyDeletion(): ResultUploadPrivacyResetResult =
         consentStore.resetForPrivacyDeletion()
 

@@ -58,6 +58,7 @@ internal data class PersistedResultUploadConsent(
     val policyVersion: String? = null,
     val consentEpoch: Long = 0L,
     val claimedResultIds: Set<String> = emptySet(),
+    val authorizedResultId: String? = null,
 )
 
 internal interface ResultUploadConsentPersistence {
@@ -251,6 +252,20 @@ internal class ResultUploadConsentStore internal constructor(
         observePermit(permit).state == ResultUploadPermitState.CURRENT
 
     fun grant(scope: ResultUploadConsentScope): ResultUploadConsentMutationResult =
+        grant(scope = scope, authorizedResultId = null)
+
+    fun grantForResult(
+        resultId: String,
+        scope: ResultUploadConsentScope,
+    ): ResultUploadConsentMutationResult {
+        require(RESULT_ID.matches(resultId)) { "result_upload_result_id_invalid" }
+        return grant(scope = scope, authorizedResultId = resultId)
+    }
+
+    private fun grant(
+        scope: ResultUploadConsentScope,
+        authorizedResultId: String?,
+    ): ResultUploadConsentMutationResult =
         synchronized(processState.persistenceIoLock) grant@{
             val policyBeforeRead = synchronized(processState.attemptRegistry.lock) {
                 when {
@@ -294,6 +309,9 @@ internal class ResultUploadConsentStore internal constructor(
                                 processState.authorizationRevision !=
                                 policyBeforeRead.authorizationRevision ->
                                 ResultUploadConsentMutationResult.BLOCKED_BY_PROCESS_REVOCATION
+
+                            stored.authorizedResultId != authorizedResultId ->
+                                ResultUploadConsentMutationResult.STATE_UNAVAILABLE
 
                             else -> null
                         }
@@ -346,6 +364,7 @@ internal class ResultUploadConsentStore internal constructor(
                             state = ResultUploadConsent.GRANTED,
                             consentEpoch = stored.consentEpoch + 1L,
                             claimedResultIds = stored.claimedResultIds,
+                            authorizedResultId = authorizedResultId,
                         ),
                     )
                 ) {
@@ -531,6 +550,7 @@ internal class ResultUploadConsentStore internal constructor(
                         state = ResultUploadConsent.REVOKED,
                         consentEpoch = stored.consentEpoch,
                         claimedResultIds = stored.claimedResultIds,
+                        authorizedResultId = null,
                     ),
                 )
             ) {
@@ -651,10 +671,18 @@ internal class ResultUploadConsentStore internal constructor(
                     )
 
                     ResultUploadConsent.GRANTED -> {
-                        PreparedAdmissionSnapshot(
-                            expectedConsentEpoch = stored.consentEpoch,
-                            capabilityGeneration = processState.capabilityGeneration,
-                        )
+                        if (stored.authorizedResultId != null &&
+                            stored.authorizedResultId != resultId
+                        ) {
+                            PreparedAdmissionSnapshot(
+                                terminalDecision = ResultUploadAdmissionDecision.NotConsented,
+                            )
+                        } else {
+                            PreparedAdmissionSnapshot(
+                                expectedConsentEpoch = stored.consentEpoch,
+                                capabilityGeneration = processState.capabilityGeneration,
+                            )
+                        }
                     }
                 }
             }
@@ -708,6 +736,10 @@ internal class ResultUploadConsentStore internal constructor(
                     ResultUploadConsent.GRANTED -> when {
                         stored.consentEpoch != snapshot.expectedConsentEpoch ->
                             ResultUploadAdmissionDecision.AuthorizationChanged
+
+                        stored.authorizedResultId != null &&
+                            stored.authorizedResultId != resultId ->
+                            ResultUploadAdmissionDecision.NotConsented
 
                         resultId in stored.claimedResultIds ->
                             ResultUploadAdmissionDecision.AlreadyClaimed
@@ -778,7 +810,8 @@ internal class ResultUploadConsentStore internal constructor(
         if (state == null &&
             scopeFieldsEmpty &&
             consentEpoch == 0L &&
-            claimedResultIds.isEmpty()
+            claimedResultIds.isEmpty() &&
+            authorizedResultId == null
         ) {
             return PersistedConsentRecordShape.EMPTY
         }
@@ -786,14 +819,17 @@ internal class ResultUploadConsentStore internal constructor(
         if (state == LEGACY_LOWERCASE_GRANTED &&
             canonicalScope &&
             consentEpoch == 0L &&
-            claimedResultIds.isEmpty()
+            claimedResultIds.isEmpty() &&
+            authorizedResultId == null
         ) {
             return PersistedConsentRecordShape.LEGACY_DEFAULT_OFF
         }
         if (hasCanonicalConsentState() &&
             canonicalScope &&
             hasValidConsentEpoch() &&
-            claimedResultIds.all(RESULT_ID::matches)
+            claimedResultIds.all(RESULT_ID::matches) &&
+            (authorizedResultId == null || RESULT_ID.matches(authorizedResultId)) &&
+            (state != ResultUploadConsent.REVOKED.name || authorizedResultId == null)
         ) {
             return PersistedConsentRecordShape.CANONICAL
         }
@@ -913,6 +949,7 @@ internal class ResultUploadConsentStore internal constructor(
         state: ResultUploadConsent,
         consentEpoch: Long,
         claimedResultIds: Set<String>,
+        authorizedResultId: String?,
     ): PersistedResultUploadConsent = PersistedResultUploadConsent(
         state = state.name,
         recipient = recipient,
@@ -920,6 +957,7 @@ internal class ResultUploadConsentStore internal constructor(
         policyVersion = policyVersion,
         consentEpoch = consentEpoch,
         claimedResultIds = claimedResultIds,
+        authorizedResultId = authorizedResultId,
     )
 
     private data class PreparedAdmissionSnapshot(
@@ -957,6 +995,7 @@ internal class ResultUploadConsentStore internal constructor(
             claimedResultIds = prefs.getStringSet(KEY_CLAIMED_RESULT_IDS, emptySet())
                 ?.toSet()
                 .orEmpty(),
+            authorizedResultId = prefs.getString(KEY_AUTHORIZED_RESULT_ID, null),
         )
 
         override fun write(value: PersistedResultUploadConsent): Boolean = prefs.edit()
@@ -966,6 +1005,7 @@ internal class ResultUploadConsentStore internal constructor(
             .putString(KEY_POLICY_VERSION, value.policyVersion)
             .putLong(KEY_CONSENT_EPOCH, value.consentEpoch)
             .putStringSet(KEY_CLAIMED_RESULT_IDS, value.claimedResultIds.toSet())
+            .putString(KEY_AUTHORIZED_RESULT_ID, value.authorizedResultId)
             .commit()
 
         override fun isPhysicallyEmpty(): Boolean = prefs.all.isEmpty()
@@ -981,6 +1021,7 @@ internal class ResultUploadConsentStore internal constructor(
         const val KEY_POLICY_VERSION = "policy_version"
         const val KEY_CONSENT_EPOCH = "consent_epoch"
         const val KEY_CLAIMED_RESULT_IDS = "claimed_result_ids"
+        const val KEY_AUTHORIZED_RESULT_ID = "authorized_result_id"
         const val LEGACY_LOWERCASE_GRANTED = "granted"
         val RESULT_ID = Regex(
             "^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
