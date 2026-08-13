@@ -6,6 +6,50 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class AnebResultJsonlExporterTest {
+    @Test fun verifiedBodyReturnsExactStoredBodyAndRejectsAnyIdentityDrift() {
+        val hostile = "RAW_ENVELOPE_IDENTITY_SENTINEL"
+        val valid = record(
+            runId = "00000000-0000-7000-8000-000000000001",
+            startedAt = 1_000L,
+            schemaVersion = "aneb-result-v2",
+        )
+        var transportCalls = 0
+        fun verifyThenTransport(record: ResultEnvelopeEntity): String {
+            val body = AnebResultJsonlExporter.verifiedBody(record)
+            transportCalls += 1
+            return body
+        }
+
+        assertEquals(valid.bodyJson, verifyThenTransport(valid))
+        assertEquals(1, transportCalls)
+
+        val invalidRecords = listOf(
+            valid.copy(canonicalSha256 = "sha256:" + "0".repeat(64)) to
+                "aneb_result_export_digest_mismatch",
+            valid.copy(schemaVersion = "aneb-result-v1") to
+                "aneb_result_export_schema_identity_mismatch",
+            valid.copy(schemaVersion = hostile) to
+                "aneb_result_export_schema_not_supported",
+            valid.copy(testType = hostile) to
+                "aneb_result_export_test_type_mismatch",
+            valid.copy(runId = hostile) to
+                "aneb_result_export_run_identity_mismatch",
+            valid.copy(bodyJson = hostile) to
+                "aneb_result_export_body_invalid",
+        )
+        invalidRecords.forEach { (invalid, expectedCode) ->
+            val callsBefore = transportCalls
+            val error = assertThrows(AnebResultJsonlExporter.VerificationException::class.java) {
+                verifyThenTransport(invalid)
+            }
+            assertEquals(expectedCode, error.message)
+            assertEquals(null, error.cause)
+            assertEquals(0, error.suppressed.size)
+            assertEquals(0, error.toString().windowed(hostile.length).count { it == hostile })
+            assertEquals(callsBefore, transportCalls)
+        }
+    }
+
     @Test fun sortsAndEmitsExactStoredBodies() {
         val later = record(
             "00000000-0000-7000-8000-000000000002",
@@ -78,7 +122,7 @@ class AnebResultJsonlExporterTest {
         assertEquals(emptyList<ResultEnvelopeEntity>(), selection.accepted)
         assertEquals(AnebResultJsonlExporter.RejectionKind.UNSUPPORTED_SCHEMA, selection.rejected.single().kind)
         assertEquals(
-            "aneb_result_export_schema_not_supported:aneb-result-v3",
+            "aneb_result_export_schema_not_supported",
             selection.rejected.single().reason,
         )
     }

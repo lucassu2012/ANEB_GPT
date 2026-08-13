@@ -1,6 +1,7 @@
 package com.aneb.probe.engine
 
 import com.aneb.probe.data.ResultEnvelopeEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,8 +22,7 @@ internal object AnebResultJsonlExporter {
     class VerificationException internal constructor(
         val kind: RejectionKind,
         message: String,
-        cause: Throwable? = null,
-    ) : IllegalArgumentException(message, cause)
+    ) : IllegalArgumentException(message)
 
     data class RejectedRecord(
         val runId: String,
@@ -44,6 +44,12 @@ internal object AnebResultJsonlExporter {
         return ordered.joinToString(separator = "\n", postfix = if (ordered.isEmpty()) "" else "\n") { it.bodyJson }
     }
 
+    /** Returns the exact immutable body only after its stored digest and identities are verified. */
+    fun verifiedBody(record: ResultEnvelopeEntity): String {
+        verify(record)
+        return record.bodyJson
+    }
+
     /**
      * A legacy/corrupt record must not permanently block the user's whole archive. Each envelope
      * remains fail-closed: only independently verified records are accepted, and every rejection
@@ -60,11 +66,14 @@ internal object AnebResultJsonlExporter {
                 try {
                     verify(record)
                     accepted += record
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
                 } catch (error: Exception) {
                     rejected += RejectedRecord(
                         runId = record.runId,
                         kind = (error as? VerificationException)?.kind ?: RejectionKind.INTEGRITY,
-                        reason = error.message ?: "aneb_result_export_unknown_integrity_failure",
+                        reason = (error as? VerificationException)?.message
+                            ?: "aneb_result_export_unknown_integrity_failure",
                     )
                 }
             }
@@ -75,29 +84,39 @@ internal object AnebResultJsonlExporter {
         if (record.schemaVersion !in SUPPORTED_SCHEMA_VERSIONS) {
             reject(
                 RejectionKind.UNSUPPORTED_SCHEMA,
-                "aneb_result_export_schema_not_supported:${record.schemaVersion}",
+                "aneb_result_export_schema_not_supported",
             )
         }
-        if (TokenRuntimeIntegrity.canonicalSha256(record.bodyJson) != record.canonicalSha256) {
-            reject(RejectionKind.INTEGRITY, "aneb_result_export_digest_mismatch:${record.runId}")
+        val actualDigest = try {
+            TokenRuntimeIntegrity.canonicalSha256(record.bodyJson)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_body_invalid")
         }
-        val body = runCatching { Json.parseToJsonElement(record.bodyJson).jsonObject }
-            .getOrElse {
-                reject(RejectionKind.INTEGRITY, "aneb_result_export_body_invalid:${record.runId}", it)
-            }
+        if (actualDigest != record.canonicalSha256) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_digest_mismatch")
+        }
+        val body = try {
+            Json.parseToJsonElement(record.bodyJson).jsonObject
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_body_invalid")
+        }
         if (body["schema_version"]?.jsonPrimitive?.content != record.schemaVersion) {
-            reject(RejectionKind.INTEGRITY, "aneb_result_export_schema_identity_mismatch:${record.runId}")
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_schema_identity_mismatch")
         }
         if (body["test_type"]?.jsonPrimitive?.content != record.testType) {
-            reject(RejectionKind.INTEGRITY, "aneb_result_export_test_type_mismatch:${record.runId}")
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_test_type_mismatch")
         }
         if (body["run"]?.jsonObject?.get("run_id")?.jsonPrimitive?.content != record.runId) {
-            reject(RejectionKind.INTEGRITY, "aneb_result_export_run_identity_mismatch:${record.runId}")
+            reject(RejectionKind.INTEGRITY, "aneb_result_export_run_identity_mismatch")
         }
     }
 
-    private fun reject(kind: RejectionKind, message: String, cause: Throwable? = null): Nothing {
-        throw VerificationException(kind, message, cause)
+    private fun reject(kind: RejectionKind, message: String): Nothing {
+        throw VerificationException(kind, message)
     }
 
     private val SUPPORTED_SCHEMA_VERSIONS = setOf("aneb-result-v1", TokenResultEnvelopeV2.SCHEMA_VERSION)
