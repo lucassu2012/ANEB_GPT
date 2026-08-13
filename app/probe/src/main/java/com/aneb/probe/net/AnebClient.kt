@@ -90,6 +90,8 @@ class AnebClient private constructor(
 
     private val client: OkHttpClient = providedClient ?: OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
@@ -888,28 +890,53 @@ class AnebClient private constructor(
 
     /** GET /api/v1/profiles（P1 范围 1：拉不到用打包内置 assets 副本并告警） */
 
-    suspend fun fetchProfiles(url: String): HttpTextResult =
-        simpleCall(client.newCall(Request.Builder().url(url).get().build()))
+    suspend fun fetchProfiles(url: String): HttpTextResult {
+        val call = try {
+            client.newCall(Request.Builder().url(url).get().build())
+        } catch (_: IllegalArgumentException) {
+            return HttpTextResult(null, null, "REQUEST_BUILD_FAILED transport=LOCAL")
+        }
+        return simpleCall(call)
+    }
 
-    /** POST /api/v1/results（P1 范围 8：400 时 body 含 errors 清单，调用方打日志） */
-    suspend fun postResults(url: String, jsonBody: String): HttpTextResult =
-        simpleCall(
-            client.newCall(
-                Request.Builder().url(url)
-                    .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                    .build()
-            )
-        )
+    /** POST one verified result using the dedicated upload credential and run identity. */
+    internal suspend fun submitResult(
+        url: String,
+        jsonBody: String,
+        bearerToken: String,
+        idempotencyKey: String,
+    ): HttpTextResult = simpleCall(
+        call = client.newCall(
+            Request.Builder().url(url)
+                .header("Authorization", "Bearer $bearerToken")
+                .header("Idempotency-Key", idempotencyKey)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build(),
+        ),
+        readSuccessfulBody = false,
+    )
 
-    private suspend fun simpleCall(call: Call): HttpTextResult = try {
+    private suspend fun simpleCall(
+        call: Call,
+        readSuccessfulBody: Boolean = true,
+    ): HttpTextResult = try {
         executeCancellable(call) { resp ->
-            val body = resp.body?.string()
-            HttpTextResult(resp.code, body, if (resp.isSuccessful) null else "http ${resp.code}")
+            if (resp.isSuccessful) {
+                HttpTextResult(
+                    httpCode = resp.code,
+                    body = if (readSuccessfulBody) resp.body?.string() else null,
+                    error = null,
+                )
+            } else {
+                HttpTextResult(resp.code, null, "http ${resp.code}")
+            }
         }
     } catch (e: CancellationException) {
         throw e
-    } catch (e: Exception) {
-        HttpTextResult(null, null, e.toString())
+    } catch (_: IOException) {
+        HttpTextResult(null, null, "TRANSPORT_FAILED transport=IO")
+    } catch (_: Exception) {
+        HttpTextResult(null, null, "CONTROL_PLANE_FAILED transport=LOCAL")
     } finally {
         timingFactory.recordFor(call) // 控制面不计时，但必须取走记录防泄漏
     }
