@@ -58,13 +58,17 @@ The Go node is the sole authority for:
 - application-layer initial delay, pacing and scheduled stalls;
 - server-side run receipt and schedule hash;
 - collection of uploaded client evidence;
-- campaign export assembly and offline report generation, unless export is performed in the Android app using the same schema.
+- canonical campaign bundle assembly;
+- manifest verification and offline HTML report generation.
 
-One implementation must be chosen for final evidence publication; Android and server must not independently publish conflicting summaries. The recommended ownership is:
+Publication ownership is frozen as follows:
 
-- Android: raw event capture and per-run metric calculation;
-- server: receipt binding, bundle assembly, manifest and HTML report;
-- Android local export: fallback copy of the same canonical JSON/CSV records.
+- Android captures raw arrival events and calculates canonical per-run metrics and condition aggregates.
+- Android uploads the canonical records plus raw evidence and retains a local device copy.
+- The Go node binds those records to server receipts, independently validates cross-file identities, publishes the canonical evidence directory, creates `manifest.json` and renders `report.html`.
+- Android may export a **device fallback bundle** when upload/finalization fails, but that fallback is labeled `device_fallback_unverified`, cannot satisfy G4/G5, and must not compete with the canonical server-published summary.
+
+Android and server must not independently publish conflicting final summaries.
 
 ### 2.3 Android app
 
