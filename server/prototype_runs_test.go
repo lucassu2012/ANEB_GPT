@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -269,6 +270,11 @@ func TestPrototypeRunStreamsGeneratedScheduleForEveryCondition(t *testing.T) {
 
 func TestPrototypeRunTerminalReceiptUsesExactServerWireKeyset(t *testing.T) {
 	serverDetails, _, _ := loadPrototypeOptionATerminalProjectionFixture(t)
+	serverDetailsJSON, err := json.Marshal(serverDetails)
+	if err != nil {
+		t.Fatalf("encode shared JSON fixture server details: %v", err)
+	}
+	expectedDetails := decodePrototypeJSONObjectUseNumber(t, serverDetailsJSON, "shared JSON fixture server details")
 	campaignID := serverDetails["campaign_id"].(string)
 	runID := serverDetails["run_id"].(string)
 	campaignMode := serverDetails["campaign_mode"].(string)
@@ -287,13 +293,48 @@ func TestPrototypeRunTerminalReceiptUsesExactServerWireKeyset(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 	}
-	frames := strings.Split(strings.TrimSuffix(res.Body.String(), "\n\n"), "\n\n")
-	if len(frames) != 122 || !strings.HasPrefix(frames[len(frames)-1], "event: done\ndata: ") {
-		t.Fatalf("terminal frame shape: count=%d last=%q", len(frames), frames[len(frames)-1])
+	frames := splitPrototypeSSEFrames(t, res.Body.String())
+	if len(frames) != 122 {
+		t.Fatalf("terminal frame shape: count=%d", len(frames))
 	}
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(frames[len(frames)-1], "event: done\ndata: ")), &envelope); err != nil {
-		t.Fatalf("terminal envelope: %v", err)
+	for i, frame := range frames {
+		expectedEvent := "content_event"
+		if i == 0 {
+			expectedEvent = "run_started"
+		} else if i == len(frames)-1 {
+			expectedEvent = "done"
+		}
+		_ = prototypeSSEFrameData(t, frame, expectedEvent, fmt.Sprintf("response frame %d", i))
+	}
+	envelope := decodePrototypeJSONObjectUseNumber(t, prototypeSSEFrameData(t, frames[len(frames)-1], "done", "response terminal frame"), "terminal envelope")
+	serverMonotonic, ok := envelope["server_monotonic_ns"].(json.Number)
+	if !ok {
+		t.Fatalf("server_monotonic_ns = %#v (%T), want JSON integer", envelope["server_monotonic_ns"], envelope["server_monotonic_ns"])
+	}
+	serverMonotonicNs, err := serverMonotonic.Int64()
+	if err != nil || serverMonotonicNs < 0 {
+		t.Fatalf("server_monotonic_ns = %q, want nonnegative int64: %v", serverMonotonic, err)
+	}
+
+	rawFixture, err := os.ReadFile(filepath.Join("testdata", "prototype_option_a_done_frame.sse"))
+	if err != nil {
+		t.Fatalf("read done-frame SSE fixture: %v", err)
+	}
+	fixtureFrames := splitPrototypeSSEFrames(t, string(rawFixture))
+	if len(fixtureFrames) != 1 {
+		t.Fatalf("done-frame fixture count = %d, want 1", len(fixtureFrames))
+	}
+	fixtureEnvelope := decodePrototypeJSONObjectUseNumber(t, prototypeSSEFrameData(t, fixtureFrames[0], "done", "fixture terminal frame"), "done-frame fixture envelope")
+	fixtureMonotonic, ok := fixtureEnvelope["server_monotonic_ns"].(json.Number)
+	if !ok {
+		t.Fatalf("fixture server_monotonic_ns = %#v (%T), want JSON integer", fixtureEnvelope["server_monotonic_ns"], fixtureEnvelope["server_monotonic_ns"])
+	}
+	if fixtureMonotonic != json.Number("0") {
+		t.Fatalf("fixture server_monotonic_ns = %q, want sentinel 0", fixtureMonotonic)
+	}
+	envelope["server_monotonic_ns"] = json.Number("0")
+	if !reflect.DeepEqual(envelope, fixtureEnvelope) {
+		t.Fatalf("terminal envelope differs from raw SSE fixture: got=%#v want=%#v", envelope, fixtureEnvelope)
 	}
 	receipt, ok := envelope["details"].(map[string]any)
 	if !ok {
@@ -324,10 +365,10 @@ func TestPrototypeRunTerminalReceiptUsesExactServerWireKeyset(t *testing.T) {
 			t.Fatalf("removed non-wire field %q still present", removed)
 		}
 	}
-	if receipt["campaign_mode"] != campaignMode || receipt["run_index"] != float64(runIndex) {
+	if receipt["campaign_mode"] != campaignMode || !reflect.DeepEqual(receipt["run_index"], expectedDetails["run_index"]) {
 		t.Fatalf("request identity missing from receipt: mode=%#v index=%#v", receipt["campaign_mode"], receipt["run_index"])
 	}
-	for key, want := range serverDetails {
+	for key, want := range expectedDetails {
 		if !reflect.DeepEqual(receipt[key], want) {
 			t.Fatalf("fixture receipt %s = %#v, want %#v", key, receipt[key], want)
 		}
@@ -341,6 +382,62 @@ func TestPrototypeRunTerminalReceiptUsesExactServerWireKeyset(t *testing.T) {
 			t.Fatalf("client-enriched field leaked into server receipt: %s", forbidden)
 		}
 	}
+}
+
+func splitPrototypeSSEFrames(t *testing.T, body string) []string {
+	t.Helper()
+	if !strings.HasSuffix(body, "\n\n") {
+		t.Fatalf("SSE body does not end with complete frame delimiter")
+	}
+	trimmed := strings.TrimSuffix(body, "\n\n")
+	if trimmed == "" {
+		t.Fatalf("SSE body is empty")
+	}
+	frames := strings.Split(trimmed, "\n\n")
+	for i, frame := range frames {
+		if frame == "" {
+			t.Fatalf("SSE frame %d is empty", i)
+		}
+	}
+	return frames
+}
+
+func prototypeSSEFrameData(t *testing.T, frame, expectedEvent, label string) []byte {
+	t.Helper()
+	lines := strings.Split(frame, "\n")
+	if len(lines) != 2 || lines[0] != "event: "+expectedEvent {
+		t.Fatalf("%s framing = %q, want event line + data line for %q", label, frame, expectedEvent)
+	}
+	const dataPrefix = "data: "
+	if !strings.HasPrefix(lines[1], dataPrefix) {
+		t.Fatalf("%s framing = %q, want data line", label, frame)
+	}
+	data := strings.TrimPrefix(lines[1], dataPrefix)
+	if strings.TrimSpace(data) == "" {
+		t.Fatalf("%s has empty data payload", label)
+	}
+	return []byte(data)
+}
+
+func decodePrototypeJSONObjectUseNumber(t *testing.T, raw []byte, label string) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode %s: %v", label, err)
+	}
+	if value == nil {
+		t.Fatalf("decode %s: want JSON object", label)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			t.Fatalf("decode %s: multiple JSON values", label)
+		}
+		t.Fatalf("decode %s trailing JSON: %v", label, err)
+	}
+	return value
 }
 
 func loadPrototypeOptionATerminalProjectionFixture(t *testing.T) (map[string]any, map[string]any, map[string]any) {
