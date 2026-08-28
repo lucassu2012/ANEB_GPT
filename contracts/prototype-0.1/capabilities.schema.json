@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aneb.local/schemas/prototype-0.1/capabilities.schema.json",
+  "title": "ANEB Prototype 0.1 capabilities",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "product_version",
+    "protocol_version",
+    "server_version",
+    "server_binary_sha256",
+    "claim_scope",
+    "evidence_mode",
+    "impairment_layer",
+    "workload",
+    "conditions",
+    "evidence_schema_version",
+    "score_policy_id",
+    "terminal_receipt_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "aneb-prototype-capabilities-0.1"
+    },
+    "product_version": {
+      "const": "prototype-0.1"
+    },
+    "protocol_version": {
+      "const": "prototype-stream-0.1"
+    },
+    "server_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "server_binary_sha256": {
+      "$ref": "#/$defs/hash"
+    },
+    "claim_scope": {
+      "const": "application_end_to_end_to_probe_node"
+    },
+    "evidence_mode": {
+      "const": "synthetic_application_impairment"
+    },
+    "impairment_layer": {
+      "const": "application"
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "manifest_sha256", "content_event_count"],
+      "properties": {
+        "id": {
+          "const": "streaming_text_reference_v0.1"
+        },
+        "version": {
+          "const": "0.1"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "content_event_count": {
+          "const": 120
+        }
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "contract_sha256", "schedule_sha256"],
+        "properties": {
+          "id": {
+            "enum": ["baseline_v0.1", "slow_v0.1", "unstable_v0.1"]
+          },
+          "version": {
+            "const": "0.1"
+          },
+          "contract_sha256": {
+            "$ref": "#/$defs/hash"
+          },
+          "schedule_sha256": {
+            "$ref": "#/$defs/hash"
+          }
+        }
+      }
+    },
+    "evidence_schema_version": {
+      "const": "aneb-prototype-evidence-0.1"
+    },
+    "score_policy_id": {
+      "const": "rpi-0.1"
+    },
+    "terminal_receipt_version": {
+      "const": "prototype-terminal-receipt-0.1"
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256:)?[a-f0-9]{64}$"
+    }
+  }
+}
