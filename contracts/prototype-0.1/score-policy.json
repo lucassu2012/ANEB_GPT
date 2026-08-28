@@ -1,0 +1,94 @@
+{
+  "schema_version": "aneb-prototype-score-policy-0.1",
+  "policy_id": "rpi-0.1",
+  "display_name": "Relative Prototype Index (same-campaign synthetic comparison)",
+  "scope": "same_campaign_synthetic_comparison",
+  "independent_from": [
+    "aqs",
+    "formal_aneb_scores",
+    "mos",
+    "operator_scores",
+    "third_party_app_scores"
+  ],
+  "baseline_condition_id": "baseline_v0.1",
+  "mandatory_metrics": [
+    "success_rate",
+    "median_ttft_ms",
+    "median_completion_ms",
+    "median_stall_fraction"
+  ],
+  "success_rate_definition": "current_condition_successful_runs_divided_by_current_condition_planned_runs",
+  "median": {
+    "algorithm": "arithmetic_mean_of_two_middle_sorted_values",
+    "source": "successful_runs_only",
+    "null_when_no_values": true
+  },
+  "value_domains": {
+    "ttft_ms": {"minimum_exclusive": 0},
+    "completion_ms": {"minimum_exclusive": 0},
+    "success_rate": {"minimum": 0, "maximum": 1},
+    "stall_fraction": {"minimum": 0, "maximum": 1}
+  },
+  "eligibility": {
+    "campaign_status_must_equal": "complete",
+    "minimum_successful_baseline_runs": 1,
+    "minimum_successful_condition_runs": 1,
+    "contracts_must_match_exactly": true,
+    "missing_mandatory_metric_result": null
+  },
+  "subscores": {
+    "ttft_quality": {
+      "expression": "min(1, baseline_median_ttft_ms / condition_median_ttft_ms)",
+      "weight": 0.45
+    },
+    "completion_quality": {
+      "expression": "min(1, baseline_median_completion_ms / condition_median_completion_ms)",
+      "weight": 0.35
+    },
+    "stall_quality": {
+      "expression": "clamp(1 - condition_median_stall_fraction, 0, 1)",
+      "weight": 0.2
+    }
+  },
+  "final_expression": "round_half_away_from_zero(clamp(100 * success_rate * (0.45 * ttft_quality + 0.35 * completion_quality + 0.20 * stall_quality), 0, 100))",
+  "output": {
+    "minimum": 0,
+    "maximum": 100,
+    "rounding": "nearest_integer_half_away_from_zero",
+    "null_on_ineligible": true
+  },
+  "null_reasons": [
+    "campaign_incomplete",
+    "contract_mismatch",
+    "invalid_evidence",
+    "no_successful_baseline",
+    "no_successful_condition_run",
+    "mandatory_metric_missing",
+    "non_positive_metric",
+    "score_policy_unsupported"
+  ],
+  "null_reason_precedence": [
+    "campaign_incomplete",
+    "contract_mismatch",
+    "invalid_evidence",
+    "no_successful_baseline",
+    "no_successful_condition_run",
+    "mandatory_metric_missing",
+    "non_positive_metric",
+    "score_policy_unsupported"
+  ],
+  "null_reason_fields": ["primary_null_reason", "all_null_reasons"],
+  "confidence": {
+    "quick": {
+      "successful_runs_0": "NONE",
+      "successful_runs_1": "LOW"
+    },
+    "acceptance": {
+      "successful_runs_3": "HIGH",
+      "successful_runs_2": "MEDIUM",
+      "successful_runs_1": "LOW",
+      "successful_runs_0": "NONE"
+    }
+  },
+  "required_disclosure": "This score compares deterministic application-layer conditions against this campaign's Baseline. It is not a formal ANEB industry score and does not represent a third-party AI application's network requirement."
+}
