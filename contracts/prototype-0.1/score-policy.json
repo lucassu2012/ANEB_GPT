@@ -59,18 +59,18 @@
   },
   "null_reasons": [
     "campaign_incomplete",
+    "contract_mismatch",
+    "invalid_evidence",
     "no_successful_baseline",
     "no_successful_condition_run",
     "mandatory_metric_missing",
     "non_positive_metric",
-    "contract_mismatch",
-    "invalid_evidence",
     "score_policy_unsupported"
   ],
   "null_reason_precedence": [
+    "campaign_incomplete",
     "contract_mismatch",
     "invalid_evidence",
-    "campaign_incomplete",
     "no_successful_baseline",
     "no_successful_condition_run",
     "mandatory_metric_missing",

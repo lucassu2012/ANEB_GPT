@@ -66,12 +66,14 @@
     "clock": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "unit", "epoch", "includes_deep_sleep", "t0_boundary", "event_boundary", "done_boundary"],
+      "required": ["source", "unit", "epoch", "includes_deep_sleep", "domain_id", "t0_monotonic_ns", "t0_boundary", "event_boundary", "done_boundary"],
       "properties": {
         "source": {"const": "android.os.SystemClock.elapsedRealtimeNanos"},
         "unit": {"const": "ns"},
         "epoch": {"const": "device_boot"},
         "includes_deep_sleep": {"const": true},
+        "domain_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{7,127}$"},
+        "t0_monotonic_ns": {"type": ["integer", "null"], "minimum": 0},
         "t0_boundary": {"const": "immediately_before_transport_dispatch"},
         "event_boundary": {"const": "after_complete_sse_content_event_decode_and_identity_validation"},
         "done_boundary": {"const": "after_complete_done_event_decode_and_identity_validation"}
@@ -108,7 +110,7 @@
       "minimum": 0,
       "maximum": 120
     },
-    "metrics": {
+              "metrics": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -224,6 +226,96 @@
     {
       "if": {
         "properties": {
+          "campaign_mode": {"const": "quick"},
+          "run_index": {"const": 1}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "baseline_v0.1"}}},
+          "schedule_hash": {"const": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "campaign_mode": {"const": "quick"},
+          "run_index": {"const": 2}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "slow_v0.1"}}},
+          "schedule_hash": {"const": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "campaign_mode": {"const": "quick"},
+          "run_index": {"const": 3}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "unstable_v0.1"}}},
+          "schedule_hash": {"const": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "campaign_mode": {"const": "acceptance"},
+          "run_index": {"enum": [1, 4, 7]}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "baseline_v0.1"}}},
+          "schedule_hash": {"const": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "campaign_mode": {"const": "acceptance"},
+          "run_index": {"enum": [2, 5, 8]}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "slow_v0.1"}}},
+          "schedule_hash": {"const": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "campaign_mode": {"const": "acceptance"},
+          "run_index": {"enum": [3, 6, 9]}
+        },
+        "required": ["campaign_mode", "run_index"]
+      },
+      "then": {
+        "properties": {
+          "condition": {"properties": {"id": {"const": "unstable_v0.1"}}},
+          "schedule_hash": {"const": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
           "condition": {
             "properties": {"id": {"const": "baseline_v0.1"}}
           }
@@ -303,6 +395,7 @@
       },
       "then": {
         "properties": {
+          "score_eligible": {"const": true},
           "run_status": {
             "const": "complete"
           },
@@ -338,6 +431,11 @@
               "stall_duration_ms": {"type": "number", "minimum": 0},
               "stall_fraction": {"type": "number", "minimum": 0, "maximum": 1}
             }
+          },
+          "clock": {
+            "properties": {
+              "t0_monotonic_ns": {"type": "integer", "minimum": 0}
+            }
           }
         }
       }
@@ -363,6 +461,183 @@
     {
       "if": {
         "properties": {
+          "run_status": {"const": "interrupted"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {"const": false},
+          "score_eligible": {"const": false},
+          "terminal_receipt_valid": {"enum": [false, null]},
+          "failure_reason": {"const": "stream_interrupted"},
+          "metrics": {
+            "properties": {
+              "completion_ms": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "interrupted"},
+          "events_received": {"const": 0}
+        },
+        "required": ["run_status", "events_received"]
+      },
+      "then": {
+        "properties": {
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "null"},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "null"},
+              "stream_event_rate_eps": {"type": "null"},
+              "stall_threshold_ms": {"type": "null"},
+              "stall_count": {"type": "null"},
+              "stall_duration_ms": {"type": "null"},
+              "stall_fraction": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "interrupted"},
+          "events_received": {"const": 1}
+        },
+        "required": ["run_status", "events_received"]
+      },
+      "then": {
+        "properties": {
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "number", "exclusiveMinimum": 0},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "null"},
+              "stream_event_rate_eps": {"type": "null"},
+              "stall_threshold_ms": {"type": "null"},
+              "stall_count": {"type": "null"},
+              "stall_duration_ms": {"type": "null"},
+              "stall_fraction": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "interrupted"},
+          "events_received": {"minimum": 2}
+        },
+        "required": ["run_status", "events_received"]
+      },
+      "then": {
+        "properties": {
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "number", "exclusiveMinimum": 0},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "number", "exclusiveMinimum": 0},
+              "stream_event_rate_eps": {"type": "number", "exclusiveMinimum": 0},
+              "stall_threshold_ms": {"type": "number", "exclusiveMinimum": 0},
+              "stall_count": {"type": "integer", "minimum": 0},
+              "stall_duration_ms": {"type": "number", "minimum": 0},
+              "stall_fraction": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "invalid_sequence"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {"const": false},
+          "score_eligible": {"const": false},
+          "failure_reason": {"const": "invalid_sequence"},
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "null"},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "null"},
+              "stream_event_rate_eps": {"type": "null"},
+              "stall_threshold_ms": {"type": "null"},
+              "stall_count": {"type": "null"},
+              "stall_duration_ms": {"type": "null"},
+              "stall_fraction": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "failure_reason": {"enum": ["clock_domain_invalid", "clock_domain_mismatch"]}
+        },
+        "required": ["failure_reason"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {"const": false},
+          "score_eligible": {"const": false},
+          "terminal_receipt_valid": {"enum": [false, null]},
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "null"},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "null"},
+              "stream_event_rate_eps": {"type": "null"},
+              "stall_threshold_ms": {"type": "null"},
+              "stall_count": {"type": "null"},
+              "stall_duration_ms": {"type": "null"},
+              "stall_fraction": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "failure_reason": {"const": "invalid_evidence"}
+        },
+        "required": ["failure_reason"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {"const": false},
+          "score_eligible": {"const": false},
+          "terminal_receipt_valid": {"enum": [false, null]},
+          "metrics": {
+            "properties": {
+              "ttft_ms": {"type": "null"},
+              "completion_ms": {"type": "null"},
+              "stream_span_ms": {"type": "null"},
+              "stream_event_rate_eps": {"type": "null"},
+              "stall_threshold_ms": {"type": "null"},
+              "stall_count": {"type": "null"},
+              "stall_duration_ms": {"type": "null"},
+              "stall_fraction": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
           "run_status": {"const": "not_started"}
         },
         "required": ["run_status"]
@@ -376,6 +651,11 @@
           "events_received": {"const": 0},
           "terminal_receipt_valid": {"type": "null"},
           "failure_reason": {"const": "not_started"},
+          "clock": {
+            "properties": {
+              "t0_monotonic_ns": {"type": "null"}
+            }
+          },
           "metrics": {
             "properties": {
               "ttft_ms": {"type": "null"},

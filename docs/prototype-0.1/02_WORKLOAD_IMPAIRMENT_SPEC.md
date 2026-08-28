@@ -32,6 +32,7 @@ Each content event contains at least:
   "condition_id": "baseline_v0.1",
   "profile_manifest_sha256": "<bare lowercase 64-hex>",
   "schedule_hash": "<bare lowercase 64-hex>",
+  "clock_domain_id": "<opaque boot/session id>",
   "seq": 1,
   "planned_offset_ms": 200,
   "payload_id": "ref-0001"
@@ -58,6 +59,7 @@ The terminal `done` event contains:
   "profile_version": "0.1",
   "profile_manifest_sha256": "<bare lowercase 64-hex>",
   "schedule_hash": "<bare lowercase 64-hex>",
+  "clock_domain_id": "<opaque boot/session id>",
   "planned_event_count": 120,
   "emitted_event_count": 120,
   "terminal_status": "complete"

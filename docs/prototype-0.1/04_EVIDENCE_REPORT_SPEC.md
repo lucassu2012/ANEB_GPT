@@ -53,7 +53,8 @@ Required top-level fields:
     "source": "android.os.SystemClock.elapsedRealtimeNanos",
     "unit": "ns",
     "epoch": "device_boot",
-    "includes_deep_sleep": true
+    "includes_deep_sleep": true,
+    "domain_identity": "per-run opaque boot/session clock_domain_id"
   },
   "profile": {
     "id": "streaming_text_reference_v0.1",
@@ -130,10 +131,18 @@ Each line is one UTF-8 JSON object. Required common fields:
 - `event_type`;
 - `client_monotonic_ns` for every Android-observed scoring event, with
   `clock_source=android.os.SystemClock.elapsedRealtimeNanos`,
-  `clock_unit=ns`, `clock_epoch=device_boot` and one run clock domain;
+  `clock_unit=ns`, `clock_epoch=device_boot`, `clock_domain_id` and one run
+  clock domain; `run_started.details.t0_monotonic_ns` is the nonzero-or-zero
+  boot-absolute t0 used for all deltas in that run;
 - `observed_at_utc` when available;
 - `source` = `android` or `server`;
 - `details` object.
+
+`clock_domain_id` is an opaque boot/session identity generated for the run's
+measurement session. A reboot, process-loss recovery or clock-domain change
+creates a new identity; a verifier rejects a run whose events, terminal receipt,
+run record and `t0_monotonic_ns` do not all carry the same identity. A timestamp
+regression is invalid evidence, not a sortable event.
 
 Allowed event types for v0.1:
 
@@ -167,7 +176,7 @@ UTF-8 with header, comma delimiter, RFC 4180 quoting and LF line endings.
 Required columns in order:
 
 ```text
-schema_version,campaign_id,run_id,campaign_mode,run_index,profile_manifest_sha256,condition_id,condition_version,nominal_interval_ms,run_status,task_success,clock_source,clock_epoch,attempt_started_at_utc,attempt_ended_at_utc,events_expected,events_received,ttft_ms,completion_ms,stream_span_ms,stream_event_rate_eps,stall_threshold_ms,stall_count,stall_duration_ms,stall_fraction,schedule_hash,terminal_receipt_valid,score_eligible,failure_reason
+schema_version,campaign_id,run_id,campaign_mode,run_index,profile_manifest_sha256,condition_id,condition_version,nominal_interval_ms,run_status,task_success,clock_source,clock_epoch,clock_domain_id,t0_monotonic_ns,attempt_started_at_utc,attempt_ended_at_utc,events_expected,events_received,ttft_ms,completion_ms,stream_span_ms,stream_event_rate_eps,stall_threshold_ms,stall_count,stall_duration_ms,stall_fraction,schedule_hash,terminal_receipt_valid,score_eligible,failure_reason
 ```
 
 Null numeric or boolean values are empty CSV fields. Literal `0` is used only for a measured zero or a count that is truly zero.

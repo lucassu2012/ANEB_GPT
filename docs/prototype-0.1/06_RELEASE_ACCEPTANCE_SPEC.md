@@ -119,7 +119,8 @@ PASS when:
 - Product Owner decisions are appended to `docs/DECISION_LOG.md`;
 - specs PR is merged into `product/prototype-0.1`.
 - the exact schedule-byte vectors, profile-manifest binding and four-contract
-  package contents are verified; G0 remains HOLD until the issue #14 reviewer
+  package fixture contents are verified; the actual packaged ZIP/layout remains
+  a G3 acceptance responsibility. G0 remains HOLD until the issue #14 reviewer
   records this exact head.
 
 ### G1 — Core contract
@@ -170,8 +171,8 @@ PASS when an automated verifier confirms:
 - report values agree with canonical data;
 - raw Android events plus the matching terminal receipt recompute per-run
   metrics before `runs.csv`, summaries/RPI and report values are accepted;
-- profile/condition/schedule/policy hashes, clock source/epoch and ordered null
-  reasons are exact;
+- profile/condition/schedule/policy hashes, clock source/epoch/domain/t0 and
+  ordered null reasons are exact;
 - partial/failed campaigns cannot publish non-null RPI;
 - secrets/forbidden identifiers are absent.
 

@@ -163,7 +163,10 @@ A stream EOF without a valid terminal done receipt is not success.
   after complete terminal decode and identity validation.
 - All timestamps in a run come from one boot/clock domain. Reboot, process
   reconstruction without a preserved domain, clock regression or domain mismatch
-  invalidates scoring; no cross-domain or cross-run splice is permitted.
+  invalidates scoring; no cross-domain or cross-run splice is permitted. Each run
+  serializes an opaque `clock_domain_id`/boot-session identity and its
+  boot-absolute `t0_monotonic_ns`; every scoring event and terminal receipt must
+  repeat the same values.
 - Server planned offsets describe the deterministic schedule and are not subtracted
   from client measurements. Wall-clock UTC is metadata only.
 - Derived milliseconds are `ns / 1e6`, emitted with at most six decimal places;

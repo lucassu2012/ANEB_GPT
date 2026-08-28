@@ -35,7 +35,14 @@ These four files are the complete v0.1 machine contract package. There is no
 - prove `score_eligible=true` requires task success;
 - reject the published duplicate-condition, prefixed-hash, invalid-index and null-success counterexamples;
 - verify Android `elapsedRealtimeNanos` boundaries, arithmetic even median and strict stall equality/`+1ns` vectors;
-- recompute raw events -> run metrics -> CSV -> summary/RPI/report and reject a mutated run metric;
+- recompute parsed `events.jsonl` + terminal receipt -> run metrics -> RFC4180
+  CSV -> summary/null reasons/RPI -> embedded report summary and reject four
+  independent tamper stages;
+- enforce the Product Owner-approved null precedence with
+  `campaign_incomplete` before `contract_mismatch` and `invalid_evidence`,
+  deduplicate reasons and set `primary_null_reason` to the first value;
+- reject a changed `clock_domain_id`, timestamp regression or boot-absolute t0
+  splice;
 - load `score-policy.json` or verify an exact embedded copy before calculating RPI.
 
 Run the development vectors from the repository checkout with:

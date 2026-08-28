@@ -11,6 +11,12 @@ All user-visible durations use the Android
 nanoseconds, its epoch is the device boot, and it includes deep sleep. Wall-clock
 UTC is retained only for metadata and ordering.
 
+Each run records an opaque `clock_domain_id` (boot/session identity) alongside
+the clock contract and `t0_monotonic_ns`. It is created for the measurement
+session, must be repeated on every scoring event, and changes after reboot or
+loss of the process/session state. A run may not splice timestamps from two
+domain IDs.
+
 For one run:
 
 - `t0`: captured immediately before transport dispatch (the adapter's
@@ -165,13 +171,16 @@ missing, uncomputable and inapplicable values are `null`.
 
 ### 5.1 Partial/null matrix
 
-| Observation state | `ttft_ms` | `completion_ms` | stream span/rate | stall metrics | score eligibility |
-|---|---|---|---|---|---|
-| no valid content event | `null` | `null` | `null` | `null` | false |
-| first valid event, stream later fails | number | `null` | `null` unless ≥2 events | number only when ≥2 events | false |
-| ≥2 valid events, terminal missing/invalid | number | `null` | number/rate | number | false |
-| 120 valid events + valid terminal | number > 0 | number > 0 | number > 0 | measured values (fraction `[0,1]`) | eligible if all contract checks pass |
-| clock domain invalid/mismatched | `null` | `null` | `null` | `null` | false |
+The following field-by-field matrix is normative. “Numeric” means the value is
+derived from valid same-domain events; it does not authorize a synthetic zero.
+
+| Observation state | `ttft_ms` | `completion_ms` | `stream_span_ms` | `stream_event_rate_eps` | `stall_threshold_ms` | `stall_count` / `stall_duration_ms` / `stall_fraction` | score eligibility |
+|---|---|---|---|---|---|---|---|
+| no valid content event / not started | `null` | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
+| one valid content event, then interrupted | numeric > 0 | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
+| 2–120 valid events, terminal missing/invalid | numeric > 0 | `null` | numeric > 0 | numeric > 0 | numeric > 0 | numeric / numeric ≥ 0 / numeric `[0,1]` | false |
+| valid terminal + 120 valid events | numeric > 0 | numeric > 0 | numeric > 0 | numeric > 0 | numeric > 0 | numeric / numeric ≥ 0 / numeric `[0,1]` | true only if every contract gate passes |
+| clock domain invalid/mismatched or timestamp regression | `null` | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
 
 Raw events and diagnostics are retained in every row. A null is never converted
 to zero, a timeout ceiling or a sentinel.
@@ -264,18 +273,18 @@ The Baseline condition normally scores 100 when all Baseline runs succeed and no
 When `rpi = null`, one or more reasons must be emitted from this closed set:
 
 - `campaign_incomplete`;
+- `contract_mismatch`;
+- `invalid_evidence`;
 - `no_successful_baseline`;
 - `no_successful_condition_run`;
 - `mandatory_metric_missing`;
 - `non_positive_metric`;
-- `contract_mismatch`;
-- `invalid_evidence`;
 - `score_policy_unsupported`.
 
 The report emits `primary_null_reason` and `all_null_reasons`. The latter is a
 unique, compact JSON array sorted by this normative precedence (first matching
-reason is primary): `contract_mismatch`, `invalid_evidence`,
-`campaign_incomplete`, `no_successful_baseline`, `no_successful_condition_run`,
+reason is primary): `campaign_incomplete`, `contract_mismatch`,
+`invalid_evidence`, `no_successful_baseline`, `no_successful_condition_run`,
 `mandatory_metric_missing`, `non_positive_metric`, `score_policy_unsupported`.
 Reasons are evidence-derived, not free text; raw event evidence remains the
 verifier's trust root.
