@@ -40,6 +40,8 @@ These four files are the complete v0.1 machine contract package. There is no
 - validate a known-good capability document and reject version/hash/claim mismatches;
 - validate successful, interrupted, cancelled, zero-event failed and
   not-started run records;
+- validate `invalid_sequence` all-null/no-receipt prefixes at 0, 1 and 119
+  events; reject 120, null attempted t0 and count/event mismatch;
 - prove `task_success=true` requires complete status, 120 events and a valid terminal receipt;
 - prove `score_eligible=true` requires task success;
 - enforce the closed status-to-reason mapping and failed-status receipt/event/
@@ -53,6 +55,14 @@ These four files are the complete v0.1 machine contract package. There is no
   summary/null reasons/RPI -> embedded report) and reject identity, receipt,
   ordering, cardinality, chronology and tamper stages; no partial-summary
   sidecar is permitted;
+- require exact Quick/Acceptance plans with `not_started` as a contiguous
+  suffix and reject every later attempted run after the first such slot;
+- validate the full required `meta.json` vocabulary and cross-bindings, the
+  exact flat seven-file root and order-independent six-artifact manifest map;
+- parse the canonical offline report through a positive HTML structure and
+  attribute allow-list; verify all required section content and reject encoded
+  resource/navigation attributes, any extra script and duplicate/missing/empty
+  sections;
 - enforce the normative VERSION product fields with `contract_hashes` and
   `schedule_hashes` for exactly these four contracts;
 - enforce the Product Owner-approved null precedence with

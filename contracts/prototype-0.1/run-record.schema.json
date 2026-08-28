@@ -611,8 +611,14 @@
         "properties": {
           "task_success": {"const": false},
           "score_eligible": {"const": false},
+          "events_received": {"maximum": 119},
           "terminal_receipt_valid": {"enum": [false, null]},
           "failure_reason": {"const": "invalid_sequence"},
+          "clock": {
+            "properties": {
+              "t0_monotonic_ns": {"type": "integer", "minimum": 0}
+            }
+          },
           "metrics": {
             "properties": {
               "ttft_ms": {"type": "null"},

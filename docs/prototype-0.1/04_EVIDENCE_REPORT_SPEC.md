@@ -18,7 +18,11 @@ results/
     └── manifest.json
 ```
 
-All seven files are mandatory for a published campaign directory. A partial or failed campaign still publishes all files, with explicit status and nullable fields.
+All seven files are mandatory for a published campaign directory. The
+directory is flat: its immediate entries are exactly these seven regular,
+non-symlink files, with no additional file, subdirectory, symlink/reparse point
+or special entry. A partial or failed campaign still publishes all files, with
+explicit status and nullable fields.
 
 ## 2. Atomic publication
 
@@ -39,7 +43,7 @@ Required top-level fields:
 ```json
 {
   "schema_version": "aneb-prototype-evidence-0.1",
-  "campaign_id": "<uuid>",
+  "campaign_id": "<non-empty campaign id>",
   "campaign_mode": "quick",
   "campaign_status": "complete",
   "started_at_utc": "2026-08-28T10:00:00Z",
@@ -92,6 +96,23 @@ Required top-level fields:
   "conditions": []
 }
 ```
+
+The 20 shown top-level names are required and unknown top-level names fail
+closed. Nested objects use the shown exact key sets and strict JSON types.
+`schema_version`, claim/evidence/impairment tokens, score policy, clock
+contract, product version and server protocol are fixed values. Timestamps are
+RFC3339 with `ended_at_utc >= started_at_utc`; app/server/device versions and
+binary identities are format-checked rather than replaced by fixture values.
+`campaign_id`, mode and status are then checked against raw events, run rows,
+summaries and the manifest. `run_plan` is exactly the selected profile plan:
+Quick has three B/S/U indexes and Acceptance has nine B/S/U×3 indexes.
+`transport` is either `{"mode":"lan","acceptance_path":true}` or the
+documented functional fallback
+`{"mode":"adb_reverse","acceptance_path":false}`.
+
+`conditions` is a required list and may be empty. Each present entry has only
+`id`, `version`, `nominal_interval_ms` and `schedule_sha256`, is unique, follows
+published profile order and matches the loaded profile/schedule authority.
 
 The profile `sha256` is the exact SHA-256 of the checked-in
 `profile-manifest.json` bytes. Condition identity is the profile digest plus
@@ -178,6 +199,9 @@ third-party content or credentials. A failed/partial status event has exactly
 `details={"failure_reason":<closed reason>,"events_received":<integer>}`;
 it follows `run_started` and all observed content events, and no terminal
 receipt event is emitted for that run.
+For `invalid_sequence`, the retained canonical prefix count is 0..119, t0 is
+an integer and all formal metrics remain null. A 120-event invalid-sequence row
+is rejected.
 
 Unknown event types are rejected by the v0.1 finalizer unless explicitly namespaced as non-scoring diagnostics.
 
@@ -224,19 +248,35 @@ empty/null. No reason is free text.
 
 ## 7. `report.html`
 
-The report is a single offline HTML file with embedded CSS and embedded canonical summary data. It must not fetch remote fonts, JavaScript, analytics, images or APIs.
+The report is a single offline HTML file with embedded canonical summary data.
+The Prototype 0.1 canonical verifier profile intentionally admits only one
+charset meta element, one inert canonical-summary JSON script, and static
+section/span content; CSS, SVG, links and richer presentation are deferred.
+It must not fetch remote fonts, JavaScript, analytics, images or APIs.
 
 Required sections:
 
-1. **Campaign verdict** — complete/partial/failed, mode and confidence.
-2. **Disclosure** — synthetic application-layer scope and non-vendor/non-industry boundary.
-3. **Condition comparison** — TTFT, completion, event rate, stalls, success rate and RPI.
-4. **Run table** — all planned runs and statuses.
-5. **Environment** — app/server/profile hashes, device model/OS and transport mode.
-6. **Evidence integrity** — manifest verification state.
-7. **Failure details** — present for partial/failed/invalid campaigns.
+1. `campaign-verdict` — closed campaign status, mode and per-condition confidence.
+2. `disclosure` — synthetic application-layer scope and non-vendor/non-industry boundary.
+3. `condition-comparison` — TTFT, completion, event rate, stalls, success rate and RPI.
+4. `run-table` — all planned runs and statuses.
+5. `environment` — app/server/profile hashes, device model/OS and transport mode.
+6. `evidence-integrity` — manifest verification state.
+7. `failure-details` — additionally required for `partial`, `failed` and `invalid` campaigns.
 
-The report may use simple native SVG or CSS charts. Every chart value must be sourced from `summary.csv`/canonical summary JSON and must have a textual table equivalent.
+Section ids are unique, required sections occur exactly once in this order and
+their canonical static content is non-empty and recomputed from verified
+meta/run/summary/manifest authority. The whole document has exactly one
+`script`; its attribute map, independent of attribute order, is exactly
+`id=canonical-summary` plus `type=application/json`, and its data is the exact
+canonical summary JSON. HTML character references are decoded before
+attribute comparison. Unknown tags, duplicate attributes/ids, event/style/URL
+attributes, resource/navigation elements, extra scripts and missing,
+duplicated, reordered or empty required sections fail closed.
+
+CSS, SVG, links and richer charts are outside the Prototype 0.1 canonical
+verifier profile. A later report profile may add them only with its own
+positive grammar and a textual table equivalent for every plotted value.
 
 No letter grade is shown.
 
@@ -258,7 +298,7 @@ Required fields:
 ```json
 {
   "manifest_version": "aneb-prototype-manifest-0.1",
-  "campaign_id": "<uuid>",
+  "campaign_id": "<non-empty campaign id>",
   "publication_status": "verified",
   "created_at_utc": "<RFC3339>",
   "artifacts": [
@@ -272,11 +312,16 @@ Required fields:
 }
 ```
 
-`manifest.json` does not list itself. Artifact paths are relative, normalized, contain no `..`, and use `/` separators.
+`manifest.json` does not list itself. It contains an exact six-path map for the
+other canonical files; artifact array order is not authoritative. Each entry
+has exactly `path`, `media_type`, strict integer `size_bytes` and bare lowercase
+`sha256`. Artifact paths are relative, normalized, contain no `..`, and use
+`/` separators.
 
 A verifier must reject:
 
-- a missing or extra mandatory file;
+- a missing or extra mandatory file, any subdirectory/symlink/special entry, or
+  a canonical filename that is not a regular file;
 - size/hash mismatch;
 - duplicate paths;
 - absolute or traversal paths;
@@ -307,6 +352,8 @@ A verifier must reject:
   Android monotonic clock domain and a matching terminal receipt.
 - Quick indexes 1..3 and Acceptance indexes 1..9 must each occur exactly once
   in the frozen B/S/U plan; duplicate or extra runs are invalid evidence.
+- In run-index order, `not_started` is a contiguous suffix; a later attempted
+  outcome after the first `not_started` row is invalid evidence.
 - A complete Quick campaign has 3 planned attempts; a complete Acceptance campaign has 9;
   summary attempted/successful/failed/not-started counts are bounded by the plan
   and `success_rate` is recomputed in `[0,1]`.

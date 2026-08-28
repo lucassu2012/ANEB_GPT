@@ -136,6 +136,11 @@ PASS when:
 - complete, interrupted/cancelled partial, zero-event failed and not-started
   run topologies are verified through the canonical `summary.csv`; no
   `summary_partial.csv` sidecar exists;
+- `not_started` is a contiguous plan suffix in Quick and Acceptance; hole/split
+  plans are rejected, while interrupted/cancelled/failed suffix positives pass;
+- `invalid_sequence` accepts retained canonical prefixes of 0, 1 and 119 events
+  with all-null metrics and no valid receipt, and rejects 120 or count/event
+  mismatch;
 - all three condition plans pass unit/integration tests;
 - unknown contracts fail closed;
 - server emits valid terminal receipts;
@@ -169,13 +174,20 @@ PASS when:
 
 PASS when an automated verifier confirms:
 
-- all mandatory files exist;
+- the campaign root contains exactly seven regular non-symlink files and no
+  extra file, directory or special entry;
 - hashes and sizes match;
+- `meta.json` passes its exact required/nested vocabulary, strict types, fixed
+  claim/clock/protocol tokens and profile/run-plan/campaign cross-bindings;
 - campaign/run/condition identities agree across files;
 - every `runs.csv` row reconstructs and passes the formal
   `run-record.schema.json` contract before recomputation;
 - summaries recompute from run records;
 - report values agree with canonical data;
+- the offline report parser accepts the one canonical summary script
+  independent of attribute order, verifies required static sections, and
+  rejects encoded resource/navigation attributes, any extra script, duplicate
+  summary node and missing/duplicate/empty sections;
 - raw Android events plus the matching terminal receipt recompute per-run
   metrics before `runs.csv`, summaries/RPI and report values are accepted;
 - partial/failed run evidence uses its closed `run_failed`/`run_cancelled`
@@ -251,6 +263,10 @@ If a platform-specific gate cannot run in one environment, it remains unverified
 | result directory unwritable | launcher fails before campaign |
 | artifact modified after packaging | package/manifest verifier fails |
 | duplicate conflicting run upload | server rejects conflict and retains diagnostic |
+| non-suffix `not_started` plan hole | evidence verifier rejects the campaign |
+| extra campaign file/subdirectory/symlink | evidence verifier rejects the bundle |
+| encoded remote report resource or extra script | offline report verifier rejects the report |
+| invalid-sequence count 120 or count/event mismatch | formal schema/evidence verifier rejects the run |
 
 ## 9. P0 blocker definition
 

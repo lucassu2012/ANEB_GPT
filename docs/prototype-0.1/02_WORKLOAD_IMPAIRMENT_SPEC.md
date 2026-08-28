@@ -92,6 +92,11 @@ observed content prefix, and one terminal status event (`run_failed` or
 `events_received`; it has no `terminal_event` receipt. Zero-event failed runs
 use the same two-event status topology without content events, while a
 `not_started` slot has no Android scoring events and all run metrics are null.
+An `invalid_sequence` run uses `run_failed`, retains a canonical observed
+prefix of 0 through 119 content events for diagnostics, publishes all metrics
+as null and has no valid receipt. A 120-event record is not
+`invalid_sequence`; it must satisfy the complete receipt contract or fail as
+another closed status.
 
 ## 3. Condition definitions
 
@@ -220,6 +225,9 @@ three planned indexes (1–3), and `acceptance` has exactly nine (1–9), in the
 orders above. A cancelled or failed campaign records the remaining runs as
 `not_started`, not success or zero. All contract, condition and schedule hashes
 are compared byte-for-byte as bare lowercase hex.
+In ascending `run_index` order, `not_started` is a contiguous suffix, possibly
+empty. After the first `not_started` slot, every later planned slot is also
+`not_started`; no later index may contain an attempted outcome or raw events.
 
 Campaign status reports plan execution completeness, not a 100% run-success
 requirement. If every planned index reaches a run-level terminal outcome,
@@ -249,7 +257,7 @@ A run request contains only versioned identifiers and run metadata. Arbitrary cl
 | exact 120 events + matching done receipt | `complete` | eligible |
 | valid first event, then transport failure/EOF | `interrupted` | not a successful run; partial metrics retained |
 | unknown/mismatched profile or condition | `incompatible` | no business traffic, no score |
-| sequence missing/duplicate/out of order | `invalid_sequence` | not eligible |
+| sequence missing/duplicate/out of order before completion | `invalid_sequence` | not eligible; 0..119 observed prefix retained, all metrics null |
 | user cancellation | `cancelled` | not eligible |
 | timeout before first event | `ttft_timeout` | not eligible |
 | server rejects request | `server_rejected` | not eligible |
@@ -268,9 +276,10 @@ except that independently detected evidence/clock failures may use
 Every non-success status has `task_success=false`, `score_eligible=false` and
 a terminal receipt value of `false` or `null`. `incompatible`,
 `ttft_timeout` and `server_rejected` have zero received events and all metric
-fields `null`; `cancelled` follows the interrupted field-by-field partial
-matrix in the metrics specification. A valid receipt is never accepted for a
-failed status.
+fields `null`; `invalid_sequence` has 0..119 received prefix events, integer
+run t0 and all metric fields `null`; `cancelled` follows the interrupted
+field-by-field partial matrix in the metrics specification. A valid receipt is
+never accepted for a failed status.
 
 ## 8. Naming restrictions
 

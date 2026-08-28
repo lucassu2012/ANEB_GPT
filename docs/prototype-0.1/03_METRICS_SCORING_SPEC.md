@@ -125,6 +125,12 @@ Exactly equal to the threshold is not a stall. Missing, duplicate or out-of-orde
 events are not repaired by sorting; the run becomes invalid while raw events are
 retained.
 
+For `invalid_sequence`, `events_received` is the retained canonical prefix
+count before completion and is in 0..119. The run has an integer monotonic t0,
+no valid terminal receipt and all published metric fields are null; retained
+timestamps are diagnostic evidence, not partial scoring inputs. A count of 120
+is outside this status contract.
+
 For a successful run:
 
 ```text
@@ -155,6 +161,8 @@ cancellation, incompatibility, invalid sequence, timeout or server rejection
 counts as an attempted failure and is reflected in `failed_runs` and the
 success-rate penalty. A campaign that stops before later indexes has
 `not_started_runs` and is `partial` or `cancelled` instead.
+Those `not_started` rows form one contiguous suffix in exact plan order; a
+later attempted row after any `not_started` row is invalid evidence.
 
 For a partial or cancelled campaign, `success_rate` remains
 `successful_runs / planned_runs` when `planned_runs > 0`; if no run was planned it

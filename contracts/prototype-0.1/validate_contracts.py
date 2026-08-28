@@ -16,8 +16,12 @@ import io
 import json
 import math
 import re
+import stat
 import sys
 import tempfile
+from datetime import datetime
+from html import escape as html_escape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -190,6 +194,14 @@ CANONICAL_BUNDLE_FILES = [
     "run.log",
     "manifest.json",
 ]
+CANONICAL_MEDIA_TYPES = {
+    "meta.json": "application/json",
+    "events.jsonl": "application/x-ndjson",
+    "runs.csv": "text/csv",
+    "summary.csv": "text/csv",
+    "report.html": "text/html",
+    "run.log": "text/plain",
+}
 ALLOWED_EVENT_TYPES = {
     "run_started",
     "content_event",
@@ -200,6 +212,21 @@ ALLOWED_EVENT_TYPES = {
 EVIDENCE_SCHEMA_VERSION = "aneb-prototype-evidence-0.1"
 PROTOCOL_VERSION = "prototype-stream-0.1"
 PROFILE_ID = "streaming_text_reference_v0.1"
+REPORT_REQUIRED_SECTION_IDS = [
+    "campaign-verdict",
+    "disclosure",
+    "condition-comparison",
+    "run-table",
+    "environment",
+    "evidence-integrity",
+]
+REPORT_FAILURE_SECTION_STATUSES = {"partial", "failed", "invalid"}
+REPORT_DISCLOSURE = (
+    "ANEB Prototype 0.1 measures Android-client-observed timing against a local ANEB probe under "
+    "deterministic synthetic application-layer schedules. It does not emulate or measure packet loss, "
+    "RAN/core/operator quality, public-Internet quality, a real application, or model inference."
+)
+REPORT_RPI_BOUNDARY = "RPI-0.1 is not an operator, vendor or industry score and is independent of AQS."
 PROFILE_VERSION = "0.1"
 TERMINAL_RECEIPT_VERSION = "prototype-terminal-receipt-0.1"
 SCORING_EVENT_TYPES = {"run_started", "content_event", "terminal_event"}
@@ -580,18 +607,16 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
             writer.writerow({key: scalar(row.get(key)) for key in fieldnames})
 
 
-def write_bundle_metadata(
-    root: Path,
+def build_meta_record(
     runs: list[dict[str, Any]],
     profile: dict[str, Any],
     profile_hash: str,
     campaign_mode: str,
     campaign_status: str,
-) -> None:
-    """Create the seven-file campaign envelope used by the review fixture."""
+) -> dict[str, Any]:
     plan = next(item for item in profile["campaign_plans"] if item["mode"] == campaign_mode)
     campaign_id = runs[0]["campaign_id"] if runs else "campaign-0001"
-    meta = {
+    return {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "campaign_id": campaign_id,
         "campaign_mode": campaign_mode,
@@ -635,6 +660,136 @@ def write_bundle_metadata(
             for condition in profile["conditions"]
         ],
     }
+
+
+def canonical_report_sections(
+    meta: dict[str, Any],
+    runs: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+) -> list[tuple[str, dict[str, Any]]]:
+    comparison_keys = [
+        "condition_id",
+        "median_ttft_ms",
+        "median_completion_ms",
+        "median_stream_event_rate_eps",
+        "median_stall_count",
+        "median_stall_duration_ms",
+        "median_stall_fraction",
+        "success_rate",
+        "rpi",
+    ]
+    sections: list[tuple[str, dict[str, Any]]] = [
+        (
+            "campaign-verdict",
+            {
+                "campaign_mode": meta["campaign_mode"],
+                "campaign_status": meta["campaign_status"],
+                "confidence_by_condition": [
+                    {"condition_id": row["condition_id"], "confidence": row["confidence"]}
+                    for row in summary_rows
+                ],
+            },
+        ),
+        (
+            "disclosure",
+            {
+                "claim_scope": meta["claim_scope"],
+                "evidence_mode": meta["evidence_mode"],
+                "impairment_layer": meta["impairment_layer"],
+                "scope_text": REPORT_DISCLOSURE,
+                "rpi_boundary": REPORT_RPI_BOUNDARY,
+            },
+        ),
+        (
+            "condition-comparison",
+            {"rows": [{key: row[key] for key in comparison_keys} for row in summary_rows]},
+        ),
+        (
+            "run-table",
+            {
+                "rows": [
+                    {
+                        "run_index": run["run_index"],
+                        "run_id": run["run_id"],
+                        "condition_id": run["condition"]["id"],
+                        "run_status": run["run_status"],
+                    }
+                    for run in sorted(runs, key=lambda item: item["run_index"])
+                ]
+            },
+        ),
+        (
+            "environment",
+            {
+                "android_app": meta["android_app"],
+                "server": meta["server"],
+                "profile": meta["profile"],
+                "device": meta["device"],
+                "transport": meta["transport"],
+            },
+        ),
+        ("evidence-integrity", {"manifest_verification": "verified"}),
+    ]
+    if meta["campaign_status"] in REPORT_FAILURE_SECTION_STATUSES:
+        sections.append(
+            (
+                "failure-details",
+                {
+                    "runs": [
+                        {
+                            "run_index": run["run_index"],
+                            "run_status": run["run_status"],
+                            "failure_reason": run["failure_reason"],
+                        }
+                        for run in sorted(runs, key=lambda item: item["run_index"])
+                        if run["run_status"] != "complete"
+                    ]
+                },
+            )
+        )
+    return sections
+
+
+def render_report_html(
+    meta: dict[str, Any],
+    runs: list[dict[str, Any]],
+    summary_rows: list[dict[str, Any]],
+) -> str:
+    report_payload = {
+        "campaign_mode": meta["campaign_mode"],
+        "campaign_status": meta["campaign_status"],
+        "summary": summary_rows,
+    }
+    parts = [
+        '<!doctype html><meta charset="utf-8"><script id="canonical-summary" type="application/json">',
+        json.dumps(report_payload, sort_keys=True, separators=(",", ":")),
+        "</script>",
+    ]
+    for section_id, payload in canonical_report_sections(meta, runs, summary_rows):
+        section_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        parts.extend(
+            [
+                f'<section id="{section_id}"><span data-kind="canonical-section">',
+                html_escape(section_json, quote=False),
+                "</span></section>",
+            ]
+        )
+    return "".join(parts) + "\n"
+
+
+def write_bundle_metadata(
+    root: Path,
+    runs: list[dict[str, Any]],
+    profile: dict[str, Any],
+    profile_hash: str,
+    campaign_mode: str,
+    campaign_status: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    """Create the seven-file campaign envelope used by the review fixture."""
+    if meta is None:
+        meta = build_meta_record(runs, profile, profile_hash, campaign_mode, campaign_status)
+    campaign_id = meta["campaign_id"]
     (root / "meta.json").write_text(
         json.dumps(meta, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -1087,6 +1242,7 @@ def build_e2e_bundle(
     campaign_mode: str = "quick",
     statuses: dict[int, str] | None = None,
     campaign_status_override: str | None = None,
+    invalid_sequence_counts: dict[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     campaign_plan = next(
         (plan for plan in profile["campaign_plans"] if plan["mode"] == campaign_mode),
@@ -1096,8 +1252,16 @@ def build_e2e_bundle(
         raise ValueError(f"unknown campaign mode {campaign_mode}")
     condition_order = campaign_plan["condition_order"]
     statuses = dict(statuses or {})
+    invalid_sequence_counts = dict(invalid_sequence_counts or {})
     if any(index not in range(1, len(condition_order) + 1) for index in statuses):
         raise ValueError("fixture status index is outside the frozen campaign plan")
+    if any(
+        index not in range(1, len(condition_order) + 1)
+        or type(count) is not int
+        or not 0 <= count < 120
+        for index, count in invalid_sequence_counts.items()
+    ):
+        raise ValueError("invalid-sequence fixture count is outside 0..119")
     if campaign_status_override not in {None, "failed", "invalid"}:
         raise ValueError("only explicit failed/invalid campaign status overrides are allowed")
     runs: list[dict[str, Any]] = []
@@ -1115,12 +1279,18 @@ def build_e2e_bundle(
             t0_ns=next_t0_ns,
         )
         run = status_record(base, status, profile)
+        if index in invalid_sequence_counts:
+            if status != "invalid_sequence":
+                raise ValueError("invalid-sequence fixture count is attached to another status")
+            run["events_received"] = invalid_sequence_counts[index]
         runs.append(run)
         if status == "not_started":
             continue
         t0 = base["clock"]["t0_monotonic_ns"]
         offsets, terminal_offset = schedule_offsets(profile, condition_id)
-        if status in {"interrupted", "cancelled"}:
+        if status in {"interrupted", "cancelled"} or (
+            status == "invalid_sequence" and run["events_received"] > 0
+        ):
             end_ns = t0 + offsets[run["events_received"] - 1] * 1_000_000 + 1_000_000
         elif status in {"incompatible", "invalid_sequence", "ttft_timeout", "server_rejected"}:
             end_ns = t0 + 1_000_000
@@ -1221,20 +1391,12 @@ def build_e2e_bundle(
     write_csv(root / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in summary_rows])
     if (root / "summary_partial.csv").exists():
         (root / "summary_partial.csv").unlink()
-    report_payload = {"campaign_mode": campaign_mode, "campaign_status": campaign_status, "summary": summary_rows}
-    report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
-    visible_rpi = "".join(
-        f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
-        f'RPI: {scalar(row["rpi"])}</span>'
-        for row in summary_rows
-    )
+    meta = build_meta_record(parsed_runs, profile, profile_hash, campaign_mode, campaign_status)
     (root / "report.html").write_text(
-        "<!doctype html><meta charset=\"utf-8\"><script id=\"canonical-summary\" "
-        "type=\"application/json\">" + report_json + "</script>"
-        "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
+        render_report_html(meta, parsed_runs, summary_rows),
         encoding="utf-8",
     )
-    write_bundle_metadata(root, runs, profile, profile_hash, campaign_mode, campaign_status)
+    write_bundle_metadata(root, parsed_runs, profile, profile_hash, campaign_mode, campaign_status, meta)
     return runs
 
 
@@ -1253,6 +1415,12 @@ def assert_campaign_plan(runs: list[dict[str, Any]], profile: dict[str, Any], ca
     indices = [run["run_index"] for run in runs]
     if sorted(indices) != expected_indices:
         raise ValueError("run indexes are not exactly the frozen campaign plan")
+    not_started_seen = False
+    for run in sorted(runs, key=lambda item: item["run_index"]):
+        if run["run_status"] == "not_started":
+            not_started_seen = True
+        elif not_started_seen:
+            raise ValueError("not_started run records are not a contiguous plan suffix")
     for run in runs:
         index = run["run_index"]
         if run["campaign_mode"] != campaign_mode:
@@ -1284,6 +1452,253 @@ def campaign_status_from_runs(runs: list[dict[str, Any]]) -> str:
     return "complete"
 
 
+class ReportStructureCollector(HTMLParser):
+    """Collect the fixed report grammar with browser-decoded attributes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.events: list[tuple[Any, ...]] = []
+
+    def handle_decl(self, decl: str) -> None:
+        self.events.append(("decl", decl.lower()))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        names = [name for name, _ in attrs]
+        if len(names) != len(set(names)):
+            self.events.append(("duplicate-attributes", tag, tuple(attrs)))
+        self.events.append(("start", tag, tuple(sorted(attrs))))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.events.append(("startend", tag, tuple(sorted(attrs))))
+
+    def handle_endtag(self, tag: str) -> None:
+        self.events.append(("end", tag))
+
+    def handle_comment(self, data: str) -> None:
+        self.events.append(("comment", data))
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self.events.append(("data", data))
+
+    def handle_pi(self, data: str) -> None:
+        self.events.append(("pi", data))
+
+    def unknown_decl(self, data: str) -> None:
+        self.events.append(("unknown-decl", data))
+
+
+def parse_report_structure(report_text: str) -> list[tuple[Any, ...]]:
+    parser = ReportStructureCollector()
+    parser.feed(report_text)
+    parser.close()
+    return parser.events
+
+
+def assert_report_structure(
+    report_text: str,
+    meta: dict[str, Any],
+    runs: list[dict[str, Any]],
+    expected_summary: list[dict[str, Any]],
+) -> None:
+    expected_report = render_report_html(meta, runs, expected_summary)
+    if parse_report_structure(report_text) != parse_report_structure(expected_report):
+        raise ValueError("offline report structure or attributes are outside the positive allowlist")
+
+
+def is_bare_lower_hex(value: Any, length: int) -> bool:
+    return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
+
+
+def is_regular_nonlink_file(path: Path) -> bool:
+    """Reject links and platform reparse objects instead of following them."""
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and not path.is_symlink()
+        and not (attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    )
+
+
+def is_rfc3339(value: Any) -> bool:
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})",
+        value,
+    ) is None:
+        return False
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is not None
+    except ValueError:
+        return False
+
+
+def assert_meta_contract(meta: Any, profile: dict[str, Any], profile_hash: str) -> None:
+    expected_top_level = {
+        "schema_version",
+        "campaign_id",
+        "campaign_mode",
+        "campaign_status",
+        "started_at_utc",
+        "ended_at_utc",
+        "claim_scope",
+        "evidence_mode",
+        "impairment_layer",
+        "score_policy_id",
+        "profile_manifest_sha256",
+        "clock_contract",
+        "profile",
+        "product",
+        "android_app",
+        "server",
+        "device",
+        "transport",
+        "run_plan",
+        "conditions",
+    }
+    if not isinstance(meta, dict) or set(meta) != expected_top_level:
+        raise ValueError("campaign metadata top-level shape is not canonical")
+    if (
+        meta["schema_version"] != EVIDENCE_SCHEMA_VERSION
+        or not isinstance(meta["campaign_id"], str)
+        or not meta["campaign_id"]
+        or meta["campaign_mode"] not in {"quick", "acceptance"}
+        or meta["campaign_status"] not in {"complete", "partial", "cancelled", "failed", "invalid"}
+        or meta["claim_scope"] != "application_end_to_end_to_probe_node"
+        or meta["evidence_mode"] != "synthetic_application_impairment"
+        or meta["impairment_layer"] != "application"
+        or meta["score_policy_id"] != "rpi-0.1"
+        or meta["profile_manifest_sha256"] != profile_hash
+        or not is_bare_lower_hex(meta["profile_manifest_sha256"], 64)
+    ):
+        raise ValueError("campaign metadata identity or claim boundary is invalid")
+    if not is_rfc3339(meta["started_at_utc"]) or not is_rfc3339(meta["ended_at_utc"]):
+        raise ValueError("campaign metadata timestamps are not RFC3339")
+    started = datetime.fromisoformat(meta["started_at_utc"].replace("Z", "+00:00"))
+    ended = datetime.fromisoformat(meta["ended_at_utc"].replace("Z", "+00:00"))
+    if ended < started:
+        raise ValueError("campaign metadata end precedes start")
+    clock_contract = meta["clock_contract"]
+    if (
+        not isinstance(clock_contract, dict)
+        or type(clock_contract.get("includes_deep_sleep")) is not bool
+        or clock_contract != {
+        "source": "android.os.SystemClock.elapsedRealtimeNanos",
+        "unit": "ns",
+        "epoch": "device_boot",
+        "includes_deep_sleep": True,
+        "domain_identity": "per-run opaque boot/session clock_domain_id",
+        }
+    ):
+        raise ValueError("campaign metadata clock contract is not canonical")
+    if meta["profile"] != {
+        "id": profile["workload"]["id"],
+        "version": profile["workload"]["version"],
+        "sha256": profile_hash,
+    }:
+        raise ValueError("campaign metadata profile identity is not canonical")
+    product = meta["product"]
+    if (
+        not isinstance(product, dict)
+        or set(product) != {"version", "git_commit"}
+        or product["version"] != "prototype-0.1"
+        or not is_bare_lower_hex(product["git_commit"], 40)
+    ):
+        raise ValueError("campaign metadata product identity is invalid")
+    android_app = meta["android_app"]
+    if (
+        not isinstance(android_app, dict)
+        or set(android_app) != {"version_name", "version_code", "apk_sha256"}
+        or not isinstance(android_app["version_name"], str)
+        or not android_app["version_name"]
+        or type(android_app["version_code"]) is not int
+        or android_app["version_code"] < 1
+        or not is_bare_lower_hex(android_app["apk_sha256"], 64)
+    ):
+        raise ValueError("campaign metadata Android app identity is invalid")
+    server = meta["server"]
+    if (
+        not isinstance(server, dict)
+        or set(server) != {"version", "binary_sha256", "protocol_version"}
+        or not isinstance(server["version"], str)
+        or not server["version"]
+        or not is_bare_lower_hex(server["binary_sha256"], 64)
+        or server["protocol_version"] != PROTOCOL_VERSION
+    ):
+        raise ValueError("campaign metadata server identity is invalid")
+    device = meta["device"]
+    if (
+        not isinstance(device, dict)
+        or set(device) != {"manufacturer", "model", "os_release", "sdk_int"}
+        or any(not isinstance(device[key], str) or not device[key] for key in ["manufacturer", "model", "os_release"])
+        or type(device["sdk_int"]) is not int
+        or device["sdk_int"] < 1
+    ):
+        raise ValueError("campaign metadata device shape is invalid")
+    transport = meta["transport"]
+    if (
+        not isinstance(transport, dict)
+        or set(transport) != {"mode", "acceptance_path"}
+        or type(transport.get("acceptance_path")) is not bool
+        or (transport["mode"], transport["acceptance_path"])
+        not in {("lan", True), ("adb_reverse", False)}
+    ):
+        raise ValueError("campaign metadata transport authority is invalid")
+    run_plan = meta["run_plan"]
+    if (
+        not isinstance(run_plan, dict)
+        or set(run_plan) != {"planned_runs", "order"}
+        or type(run_plan["planned_runs"]) is not int
+        or not isinstance(run_plan["order"], list)
+    ):
+        raise ValueError("campaign metadata run plan shape is invalid")
+    plans = [plan for plan in profile["campaign_plans"] if plan["mode"] == meta["campaign_mode"]]
+    if len(plans) != 1 or run_plan != {
+        "planned_runs": len(plans[0]["condition_order"]),
+        "order": list(plans[0]["condition_order"]),
+    }:
+        raise ValueError("campaign metadata run plan does not match the frozen mode plan")
+    conditions = meta["conditions"]
+    if not isinstance(conditions, list):
+        raise ValueError("campaign metadata conditions are not a list")
+    profile_by_id = {condition["id"]: condition for condition in profile["conditions"]}
+    seen_condition_ids: set[str] = set()
+    observed_order: list[str] = []
+    for condition in conditions:
+        if not isinstance(condition, dict) or set(condition) != {
+            "id",
+            "version",
+            "nominal_interval_ms",
+            "schedule_sha256",
+        }:
+            raise ValueError("campaign metadata condition shape is invalid")
+        condition_id = condition["id"]
+        published = profile_by_id.get(condition_id)
+        if (
+            not isinstance(condition_id, str)
+            or not isinstance(condition["version"], str)
+            or type(condition["nominal_interval_ms"]) is not int
+            or not is_bare_lower_hex(condition["schedule_sha256"], 64)
+            or condition_id in seen_condition_ids
+            or published is None
+            or condition != {
+            "id": published["id"],
+            "version": published["version"],
+            "nominal_interval_ms": published["nominal_interval_ms"],
+            "schedule_sha256": published["schedule_sha256"],
+            }
+        ):
+            raise ValueError("campaign metadata condition does not match the published profile")
+        seen_condition_ids.add(condition_id)
+        observed_order.append(condition_id)
+    published_order = [condition["id"] for condition in profile["conditions"]]
+    if observed_order != [condition_id for condition_id in published_order if condition_id in seen_condition_ids]:
+        raise ValueError("campaign metadata condition order does not follow the published profile")
+
+
 def verify_e2e_bundle(
     root: Path,
     profile: dict[str, Any],
@@ -1292,37 +1707,55 @@ def verify_e2e_bundle(
 ) -> None:
     if run_schema is None:
         run_schema = load_json("run-record.schema.json")
-    actual_files = {path.name for path in root.iterdir() if path.is_file()}
+    actual_files = {path.name for path in root.iterdir()}
     expected_files = set(CANONICAL_BUNDLE_FILES)
     if actual_files != expected_files:
         extra = sorted(actual_files - expected_files)
         missing = sorted(expected_files - actual_files)
         raise ValueError(f"campaign bundle file set is not the frozen seven-file set (extra={extra}, missing={missing})")
+    if any(not is_regular_nonlink_file(root / name) for name in expected_files):
+        raise ValueError("campaign bundle entries must be regular non-symlink files")
     try:
         meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("campaign metadata or manifest is malformed") from exc
-    if (
-        not isinstance(meta, dict)
-        or meta.get("schema_version") != EVIDENCE_SCHEMA_VERSION
-        or meta.get("profile_manifest_sha256") != profile_hash
-    ):
-        raise ValueError("campaign metadata does not bind the published profile")
-    artifact_names = [item.get("path") for item in manifest.get("artifacts", [])]
+    assert_meta_contract(meta, profile, profile_hash)
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "manifest_version",
+        "campaign_id",
+        "publication_status",
+        "created_at_utc",
+        "artifacts",
+    }:
+        raise ValueError("campaign manifest top-level shape is not canonical")
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, list):
+        raise ValueError("campaign manifest artifacts are not a list")
+    artifact_names = [item.get("path") if isinstance(item, dict) else None for item in artifacts]
     expected_artifacts = [name for name in CANONICAL_BUNDLE_FILES if name != "manifest.json"]
     if (
         manifest.get("manifest_version") != "aneb-prototype-manifest-0.1"
         or manifest.get("publication_status") != "verified"
         or manifest.get("campaign_id") != meta.get("campaign_id")
-        or artifact_names != expected_artifacts
-        or len(artifact_names) != len(set(artifact_names))
+        or not is_rfc3339(manifest.get("created_at_utc"))
+        or set(artifact_names) != set(expected_artifacts)
+        or len(artifact_names) != len(expected_artifacts)
     ):
         raise ValueError("campaign manifest shape is not canonical")
-    for item in manifest["artifacts"]:
+    for item in artifacts:
+        if not isinstance(item, dict) or set(item) != {"path", "media_type", "size_bytes", "sha256"}:
+            raise ValueError("campaign manifest artifact shape is not canonical")
         path = item["path"]
         if not isinstance(path, str) or path not in expected_artifacts or "/" in path or "\\" in path or ".." in path:
             raise ValueError("campaign manifest path is not canonical")
+        if (
+            item["media_type"] != CANONICAL_MEDIA_TYPES[path]
+            or type(item["size_bytes"]) is not int
+            or item["size_bytes"] < 0
+            or not is_bare_lower_hex(item["sha256"], 64)
+        ):
+            raise ValueError("campaign manifest artifact metadata is invalid")
         data = (root / path).read_bytes()
         if item.get("size_bytes") != len(data) or item.get("sha256") != hashlib.sha256(data).hexdigest():
             raise ValueError("campaign manifest artifact hash/size mismatch")
@@ -1346,6 +1779,11 @@ def verify_e2e_bundle(
     if meta.get("campaign_mode") != campaign_mode:
         raise ValueError("campaign metadata mode does not match run authority")
     plan = assert_campaign_plan(runs, profile, campaign_mode)
+    if meta.get("run_plan") != {
+        "planned_runs": len(plan["condition_order"]),
+        "order": list(plan["condition_order"]),
+    }:
+        raise ValueError("campaign metadata run plan does not match the frozen mode plan")
     inferred_campaign_status = campaign_status_from_runs(runs)
     declared_campaign_status = meta.get("campaign_status")
     if declared_campaign_status in {"failed", "invalid"}:
@@ -1605,6 +2043,9 @@ def verify_e2e_bundle(
                     abs_tol=SERIALIZED_NUMBER_TOLERANCE,
                 ):
                     raise ValueError(f"partial metric mismatch for {key}")
+        elif run["run_status"] == "invalid_sequence":
+            if any(value is not None for value in run["metrics"].values()):
+                raise ValueError("invalid-sequence prefix retains numeric metrics")
         else:
             raise ValueError("non-partial failure status has observed content")
         end_by_index[run["run_index"]] = failures[0]["client_monotonic_ns"]
@@ -1658,41 +2099,7 @@ def verify_e2e_bundle(
     if (root / "summary_partial.csv").exists():
         raise ValueError("summary_partial.csv is outside the seven-file campaign contract")
     report_text = (root / "report.html").read_text(encoding="utf-8")
-    if re.search(r"(?:https?:)?//", report_text, flags=re.IGNORECASE):
-        raise ValueError("offline report contains a remote URL")
-    if re.search(r"<[^>]+\b(?:src|href|action)\s*=", report_text, flags=re.IGNORECASE):
-        raise ValueError("offline report contains a resource or form URL attribute")
-    if re.search(
-        r"(?:\burl\s*\(|@import\b|\b(?:fetch|XMLHttpRequest|WebSocket)\s*\()",
-        report_text,
-        flags=re.IGNORECASE,
-    ):
-        raise ValueError("offline report contains an active resource/API reference")
-    if re.search(r"<(?:iframe|object|embed)\b", report_text, flags=re.IGNORECASE):
-        raise ValueError("offline report contains remote active content")
-    matches = re.findall(
-        r'<script id="canonical-summary" type="application/json">(.*?)</script>',
-        report_text,
-        flags=re.DOTALL,
-    )
-    if len(matches) != 1:
-        raise ValueError("report has no embedded canonical summary")
-    report_payload = json.loads(matches[0])
-    if report_payload != {
-        "campaign_mode": campaign_mode,
-        "campaign_status": campaign_status,
-        "summary": expected_summary,
-    }:
-        raise ValueError("report summary is not the canonical summary")
-    visible = re.findall(
-        r'<span data-condition="([^"]+)" data-rpi="([^"]*)">RPI: ([^<]*)</span>',
-        report_text,
-    )
-    if len(visible) != len(expected_summary) or report_text.count("RPI:") != len(expected_summary):
-        raise ValueError("report visible RPI values are not a single canonical rendering")
-    expected_visible = [(row["condition_id"], scalar(row["rpi"]), scalar(row["rpi"])) for row in expected_summary]
-    if visible != expected_visible:
-        raise ValueError("report visible RPI values are not derived from canonical summary")
+    assert_report_structure(report_text, meta, runs, expected_summary)
 
 
 def mutate_and_expect_bundle_failure(
@@ -2051,24 +2458,23 @@ def main() -> int:
         )
     checks.append("closed failure status/reason/receipt/event/metric topology")
     checks.append("all eight status reason domains and attributable branch regressions")
-    invalid_sequence = copy.deepcopy(run)
-    invalid_sequence.update(
-        {
-            "run_status": "invalid_sequence",
-            "task_success": False,
-            "score_eligible": False,
-            "terminal_receipt_valid": None,
-            "failure_reason": "invalid_sequence",
-            "metrics": {key: None for key in METRIC_KEYS},
-        }
-    )
-    expect_valid(schemas["run-record"], invalid_sequence, "invalid sequence all-null matrix")
+    invalid_sequence = status_record(copy.deepcopy(run), "invalid_sequence", profile)
+    for observed_count in [0, 1, 119]:
+        candidate = copy.deepcopy(invalid_sequence)
+        candidate["events_received"] = observed_count
+        expect_valid(schemas["run-record"], candidate, f"invalid sequence {observed_count}-event prefix")
+    invalid_sequence_120 = copy.deepcopy(invalid_sequence)
+    invalid_sequence_120["events_received"] = 120
+    expect_invalid(schemas["run-record"], invalid_sequence_120, "invalid sequence full 120-event survivor")
     invalid_sequence_receipt = copy.deepcopy(invalid_sequence)
     invalid_sequence_receipt["terminal_receipt_valid"] = True
     expect_invalid(schemas["run-record"], invalid_sequence_receipt, "invalid sequence valid receipt survivor")
     invalid_sequence_numeric = copy.deepcopy(invalid_sequence)
     invalid_sequence_numeric["metrics"]["ttft_ms"] = 1.0
     expect_invalid(schemas["run-record"], invalid_sequence_numeric, "invalid sequence retained metrics")
+    invalid_sequence_null_t0 = copy.deepcopy(invalid_sequence)
+    invalid_sequence_null_t0["clock"]["t0_monotonic_ns"] = None
+    expect_invalid(schemas["run-record"], invalid_sequence_null_t0, "invalid sequence without attempted t0")
     clock_invalid = copy.deepcopy(run)
     clock_invalid.update(
         {
@@ -2176,11 +2582,137 @@ def main() -> int:
     assert mixed_rows[2]["rpi"] is not None and mixed_rows[2]["primary_null_reason"] is None
     checks.append("mixed-eligibility Acceptance RPI is computed per row")
 
+    meta_fixture = build_meta_record(
+        [valid_run(profile_hash, profile, "baseline_v0.1", 1, "quick")],
+        profile,
+        profile_hash,
+        "quick",
+        "complete",
+    )
+    assert_meta_contract(meta_fixture, profile, profile_hash)
+    empty_condition_meta = copy.deepcopy(meta_fixture)
+    empty_condition_meta["conditions"] = []
+    assert_meta_contract(empty_condition_meta, profile, profile_hash)
+    adb_reverse_meta = copy.deepcopy(meta_fixture)
+    adb_reverse_meta["transport"] = {"mode": "adb_reverse", "acceptance_path": False}
+    assert_meta_contract(adb_reverse_meta, profile, profile_hash)
+
+    meta_counterexamples: list[tuple[str, Callable[[dict[str, Any]], None]]] = [
+        ("missing claim_scope", lambda candidate: candidate.pop("claim_scope")),
+        ("extra top-level field", lambda candidate: candidate.__setitem__("forged", True)),
+        ("clock unit", lambda candidate: candidate["clock_contract"].__setitem__("unit", "ms")),
+        (
+            "clock boolean type",
+            lambda candidate: candidate["clock_contract"].__setitem__("includes_deep_sleep", 1),
+        ),
+        ("profile hash", lambda candidate: candidate["profile"].__setitem__("sha256", "b" * 64)),
+        ("product commit", lambda candidate: candidate["product"].__setitem__("git_commit", "G" * 40)),
+        ("APK hash", lambda candidate: candidate["android_app"].__setitem__("apk_sha256", "B" * 64)),
+        ("Android app extra field", lambda candidate: candidate["android_app"].__setitem__("forged", "x")),
+        ("server protocol", lambda candidate: candidate["server"].__setitem__("protocol_version", "forged")),
+        ("device missing field", lambda candidate: candidate["device"].pop("model")),
+        (
+            "transport pair",
+            lambda candidate: candidate.__setitem__("transport", {"mode": "lan", "acceptance_path": False}),
+        ),
+        (
+            "transport boolean type",
+            lambda candidate: candidate.__setitem__("transport", {"mode": "lan", "acceptance_path": 1}),
+        ),
+        (
+            "run plan authority",
+            lambda candidate: candidate.__setitem__(
+                "run_plan",
+                {"planned_runs": 9, "order": ["baseline_v0.1"] * 9},
+            ),
+        ),
+        (
+            "condition hash",
+            lambda candidate: candidate["conditions"][0].__setitem__("schedule_sha256", "b" * 64),
+        ),
+        (
+            "condition integer type",
+            lambda candidate: candidate["conditions"][0].__setitem__("nominal_interval_ms", 50.0),
+        ),
+        ("condition order", lambda candidate: candidate["conditions"].reverse()),
+        (
+            "reversed timestamps",
+            lambda candidate: candidate.__setitem__("ended_at_utc", "2026-08-28T09:59:00Z"),
+        ),
+        ("boolean planned count", lambda candidate: candidate["run_plan"].__setitem__("planned_runs", True)),
+    ]
+    for label, mutate_meta in meta_counterexamples:
+        candidate = copy.deepcopy(meta_fixture)
+        mutate_meta(candidate)
+        expect_failure(
+            lambda candidate=candidate: assert_meta_contract(candidate, profile, profile_hash),
+            f"meta counterexample {label}",
+        )
+    checks.append("full meta shape/constants plus empty-condition and adb-reverse format boundaries")
+
     with tempfile.TemporaryDirectory(prefix="aneb-prototype-evidence-") as directory:
-        bundle = Path(directory)
+        workspace = Path(directory)
+        bundle = workspace / "canonical"
+        bundle.mkdir()
         build_e2e_bundle(bundle, profile, profile_hash)
         assert not (bundle / "terminal_receipts.json").exists()
         verify_e2e_bundle(bundle, profile, profile_hash)
+        if '<section id="campaign-verdict">' not in (bundle / "report.html").read_text(encoding="utf-8"):
+            raise AssertionError("canonical report is missing the campaign-verdict display section")
+        canonical_report_text = (bundle / "report.html").read_text(encoding="utf-8")
+        required_complete_sections = {
+            "campaign-verdict",
+            "disclosure",
+            "condition-comparison",
+            "run-table",
+            "environment",
+            "evidence-integrity",
+        }
+        if any(f'<section id="{section_id}">' not in canonical_report_text for section_id in required_complete_sections):
+            raise AssertionError("canonical complete report is missing a required display section")
+        if '<section id="failure-details">' in canonical_report_text:
+            raise AssertionError("complete report unexpectedly requires the conditional failure-details section")
+
+        reordered_script_bundle = workspace / "reordered-canonical-summary-attributes"
+        reordered_script_bundle.mkdir()
+        build_e2e_bundle(reordered_script_bundle, profile, profile_hash)
+        reordered_report_path = reordered_script_bundle / "report.html"
+        reordered_report = reordered_report_path.read_text(encoding="utf-8").replace(
+            '<script id="canonical-summary" type="application/json">',
+            '<script type="application/json" id="canonical-summary">',
+            1,
+        )
+        reordered_report_path.write_text(reordered_report, encoding="utf-8")
+        refresh_bundle_manifest(reordered_script_bundle)
+        verify_e2e_bundle(reordered_script_bundle, profile, profile_hash)
+
+        nested_extra = bundle / "nested"
+        nested_extra.mkdir()
+        (nested_extra / "extra.txt").write_text("outside canonical bundle\n", encoding="utf-8")
+        expect_failure(
+            lambda: verify_e2e_bundle(bundle, profile, profile_hash),
+            "campaign bundle with nested extra file",
+        )
+        (nested_extra / "extra.txt").unlink()
+        nested_extra.rmdir()
+
+        flat_extra = bundle / "extra.txt"
+        flat_extra.write_text("outside canonical bundle\n", encoding="utf-8")
+        expect_failure(
+            lambda: verify_e2e_bundle(bundle, profile, profile_hash),
+            "campaign bundle with flat extra file",
+        )
+        flat_extra.unlink()
+
+        nonregular_bundle = workspace / "canonical-name-nonregular"
+        nonregular_bundle.mkdir()
+        build_e2e_bundle(nonregular_bundle, profile, profile_hash)
+        (nonregular_bundle / "run.log").unlink()
+        (nonregular_bundle / "run.log").mkdir()
+        expect_failure(
+            lambda: verify_e2e_bundle(nonregular_bundle, profile, profile_hash),
+            "campaign bundle canonical name is not a regular file",
+        )
 
         def mutate_raw(path: Path) -> None:
             lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -2400,9 +2932,9 @@ def main() -> int:
             ]
             source = next(event for event in events if event["run_id"] == "run-quick-02")
             forged = copy.deepcopy(source)
-            forged["run_id"] = "run-quick-01"
-            forged["run_index"] = 1
-            forged["condition_id"] = "baseline_v0.1"
+            forged["run_id"] = "run-quick-03"
+            forged["run_index"] = 3
+            forged["condition_id"] = "unstable_v0.1"
             events.append(forged)
             (path / "events.jsonl").write_text(
                 "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
@@ -2461,17 +2993,11 @@ def main() -> int:
             parsed_runs = [csv_row_to_run(row) for row in rows]
             summary = compute_summary_rows(parsed_runs, profile, campaign_mode, "complete")
             write_csv(path / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in summary])
-            report_payload = {"campaign_mode": campaign_mode, "campaign_status": "complete", "summary": summary}
-            report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
-            visible_rpi = "".join(
-                f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
-                f'RPI: {scalar(row["rpi"])}</span>'
-                for row in summary
-            )
+            meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+            meta["campaign_mode"] = campaign_mode
+            meta["campaign_status"] = "complete"
             (path / "report.html").write_text(
-                "<!doctype html><meta charset=\"utf-8\"><script id=\"canonical-summary\" "
-                "type=\"application/json\">" + report_json + "</script>"
-                "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
+                render_report_html(meta, parsed_runs, summary),
                 encoding="utf-8",
             )
 
@@ -2520,13 +3046,91 @@ def main() -> int:
         refresh_bundle_manifest(bundle)
         verify_e2e_bundle(bundle, profile, profile_hash)
 
-        acceptance_bundle = bundle / "acceptance"
+        acceptance_bundle = workspace / "acceptance"
         acceptance_bundle.mkdir()
         build_e2e_bundle(acceptance_bundle, profile, profile_hash, "acceptance")
         assert not (acceptance_bundle / "terminal_receipts.json").exists()
         verify_e2e_bundle(acceptance_bundle, profile, profile_hash)
 
-        mixed_acceptance_bundle = bundle / "acceptance-mixed"
+        acceptance_suffix_bundle = workspace / "acceptance-not-started-suffix"
+        acceptance_suffix_bundle.mkdir()
+        build_e2e_bundle(
+            acceptance_suffix_bundle,
+            profile,
+            profile_hash,
+            "acceptance",
+            {8: "not_started", 9: "not_started"},
+        )
+        verify_e2e_bundle(acceptance_suffix_bundle, profile, profile_hash)
+
+        acceptance_meta_plan_bundle = workspace / "acceptance-forged-meta-plan"
+        acceptance_meta_plan_bundle.mkdir()
+        build_e2e_bundle(acceptance_meta_plan_bundle, profile, profile_hash, "acceptance")
+        acceptance_meta_path = acceptance_meta_plan_bundle / "meta.json"
+        acceptance_meta = json.loads(acceptance_meta_path.read_text(encoding="utf-8"))
+        quick_plan = next(plan for plan in profile["campaign_plans"] if plan["mode"] == "quick")
+        acceptance_meta["run_plan"] = {
+            "planned_runs": len(quick_plan["condition_order"]),
+            "order": list(quick_plan["condition_order"]),
+        }
+        acceptance_meta_path.write_text(
+            json.dumps(acceptance_meta, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        refresh_bundle_manifest(acceptance_meta_plan_bundle)
+        expect_failure(
+            lambda: verify_e2e_bundle(acceptance_meta_plan_bundle, profile, profile_hash),
+            "Acceptance metadata forged to Quick run plan",
+        )
+
+        missing_claim_scope_bundle = workspace / "missing-meta-claim-scope"
+        missing_claim_scope_bundle.mkdir()
+        build_e2e_bundle(missing_claim_scope_bundle, profile, profile_hash)
+        missing_claim_meta_path = missing_claim_scope_bundle / "meta.json"
+        missing_claim_meta = json.loads(missing_claim_meta_path.read_text(encoding="utf-8"))
+        del missing_claim_meta["claim_scope"]
+        missing_claim_meta_path.write_text(
+            json.dumps(missing_claim_meta, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        refresh_bundle_manifest(missing_claim_scope_bundle)
+        expect_failure(
+            lambda: verify_e2e_bundle(missing_claim_scope_bundle, profile, profile_hash),
+            "campaign metadata missing claim_scope",
+        )
+
+        missing_manifest_media_bundle = workspace / "missing-manifest-media-type"
+        missing_manifest_media_bundle.mkdir()
+        build_e2e_bundle(missing_manifest_media_bundle, profile, profile_hash)
+        missing_media_manifest_path = missing_manifest_media_bundle / "manifest.json"
+        missing_media_manifest = json.loads(missing_media_manifest_path.read_text(encoding="utf-8"))
+        del missing_media_manifest["artifacts"][0]["media_type"]
+        missing_media_manifest_path.write_text(
+            json.dumps(missing_media_manifest, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        expect_failure(
+            lambda: verify_e2e_bundle(missing_manifest_media_bundle, profile, profile_hash),
+            "campaign manifest artifact missing media_type",
+        )
+
+        shuffled_manifest_bundle = workspace / "shuffled-manifest-artifacts"
+        shuffled_manifest_bundle.mkdir()
+        build_e2e_bundle(shuffled_manifest_bundle, profile, profile_hash)
+        shuffled_manifest_path = shuffled_manifest_bundle / "manifest.json"
+        shuffled_manifest = json.loads(shuffled_manifest_path.read_text(encoding="utf-8"))
+        shuffled_manifest["artifacts"] = [
+            dict(reversed(list(item.items())))
+            for item in reversed(shuffled_manifest["artifacts"])
+        ]
+        shuffled_manifest = dict(reversed(list(shuffled_manifest.items())))
+        shuffled_manifest_path.write_text(
+            json.dumps(shuffled_manifest, sort_keys=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        verify_e2e_bundle(shuffled_manifest_bundle, profile, profile_hash)
+
+        mixed_acceptance_bundle = workspace / "acceptance-mixed"
         mixed_acceptance_bundle.mkdir()
         build_e2e_bundle(
             mixed_acceptance_bundle,
@@ -2550,13 +3154,28 @@ def main() -> int:
             and unstable_row["rpi"] != ""
         )
 
-        partial_bundle = bundle / "partial-interrupted"
+        partial_bundle = workspace / "partial-interrupted"
         partial_bundle.mkdir()
         build_e2e_bundle(partial_bundle, profile, profile_hash, "quick", {1: "interrupted"})
         assert not (partial_bundle / "summary_partial.csv").exists()
         verify_e2e_bundle(partial_bundle, profile, profile_hash)
 
-        cancelled_bundle = bundle / "partial-cancelled"
+        partial_interrupted_suffix_bundle = workspace / "partial-interrupted-suffix"
+        partial_interrupted_suffix_bundle.mkdir()
+        build_e2e_bundle(
+            partial_interrupted_suffix_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {1: "interrupted", 2: "not_started", 3: "not_started"},
+        )
+        verify_e2e_bundle(partial_interrupted_suffix_bundle, profile, profile_hash)
+        if '<section id="failure-details">' not in (
+            partial_interrupted_suffix_bundle / "report.html"
+        ).read_text(encoding="utf-8"):
+            raise AssertionError("partial interrupted report is missing failure-details")
+
+        cancelled_bundle = workspace / "partial-cancelled"
         cancelled_bundle.mkdir()
         build_e2e_bundle(
             cancelled_bundle,
@@ -2567,7 +3186,7 @@ def main() -> int:
         )
         verify_e2e_bundle(cancelled_bundle, profile, profile_hash)
 
-        failed_bundle = bundle / "partial-server-rejected"
+        failed_bundle = workspace / "partial-server-rejected"
         failed_bundle.mkdir()
         build_e2e_bundle(
             failed_bundle,
@@ -2580,11 +3199,146 @@ def main() -> int:
         verify_e2e_bundle(failed_bundle, profile, profile_hash)
         failed_summary = read_csv(failed_bundle / "summary.csv", SUMMARY_COLUMNS)
         assert all(row["campaign_status"] == "failed" and row["rpi"] == "" for row in failed_summary)
+        if '<section id="failure-details">' not in (failed_bundle / "report.html").read_text(encoding="utf-8"):
+            raise AssertionError("failed report is missing failure-details")
 
-        not_started_bundle = bundle / "partial-not-started"
+        invalid_campaign_bundle = workspace / "invalid-campaign"
+        invalid_campaign_bundle.mkdir()
+        build_e2e_bundle(
+            invalid_campaign_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {3: "invalid_sequence"},
+            "invalid",
+            invalid_sequence_counts={3: 1},
+        )
+        verify_e2e_bundle(invalid_campaign_bundle, profile, profile_hash)
+        if '<section id="failure-details">' not in (
+            invalid_campaign_bundle / "report.html"
+        ).read_text(encoding="utf-8"):
+            raise AssertionError("invalid report is missing failure-details")
+
+        for invalid_count in [0, 1, 119]:
+            invalid_sequence_bundle = workspace / f"invalid-sequence-{invalid_count}-event-prefix"
+            invalid_sequence_bundle.mkdir()
+            build_e2e_bundle(
+                invalid_sequence_bundle,
+                profile,
+                profile_hash,
+                "quick",
+                {3: "invalid_sequence"},
+                invalid_sequence_counts={3: invalid_count},
+            )
+            verify_e2e_bundle(invalid_sequence_bundle, profile, profile_hash)
+
+        invalid_sequence_mismatch_bundle = workspace / "invalid-sequence-count-event-mismatch"
+        invalid_sequence_mismatch_bundle.mkdir()
+        build_e2e_bundle(
+            invalid_sequence_mismatch_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {3: "invalid_sequence"},
+            invalid_sequence_counts={3: 1},
+        )
+        mismatch_events = [
+            json.loads(line)
+            for line in (invalid_sequence_mismatch_bundle / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        mismatch_events = [
+            event
+            for event in mismatch_events
+            if not (event["run_id"] == "run-quick-03" and event["event_type"] == "content_event")
+        ]
+        (invalid_sequence_mismatch_bundle / "events.jsonl").write_text(
+            "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in mismatch_events) + "\n",
+            encoding="utf-8",
+        )
+        refresh_bundle_manifest(invalid_sequence_mismatch_bundle)
+        expect_failure(
+            lambda: verify_e2e_bundle(invalid_sequence_mismatch_bundle, profile, profile_hash),
+            "invalid-sequence count/event mismatch",
+        )
+
+        not_started_bundle = workspace / "partial-not-started"
         not_started_bundle.mkdir()
-        build_e2e_bundle(not_started_bundle, profile, profile_hash, "quick", {1: "not_started"})
+        build_e2e_bundle(not_started_bundle, profile, profile_hash, "quick", {3: "not_started"})
         verify_e2e_bundle(not_started_bundle, profile, profile_hash)
+        if '<section id="failure-details">' not in (not_started_bundle / "report.html").read_text(encoding="utf-8"):
+            raise AssertionError("partial report is missing the conditional failure-details section")
+
+        quick_not_started_hole = workspace / "quick-not-started-hole"
+        quick_not_started_hole.mkdir()
+        build_e2e_bundle(
+            quick_not_started_hole,
+            profile,
+            profile_hash,
+            "quick",
+            {2: "not_started", 3: "interrupted"},
+        )
+        expect_failure(
+            lambda: verify_e2e_bundle(quick_not_started_hole, profile, profile_hash),
+            "Quick not-started hole followed by attempted run",
+        )
+
+        quick_split_not_started = workspace / "quick-split-not-started"
+        quick_split_not_started.mkdir()
+        build_e2e_bundle(
+            quick_split_not_started,
+            profile,
+            profile_hash,
+            "quick",
+            {1: "not_started", 3: "not_started"},
+        )
+        expect_failure(
+            lambda: verify_e2e_bundle(quick_split_not_started, profile, profile_hash),
+            "Quick split not-started records around attempted run",
+        )
+
+        acceptance_not_started_hole = workspace / "acceptance-not-started-hole"
+        acceptance_not_started_hole.mkdir()
+        build_e2e_bundle(
+            acceptance_not_started_hole,
+            profile,
+            profile_hash,
+            "acceptance",
+            {
+                5: "not_started",
+                6: "interrupted",
+                7: "not_started",
+                8: "not_started",
+                9: "not_started",
+            },
+        )
+        expect_failure(
+            lambda: verify_e2e_bundle(acceptance_not_started_hole, profile, profile_hash),
+            "Acceptance not-started hole followed by attempted run",
+        )
+
+        acceptance_split_not_started = workspace / "acceptance-split-not-started"
+        acceptance_split_not_started.mkdir()
+        build_e2e_bundle(
+            acceptance_split_not_started,
+            profile,
+            profile_hash,
+            "acceptance",
+            {
+                1: "not_started",
+                3: "not_started",
+                4: "not_started",
+                5: "not_started",
+                6: "not_started",
+                7: "not_started",
+                8: "not_started",
+                9: "not_started",
+            },
+        )
+        expect_failure(
+            lambda: verify_e2e_bundle(acceptance_split_not_started, profile, profile_hash),
+            "Acceptance split not-started records around attempted run",
+        )
 
         def mutate_duplicate_run_row(path: Path) -> None:
             rows = read_csv(path / "runs.csv", RUN_COLUMNS)
@@ -2671,6 +3425,41 @@ def main() -> int:
                 encoding="utf-8",
             )
 
+        def mutate_report_encoded_srcset(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<img srcset="https:&#47;&#47;example.invalid/tracker.png 1x">' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_meta_refresh(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<meta http-equiv="refresh" content="0;url=https:&#47;&#47;example.invalid/">' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_encoded_formaction(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<button formaction="https:&#47;&#47;example.invalid/submit">send</button>' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_split_fetch(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<script>globalThis["fe"+"tch"]("remote")</script>' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_dynamic_image(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<script>const image=new Image();image.src="remote"</script>' + report,
+                encoding="utf-8",
+            )
+
         def mutate_report_duplicate_summary(path: Path) -> None:
             report = (path / "report.html").read_text(encoding="utf-8")
             match = re.search(
@@ -2682,15 +3471,62 @@ def main() -> int:
                 raise ValueError("report has no canonical summary to duplicate")
             (path / "report.html").write_text(report + match.group(0) + "\n", encoding="utf-8")
 
+        def mutate_report_duplicate_summary_reordered(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            match = re.search(
+                r'<script id="canonical-summary" type="application/json">(.*?)</script>',
+                report,
+                flags=re.DOTALL,
+            )
+            if not match:
+                raise ValueError("report has no canonical summary to duplicate")
+            duplicate = (
+                '<script type="application/json" id="canonical-summary">'
+                + match.group(1)
+                + "</script>"
+            )
+            (path / "report.html").write_text(report + duplicate + "\n", encoding="utf-8")
+
+        def mutate_report_remove_section(path: Path, section_id: str) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            pattern = rf'<section id="{re.escape(section_id)}">.*?</section>'
+            replaced, count = re.subn(pattern, "", report, count=1, flags=re.DOTALL)
+            if count != 1:
+                raise ValueError(f"report has no {section_id} section")
+            (path / "report.html").write_text(replaced, encoding="utf-8")
+
+        def mutate_report_duplicate_section(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            match = re.search(r'<section id="campaign-verdict">.*?</section>', report, flags=re.DOTALL)
+            if not match:
+                raise ValueError("report has no campaign-verdict section")
+            (path / "report.html").write_text(report + match.group(0) + "\n", encoding="utf-8")
+
+        def mutate_report_empty_disclosure(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            replaced, count = re.subn(
+                r'<section id="disclosure">.*?</section>',
+                '<section id="disclosure"></section>',
+                report,
+                count=1,
+                flags=re.DOTALL,
+            )
+            if count != 1:
+                raise ValueError("report has no disclosure section")
+            (path / "report.html").write_text(replaced, encoding="utf-8")
+
         def mutate_report_visible_rpi(path: Path) -> None:
             report = (path / "report.html").read_text(encoding="utf-8")
-            replaced = report.replace(
-                'data-condition="baseline_v0.1" data-rpi="100">RPI: 100',
-                'data-condition="baseline_v0.1" data-rpi="99">RPI: 99',
-                1,
-            )
-            if replaced == report:
+            marker = '<section id="condition-comparison">'
+            start = report.find(marker)
+            end = report.find("</section>", start)
+            if start < 0 or end < 0:
+                raise ValueError("report has no condition-comparison section")
+            segment = report[start:end]
+            forged_segment = segment.replace('"rpi":100', '"rpi":99', 1)
+            if forged_segment == segment:
                 raise ValueError("report has no baseline visible RPI")
+            replaced = report[:start] + forged_segment + report[end:]
             (path / "report.html").write_text(replaced, encoding="utf-8")
 
         def mutate_unique_extra_run(path: Path) -> None:
@@ -2839,8 +3675,87 @@ def main() -> int:
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "report tamper", mutate_report)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "remote report script", mutate_report_remote_script)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "remote report image", mutate_report_remote_image)
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "encoded remote report srcset",
+            mutate_report_encoded_srcset,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "encoded report meta refresh",
+            mutate_report_meta_refresh,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "encoded report formaction",
+            mutate_report_encoded_formaction,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "split fetch script",
+            mutate_report_split_fetch,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "dynamic image script",
+            mutate_report_dynamic_image,
+        )
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "duplicate canonical report summary", mutate_report_duplicate_summary)
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "duplicate reordered canonical report summary",
+            mutate_report_duplicate_summary_reordered,
+        )
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "forged visible report RPI", mutate_report_visible_rpi)
+        for section_id in REPORT_REQUIRED_SECTION_IDS:
+            mutate_and_expect_bundle_failure(
+                bundle,
+                profile,
+                profile_hash,
+                f"missing report section {section_id}",
+                lambda path, section_id=section_id: mutate_report_remove_section(path, section_id),
+            )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "duplicate report section",
+            mutate_report_duplicate_section,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "empty disclosure report section",
+            mutate_report_empty_disclosure,
+        )
+        missing_failure_section_bundle = workspace / "missing-conditional-failure-section"
+        missing_failure_section_bundle.mkdir()
+        build_e2e_bundle(
+            missing_failure_section_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {3: "not_started"},
+        )
+        mutate_report_remove_section(missing_failure_section_bundle, "failure-details")
+        refresh_bundle_manifest(missing_failure_section_bundle)
+        expect_failure(
+            lambda: verify_e2e_bundle(missing_failure_section_bundle, profile, profile_hash),
+            "partial report missing conditional failure-details section",
+        )
         mutate_and_expect_bundle_failure(
             bundle,
             profile,
@@ -2860,6 +3775,10 @@ def main() -> int:
     checks.append("observed timestamp jitter is accepted only after raw-metric recomputation")
     checks.append("event schema/unit, receipt vocabulary/counts, timestamp/order and frozen-plan cardinality negatives")
     checks.append("clock-domain splice, timestamp-regression and inter-run cooldown chronology negatives")
+    checks.append("Quick/Acceptance not-started suffix positives and non-suffix plan-hole negatives")
+    checks.append("exact flat seven-file root plus full meta and order-independent manifest-map checks")
+    checks.append("positive offline report grammar, canonical sections and encoded-resource/script negatives")
+    checks.append("invalid-sequence 0/1/119 prefix positives plus 120/count-mismatch negatives")
 
     print(f"PASS: {len(checks)} contract checks")
     for item in checks:
