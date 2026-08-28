@@ -1,0 +1,2 @@
+# SKELETON_NOT_RELEASE
+# A final package checksum list is generated in a fresh package only after server and APK hashes are admitted.
