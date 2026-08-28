@@ -1,6 +1,6 @@
 # ANEB Prototype 0.1
 
-当前树是可独立检查的发布骨架，不是可运行发布包。#14 当前为 G0 REJECT；合同字段仍以 Product Owner 决策为准。真实 server/APK 到达并通过固定哈希验收前，启动器会安全停止，不会制造 READY 或结果。
+当前树是可独立检查的发布骨架，不是可运行发布包。#14 的 G0 已批准；本树仍未取得真实 server/APK，artifact admission 保持阻塞。启动器会安全停止，不会制造 READY 或结果。
 
 ## 五步快速开始
 
@@ -12,7 +12,7 @@
 
 ## 当前骨架状态
 
-server/aneb-server.exe 与 android/aneb-prototype-0.1.apk 尚未进入本树。不要把源代码、debug APK 或历史目录当作发布输入。启动器、doctor、包校验器和机械七文件 finalizer 已可在 Windows PowerShell 上独立验证；这不代表 G3/G4 通过。
+server/aneb-server.exe 与 android/aneb-prototype-0.1.apk 尚未进入本树。四个 G0 machine contracts 已绑定到 VERSION.json 的 canonical path/size/SHA；`evidence-schema.json` 不是本版本合同文件。不要把源代码、debug APK 或历史目录当作发布输入。启动器、doctor、包校验器和机械七文件 finalizer 已可在 Windows PowerShell 上独立验证；这不代表 G3/G4 通过。
 
 ## 失败处理
 
