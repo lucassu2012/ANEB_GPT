@@ -1,6 +1,6 @@
 # ANEB Prototype 0.1 — Specification Index
 
-Status: **Product scope approved; technical specs under G0 review**  
+Status: **Product scope approved; G0 rework reviewable exact head**
 Product Owner decision date: **2026-08-28**  
 Product baseline: `ANEB_GPT/main`  
 Integration branch: `product/prototype-0.1`  
@@ -29,6 +29,12 @@ The prototype must answer one narrow question:
 | `08_DECISION_LOG_PROPOSAL.md` | append-only Product Owner decision proposal for G0 | SPEC + PMO / #14 + #13 |
 | `09_CODEX_TASK_ROUTING.md` | literal Codex task names, role mapping and one-shot master dispatch | PMO / #13 |
 | `STATUS.md` | live program status and dependency board | PMO / #13 |
+
+The machine contract package is exactly the four existing files under
+`contracts/prototype-0.1/`: `profile-manifest.json`,
+`capabilities.schema.json`, `run-record.schema.json` and `score-policy.json`.
+`validate_contracts.py` is a development-only positive/negative vector runner;
+it is not a fifth release contract.
 
 ## Source-of-truth order
 
@@ -64,5 +70,10 @@ No conversation may silently change a metric, score, evidence field, claim bound
 - Conditions: `baseline_v0.1`, `slow_v0.1`, `unstable_v0.1`
 - Evidence schema: `aneb-prototype-evidence-0.1`
 - Relative score policy: `rpi-0.1`
+
+The profile-manifest SHA-256 plus condition id/version/nominal interval and the
+exact bare lowercase schedule SHA-256 bind condition identity. Any mismatch is
+fail-closed. Missing measurements remain `null`; the raw-event verifier is the
+authority for per-run metrics and all derived summaries.
 
 Any semantic change to one of these contracts requires a version increment. Formatting-only edits do not.

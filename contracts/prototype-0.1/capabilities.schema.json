@@ -13,6 +13,7 @@
     "claim_scope",
     "evidence_mode",
     "impairment_layer",
+    "profile_manifest_sha256",
     "workload",
     "conditions",
     "evidence_schema_version",
@@ -45,19 +46,19 @@
     "impairment_layer": {
       "const": "application"
     },
+    "profile_manifest_sha256": {
+      "const": "ed440d42dfcc849cb7bb24c52f6c0623057d83c4d97af1f86b024703eb9370eb"
+    },
     "workload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version", "manifest_sha256", "content_event_count"],
+      "required": ["id", "version", "content_event_count"],
       "properties": {
         "id": {
           "const": "streaming_text_reference_v0.1"
         },
         "version": {
           "const": "0.1"
-        },
-        "manifest_sha256": {
-          "$ref": "#/$defs/hash"
         },
         "content_event_count": {
           "const": 120
@@ -68,25 +69,42 @@
       "type": "array",
       "minItems": 3,
       "maxItems": 3,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "version", "contract_sha256", "schedule_sha256"],
-        "properties": {
-          "id": {
-            "enum": ["baseline_v0.1", "slow_v0.1", "unstable_v0.1"]
-          },
-          "version": {
-            "const": "0.1"
-          },
-          "contract_sha256": {
-            "$ref": "#/$defs/hash"
-          },
-          "schedule_sha256": {
-            "$ref": "#/$defs/hash"
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "nominal_interval_ms", "schedule_sha256"],
+          "properties": {
+            "id": {"const": "baseline_v0.1"},
+            "version": {"const": "0.1"},
+            "nominal_interval_ms": {"const": 50},
+            "schedule_sha256": {"const": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "nominal_interval_ms", "schedule_sha256"],
+          "properties": {
+            "id": {"const": "slow_v0.1"},
+            "version": {"const": "0.1"},
+            "nominal_interval_ms": {"const": 125},
+            "schedule_sha256": {"const": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "nominal_interval_ms", "schedule_sha256"],
+          "properties": {
+            "id": {"const": "unstable_v0.1"},
+            "version": {"const": "0.1"},
+            "nominal_interval_ms": {"const": 65},
+            "schedule_sha256": {"const": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"}
           }
         }
-      }
+      ],
+      "items": false
     },
     "evidence_schema_version": {
       "const": "aneb-prototype-evidence-0.1"
@@ -101,7 +119,7 @@
   "$defs": {
     "hash": {
       "type": "string",
-      "pattern": "^(sha256:)?[a-f0-9]{64}$"
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }

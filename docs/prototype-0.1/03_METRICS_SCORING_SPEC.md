@@ -1,23 +1,33 @@
 # 03 — Metrics and Relative Scoring Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Primary issues: #14 and #16  
 Policy id: `rpi-0.1`
 
 ## 1. Measurement clock
 
-All user-visible durations use the Android process monotonic clock. Wall-clock UTC is retained only for metadata and ordering.
+All user-visible durations use the Android
+`android.os.SystemClock.elapsedRealtimeNanos()` clock. Its raw unit is integer
+nanoseconds, its epoch is the device boot, and it includes deep sleep. Wall-clock
+UTC is retained only for metadata and ordering.
 
 For one run:
 
-- `t0`: captured immediately before dispatching the HTTP run call to OkHttp/Cronet.
+- `t0`: captured immediately before transport dispatch (the adapter's
+  `Call.enqueue`/`Call.execute` or Cronet `UrlRequest.start` invocation).
 - `t_headers`: response headers accepted; diagnostic only.
-- `t_i`: complete SSE content event `i` decoded and validated for the current run.
+- `t_i`: complete SSE content event `i` decoded and identity-validated for the
+  current run, immediately after the event boundary.
 - `t_first = t_1`.
 - `t_last = t_120` for a successful run.
-- `t_done`: complete matching terminal `done` event decoded and validated.
+- `t_done`: complete matching terminal `done` event decoded and identity-validated.
 
-Duration conversion must preserve sub-millisecond internal precision and emit milliseconds as a decimal or integer according to the existing result conventions. Implementations must not mix wall clock and monotonic clock.
+All timestamps in a run must be from one boot/clock domain. Reboot, process
+reconstruction without the original clock-domain identity, clock regression or
+domain mismatch makes the run invalid for scoring; timestamps are never spliced
+across domains or runs. Duration conversion preserves raw nanoseconds and emits
+milliseconds as `ns / 1e6`, with at most six decimal places and no second-based
+rounding. UTC never participates in TTFT, completion, span, gap or stall math.
 
 ## 2. Per-run status
 
@@ -41,7 +51,8 @@ ttft_ms = (t_first - t0) in milliseconds
 
 This is an end-to-end first-stream-event proxy to the self-hosted node. It includes client dispatch, local path, server initial delay, response setup and client decoding. It is not model inference latency.
 
-If no valid first event arrives, `ttft_ms = null`.
+If no valid first event arrives, `ttft_ms = null`; no timeout cap or zero is
+substituted.
 
 ### 3.2 Completion time
 
@@ -59,7 +70,8 @@ For at least two valid content events:
 stream_span_ms = (t_last_available - t_first) in milliseconds
 ```
 
-For a successful run, `t_last_available = t_120`. With fewer than two events, the value is `null`.
+For a successful run, `t_last_available = t_120`. With fewer than two valid
+events, the value is `null`.
 
 ### 3.4 Stream event rate
 
@@ -75,27 +87,31 @@ If `stream_span_ms <= 0`, the run is invalid and the rate is `null`.
 
 ### 3.5 Stall detection
 
-For adjacent valid content events:
+For adjacent valid content events in their received sequence order:
 
 ```text
-gap_i_ms = t_i - t_(i-1)
-stall_threshold_ms = max(500 ms, 4 * nominal_interval_ms)
+gap_i_ns = t_i - t_(i-1)
+stall_threshold_ns = max(500,000,000 ns, 4 * nominal_interval_ms * 1,000,000 ns)
 ```
 
 A stall exists when:
 
 ```text
-gap_i_ms > stall_threshold_ms
+gap_i_ns > stall_threshold_ns
 ```
 
 The strict `>` operator is normative.
 
 ```text
 stall_count = number of qualifying gaps
-stall_duration_ms = sum(gap_i_ms - nominal_interval_ms for qualifying gaps)
+stall_duration_ms = sum((gap_i_ns - nominal_interval_ms * 1,000,000) / 1,000,000
+                        for qualifying gaps)
 ```
 
 The initial delay before event 1 and the terminal gap after event 120 are not stalls.
+Exactly equal to the threshold is not a stall. Missing, duplicate or out-of-order
+events are not repaired by sorting; the run becomes invalid while raw events are
+retained.
 
 For a successful run:
 
@@ -122,7 +138,11 @@ For a completed campaign:
 success_rate = successful_runs / planned_runs
 ```
 
-For a partial or cancelled campaign, `success_rate` may be shown diagnostically as `successful_runs / attempted_runs`, but all condition `RPI-0.1` values are `null` and the report must label the campaign incomplete.
+For a partial or cancelled campaign, `success_rate` remains
+`successful_runs / planned_runs` when `planned_runs > 0`; if no run was planned it
+is `null`. It must not switch denominators to make a partial campaign look
+complete. All condition `RPI-0.1` values are `null` and the report labels the
+campaign incomplete.
 
 ## 5. Condition aggregation
 
@@ -137,6 +157,25 @@ For each condition, calculate medians across successful runs only:
 
 The report also emits successful-run minimum and maximum for TTFT and completion as diagnostics. No failed duration is replaced with a timeout ceiling or numeric zero.
 
+The median is deterministic: sort the non-null successful values; for an odd
+count use the middle value, and for an even count use the arithmetic mean of the
+two middle values. Counts, durations and rates are retained as numeric zero only
+when that zero was actually observed (for example Baseline `stall_count=0`);
+missing, uncomputable and inapplicable values are `null`.
+
+### 5.1 Partial/null matrix
+
+| Observation state | `ttft_ms` | `completion_ms` | stream span/rate | stall metrics | score eligibility |
+|---|---|---|---|---|---|
+| no valid content event | `null` | `null` | `null` | `null` | false |
+| first valid event, stream later fails | number | `null` | `null` unless ≥2 events | number only when ≥2 events | false |
+| ≥2 valid events, terminal missing/invalid | number | `null` | number/rate | number | false |
+| 120 valid events + valid terminal | number > 0 | number > 0 | number > 0 | measured values (fraction `[0,1]`) | eligible if all contract checks pass |
+| clock domain invalid/mismatched | `null` | `null` | `null` | `null` | false |
+
+Raw events and diagnostics are retained in every row. A null is never converted
+to zero, a timeout ceiling or a sentinel.
+
 ## 6. Confidence
 
 ### Quick mode
@@ -148,6 +187,8 @@ confidence = LOW
 ```
 
 Quick mode cannot claim MEDIUM or HIGH confidence.
+With zero successful runs, Quick confidence is `NONE`; with its one successful
+run per condition it is `LOW`.
 
 ### Acceptance mode
 
@@ -172,11 +213,13 @@ Confidence describes repeat count and completion only. It is not statistical pro
 
 A condition score is calculated only when:
 
-- the campaign is complete;
-- at least one successful run exists for the condition;
+- the campaign is complete and the condition has at least one successful run;
 - at least one successful Baseline run exists;
-- mandatory medians for TTFT, completion and stall fraction are non-null and positive where required;
-- profile, condition, evidence and score-policy versions match exactly.
+- profile manifest, workload, condition id/version/nominal interval, schedule,
+  evidence schema and score-policy identities match exactly;
+- the run clock source/epoch/domain is valid and consistent;
+- mandatory medians for TTFT, completion and stall fraction are non-null, with
+  TTFT/completion strictly `> 0` and success rate/stall fraction in `[0,1]`.
 
 Otherwise `rpi = null` with a machine-readable reason.
 
@@ -195,18 +238,24 @@ All ratios require positive denominators; otherwise the score is null.
 ### 7.4 Formula
 
 ```text
-RPI-0.1 = round(
-  100
-  * success_rate
-  * (
-      0.45 * ttft_quality
-    + 0.35 * completion_quality
-    + 0.20 * stall_quality
-    )
+RPI-0.1 = round_half_away_from_zero(
+  clamp(
+    100
+    * success_rate
+    * (
+        0.45 * ttft_quality
+      + 0.35 * completion_quality
+      + 0.20 * stall_quality
+    ),
+    0,
+    100
+  )
 )
 ```
 
-The result is clamped to `[0, 100]` after calculation. Rounding uses ordinary nearest-integer rounding with `.5` away from zero.
+The implementation order is `raw = 100 * ...`, `clamped = clamp(raw, 0, 100)`
+and then nearest-integer rounding with `.5` away from zero. The result is still
+bounded to `[0, 100]`.
 
 The Baseline condition normally scores 100 when all Baseline runs succeed and no Baseline stalls are detected. A noisy Baseline may score below 100 through its own stall quality; this is intentional and visible.
 
@@ -222,6 +271,14 @@ When `rpi = null`, one or more reasons must be emitted from this closed set:
 - `contract_mismatch`;
 - `invalid_evidence`;
 - `score_policy_unsupported`.
+
+The report emits `primary_null_reason` and `all_null_reasons`. The latter is a
+unique, compact JSON array sorted by this normative precedence (first matching
+reason is primary): `contract_mismatch`, `invalid_evidence`,
+`campaign_incomplete`, `no_successful_baseline`, `no_successful_condition_run`,
+`mandatory_metric_missing`, `non_positive_metric`, `score_policy_unsupported`.
+Reasons are evidence-derived, not free text; raw event evidence remains the
+verifier's trust root.
 
 ## 9. UI and report wording
 

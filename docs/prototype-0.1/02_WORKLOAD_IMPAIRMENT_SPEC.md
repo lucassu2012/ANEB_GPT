@@ -1,6 +1,6 @@
 # 02 — Workload and Synthetic Impairment Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Primary issues: #14 and #15
 
 ## 1. Workload identity
@@ -30,7 +30,8 @@ Each content event contains at least:
   "campaign_id": "<uuid>",
   "run_id": "<uuid>",
   "condition_id": "baseline_v0.1",
-  "schedule_hash": "sha256:<hex>",
+  "profile_manifest_sha256": "<bare lowercase 64-hex>",
+  "schedule_hash": "<bare lowercase 64-hex>",
   "seq": 1,
   "planned_offset_ms": 200,
   "payload_id": "ref-0001"
@@ -55,7 +56,8 @@ The terminal `done` event contains:
   "condition_id": "baseline_v0.1",
   "profile_id": "streaming_text_reference_v0.1",
   "profile_version": "0.1",
-  "schedule_hash": "sha256:<hex>",
+  "profile_manifest_sha256": "<bare lowercase 64-hex>",
+  "schedule_hash": "<bare lowercase 64-hex>",
   "planned_event_count": 120,
   "emitted_event_count": 120,
   "terminal_status": "complete"
@@ -112,7 +114,23 @@ Purpose: demonstrate visible mid-stream stalls while still completing successful
 
 ## 4. Schedule generation and hash
 
-For each condition, the server generates a canonical UTF-8 schedule with LF line endings:
+For each condition, the server generates one canonical byte sequence. The
+following rules are normative and are part of the hash identity:
+
+- UTF-8 encoding, no BOM;
+- LF (`0x0a`) after the header and after every row, including the final row;
+- exact header `seq,planned_offset_ms,payload_id`;
+- comma delimiter, no quoting, no spaces and no empty fields;
+- `seq` and `planned_offset_ms` are base-10 ASCII integers;
+- exactly 120 `content` rows are included; the terminal `done` event is not in
+  the schedule CSV;
+- `payload_id` is `ref-%04d` with the one-based sequence number;
+- event 1 uses `initial_delay_ms`; each later event adds `nominal_interval_ms`;
+- a pause declared after N is added once to the N -> N+1 transition; multiple
+  pauses on one transition add arithmetically;
+- the fixed seed adds no random jitter.
+
+The resulting bytes are:
 
 ```csv
 seq,planned_offset_ms,payload_id
@@ -122,15 +140,26 @@ seq,planned_offset_ms,payload_id
 120,6150,ref-0120
 ```
 
-The schedule hash is:
+The schedule hash is the bare lowercase SHA-256 digest of those exact bytes:
 
 ```text
-sha256:<lowercase hex SHA-256 of the exact canonical CSV bytes>
+<lowercase hex SHA-256 of the exact canonical CSV bytes>
 ```
 
-The fixed v0.1 seed is included in the profile/condition manifest but does not add random jitter. The same version must always produce identical canonical schedule bytes and hash.
+| Condition | `schedule_sha256` |
+|---|---|
+| `baseline_v0.1` | `46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e` |
+| `slow_v0.1` | `b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062` |
+| `unstable_v0.1` | `d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58` |
 
-Any timing semantic change requires a new condition version.
+For this exact v0.1 contract head, `profile_manifest_sha256` is
+`ed440d42dfcc849cb7bb24c52f6c0623057d83c4d97af1f86b024703eb9370eb`.
+The profile-manifest digest plus `condition_id`, `version`,
+`nominal_interval_ms` and this schedule digest form the complete condition
+identity. There is no separate condition hash. The same version must always
+produce identical canonical schedule bytes and hash; a timing semantic change
+requires a new condition version.
+
 
 ## 5. Campaign plans
 
@@ -154,9 +183,14 @@ B1 -> S1 -> U1 -> B2 -> S2 -> U2 -> B3 -> S3 -> U3
 - three runs per condition;
 - 1,000 ms unmeasured cooldown between runs;
 - fixed interleaving reduces simple time-order drift;
-- condition summaries use successful runs only, with success rate reported separately.
+- condition summaries use successful runs only, with success rate reported
+  separately as `successful_runs / planned_runs` for a complete campaign.
 
-The client must not silently reorder or skip planned runs. A cancelled or failed campaign records the remaining runs as `not_started`, not success or zero.
+The client must not silently reorder or skip planned runs. `quick` has exactly
+three planned indexes (1–3), and `acceptance` has exactly nine (1–9), in the
+orders above. A cancelled or failed campaign records the remaining runs as
+`not_started`, not success or zero. All contract, condition and schedule hashes
+are compared byte-for-byte as bare lowercase hex.
 
 ## 6. Draft HTTP contract
 

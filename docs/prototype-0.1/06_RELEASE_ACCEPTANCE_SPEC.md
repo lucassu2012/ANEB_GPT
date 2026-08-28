@@ -1,6 +1,6 @@
 # 06 — Release and Acceptance Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Primary issues: #17 and #18
 
 ## 1. Release unit
@@ -19,7 +19,10 @@ Final naming:
 ANEB-Prototype-0.1-windows-x64.zip
 ```
 
-Every candidate is bound to exact app, server, profile, condition, evidence-schema and score-policy versions.
+Every candidate is bound to exact app, server, profile, condition, evidence-schema
+and score-policy versions. The contract package contains exactly the four
+existing machine contracts listed below; no `evidence-schema.json` artifact is
+invented for Prototype 0.1.
 
 ## 2. Required package layout
 
@@ -35,7 +38,8 @@ ANEB-Prototype-0.1/
 │   └── aneb-prototype-0.1.apk
 ├── contracts/
 │   ├── profile-manifest.json
-│   ├── evidence-schema.json
+│   ├── capabilities.schema.json
+│   ├── run-record.schema.json
 │   └── score-policy.json
 ├── static/
 │   └── report assets embedded or local
@@ -82,6 +86,23 @@ Required fields:
     "slow_v0.1",
     "unstable_v0.1"
   ],
+  "contract_files": [
+    "profile-manifest.json",
+    "capabilities.schema.json",
+    "run-record.schema.json",
+    "score-policy.json"
+  ],
+  "contract_hashes": {
+    "profile-manifest.json": "<bare lowercase 64-hex>",
+    "capabilities.schema.json": "<bare lowercase 64-hex>",
+    "run-record.schema.json": "<bare lowercase 64-hex>",
+    "score-policy.json": "<bare lowercase 64-hex>"
+  },
+  "schedule_hashes": {
+    "baseline_v0.1": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
+    "slow_v0.1": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
+    "unstable_v0.1": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"
+  },
   "evidence_schema": "aneb-prototype-evidence-0.1",
   "score_policy": "rpi-0.1"
 }
@@ -97,12 +118,18 @@ PASS when:
 - issue #14 records an approval verdict;
 - Product Owner decisions are appended to `docs/DECISION_LOG.md`;
 - specs PR is merged into `product/prototype-0.1`.
+- the exact schedule-byte vectors, profile-manifest binding and four-contract
+  package contents are verified; G0 remains HOLD until the issue #14 reviewer
+  records this exact head.
 
 ### G1 — Core contract
 
 PASS when:
 
-- deterministic schedule hashes are stable;
+- deterministic schedule hashes are stable and reproduce from the published
+  canonical bytes (UTF-8/no BOM/LF/final LF/120 content rows/terminal excluded);
+- capabilities and run-record positive/negative fixtures reject duplicate
+  conditions, prefixed hashes, invalid indexes and null-success counterexamples;
 - all three condition plans pass unit/integration tests;
 - unknown contracts fail closed;
 - server emits valid terminal receipts;
@@ -114,7 +141,9 @@ PASS when:
 PASS when:
 
 - Prototype Mode validates capability, runs Quick and Acceptance plans and persists evidence;
-- metrics and RPI test vectors pass;
+- metrics and RPI test vectors pass, including arithmetic even median, strict
+  stall equality/`+1ns`, UTC independence, clock-domain invalidation, null-not-
+  zero and RPI/AQS independence;
 - cancellation/background/resume and incompatible-node paths pass;
 - Android unit tests, lint and Debug assemble pass;
 - exact APK hash is recorded in #16.
@@ -139,6 +168,10 @@ PASS when an automated verifier confirms:
 - campaign/run/condition identities agree across files;
 - summaries recompute from run records;
 - report values agree with canonical data;
+- raw Android events plus the matching terminal receipt recompute per-run
+  metrics before `runs.csv`, summaries/RPI and report values are accepted;
+- profile/condition/schedule/policy hashes, clock source/epoch and ordered null
+  reasons are exact;
 - partial/failed campaigns cannot publish non-null RPI;
 - secrets/forbidden identifiers are absent.
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "aneb-prototype-score-policy-0.1",
   "policy_id": "rpi-0.1",
-  "display_name": "Relative Prototype Index",
+  "display_name": "Relative Prototype Index (same-campaign synthetic comparison)",
   "scope": "same_campaign_synthetic_comparison",
   "independent_from": [
     "aqs",
@@ -17,6 +17,18 @@
     "median_completion_ms",
     "median_stall_fraction"
   ],
+  "success_rate_definition": "current_condition_successful_runs_divided_by_current_condition_planned_runs",
+  "median": {
+    "algorithm": "arithmetic_mean_of_two_middle_sorted_values",
+    "source": "successful_runs_only",
+    "null_when_no_values": true
+  },
+  "value_domains": {
+    "ttft_ms": {"minimum_exclusive": 0},
+    "completion_ms": {"minimum_exclusive": 0},
+    "success_rate": {"minimum": 0, "maximum": 1},
+    "stall_fraction": {"minimum": 0, "maximum": 1}
+  },
   "eligibility": {
     "campaign_status_must_equal": "complete",
     "minimum_successful_baseline_runs": 1,
@@ -38,7 +50,7 @@
       "weight": 0.2
     }
   },
-  "final_expression": "round(100 * success_rate * (0.45 * ttft_quality + 0.35 * completion_quality + 0.20 * stall_quality))",
+  "final_expression": "round_half_away_from_zero(clamp(100 * success_rate * (0.45 * ttft_quality + 0.35 * completion_quality + 0.20 * stall_quality), 0, 100))",
   "output": {
     "minimum": 0,
     "maximum": 100,
@@ -55,8 +67,20 @@
     "invalid_evidence",
     "score_policy_unsupported"
   ],
+  "null_reason_precedence": [
+    "contract_mismatch",
+    "invalid_evidence",
+    "campaign_incomplete",
+    "no_successful_baseline",
+    "no_successful_condition_run",
+    "mandatory_metric_missing",
+    "non_positive_metric",
+    "score_policy_unsupported"
+  ],
+  "null_reason_fields": ["primary_null_reason", "all_null_reasons"],
   "confidence": {
     "quick": {
+      "successful_runs_0": "NONE",
       "successful_runs_1": "LOW"
     },
     "acceptance": {

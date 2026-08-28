@@ -1,6 +1,6 @@
 # 00 — Product Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Owner: Program control conversation / issue #13  
 Approved product direction: 2026-08-28
 
@@ -121,7 +121,7 @@ Prototype results must additionally carry:
 
 - `evidence_mode = synthetic_application_impairment`;
 - `impairment_layer = application`;
-- user-facing badge: `Synthetic application path` / `应用层合成条件`.
+- user-facing badge: `Synthetic application-layer condition` / `应用层合成条件`.
 
 The prototype must never describe its conditions as physical packet loss, radio impairment, operator SLA evidence, real vendor performance or model-quality measurement.
 
@@ -129,7 +129,7 @@ The prototype must never describe its conditions as physical packet loss, radio 
 
 Prototype 0.1 is complete only when all are true:
 
-1. A fixed release candidate is identified by immutable hashes.
+1. A fixed release candidate is identified by immutable hashes: the profile-manifest SHA-256, the three exact canonical schedule SHA-256 values, and the four packaged contract identities.
 2. A fresh Windows directory launches without source edits.
 3. The P40 Pro performs a fresh install and connects through the declared normal path.
 4. Quick mode completes all three conditions.
@@ -141,6 +141,15 @@ Prototype 0.1 is complete only when all are true:
 10. The repository quality gate passes.
 11. Issue #18 publishes a final P40 verdict of `PASS`.
 12. The Product Owner accepts the release candidate under issue #13.
+
+The v0.1 schedule identities are fixed to these bare lowercase SHA-256 values
+(the profile manifest binds the same values and order):
+
+| Condition | `schedule_sha256` |
+|---|---|
+| `baseline_v0.1` | `46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e` |
+| `slow_v0.1` | `b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062` |
+| `unstable_v0.1` | `d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58` |
 
 ## 8. Priority rule
 

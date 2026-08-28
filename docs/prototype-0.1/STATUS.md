@@ -1,7 +1,7 @@
 # ANEB Prototype 0.1 — Program Status
 
 Last PMO update: **2026-08-28**  
-Program state: **G0 — SPEC REVIEW**  
+Program state: **G0 — SPEC REWORK (HOLD)**
 Product Owner: Lucas  
 Program issue: #13
 
@@ -15,7 +15,7 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 | Gate | State | Evidence | Exit condition |
 |---|---|---|---|
-| G0 — Specification freeze | `REVIEW` | `product/prototype-0.1-specs`; issue #14 | spec approval, decision-log entries, specs merged to integration branch |
+| G0 — Specification freeze | `REVIEW` | isolated issue #14 rework head (HOLD) | per-file verdict, exact vectors and PO binding receipt reviewed; no gate advance in this task |
 | G1 — Core deterministic contract | `BACKLOG` | issue #15 | tested workload/conditions/capability/receipts |
 | G2 — Android vertical slice | `BACKLOG` | issue #16 | Quick + Acceptance campaign and metric gates pass |
 | G3 — Fixed Windows package | `BACKLOG` | issue #17 | self-contained candidate launches from fresh directory |
@@ -28,11 +28,11 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
 | #13 | current PMO conversation | `IN_PROGRESS` | scope, branches, issues, specs and control model created | G0 review pending |
-| #14 | Agentic网络体验标准 | `READY` | review packet prepared | conversation dispatch/spec review pending |
+| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS` | binding docs/contracts rework and machine vectors | exact new head awaits independent review; G0 remains HOLD |
 | #15 | ANEB_GPT core | `BACKLOG` | implementation contract prepared | waits for #14 freeze |
 | #16 | ANEB_GPT Android | `BACKLOG` | implementation contract prepared | waits for #14 and #15 interface |
 | #17 | release/packaging | `BACKLOG` | package/evidence contract prepared | can prototype verifier; fixed candidate waits for #15/#16 |
-| #18 | ANEB_CC QA/reuse | `READY` for reuse review; `BACKLOG` for device acceptance | selective-backport and P40 protocol prepared | acceptance waits for fixed candidate |
+| #18 | `20260801_ANEB_WP2设备运行时` | `READY` | selective-backport and P40 protocol prepared | acceptance waits for fixed candidate |
 | #19 | AI应用网络要求测试 | `READY` | non-blocking Prototype 0.2 protocol task prepared | no 0.1 dependency |
 
 ## Locked product decisions
@@ -62,7 +62,9 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 ## Current primary blocker
 
-`G0` cannot pass until the issue #14 conversation reviews the draft contracts and the Product Owner decisions are appended to `docs/DECISION_LOG.md`.
+`G0` is HOLD until the issue #14 conversation reviews the rework exact head,
+recomputes the raw evidence vectors and records the final per-file verdict. This
+task does not advance G0 or merge the specs.
 
 There is no current hardware, administrator-rights, cloud-node, PCAP or third-party-App blocker for Prototype 0.1.
 
@@ -80,11 +82,11 @@ There is no current hardware, administrator-rights, cloud-node, PCAP or third-pa
 
 ## Next PMO actions
 
-1. route the dispatch packet to each existing ANEB conversation;
-2. collect #14 spec verdicts and resolve only release-blocking contradictions;
-3. append approved scope/score/governance decisions to the decision log;
-4. merge the specs PR to `product/prototype-0.1`;
-5. mark #15 and the independent #18 reuse review READY/IN_PROGRESS.
+1. have the issue #14 reviewer inspect the exact rework commit and validation output;
+2. keep #15/#16 blocked until #14 review is complete;
+3. append only the approved binding decisions to the decision log through PMO;
+4. let PMO decide whether to merge the specs to `product/prototype-0.1`;
+5. keep #18 READY for reuse review until a fixed candidate exists.
 
 ## Progress update rule
 

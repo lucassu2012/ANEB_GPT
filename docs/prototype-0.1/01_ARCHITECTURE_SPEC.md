@@ -1,6 +1,6 @@
 # 01 — Architecture Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Primary issues: #15, #16, #17
 
 ## 1. Architecture principle
@@ -123,6 +123,9 @@ Before sending business traffic, Android calls a capability endpoint and validat
 - server build version and binary identity;
 - supported terminal receipt version;
 - `claim_scope` and `evidence_mode`.
+- `impairment_layer` (must be `application`);
+- `profile_manifest_sha256`;
+- the exact ordered condition identity tuple (`id`, `version`, `nominal_interval_ms`, `schedule_sha256`).
 
 Unknown, missing or incompatible mandatory values fail closed. The app may show diagnostics but must not execute or score the campaign.
 
@@ -133,7 +136,7 @@ Each run has a unique `run_id` and belongs to one `campaign_id`.
 ```text
 client creates run request
   -> server validates exact profile/condition
-  -> server returns/streams a signed-by-hash plan identity
+  -> server returns/streams a hash-bound/content-addressed plan identity
   -> client starts monotonic request clock
   -> server emits deterministic SSE events
   -> client records arrival events and validates sequence
@@ -144,19 +147,35 @@ client creates run request
 ```
 
 Cryptographic signing is not required for Prototype 0.1. SHA-256 content binding is required.
+Hashes are bare lowercase 64-hex identities; the algorithm is conveyed by the
+field name and contract, not by a `sha256:` string prefix. The profile manifest
+hash, condition id/version/nominal interval and schedule hash are one exact
+binding; a separate condition hash is not an additional identity.
 
 A stream EOF without a valid terminal done receipt is not success.
 
 ## 6. Timing ownership
 
-- User-visible duration metrics use the Android monotonic clock only.
-- Server planned offsets describe the deterministic schedule and are not subtracted from client measurements.
-- Wall-clock UTC is metadata, not a duration source.
-- Cross-device clock synchronization is not required.
+- User-visible duration metrics use `android.os.SystemClock.elapsedRealtimeNanos()`
+  in integer nanoseconds, with `device_boot` as the epoch and deep sleep included.
+- `t0` is captured immediately before transport dispatch; each content timestamp is
+  captured after complete SSE decode and identity validation; `t_done` is captured
+  after complete terminal decode and identity validation.
+- All timestamps in a run come from one boot/clock domain. Reboot, process
+  reconstruction without a preserved domain, clock regression or domain mismatch
+  invalidates scoring; no cross-domain or cross-run splice is permitted.
+- Server planned offsets describe the deterministic schedule and are not subtracted
+  from client measurements. Wall-clock UTC is metadata only.
+- Derived milliseconds are `ns / 1e6`, emitted with at most six decimal places;
+  no second-based rounding is allowed.
 
 ## 7. Data ownership and publication
 
 - Android retains raw event evidence locally even when upload fails.
+- The verifier's authority chain is raw Android receipt events and the matching
+  server terminal receipt -> canonical per-run metrics -> `runs.csv` -> condition
+  summaries/RPI -> `report.html`; a report or summary cannot become authoritative
+  by merely agreeing with a tampered run record.
 - Server stores accepted uploads under a campaign-specific temporary directory.
 - Final campaign publication is atomic as defined in `04_EVIDENCE_REPORT_SPEC.md`.
 - Duplicate upload of the same immutable run record is idempotent.

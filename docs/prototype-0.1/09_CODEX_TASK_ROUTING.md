@@ -12,14 +12,15 @@ The actual visible Codex tasks are mapped below. This table supersedes the conve
 
 | Actual Codex task | Prototype role | GitHub issue | State | Instruction |
 |---|---|---:|---|---|
-| `20260803_ANEB开发策略与质量_v2` | **Master PMO / orchestrator** | #13 | ACTIVE | Own G0–G6 board, send assignments to the other named tasks, reconcile issue/PR evidence, escalate Product Owner decisions only. Do not build a parallel product branch. |
-| `20260710_智能体网络诉求` | **SPEC and measurement contract** | #14 | READY | Review/freeze workload, metric clocks, stall semantics, `rpi-0.1`, evidence null behavior and claim boundary from PR #20. |
-| `20260715_开发ANEB系统` | **Go Core / server implementation** | #15 | BLOCKED until G0 | Implement deterministic stream workload, three application-layer conditions, capability contract, schedule hashes and terminal receipts. |
-| `20260714_设计ANEB手机APP界面` | **Android Prototype Mode** | #16 | BLOCKED until #14/#15 contract | Implement native Compose campaign flow, metrics, RPI, evidence capture and result/error UI; reuse existing app architecture. |
-| `20260804_ANEB_试点产品体验与上线缺口` | **Release/package/report** | #17 | READY for skeleton | Build Windows launcher, package verifier, canonical evidence finalizer, offline report and five-step guide. |
-| `20260801_ANEB_WP2设备运行时` | **ANEB_CC selective reuse + P40 QA** | #18 | READY for reuse review | Remain idle on release tree until a fixed RC arrives; inspect only small backport candidates and later run fresh P40 acceptance. |
-| `20260801_ANEB开发策略与质量_v1` | **Superseded historical coordinator** | none | FROZEN | Read-only source. Do not issue new implementation instructions or make release decisions. Forward any unique unresolved evidence to the v2 PMO task. |
-| `GitHub Mention: Cloud continuation 1: Profile...` | **Legacy cloud task linked to old issue/PR line** | historical #1/#2 | FROZEN | Do not continue the old scope unless the v2 PMO explicitly identifies a required, compatible backport. |
+| `20260803_ANEB开发策略与质量_v2` | **Master PMO / orchestrator** | #13 | IN_PROGRESS | Own G0–G6 board, send assignments to the other named tasks, reconcile issue/PR evidence, escalate Product Owner decisions only. Do not build a parallel product branch. |
+| `20260710_智能体网络诉求` | **SPEC and measurement contract** | #14 | IN_PROGRESS | Review/freeze workload, metric clocks, stall semantics, `rpi-0.1`, evidence null behavior and claim boundary from the exact rejected head and rework commit. |
+| `20260715_开发ANEB系统` | **Go Core / server implementation** | #15 | BLOCKED | Implement deterministic stream workload, three application-layer conditions, capability contract, schedule hashes and terminal receipts after G0. |
+| `20260714_设计ANEB手机APP界面` | **Android Prototype Mode** | #16 | BLOCKED | Implement native Compose campaign flow, metrics, RPI, evidence capture and result/error UI after #14/#15 contracts. |
+| `20260804_ANEB_试点产品体验与上线缺口` | **Release/package/report** | #17 | READY | Build Windows launcher, package verifier, canonical evidence finalizer, offline report and five-step guide after the fixed contracts. |
+| `20260801_ANEB_WP2设备运行时` | **ANEB_CC selective reuse + P40 QA** | #18 | READY | Remain idle on release tree until a fixed RC arrives; inspect only small backport candidates and later run fresh P40 acceptance. |
+| `AI应用网络要求测试` | **Prototype 0.2 real-App manual protocol** | #19 | READY | Produce the bounded manual Doubao/Kimi protocol; it does not change Prototype 0.1 code or gates. |
+| `20260801_ANEB开发策略与质量_v1` | **Superseded historical coordinator** | none | REJECTED | Read-only source. Do not issue new implementation instructions or make release decisions. Forward any unique unresolved evidence to the v2 PMO task. |
+| `GitHub Mention: Cloud continuation 1: Profile...` | **Legacy cloud task linked to old issue/PR line** | historical #1/#2 | REJECTED | Do not continue the old scope unless the v2 PMO explicitly identifies a required, compatible backport. |
 
 ## 3. Master-task delegation instruction
 
@@ -38,11 +39,12 @@ The Product Owner should send the following once to `20260803_ANEB开发策略�
 3. 20260714_设计ANEB手机APP界面 -> issue #16 APP，等待 #14/#15 合同；
 4. 20260804_ANEB_试点产品体验与上线缺口 -> issue #17 RELEASE，可先做 verifier/launcher/report skeleton；
 5. 20260801_ANEB_WP2设备运行时 -> issue #18 QA/REUSE，先做 selective backport 表，固定 RC 到达前保持 release tree idle；
-6. 20260801_ANEB开发策略与质量_v1 和 GitHub Mention 旧任务 -> FROZEN，只读，不再并行发号施令。
+6. 20260801_ANEB开发策略与质量_v1 和 GitHub Mention 旧任务 -> REJECTED，只读，不再并行发号施令。
 
 每个任务必须按其 GitHub issue 的验收标准工作，并回报：
 STATE / COMPLETED / EVIDENCE / BLOCKER / NEXT / DECISION_NEEDED；
-代码任务另加 COMMIT_OR_PR / TESTS / REGRESSION；设备任务另加 CANDIDATE / DEVICE / VERDICT。
+EVIDENCE 必须包含本次审查或实现的精确 head commit SHA；代码任务另加
+COMMIT_OR_PR / TESTS / REGRESSION；设备任务另加 CANDIDATE / DEVICE / VERDICT。
 
 你负责：
 - 发送和追踪这些任务；

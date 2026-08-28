@@ -1,6 +1,6 @@
 # ANEB Prototype 0.1 — Machine-Readable Contracts
 
-Status: **Draft until G0 approval and merge into `product/prototype-0.1`**
+Status: **G0 rework — reviewable exact head**
 
 These files are the executable counterparts of `docs/prototype-0.1/`:
 
@@ -9,15 +9,22 @@ These files are the executable counterparts of `docs/prototype-0.1/`:
 - `capabilities.schema.json` — fail-closed server capability response contract;
 - `run-record.schema.json` — canonical Android per-run measurement record.
 
+These four files are the complete v0.1 machine contract package. There is no
+`evidence-schema.json` artifact; evidence directory/report rules remain in
+`docs/prototype-0.1/04_EVIDENCE_REPORT_SPEC.md`.
+
 ## Rules
 
 1. Implementations must consume or verify these contracts; they must not duplicate their values as an unversioned second truth source.
 2. A semantic change to timing, metrics, score eligibility, claim scope or evidence fields requires a version increment and Product Owner decision.
-3. JSON objects are UTF-8. Contract artifact hashes use SHA-256 over the exact checked-in bytes unless a contract defines a more specific canonicalization.
-4. The condition `schedule_sha256` values are computed from the canonical CSV described in `profile-manifest.json` and `02_WORKLOAD_IMPAIRMENT_SPEC.md`.
-5. Unknown mandatory versions and fields fail closed in the formal Prototype flow.
-6. Missing measurements remain JSON `null`; they are not converted to zero, timeout ceilings or sentinel numbers.
-7. These contracts do not authorize AQS changes, IP-layer impairment claims, vendor-App claims or formal ANEB industry scoring.
+3. JSON objects are UTF-8. Text contract identities use SHA-256 over the
+   checked-in canonical bytes: no BOM and LF line endings. A Windows checkout
+   may display CRLF, but the verifier hashes the canonical LF bytes.
+4. Condition identity is `profile_manifest_sha256` plus `id`, `version`, `nominal_interval_ms` and `schedule_sha256`; no separate condition hash is used.
+5. Hash identity fields are bare lowercase 64-hex SHA-256 values (no `sha256:` prefix). The three schedule values are computed from the exact canonical CSV described in `profile-manifest.json` and `02_WORKLOAD_IMPAIRMENT_SPEC.md`.
+6. Unknown mandatory versions and fields fail closed in the formal Prototype flow.
+7. Missing measurements remain JSON `null`; they are not converted to zero, timeout ceilings or sentinel numbers.
+8. These contracts do not authorize AQS changes, IP-layer impairment claims, vendor-App claims or formal ANEB industry scoring.
 
 ## Required implementation tests
 
@@ -26,4 +33,13 @@ These files are the executable counterparts of `docs/prototype-0.1/`:
 - validate successful, interrupted, cancelled and not-started run records;
 - prove `task_success=true` requires complete status, 120 events and a valid terminal receipt;
 - prove `score_eligible=true` requires task success;
+- reject the published duplicate-condition, prefixed-hash, invalid-index and null-success counterexamples;
+- verify Android `elapsedRealtimeNanos` boundaries, arithmetic even median and strict stall equality/`+1ns` vectors;
+- recompute raw events -> run metrics -> CSV -> summary/RPI/report and reject a mutated run metric;
 - load `score-policy.json` or verify an exact embedded copy before calculating RPI.
+
+Run the development vectors from the repository checkout with:
+
+```powershell
+python contracts/prototype-0.1/validate_contracts.py
+```

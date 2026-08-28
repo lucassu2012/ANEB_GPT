@@ -1,6 +1,6 @@
 # 05 — UX and Error Specification
 
-Status: **Draft for G0 approval**  
+Status: **G0 rework — reviewable exact head**
 Primary issues: #16 and #17
 
 ## 1. UX objective
@@ -73,7 +73,10 @@ Show:
 - buttons: `Configure node`, `Start Quick`, `Start Acceptance`;
 - latest Prototype campaign, if any.
 
-Do not place AQS or formal-grade language on this screen.
+Prototype 0.1 screens, reports, exports and share previews must not display or
+derive AQS or formal-grade language. RPI-0.1 is always labeled
+`Relative Prototype Index (same-campaign synthetic comparison)` and cannot be
+converted to AQS.
 
 ### Screen B — Node setup and contract check
 
@@ -121,6 +124,11 @@ Show only actionable live state:
 
 The app must survive Activity recreation and background/resume through the existing foreground service pattern.
 
+Live stall state is provisional and uses the finalizer's exact rule:
+`gap_ns > max(500,000,000, 4 * nominal_interval_ms * 1,000,000)` over adjacent
+valid content events. Equality is not a stall. The final canonical evidence
+recomputation is authoritative if a live display and saved result differ.
+
 ### Screen E — Results
 
 Top section:
@@ -140,7 +148,11 @@ Condition comparison:
 - success rate;
 - RPI-0.1.
 
-Each metric has a plain-language definition link. Null values render `—` plus the machine reason, never zero.
+Each metric has a plain-language definition link. Null values render `—` plus
+the machine reason, never zero. Confidence is evidence completeness for this
+Quick/Acceptance campaign, not an industry or network confidence interval. The
+full synthetic application-layer disclosure remains visible on the result and
+report surfaces.
 
 Actions:
 
@@ -168,6 +180,9 @@ Allowed examples:
 - `Slow condition increased median first-event time relative to this campaign's Baseline.`
 - `Unstable condition produced two detected stream stalls.`
 - `Relative Prototype Index compares synthetic conditions within this campaign.`
+
+The RPI label is always `Relative Prototype Index (same-campaign synthetic
+comparison)`.
 
 Forbidden examples:
 
@@ -208,6 +223,13 @@ Every blocking error includes:
 
 Server-side internal errors may use additional codes but must map to one user-facing primary code.
 
+The user-facing code may remain `P008_STREAM_INTERRUPTED`, but the exported
+machine reason must distinguish at least `stream_interrupted`,
+`invalid_sequence`, `clock_domain_invalid`, `clock_domain_mismatch` and
+`mandatory_metric_missing`. `primary_null_reason` and ordered
+`all_null_reasons` are the only report-level null fields; diagnostic prose does
+not replace them.
+
 ## 6. Partial and failed campaigns
 
 A partial campaign is not visually treated as a successful comparison.
@@ -229,7 +251,10 @@ Required behavior:
 - long hashes truncate visually but copy in full;
 - live charts are optional; textual metrics and progress are mandatory;
 - no remote assets or fake demo values in production routes;
-- animations must not delay measurement clocks or block cancellation.
+- animations must not delay measurement clocks or block cancellation. Live and
+  final durations use Android `elapsedRealtimeNanos()`; UTC changes do not alter
+  metrics. A clock-domain interruption makes affected metrics unavailable, never
+  zero.
 
 ## 8. Installation guide
 

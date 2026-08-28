@@ -1,6 +1,6 @@
 # 07 — Program Governance and Conversation Routing
 
-Status: **Active upon Product Owner approval**  
+Status: **Active (Product Owner approved 2026-08-28)**
 Program issue: #13
 
 ## 1. Control model
@@ -19,13 +19,13 @@ A claim such as “done” in one conversation is not a program completion signa
 
 | Existing ANEB conversation | Binding assignment | Issue | May change code? | Blocks Prototype 0.1? |
 |---|---|---:|---:|---:|
-| **Current ANEB audit/program conversation** | PMO, scope control, dependency management, release integration and PO decisions | #13; coordinates #17 | only coordination/spec/release integration as needed | yes |
-| **Agentic网络体验标准** | review/freeze workload, metric, score and claim contracts | #14 | documentation/tests only unless explicitly routed | yes, G0 only |
-| **ANEB_GPT server/core conversation** | deterministic workload, condition engine, capability and receipts | #15 | yes, isolated branch | yes |
-| **ANEB_GPT Android/app conversation** | Prototype Mode, campaign runner, metrics, local evidence and result UI | #16 | yes, isolated branch | yes |
-| **ANEB packaging/release conversation**; current PMO if none exists | Windows launcher, fixed package, finalizer, report and verifier | #17 | yes, isolated branch | yes |
-| **ANEB_CC conversation** | selective reuse review plus P40 acceptance; no competing product development | #18 | only approved small backports/fixes | yes, G5 only |
-| **AI应用网络要求测试** | manual Doubao/Kimi protocol for Prototype 0.2 | #19 | no Prototype 0.1 code | no |
+| `20260803_ANEB开发策略与质量_v2` | PMO, scope control, dependency management, release integration and PO decisions | #13; coordinates #17 | only coordination/spec/release integration as needed | yes |
+| `20260710_智能体网络诉求` | review/freeze workload, metric, score and claim contracts | #14 | documentation/tests only unless explicitly routed | yes, G0 only |
+| `20260715_开发ANEB系统` | deterministic workload, condition engine, capability and receipts | #15 | yes, isolated branch | yes |
+| `20260714_设计ANEB手机APP界面` | Prototype Mode, campaign runner, metrics, local evidence and result UI | #16 | yes, isolated branch | yes |
+| `20260804_ANEB_试点产品体验与上线缺口` | Windows launcher, fixed package, finalizer, report and verifier | #17 | yes, isolated branch | yes |
+| `20260801_ANEB_WP2设备运行时` | selective reuse review plus P40 acceptance; no competing product development | #18 | only approved small backports/fixes | yes, G5 only |
+| `AI应用网络要求测试` | manual Doubao/Kimi protocol for Prototype 0.2 | #19 | no Prototype 0.1 code | no |
 
 If only one ANEB_GPT implementation conversation exists, it executes #15 then #16 as separate branches/PRs. It must not combine them into an unreviewable mega-change.
 
@@ -104,7 +104,7 @@ Allowed states:
 Every meaningful checkpoint uses:
 
 ```text
-STATE: READY | IN_PROGRESS | BLOCKED | REVIEW | DONE
+STATE: BACKLOG | READY | IN_PROGRESS | BLOCKED | REVIEW | DONE | REJECTED
 COMPLETED:
 - concrete artifact or test
 EVIDENCE:
@@ -124,6 +124,8 @@ TESTS:
 - command and exact pass/fail counts
 REGRESSION:
 - existing gates run and result
+COMMIT_OR_PR:
+- exact branch and commit SHA, or PR URL and head SHA
 ```
 
 Device work additionally includes:
