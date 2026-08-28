@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aneb.local/schemas/prototype-0.1/run-record.schema.json",
+  "title": "ANEB Prototype 0.1 canonical run record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "run_id",
+    "campaign_mode",
+    "run_index",
+    "condition",
+    "run_status",
+    "task_success",
+    "attempt_started_at_utc",
+    "attempt_ended_at_utc",
+    "events_expected",
+    "events_received",
+    "metrics",
+    "schedule_hash",
+    "terminal_receipt_valid",
+    "score_eligible",
+    "failure_reason"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "aneb-prototype-run-record-0.1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/id"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "campaign_mode": {
+      "enum": ["quick", "acceptance"]
+    },
+    "run_index": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "contract_sha256", "nominal_interval_ms"],
+      "properties": {
+        "id": {
+          "enum": ["baseline_v0.1", "slow_v0.1", "unstable_v0.1"]
+        },
+        "version": {
+          "const": "0.1"
+        },
+        "contract_sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "nominal_interval_ms": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "run_status": {
+      "enum": [
+        "complete",
+        "interrupted",
+        "incompatible",
+        "invalid_sequence",
+        "cancelled",
+        "ttft_timeout",
+        "server_rejected",
+        "not_started"
+      ]
+    },
+    "task_success": {
+      "type": "boolean"
+    },
+    "attempt_started_at_utc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "attempt_ended_at_utc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "events_expected": {
+      "const": 120
+    },
+    "events_received": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 120
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ttft_ms",
+        "completion_ms",
+        "stream_span_ms",
+        "stream_event_rate_eps",
+        "stall_threshold_ms",
+        "stall_count",
+        "stall_duration_ms",
+        "stall_fraction"
+      ],
+      "properties": {
+        "ttft_ms": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "completion_ms": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "stream_span_ms": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "stream_event_rate_eps": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "stall_threshold_ms": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "stall_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "stall_duration_ms": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "stall_fraction": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "schedule_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "terminal_receipt_valid": {
+      "type": ["boolean", "null"]
+    },
+    "score_eligible": {
+      "type": "boolean"
+    },
+    "failure_reason": {
+      "type": ["string", "null"],
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256:)?[a-f0-9]{64}$"
+    },
+    "nullableNonNegativeNumber": {
+      "type": ["number", "null"],
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task_success": {
+            "const": true
+          }
+        },
+        "required": ["task_success"]
+      },
+      "then": {
+        "properties": {
+          "run_status": {
+            "const": "complete"
+          },
+          "events_received": {
+            "const": 120
+          },
+          "terminal_receipt_valid": {
+            "const": true
+          },
+          "failure_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "score_eligible": {
+            "const": true
+          }
+        },
+        "required": ["score_eligible"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}
