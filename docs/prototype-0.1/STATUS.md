@@ -9,13 +9,15 @@ Program issue: #13
 
 The product direction has been narrowed and approved. A single product baseline, integration branch, issue hierarchy, workstream allocation and complete first-pass specification set now exist.
 
+The Master PMO dispatch has been delivered to issues #14–#18 through their existing Codex tasks, and every active workstream has posted a durable first acknowledgement to its GitHub issue. The legacy strategy task is frozen. The exact legacy `GitHub Mention: Cloud continuation...` task was not found in the active or archived task index, so no task-to-task delivery is claimed for it; its old scope remains frozen by the Prototype 0.1 governance boundary.
+
 No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains valuable baseline capability, but it is not counted as Prototype 0.1 completion until it satisfies the frozen end-to-end release contract.
 
 ## Gate board
 
 | Gate | State | Evidence | Exit condition |
 |---|---|---|---|
-| G0 — Specification freeze | `REVIEW` | `product/prototype-0.1-specs`; issue #14 | spec approval, decision-log entries, specs merged to integration branch |
+| G0 — Specification freeze | `REVIEW` | PR #20 at `f23d9ca`; issue #14 | resolve proven spec blockers, approve specs, append decision-log entries, merge specs to integration branch |
 | G1 — Core deterministic contract | `BACKLOG` | issue #15 | tested workload/conditions/capability/receipts |
 | G2 — Android vertical slice | `BACKLOG` | issue #16 | Quick + Acceptance campaign and metric gates pass |
 | G3 — Fixed Windows package | `BACKLOG` | issue #17 | self-contained candidate launches from fresh directory |
@@ -27,13 +29,13 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
-| #13 | current PMO conversation | `IN_PROGRESS` | scope, branches, issues, specs and control model created | G0 review pending |
-| #14 | Agentic网络体验标准 | `READY` | review packet prepared | conversation dispatch/spec review pending |
-| #15 | ANEB_GPT core | `BACKLOG` | implementation contract prepared | waits for #14 freeze |
-| #16 | ANEB_GPT Android | `BACKLOG` | implementation contract prepared | waits for #14 and #15 interface |
-| #17 | release/packaging | `BACKLOG` | package/evidence contract prepared | can prototype verifier; fixed candidate waits for #15/#16 |
-| #18 | ANEB_CC QA/reuse | `READY` for reuse review; `BACKLOG` for device acceptance | selective-backport and P40 protocol prepared | acceptance waits for fixed candidate |
-| #19 | AI应用网络要求测试 | `READY` | non-blocking Prototype 0.2 protocol task prepared | no 0.1 dependency |
+| #13 | `20260803_ANEB开发策略与质量_v2` | `IN_PROGRESS` | dispatch receipt and first acknowledgements recorded in issue #13 | G0 review pending |
+| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS` | 17-file review and schedule-hash recomputation in progress | two candidate G0-blocking gaps under review |
+| #15 | `20260715_开发ANEB系统` | `WAITING_G0` | read-only gap analysis and six-part test plan complete | waits for #14 contract freeze; implementation forbidden before G0 |
+| #16 | `20260714_设计ANEB 手机APP界面` | `WAITING_ON_14_15` | dispatch acknowledged; read-only gap/vector mapping only | waits for #14 freeze and #15 versioned interface |
+| #17 | `20260804_ANEB_试点产品体验与上线缺口` | `IN_PROGRESS_SKELETON` | offline verifier/finalizer/launcher/report skeleton started | final ZIP waits for fixed #15 server and #16 APK |
+| #18 | `20260801_ANEB_WP2设备运行时` | `IN_PROGRESS_READ_ONLY` | selective-reuse review started; `CANDIDATE=NONE`, `DEVICE=NOT_TOUCHED` | P40 acceptance waits for one signed RC |
+| #19 | Prototype 0.2 real-App protocol | `FROZEN_POST_0_1` | issue remains non-blocking research only | no work may consume Prototype 0.1 critical-path capacity |
 
 ## Locked product decisions
 
@@ -62,7 +64,14 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 ## Current primary blocker
 
-`G0` cannot pass until the issue #14 conversation reviews the draft contracts and the Product Owner decisions are appended to `docs/DECISION_LOG.md`.
+`G0` cannot pass until issue #14 finishes its independent review, proven blocking defects are resolved, and accepted Product Owner decisions are appended to `docs/DECISION_LOG.md`.
+
+Issue #14 has currently recorded two candidate blockers:
+
+1. the canonical schedule byte serialization is not fully frozen in the prose/manifest contract; and
+2. the capability schema limits the condition array length to three but does not yet enforce exactly one `baseline`, one `slow` and one `unstable` condition.
+
+These are review findings, not yet Product Owner decisions. They do not authorize implementation or a gate advance.
 
 There is no current hardware, administrator-rights, cloud-node, PCAP or third-party-App blocker for Prototype 0.1.
 
@@ -80,11 +89,24 @@ There is no current hardware, administrator-rights, cloud-node, PCAP or third-pa
 
 ## Next PMO actions
 
-1. route the dispatch packet to each existing ANEB conversation;
-2. collect #14 spec verdicts and resolve only release-blocking contradictions;
-3. append approved scope/score/governance decisions to the decision log;
-4. merge the specs PR to `product/prototype-0.1`;
-5. mark #15 and the independent #18 reuse review READY/IN_PROGRESS.
+1. collect #14 per-file verdicts and resolve only proven G0-blocking contradictions;
+2. keep #15 and #16 waiting until the binding contracts are frozen;
+3. track #17 skeleton output and #18 selective-reuse evidence without allowing fabricated artifacts, device work or a second product line;
+4. append only approved scope/score/evidence/claim/governance decisions to the decision log;
+5. merge PR #20 to `product/prototype-0.1` only after G0 review evidence is complete;
+6. advance G1–G6 only from issue-bound evidence and exact candidate receipts.
+
+## Dispatch receipt — 2026-08-28
+
+| Issue | Task-to-task delivery | First durable acknowledgement |
+|---:|---|---|
+| #14 | accepted | [SPEC IN_PROGRESS](https://github.com/lucassu2012/ANEB_GPT/issues/14#issuecomment-5447694146) |
+| #15 | accepted | [CORE WAITING_G0](https://github.com/lucassu2012/ANEB_GPT/issues/15#issuecomment-5447727252) |
+| #16 | accepted | [APP WAITING ON #14/#15](https://github.com/lucassu2012/ANEB_GPT/issues/16#issuecomment-5447702497) |
+| #17 | accepted | [RELEASE skeleton started](https://github.com/lucassu2012/ANEB_GPT/issues/17#issuecomment-5447705827) |
+| #18 | accepted | [QA/REUSE read-only review started](https://github.com/lucassu2012/ANEB_GPT/issues/18#issuecomment-5447705802) |
+
+The authoritative PMO dispatch summary is [issue #13 comment 5447736109](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5447736109).
 
 ## Progress update rule
 
