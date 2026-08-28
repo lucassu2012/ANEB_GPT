@@ -25,8 +25,9 @@ The prototype must answer one narrow question:
 | `04_EVIDENCE_REPORT_SPEC.md` | evidence directory, schemas, atomic publication and report | RELEASE + QA / #17–#18 |
 | `05_UX_ERROR_SPEC.md` | Windows and Android flow, error states and minimum polish | APP + RELEASE / #16–#17 |
 | `06_RELEASE_ACCEPTANCE_SPEC.md` | packaging, quality gates and P40 acceptance | RELEASE + QA / #17–#18 |
-| `07_PROGRAM_GOVERNANCE.md` | conversation routing, status protocol and change control | PMO / #13 |
+| `07_PROGRAM_GOVERNANCE.md` | workstream protocol, status format and change control | PMO / #13 |
 | `08_DECISION_LOG_PROPOSAL.md` | append-only Product Owner decision proposal for G0 | SPEC + PMO / #14 + #13 |
+| `09_CODEX_TASK_ROUTING.md` | literal Codex task names, role mapping and one-shot master dispatch | PMO / #13 |
 | `STATUS.md` | live program status and dependency board | PMO / #13 |
 
 ## Source-of-truth order
