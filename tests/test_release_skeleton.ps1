@@ -109,6 +109,10 @@ try {
         'README_FIRST.md',
         'VERSION.json',
         'SHA256SUMS.txt',
+        'contracts/prototype-0.1/capabilities.schema.json',
+        'contracts/prototype-0.1/profile-manifest.json',
+        'contracts/prototype-0.1/run-record.schema.json',
+        'contracts/prototype-0.1/score-policy.json',
         'static/report-template.html',
         'tools/common.ps1',
         'tools/doctor.ps1',
@@ -124,6 +128,60 @@ try {
     $skeletonResult = Invoke-AnEbTool -ScriptPath $verify -Arguments @('-Root', $packageRoot, '-AllowSkeleton')
     Assert-AnEbTest -Condition ($skeletonResult.ExitCode -eq 0) -Message 'package verifier accepts only explicit skeleton mode'
     Assert-AnEbTest -Condition ($skeletonResult.Output -match 'BLOCKED_ARTIFACTS') -Message 'skeleton verifier states that server and APK are absent'
+    Assert-AnEbTest -Condition ($skeletonResult.Output -match 'PASS CONTRACT_BINDING') -Message 'skeleton verifier validates the exact four-contract binding'
+
+    $freshPackage = Join-Path $tempRoot 'package-copy'
+    Copy-Item -LiteralPath $packageRoot -Destination $freshPackage -Recurse
+    $freshResult = Invoke-AnEbTool -ScriptPath (Join-Path $freshPackage 'tools\verify-package.ps1') -Arguments @('-Root', $freshPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($freshResult.ExitCode -eq 0) -Message 'fresh copied package preserves contract binding'
+
+    $missingContractPackage = Join-Path $tempRoot 'package-missing-contract'
+    Copy-Item -LiteralPath $packageRoot -Destination $missingContractPackage -Recurse
+    Remove-Item -LiteralPath (Join-Path $missingContractPackage 'contracts\prototype-0.1\run-record.schema.json') -Force
+    $missingContractResult = Invoke-AnEbTool -ScriptPath (Join-Path $missingContractPackage 'tools\verify-package.ps1') -Arguments @('-Root', $missingContractPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($missingContractResult.ExitCode -ne 0) -Message 'verifier rejects a missing machine contract'
+    Assert-AnEbTest -Condition ($missingContractResult.Output -match 'CONTRACT') -Message 'missing contract failure is explicit'
+
+    $extraContractPackage = Join-Path $tempRoot 'package-extra-contract'
+    Copy-Item -LiteralPath $packageRoot -Destination $extraContractPackage -Recurse
+    Write-AnEbTestText -Path (Join-Path $extraContractPackage 'contracts\prototype-0.1\evidence-schema.json') -Text '{}'
+    $extraContractResult = Invoke-AnEbTool -ScriptPath (Join-Path $extraContractPackage 'tools\verify-package.ps1') -Arguments @('-Root', $extraContractPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($extraContractResult.ExitCode -ne 0) -Message 'verifier rejects an undeclared evidence schema artifact'
+    Assert-AnEbTest -Condition ($extraContractResult.Output -match 'CONTRACT') -Message 'extra contract failure is explicit'
+
+    $tamperedContractPackage = Join-Path $tempRoot 'package-tampered-contract'
+    Copy-Item -LiteralPath $packageRoot -Destination $tamperedContractPackage -Recurse
+    Write-AnEbTestText -Path (Join-Path $tamperedContractPackage 'contracts\prototype-0.1\profile-manifest.json') -Text ('{"tampered":true}' + [char]10)
+    $tamperedContractResult = Invoke-AnEbTool -ScriptPath (Join-Path $tamperedContractPackage 'tools\verify-package.ps1') -Arguments @('-Root', $tamperedContractPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($tamperedContractResult.ExitCode -ne 0) -Message 'verifier rejects a tampered contract byte'
+    Assert-AnEbTest -Condition ($tamperedContractResult.Output -match 'HASH') -Message 'tampered contract failure is hash-bound'
+
+    $tamperedVersionPackage = Join-Path $tempRoot 'package-tampered-version'
+    Copy-Item -LiteralPath $packageRoot -Destination $tamperedVersionPackage -Recurse
+    $versionText = [System.IO.File]::ReadAllText((Join-Path $tamperedVersionPackage 'VERSION.json'))
+    $versionText = $versionText.Replace('44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc', ('0' * 64))
+    Write-AnEbTestText -Path (Join-Path $tamperedVersionPackage 'VERSION.json') -Text $versionText
+    $tamperedVersionResult = Invoke-AnEbTool -ScriptPath (Join-Path $tamperedVersionPackage 'tools\verify-package.ps1') -Arguments @('-Root', $tamperedVersionPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($tamperedVersionResult.ExitCode -ne 0) -Message 'verifier rejects a VERSION contract hash drift'
+    Assert-AnEbTest -Condition ($tamperedVersionResult.Output -match 'VERSION') -Message 'VERSION hash failure is explicit'
+
+    $tamperedSizePackage = Join-Path $tempRoot 'package-tampered-contract-size'
+    Copy-Item -LiteralPath $packageRoot -Destination $tamperedSizePackage -Recurse
+    $sizeText = [System.IO.File]::ReadAllText((Join-Path $tamperedSizePackage 'VERSION.json'))
+    $sizeText = $sizeText.Replace('"profile-manifest.json": 3797', '"profile-manifest.json": 1')
+    Write-AnEbTestText -Path (Join-Path $tamperedSizePackage 'VERSION.json') -Text $sizeText
+    $tamperedSizeResult = Invoke-AnEbTool -ScriptPath (Join-Path $tamperedSizePackage 'tools\verify-package.ps1') -Arguments @('-Root', $tamperedSizePackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($tamperedSizeResult.ExitCode -ne 0) -Message 'verifier rejects a VERSION contract size drift'
+    Assert-AnEbTest -Condition ($tamperedSizeResult.Output -match 'SIZE') -Message 'VERSION size failure is explicit'
+
+    $tamperedPathPackage = Join-Path $tempRoot 'package-tampered-contract-path'
+    Copy-Item -LiteralPath $packageRoot -Destination $tamperedPathPackage -Recurse
+    $pathText = [System.IO.File]::ReadAllText((Join-Path $tamperedPathPackage 'VERSION.json'))
+    $pathText = $pathText.Replace('"profile-manifest.json": "contracts/prototype-0.1/profile-manifest.json"', '"profile-manifest.json": "profile-manifest.json"')
+    Write-AnEbTestText -Path (Join-Path $tamperedPathPackage 'VERSION.json') -Text $pathText
+    $tamperedPathResult = Invoke-AnEbTool -ScriptPath (Join-Path $tamperedPathPackage 'tools\verify-package.ps1') -Arguments @('-Root', $tamperedPathPackage, '-AllowSkeleton')
+    Assert-AnEbTest -Condition ($tamperedPathResult.ExitCode -ne 0) -Message 'verifier rejects a VERSION contract path drift'
+    Assert-AnEbTest -Condition ($tamperedPathResult.Output -match 'PATH') -Message 'VERSION path failure is explicit'
 
     $releaseResult = Invoke-AnEbTool -ScriptPath $verify -Arguments @('-Root', $packageRoot)
     Assert-AnEbTest -Condition ($releaseResult.ExitCode -ne 0) -Message 'package verifier rejects skeleton as a release'
