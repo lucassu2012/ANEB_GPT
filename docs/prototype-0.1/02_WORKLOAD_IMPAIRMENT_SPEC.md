@@ -86,6 +86,13 @@ invalidates the receipt.
 
 EOF without a valid matching `done` event is `interrupted`, not success.
 
+For an interrupted or cancelled run, raw evidence contains `run_started`, the
+observed content prefix, and one terminal status event (`run_failed` or
+`run_cancelled`) whose details are exactly `failure_reason` plus
+`events_received`; it has no `terminal_event` receipt. Zero-event failed runs
+use the same two-event status topology without content events, while a
+`not_started` slot has no Android scoring events and all run metrics are null.
+
 ## 3. Condition definitions
 
 Synthetic conditions alter only server-side application behavior: initial response delay, logical event pacing and scheduled pauses. They do not alter IP packets, radio conditions or operating-system traffic control.
@@ -173,10 +180,12 @@ The schedule hash is the bare lowercase SHA-256 digest of those exact bytes:
 | `unstable_v0.1` | `d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58` |
 
 For this exact v0.1 contract head, `profile_manifest_sha256` is
-`592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b`.
-The profile-manifest digest plus `condition_id`, `version`,
-`nominal_interval_ms` and this schedule digest form the complete condition
-identity. There is no separate condition hash. The same version must always
+`44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc`.
+The profile-manifest digest plus `condition_id`, `version` and this schedule
+digest form the complete condition identity. `nominal_interval_ms` is a
+redundant consistency field checked against the manifest and generated
+schedule; it is not an additional identity component. There is no separate
+condition hash. The same version must always
 produce identical canonical schedule bytes and hash; a timing semantic change
 requires a new condition version.
 
@@ -211,6 +220,15 @@ three planned indexes (1–3), and `acceptance` has exactly nine (1–9), in the
 orders above. A cancelled or failed campaign records the remaining runs as
 `not_started`, not success or zero. All contract, condition and schedule hashes
 are compared byte-for-byte as bare lowercase hex.
+
+Campaign status reports plan execution completeness, not a 100% run-success
+requirement. If every planned index reaches a run-level terminal outcome,
+including `interrupted`, `cancelled`, `incompatible`, `invalid_sequence`,
+timeout or server rejection, the campaign may remain `complete`; success rate
+and per-condition RPI/null reasons then expose the failed runs. `partial` or
+`cancelled` means execution stopped and one or more planned slots are
+`not_started`. Campaign-level `failed`/`invalid` labels require explicit
+evidence authority and are not inferred from a single failed run.
 
 ## 6. Draft HTTP contract
 

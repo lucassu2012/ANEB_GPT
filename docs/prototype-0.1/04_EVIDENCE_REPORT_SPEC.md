@@ -94,9 +94,11 @@ Required top-level fields:
 ```
 
 The profile `sha256` is the exact SHA-256 of the checked-in
-`profile-manifest.json` bytes. The profile binds the fixed condition order and
-the following schedule identities; every event, terminal receipt and run record
-must repeat the matching bare lowercase digest:
+`profile-manifest.json` bytes. Condition identity is the profile digest plus
+condition `id`, `version` and schedule digest; `nominal_interval_ms` is an
+independently checked consistency field, not an extra identity component.
+Every event, terminal receipt and run record must repeat the matching bare
+lowercase digest:
 
 | Condition | `schedule_sha256` |
 |---|---|
@@ -117,6 +119,15 @@ inference.**
 - `cancelled`;
 - `failed`;
 - `invalid`.
+
+`campaign_status` describes execution of the frozen plan, not whether every
+run succeeded. If every planned index is attempted (including a run-level
+`interrupted`, `cancelled`, `incompatible`, `invalid_sequence`, timeout or
+server-rejected result), the campaign may be `complete`; the condition rows
+carry the success-rate penalty and per-condition RPI/null reasons. `partial`
+or `cancelled` means execution stopped with one or more `not_started` slots.
+`failed` and `invalid` are campaign-level values and require explicit
+`meta.json` authority; they are not inferred solely from run statuses.
 
 Device metadata must exclude IMEI, serial number, phone number, advertising id and account identifiers.
 
@@ -163,7 +174,10 @@ envelope but is never counted as a scoring event. `run_failed` and
 `run_cancelled` are run-scoped status events only and are invalid alongside a
 complete run. The bundle does not claim campaign-level or server-side event
 types that this machine contract cannot represent. Events must not include
-third-party content or credentials.
+third-party content or credentials. A failed/partial status event has exactly
+`details={"failure_reason":<closed reason>,"events_received":<integer>}`;
+it follows `run_started` and all observed content events, and no terminal
+receipt event is emitted for that run.
 
 Unknown event types are rejected by the v0.1 finalizer unless explicitly namespaced as non-scoring diagnostics.
 
@@ -277,14 +291,16 @@ A verifier must reject:
 - One immutable `run_id` per planned run.
 - Every raw event, nested terminal-event details, terminal receipt and run row
   must agree on `campaign_id`, `run_id`, campaign mode/index, condition
-  id/version/nominal interval, profile/schedule hashes and (for scoring) the
-  same `clock_domain_id` and `t0_monotonic_ns`; a downstream coordinated
-  rewrite cannot establish identity.
+  id/version, profile/schedule hashes and (for scoring) the same
+  `clock_domain_id` and `t0_monotonic_ns`; `nominal_interval_ms` must also
+  agree as a separate consistency field. A downstream coordinated rewrite
+  cannot establish identity.
 - Event types outside the v0.1 allow-list are rejected unless explicitly
   namespaced as `diagnostic.*` and excluded from scoring.
-- Profile, condition id/version/nominal interval and schedule hashes match the
-  four contracts and server receipts exactly (bare lowercase hex; no
-  `sha256:` prefix).
+- Profile, condition id/version and schedule hashes match the four contracts
+  and server receipts exactly (bare lowercase hex; no `sha256:` prefix);
+  `nominal_interval_ms` is checked separately against the condition and
+  schedule definitions.
 - `task_success=true` implies `run_status=complete`, exact 120 events and valid terminal receipt.
 - `score_eligible=true` implies task success, all mandatory metrics non-null and
   valid, exact profile/condition/schedule/policy identities, a valid single

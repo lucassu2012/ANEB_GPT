@@ -54,7 +54,7 @@
 |---|---|---|
 | DN-1A | Android `elapsedRealtimeNanos()` is the sole measurement clock; sample at the fixed dispatch/decode boundaries, retain raw nanoseconds, and reject boot/process/clock-domain splicing. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-2A | For an even number of successful runs, median is the arithmetic mean of the two middle sorted values. | Product Owner binding receipt, Issue #14 comment `5449399284` |
-| DN-3A | Hash identities are bare lowercase 64-hex SHA-256 values; condition identity binds the profile-manifest hash with condition id/version/nominal interval and schedule hash. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+| DN-3A | Hash identities are bare lowercase 64-hex SHA-256 values; condition identity binds the profile-manifest hash with condition id/version and schedule hash. `nominal_interval_ms` remains an independently checked consistency field. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-4A | Null output has deterministic `primary_null_reason` plus ordered, deduplicated `all_null_reasons`; raw-event-to-report recomputation is the verifier authority. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-5A | VERSION/package binds exactly the four existing machine contracts; no `evidence-schema.json` artifact is invented. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 

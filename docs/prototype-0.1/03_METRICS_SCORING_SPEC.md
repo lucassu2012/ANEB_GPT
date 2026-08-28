@@ -150,6 +150,12 @@ For a completed campaign:
 success_rate = successful_runs / planned_runs
 ```
 
+Completion means every planned index was attempted; a run-level interruption,
+cancellation, incompatibility, invalid sequence, timeout or server rejection
+counts as an attempted failure and is reflected in `failed_runs` and the
+success-rate penalty. A campaign that stops before later indexes has
+`not_started_runs` and is `partial` or `cancelled` instead.
+
 For a partial or cancelled campaign, `success_rate` remains
 `successful_runs / planned_runs` when `planned_runs > 0`; if no run was planned it
 is `null`. It must not switch denominators to make a partial campaign look
@@ -231,8 +237,9 @@ A condition score is calculated only when:
 
 - the campaign is complete and the condition has at least one successful run;
 - at least one successful Baseline run exists;
-- profile manifest, workload, condition id/version/nominal interval, schedule,
-  evidence schema and score-policy identities match exactly;
+- profile manifest, workload, condition id/version, schedule, evidence schema
+  and score-policy identities match exactly; `nominal_interval_ms` is checked
+  separately against the condition and schedule;
 - the run clock source/epoch/domain is valid and consistent;
 - mandatory medians for TTFT, completion and stall fraction are non-null, with
   TTFT/completion strictly `> 0` and success rate/stall fraction in `[0,1]`.

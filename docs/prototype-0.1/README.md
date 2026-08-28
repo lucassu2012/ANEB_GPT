@@ -71,8 +71,9 @@ No conversation may silently change a metric, score, evidence field, claim bound
 - Evidence schema: `aneb-prototype-evidence-0.1`
 - Relative score policy: `rpi-0.1`
 
-The profile-manifest SHA-256 plus condition id/version/nominal interval and the
-exact bare lowercase schedule SHA-256 bind condition identity. Any mismatch is
+The profile-manifest SHA-256 plus condition id/version and the exact bare
+lowercase schedule SHA-256 bind condition identity. `nominal_interval_ms` is
+checked independently against the manifest and schedule. Any mismatch is
 fail-closed. Missing measurements remain `null`; the raw-event verifier is the
 authority for per-run metrics and all derived summaries.
 

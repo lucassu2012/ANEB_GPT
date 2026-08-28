@@ -47,7 +47,7 @@
       "const": "application"
     },
     "profile_manifest_sha256": {
-      "const": "592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b"
+      "const": "44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc"
     },
     "workload": {
       "type": "object",

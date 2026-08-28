@@ -128,7 +128,8 @@ Before sending business traffic, Android calls a capability endpoint and validat
 - `claim_scope` and `evidence_mode`.
 - `impairment_layer` (must be `application`);
 - `profile_manifest_sha256`;
-- the exact ordered condition identity tuple (`id`, `version`, `nominal_interval_ms`, `schedule_sha256`).
+- the exact ordered condition identity tuple (`id`, `version`, `schedule_sha256`);
+  `nominal_interval_ms` is checked separately against the manifest and schedule.
 
 Unknown, missing or incompatible mandatory values fail closed. The app may show diagnostics but must not execute or score the campaign.
 
@@ -152,8 +153,9 @@ client creates run request
 Cryptographic signing is not required for Prototype 0.1. SHA-256 content binding is required.
 Hashes are bare lowercase 64-hex identities; the algorithm is conveyed by the
 field name and contract, not by a `sha256:` string prefix. The profile manifest
-hash, condition id/version/nominal interval and schedule hash are one exact
-binding; a separate condition hash is not an additional identity.
+hash, condition id/version and schedule hash are one exact binding;
+`nominal_interval_ms` is a redundant consistency check, and a separate
+condition hash is not an additional identity.
 
 A stream EOF without a valid terminal done receipt is not success.
 

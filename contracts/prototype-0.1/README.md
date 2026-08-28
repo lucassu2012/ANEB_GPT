@@ -26,7 +26,9 @@ These four files are the complete v0.1 machine contract package. There is no
 3. JSON objects are UTF-8. Text contract identities use SHA-256 over the
    checked-in canonical bytes: no BOM and LF line endings. A Windows checkout
    may display CRLF, but the verifier hashes the canonical LF bytes.
-4. Condition identity is `profile_manifest_sha256` plus `id`, `version`, `nominal_interval_ms` and `schedule_sha256`; no separate condition hash is used.
+4. Condition identity is `profile_manifest_sha256` plus `id`, `version` and
+   `schedule_sha256`; `nominal_interval_ms` is independently checked against
+   the manifest and schedule, but is not an additional identity component.
 5. Hash identity fields are bare lowercase 64-hex SHA-256 values (no `sha256:` prefix). The three schedule values are computed from the exact canonical CSV described in `profile-manifest.json` and `02_WORKLOAD_IMPAIRMENT_SPEC.md`.
 6. Unknown mandatory versions and fields fail closed in the formal Prototype flow.
 7. Missing measurements remain JSON `null`; they are not converted to zero, timeout ceilings or sentinel numbers.
@@ -36,7 +38,8 @@ These four files are the complete v0.1 machine contract package. There is no
 
 - regenerate and verify all three canonical schedule hashes;
 - validate a known-good capability document and reject version/hash/claim mismatches;
-- validate successful, interrupted, cancelled and not-started run records;
+- validate successful, interrupted, cancelled, zero-event failed and
+  not-started run records;
 - prove `task_success=true` requires complete status, 120 events and a valid terminal receipt;
 - prove `score_eligible=true` requires task success;
 - enforce the closed status-to-reason mapping and failed-status receipt/event/
@@ -45,9 +48,11 @@ These four files are the complete v0.1 machine contract package. There is no
   incompatible evidence/clock reasons in the documented exception set;
 - reject the published duplicate-condition, prefixed-hash, invalid-index and null-success counterexamples;
 - verify Android `elapsedRealtimeNanos` boundaries, arithmetic even median and strict stall equality/`+1ns` vectors;
-- recompute parsed `events.jsonl` + terminal receipt -> run metrics -> RFC4180
-  CSV -> formal run-record schema -> summary/null reasons/RPI -> embedded report
-  summary and reject identity, receipt, ordering, cardinality and tamper stages;
+- recompute the seven-file campaign chain (`events.jsonl` plus nested terminal
+  receipt -> run metrics -> RFC4180 CSV -> formal run-record schema ->
+  summary/null reasons/RPI -> embedded report) and reject identity, receipt,
+  ordering, cardinality, chronology and tamper stages; no partial-summary
+  sidecar is permitted;
 - enforce the normative VERSION product fields with `contract_hashes` and
   `schedule_hashes` for exactly these four contracts;
 - enforce the Product Owner-approved null precedence with

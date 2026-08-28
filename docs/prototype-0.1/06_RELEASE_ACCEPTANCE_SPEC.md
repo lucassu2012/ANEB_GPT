@@ -133,6 +133,9 @@ PASS when:
   conditions, prefixed hashes, invalid indexes and null-success counterexamples;
 - Quick indexes 1..3 and Acceptance indexes 1..9 occur exactly once in the
   frozen B/S/U plan; summary counts and success rates stay within that plan;
+- complete, interrupted/cancelled partial, zero-event failed and not-started
+  run topologies are verified through the canonical `summary.csv`; no
+  `summary_partial.csv` sidecar exists;
 - all three condition plans pass unit/integration tests;
 - unknown contracts fail closed;
 - server emits valid terminal receipts;
@@ -175,6 +178,9 @@ PASS when an automated verifier confirms:
 - report values agree with canonical data;
 - raw Android events plus the matching terminal receipt recompute per-run
   metrics before `runs.csv`, summaries/RPI and report values are accepted;
+- partial/failed run evidence uses its closed `run_failed`/`run_cancelled`
+  topology and field-by-field null/metric matrix; a complete run still requires
+  exactly 120 content events and one matching terminal receipt;
 - raw event `schema_version`/clock unit, terminal receipt version/counts,
   run-start/terminal timestamps and per-run scoring-event order are validated;
 - profile/condition/schedule/policy hashes, clock source/epoch/domain/t0 and

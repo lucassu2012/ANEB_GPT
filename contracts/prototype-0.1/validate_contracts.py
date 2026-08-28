@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterable
 
 ROOT = Path(__file__).resolve().parent
 CONDITION_ORDER = ["baseline_v0.1", "slow_v0.1", "unstable_v0.1"]
+EXPECTED_PROFILE_HASH = "44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc"
 EXPECTED_SCHEDULE_HASHES = {
     "baseline_v0.1": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
     "slow_v0.1": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
@@ -74,6 +75,35 @@ EXPECTED_NULL_PRECEDENCE = [
     "non_positive_metric",
     "score_policy_unsupported",
 ]
+FAILURE_REASON_DOMAIN = [
+    "contract_mismatch",
+    "invalid_sequence",
+    "stream_interrupted",
+    "cancelled",
+    "ttft_timeout",
+    "server_rejected",
+    "not_started",
+    "clock_domain_invalid",
+    "clock_domain_mismatch",
+    "mandatory_metric_missing",
+    "invalid_evidence",
+    None,
+]
+ALLOWED_FAILURE_REASONS_BY_STATUS = {
+    "complete": {None},
+    "interrupted": {"stream_interrupted", "mandatory_metric_missing"},
+    "cancelled": {"cancelled"},
+    "incompatible": {
+        "contract_mismatch",
+        "clock_domain_invalid",
+        "clock_domain_mismatch",
+        "invalid_evidence",
+    },
+    "invalid_sequence": {"invalid_sequence"},
+    "ttft_timeout": {"ttft_timeout"},
+    "server_rejected": {"server_rejected"},
+    "not_started": {"not_started"},
+}
 METRIC_KEYS = [
     "ttft_ms",
     "completion_ms",
@@ -151,6 +181,15 @@ CONTRACT_FILES = [
     "run-record.schema.json",
     "score-policy.json",
 ]
+CANONICAL_BUNDLE_FILES = [
+    "meta.json",
+    "events.jsonl",
+    "runs.csv",
+    "summary.csv",
+    "report.html",
+    "run.log",
+    "manifest.json",
+]
 ALLOWED_EVENT_TYPES = {
     "run_started",
     "content_event",
@@ -164,6 +203,7 @@ PROFILE_ID = "streaming_text_reference_v0.1"
 PROFILE_VERSION = "0.1"
 TERMINAL_RECEIPT_VERSION = "prototype-terminal-receipt-0.1"
 SCORING_EVENT_TYPES = {"run_started", "content_event", "terminal_event"}
+SERIALIZED_NUMBER_TOLERANCE = 0.5e-6 + 1e-12
 
 
 def load_json(name: str) -> dict[str, Any]:
@@ -277,6 +317,49 @@ def derive_raw_metrics(
     return {
         "ttft_ms": (event_times_ns[0] - t0_ns) / 1_000_000,
         "completion_ms": (done_ns - t0_ns) / 1_000_000,
+        "stream_span_ms": span_ns / 1_000_000,
+        "stream_event_rate_eps": (len(event_times_ns) - 1) * 1000 / (span_ns / 1_000_000),
+        "stall_threshold_ms": max(500, 4 * nominal_interval_ms),
+        "stall_count": len(stalls),
+        "stall_duration_ms": duration_ns / 1_000_000,
+        "stall_fraction": max(0.0, min(1.0, duration_ns / span_ns)),
+    }
+
+
+def derive_partial_metrics(
+    event_times_ns: list[int],
+    nominal_interval_ms: int,
+    t0_ns: int,
+) -> dict[str, float | int | None]:
+    """Derive the field-by-field partial matrix without inventing completion."""
+    if t0_ns < 0 or not event_times_ns:
+        raise ValueError("at least one event and a non-negative t0 are required")
+    if any(timestamp < t0_ns for timestamp in event_times_ns):
+        raise ValueError("timestamps precede t0")
+    gaps = [right - left for left, right in zip(event_times_ns, event_times_ns[1:])]
+    if any(gap <= 0 for gap in gaps):
+        raise ValueError("timestamp regression in partial stream")
+    first_ns = event_times_ns[0]
+    if len(event_times_ns) == 1:
+        return {
+            "ttft_ms": (first_ns - t0_ns) / 1_000_000,
+            "completion_ms": None,
+            "stream_span_ms": None,
+            "stream_event_rate_eps": None,
+            "stall_threshold_ms": None,
+            "stall_count": None,
+            "stall_duration_ms": None,
+            "stall_fraction": None,
+        }
+    nominal_ns = nominal_interval_ms * 1_000_000
+    stalls = [gap for gap in gaps if is_stall(gap, nominal_interval_ms)]
+    span_ns = event_times_ns[-1] - first_ns
+    if span_ns <= 0:
+        raise ValueError("non-positive partial stream span")
+    duration_ns = sum(gap - nominal_ns for gap in stalls)
+    return {
+        "ttft_ms": (first_ns - t0_ns) / 1_000_000,
+        "completion_ms": None,
         "stream_span_ms": span_ns / 1_000_000,
         "stream_event_rate_eps": (len(event_times_ns) - 1) * 1000 / (span_ns / 1_000_000),
         "stall_threshold_ms": max(500, 4 * nominal_interval_ms),
@@ -458,16 +541,7 @@ def partial_interrupted_run(profile_hash: str, profile: dict[str, Any]) -> dict[
     t0_ns = result["clock"]["t0_monotonic_ns"]
     first = t0_ns + 200 * 1_000_000
     second = t0_ns + 250 * 1_000_000
-    result["metrics"] = {
-        "ttft_ms": 200.0,
-        "completion_ms": None,
-        "stream_span_ms": 50.0,
-        "stream_event_rate_eps": 20.0,
-        "stall_threshold_ms": 500,
-        "stall_count": 0,
-        "stall_duration_ms": 0.0,
-        "stall_fraction": 0.0,
-    }
+    result["metrics"] = derive_partial_metrics([first, second], 50, t0_ns)
     assert first < second
     return result
 
@@ -504,6 +578,167 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> 
         writer.writeheader()
         for row in rows:
             writer.writerow({key: scalar(row.get(key)) for key in fieldnames})
+
+
+def write_bundle_metadata(
+    root: Path,
+    runs: list[dict[str, Any]],
+    profile: dict[str, Any],
+    profile_hash: str,
+    campaign_mode: str,
+    campaign_status: str,
+) -> None:
+    """Create the seven-file campaign envelope used by the review fixture."""
+    plan = next(item for item in profile["campaign_plans"] if item["mode"] == campaign_mode)
+    campaign_id = runs[0]["campaign_id"] if runs else "campaign-0001"
+    meta = {
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
+        "campaign_id": campaign_id,
+        "campaign_mode": campaign_mode,
+        "campaign_status": campaign_status,
+        "started_at_utc": "2026-08-28T10:00:00Z",
+        "ended_at_utc": "2026-08-28T10:01:00Z",
+        "claim_scope": "application_end_to_end_to_probe_node",
+        "evidence_mode": "synthetic_application_impairment",
+        "impairment_layer": "application",
+        "score_policy_id": "rpi-0.1",
+        "profile_manifest_sha256": profile_hash,
+        "clock_contract": {
+            "source": "android.os.SystemClock.elapsedRealtimeNanos",
+            "unit": "ns",
+            "epoch": "device_boot",
+            "includes_deep_sleep": True,
+            "domain_identity": "per-run opaque boot/session clock_domain_id",
+        },
+        "profile": {
+            "id": profile["workload"]["id"],
+            "version": profile["workload"]["version"],
+            "sha256": profile_hash,
+        },
+        "product": {"version": "prototype-0.1", "git_commit": "0" * 40},
+        "android_app": {"version_name": "0.1.0", "version_code": 1, "apk_sha256": "0" * 64},
+        "server": {
+            "version": "dev",
+            "binary_sha256": "a" * 64,
+            "protocol_version": PROTOCOL_VERSION,
+        },
+        "device": {"manufacturer": "fixture", "model": "fixture", "os_release": "fixture", "sdk_int": 29},
+        "transport": {"mode": "lan", "acceptance_path": True},
+        "run_plan": {"planned_runs": len(plan["condition_order"]), "order": list(plan["condition_order"])},
+        "conditions": [
+            {
+                "id": condition["id"],
+                "version": condition["version"],
+                "nominal_interval_ms": condition["nominal_interval_ms"],
+                "schedule_sha256": condition["schedule_sha256"],
+            }
+            for condition in profile["conditions"]
+        ],
+    }
+    (root / "meta.json").write_text(
+        json.dumps(meta, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    (root / "run.log").write_text(
+        "2026-08-28T10:01:00Z INFO fixture campaign.verified\n",
+        encoding="utf-8",
+    )
+    media_types = {
+        "meta.json": "application/json",
+        "events.jsonl": "application/x-ndjson",
+        "runs.csv": "text/csv",
+        "summary.csv": "text/csv",
+        "report.html": "text/html",
+        "run.log": "text/plain",
+    }
+    artifacts = []
+    for name in CANONICAL_BUNDLE_FILES:
+        if name == "manifest.json":
+            continue
+        data = (root / name).read_bytes()
+        artifacts.append(
+            {
+                "path": name,
+                "media_type": media_types[name],
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    manifest = {
+        "manifest_version": "aneb-prototype-manifest-0.1",
+        "campaign_id": campaign_id,
+        "publication_status": "verified",
+        "created_at_utc": "2026-08-28T10:01:00Z",
+        "artifacts": artifacts,
+    }
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def refresh_bundle_manifest(root: Path) -> None:
+    """Refresh only fixture artifact hashes after an intentional test mutation."""
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = []
+    media_types = {
+        "meta.json": "application/json",
+        "events.jsonl": "application/x-ndjson",
+        "runs.csv": "text/csv",
+        "summary.csv": "text/csv",
+        "report.html": "text/html",
+        "run.log": "text/plain",
+    }
+    for name in CANONICAL_BUNDLE_FILES:
+        if name == "manifest.json":
+            continue
+        data = (root / name).read_bytes()
+        manifest["artifacts"].append(
+            {
+                "path": name,
+                "media_type": media_types[name],
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def refresh_bundle_metadata_for_test(root: Path, profile: dict[str, Any]) -> None:
+    """Keep metadata aligned when a regression mutator is intentionally coordinated."""
+    meta_path = root / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    events = [
+        json.loads(line)
+        for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    rows = read_csv(root / "runs.csv", RUN_COLUMNS)
+    if events:
+        meta["campaign_id"] = events[0]["campaign_id"]
+    if rows:
+        mode = rows[0]["campaign_mode"]
+        meta["campaign_mode"] = mode
+        plans = [item for item in profile["campaign_plans"] if item["mode"] == mode]
+        if len(plans) == 1:
+            meta["run_plan"] = {
+                "planned_runs": len(plans[0]["condition_order"]),
+                "order": list(plans[0]["condition_order"]),
+            }
+        try:
+            parsed_runs = [csv_row_to_run(row) for row in rows]
+        except (TypeError, ValueError):
+            parsed_runs = []
+        if parsed_runs:
+            meta["campaign_status"] = campaign_status_from_runs(parsed_runs)
+    meta_path.write_text(
+        json.dumps(meta, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
 
 
 def read_csv(path: Path, fieldnames: list[str]) -> list[dict[str, str]]:
@@ -785,21 +1020,117 @@ def make_event(
     }
 
 
-def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> list[dict[str, Any]]:
-    runs = [
-        valid_run(
+def status_record(base: dict[str, Any], status: str, profile: dict[str, Any]) -> dict[str, Any]:
+    """Build an otherwise-valid run record for a closed failure topology."""
+    if status == "complete":
+        return base
+    if status == "not_started":
+        result = copy.deepcopy(base)
+        result.update(
+            {
+                "run_status": "not_started",
+                "task_success": False,
+                "attempt_started_at_utc": None,
+                "attempt_ended_at_utc": None,
+                "events_received": 0,
+                "terminal_receipt_valid": None,
+                "score_eligible": False,
+                "failure_reason": "not_started",
+            }
+        )
+        result["clock"]["t0_monotonic_ns"] = None
+        result["metrics"] = {key: None for key in METRIC_KEYS}
+        return result
+    result = copy.deepcopy(base)
+    result.update(
+        {
+            "run_status": status,
+            "task_success": False,
+            "score_eligible": False,
+            "terminal_receipt_valid": None,
+        }
+    )
+    if status in {"interrupted", "cancelled"}:
+        offsets, _ = schedule_offsets(profile, result["condition"]["id"])
+        partial_count = 2
+        t0_ns = result["clock"]["t0_monotonic_ns"]
+        times = [t0_ns + offset * 1_000_000 for offset in offsets[:partial_count]]
+        result["events_received"] = partial_count
+        result["failure_reason"] = "cancelled" if status == "cancelled" else "stream_interrupted"
+        result["metrics"] = derive_partial_metrics(
+            times,
+            result["condition"]["nominal_interval_ms"],
+            t0_ns,
+        )
+        return result
+    if status not in {"incompatible", "invalid_sequence", "ttft_timeout", "server_rejected"}:
+        raise ValueError(f"unsupported fixture run status: {status}")
+    result.update(
+        {
+            "events_received": 0,
+            "failure_reason": {
+                "incompatible": "contract_mismatch",
+                "invalid_sequence": "invalid_sequence",
+                "ttft_timeout": "ttft_timeout",
+                "server_rejected": "server_rejected",
+            }[status],
+            "metrics": {key: None for key in METRIC_KEYS},
+        }
+    )
+    return result
+
+
+def build_e2e_bundle(
+    root: Path,
+    profile: dict[str, Any],
+    profile_hash: str,
+    campaign_mode: str = "quick",
+    statuses: dict[int, str] | None = None,
+    campaign_status_override: str | None = None,
+) -> list[dict[str, Any]]:
+    campaign_plan = next(
+        (plan for plan in profile["campaign_plans"] if plan["mode"] == campaign_mode),
+        None,
+    )
+    if campaign_plan is None:
+        raise ValueError(f"unknown campaign mode {campaign_mode}")
+    condition_order = campaign_plan["condition_order"]
+    statuses = dict(statuses or {})
+    if any(index not in range(1, len(condition_order) + 1) for index in statuses):
+        raise ValueError("fixture status index is outside the frozen campaign plan")
+    if campaign_status_override not in {None, "failed", "invalid"}:
+        raise ValueError("only explicit failed/invalid campaign status overrides are allowed")
+    runs: list[dict[str, Any]] = []
+    next_t0_ns = 9_000_000_000_000
+    cooldown_ns = campaign_plan["cooldown_ms"] * 1_000_000
+    for index, condition_id in enumerate(condition_order, 1):
+        status = statuses.get(index, "complete")
+        base = valid_run(
             profile_hash,
             profile,
             condition_id,
             run_index=index,
-            campaign_mode="quick",
-            run_id=f"run-quick-{index:02d}",
-            t0_ns=9_000_000_000_000 + index * 1_000_000_000,
+            campaign_mode=campaign_mode,
+            run_id=f"run-{campaign_mode}-{index:02d}",
+            t0_ns=next_t0_ns,
         )
-        for index, condition_id in enumerate(CONDITION_ORDER, 1)
-    ]
+        run = status_record(base, status, profile)
+        runs.append(run)
+        if status == "not_started":
+            continue
+        t0 = base["clock"]["t0_monotonic_ns"]
+        offsets, terminal_offset = schedule_offsets(profile, condition_id)
+        if status in {"interrupted", "cancelled"}:
+            end_ns = t0 + offsets[run["events_received"] - 1] * 1_000_000 + 1_000_000
+        elif status in {"incompatible", "invalid_sequence", "ttft_timeout", "server_rejected"}:
+            end_ns = t0 + 1_000_000
+        else:
+            end_ns = t0 + terminal_offset * 1_000_000
+        next_t0_ns = end_ns + cooldown_ns
     events: list[dict[str, Any]] = []
     for run in runs:
+        if run["run_status"] == "not_started":
+            continue
         condition = run["condition"]
         clock = run["clock"]
         offsets, terminal_offset = schedule_offsets(profile, condition["id"])
@@ -811,7 +1142,7 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
                 {"t0_monotonic_ns": clock["t0_monotonic_ns"]},
             )
         )
-        for seq, offset in enumerate(offsets, 1):
+        for seq, offset in enumerate(offsets[: run["events_received"]], 1):
             events.append(
                 make_event(
                     run,
@@ -824,6 +1155,26 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
                     },
                 )
             )
+        if run["run_status"] != "complete":
+            failure_type = "run_cancelled" if run["run_status"] == "cancelled" else "run_failed"
+            last_observed = (
+                clock["t0_monotonic_ns"]
+                + offsets[run["events_received"] - 1] * 1_000_000
+                if run["events_received"]
+                else clock["t0_monotonic_ns"]
+            )
+            events.append(
+                make_event(
+                    run,
+                    failure_type,
+                    last_observed + 1_000_000,
+                    {
+                        "failure_reason": run["failure_reason"],
+                        "events_received": run["events_received"],
+                    },
+                )
+            )
+            continue
         receipt = {
             "receipt_version": TERMINAL_RECEIPT_VERSION,
             "protocol_version": PROTOCOL_VERSION,
@@ -865,19 +1216,12 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
     # The report embeds the same decimal representation that survives the
     # RFC4180 runs.csv round trip; this makes the byte chain canonical.
     parsed_runs = [csv_row_to_run(row) for row in read_csv(root / "runs.csv", RUN_COLUMNS)]
-    summary_rows = compute_summary_rows(parsed_runs, profile, "quick", "complete")
+    campaign_status = campaign_status_override or campaign_status_from_runs(parsed_runs)
+    summary_rows = compute_summary_rows(parsed_runs, profile, campaign_mode, campaign_status)
     write_csv(root / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in summary_rows])
-    partial = copy.deepcopy(summary_rows[0])
-    partial.update(
-        {
-            "campaign_status": "partial",
-            "rpi": None,
-            "primary_null_reason": "campaign_incomplete",
-            "all_null_reasons": ["campaign_incomplete"],
-        }
-    )
-    write_csv(root / "summary_partial.csv", SUMMARY_COLUMNS, [summary_to_csv_row(partial)])
-    report_payload = {"campaign_mode": "quick", "campaign_status": "complete", "summary": summary_rows}
+    if (root / "summary_partial.csv").exists():
+        (root / "summary_partial.csv").unlink()
+    report_payload = {"campaign_mode": campaign_mode, "campaign_status": campaign_status, "summary": summary_rows}
     report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
     visible_rpi = "".join(
         f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
@@ -890,6 +1234,7 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
         "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
         encoding="utf-8",
     )
+    write_bundle_metadata(root, runs, profile, profile_hash, campaign_mode, campaign_status)
     return runs
 
 
@@ -926,14 +1271,17 @@ def assert_campaign_plan(runs: list[dict[str, Any]], profile: dict[str, Any], ca
 
 
 def campaign_status_from_runs(runs: list[dict[str, Any]]) -> str:
+    """Derive execution completeness, not aggregate run success.
+
+    A failed/interrupted run is still an attempted plan slot.  Only a missing
+    ``not_started`` slot makes this inferred campaign incomplete; explicit
+    campaign-level ``failed``/``invalid`` values belong to the canonical meta
+    authority and are not guessed from run status alone.
+    """
     statuses = {run["run_status"] for run in runs}
-    if statuses == {"complete"}:
-        return "complete"
-    if "cancelled" in statuses:
-        return "cancelled"
-    if statuses.intersection({"incompatible", "invalid_sequence", "ttft_timeout", "server_rejected"}):
-        return "failed"
-    return "partial"
+    if "not_started" in statuses:
+        return "cancelled" if "cancelled" in statuses else "partial"
+    return "complete"
 
 
 def verify_e2e_bundle(
@@ -944,6 +1292,40 @@ def verify_e2e_bundle(
 ) -> None:
     if run_schema is None:
         run_schema = load_json("run-record.schema.json")
+    actual_files = {path.name for path in root.iterdir() if path.is_file()}
+    expected_files = set(CANONICAL_BUNDLE_FILES)
+    if actual_files != expected_files:
+        extra = sorted(actual_files - expected_files)
+        missing = sorted(expected_files - actual_files)
+        raise ValueError(f"campaign bundle file set is not the frozen seven-file set (extra={extra}, missing={missing})")
+    try:
+        meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("campaign metadata or manifest is malformed") from exc
+    if (
+        not isinstance(meta, dict)
+        or meta.get("schema_version") != EVIDENCE_SCHEMA_VERSION
+        or meta.get("profile_manifest_sha256") != profile_hash
+    ):
+        raise ValueError("campaign metadata does not bind the published profile")
+    artifact_names = [item.get("path") for item in manifest.get("artifacts", [])]
+    expected_artifacts = [name for name in CANONICAL_BUNDLE_FILES if name != "manifest.json"]
+    if (
+        manifest.get("manifest_version") != "aneb-prototype-manifest-0.1"
+        or manifest.get("publication_status") != "verified"
+        or manifest.get("campaign_id") != meta.get("campaign_id")
+        or artifact_names != expected_artifacts
+        or len(artifact_names) != len(set(artifact_names))
+    ):
+        raise ValueError("campaign manifest shape is not canonical")
+    for item in manifest["artifacts"]:
+        path = item["path"]
+        if not isinstance(path, str) or path not in expected_artifacts or "/" in path or "\\" in path or ".." in path:
+            raise ValueError("campaign manifest path is not canonical")
+        data = (root / path).read_bytes()
+        if item.get("size_bytes") != len(data) or item.get("sha256") != hashlib.sha256(data).hexdigest():
+            raise ValueError("campaign manifest artifact hash/size mismatch")
     events: list[dict[str, Any]] = []
     for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines():
         if line:
@@ -961,8 +1343,17 @@ def verify_e2e_bundle(
     if len(campaign_modes) != 1:
         raise ValueError("run records disagree on campaign mode")
     campaign_mode = next(iter(campaign_modes))
+    if meta.get("campaign_mode") != campaign_mode:
+        raise ValueError("campaign metadata mode does not match run authority")
     plan = assert_campaign_plan(runs, profile, campaign_mode)
-    campaign_status = campaign_status_from_runs(runs)
+    inferred_campaign_status = campaign_status_from_runs(runs)
+    declared_campaign_status = meta.get("campaign_status")
+    if declared_campaign_status in {"failed", "invalid"}:
+        campaign_status = declared_campaign_status
+    elif declared_campaign_status == inferred_campaign_status:
+        campaign_status = inferred_campaign_status
+    else:
+        raise ValueError("campaign status is not backed by run execution or explicit campaign authority")
     if not events:
         raise ValueError("raw evidence bundle is empty or malformed")
     for event in events:
@@ -976,48 +1367,62 @@ def verify_e2e_bundle(
             raise ValueError("unknown non-namespaced event type")
         if not isinstance(event.get("run_id"), str):
             raise ValueError("raw event has no run identity")
-        if event_type in SCORING_EVENT_TYPES:
-            if type(event.get("run_index")) is not int or type(event.get("nominal_interval_ms")) is not int:
-                raise ValueError("scoring event integer identity fields are not JSON integers")
-            if event.get("clock_source") != "android.os.SystemClock.elapsedRealtimeNanos":
-                raise ValueError("scoring event clock source is not Android elapsedRealtimeNanos")
-            if event.get("clock_unit") != "ns" or event.get("clock_epoch") != "device_boot":
-                raise ValueError("scoring event clock unit/epoch is not the published contract")
-            if not isinstance(event.get("clock_domain_id"), str):
-                raise ValueError("scoring event has no clock-domain identity")
-            if type(event.get("client_monotonic_ns")) is not int:
-                raise ValueError("scoring event timestamp is not a JSON integer")
+        if type(event.get("run_index")) is not int or type(event.get("nominal_interval_ms")) is not int:
+            raise ValueError("event integer identity fields are not JSON integers")
+        if event.get("clock_source") != "android.os.SystemClock.elapsedRealtimeNanos":
+            raise ValueError("event clock source is not Android elapsedRealtimeNanos")
+        if event.get("clock_unit") != "ns" or event.get("clock_epoch") != "device_boot":
+            raise ValueError("event clock unit/epoch is not the published contract")
+        if not isinstance(event.get("clock_domain_id"), str):
+            raise ValueError("event has no clock-domain identity")
+        if type(event.get("client_monotonic_ns")) is not int:
+            raise ValueError("event timestamp is not a JSON integer")
     raw_campaign_ids = {event.get("campaign_id") for event in events}
     if len(raw_campaign_ids) != 1 or None in raw_campaign_ids:
         raise ValueError("raw events do not share one campaign identity")
     raw_campaign_id = next(iter(raw_campaign_ids))
+    if meta.get("campaign_id") != raw_campaign_id:
+        raise ValueError("campaign metadata campaign identity does not match raw authority")
     groups: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         groups.setdefault(event["run_id"], []).append(event)
     run_ids = {run["run_id"] for run in runs}
-    if set(groups) != run_ids:
+    if not set(groups).issubset(run_ids):
         raise ValueError("raw event/run id sets disagree")
+    if not groups:
+        raise ValueError("raw evidence bundle has no attempted run events")
+    end_by_index: dict[int, int] = {}
     for run in runs:
         run_id = run["run_id"]
         if run["campaign_id"] != raw_campaign_id:
             raise ValueError("runs.csv campaign identity does not match raw authority")
+        if run["run_status"] == "not_started":
+            if run_id in groups:
+                raise ValueError("not-started run has raw evidence")
+            continue
         group = groups.get(run_id)
         if group is None:
-            raise ValueError("run is absent from events.jsonl")
+            raise ValueError("attempted run is absent from events.jsonl")
         started = [event for event in group if event["event_type"] == "run_started"]
         content = [event for event in group if event["event_type"] == "content_event"]
         terminal = [event for event in group if event["event_type"] == "terminal_event"]
-        if len(started) != 1 or len(content) != 120 or len(terminal) != 1:
-            raise ValueError("event topology is invalid")
-        scoring_types = [event["event_type"] for event in group if event["event_type"] in SCORING_EVENT_TYPES]
-        expected_types = ["run_started"] + ["content_event"] * 120 + ["terminal_event"]
-        if scoring_types != expected_types:
-            raise ValueError("per-run scoring event order is invalid")
+        failures = [event for event in group if event["event_type"] in {"run_failed", "run_cancelled"}]
+        diagnostics = [
+            event
+            for event in group
+            if isinstance(event.get("event_type"), str) and event["event_type"].startswith("diagnostic.")
+        ]
+        if len(started) != 1:
+            raise ValueError("event topology is invalid: exactly one run_started is required")
+        if len(diagnostics) and any(event["event_type"] in SCORING_EVENT_TYPES for event in diagnostics):
+            raise ValueError("diagnostic event was counted as scoring")
         start = started[0]
-        t0 = start["details"]["t0_monotonic_ns"]
-        if t0 != run["clock"]["t0_monotonic_ns"]:
+        if not isinstance(start.get("details"), dict) or set(start["details"]) != {"t0_monotonic_ns"}:
+            raise ValueError("run_started details are not canonical")
+        t0 = start["details"].get("t0_monotonic_ns")
+        if type(t0) is not int or t0 < 0 or t0 != run["clock"]["t0_monotonic_ns"]:
             raise ValueError("run t0 does not match raw evidence")
-        if start["client_monotonic_ns"] != t0 or start["details"].get("t0_monotonic_ns") != t0:
+        if start["client_monotonic_ns"] != t0:
             raise ValueError("run_started timestamp/t0 boundary does not match")
         identity = (
             run["campaign_id"],
@@ -1034,34 +1439,37 @@ def verify_e2e_bundle(
             run["clock"]["domain_id"],
         )
         for event in group:
-            if event.get("source") != "android" or type(event.get("client_monotonic_ns")) is not int:
+            if (
+                event.get("source") != "android"
+                or type(event.get("client_monotonic_ns")) is not int
+                or not isinstance(event.get("details"), dict)
+            ):
                 raise ValueError("raw evidence source/timestamp shape mismatch")
             event_identity = (
-                event["campaign_id"],
-                event["run_id"],
-                event["campaign_mode"],
-                event["run_index"],
-                event["profile_manifest_sha256"],
-                event["condition_id"],
-                event["condition_version"],
-                event["nominal_interval_ms"],
-                event["schedule_hash"],
-                event["clock_source"],
-                event["clock_epoch"],
-                event["clock_domain_id"],
+                event.get("campaign_id"),
+                event.get("run_id"),
+                event.get("campaign_mode"),
+                event.get("run_index"),
+                event.get("profile_manifest_sha256"),
+                event.get("condition_id"),
+                event.get("condition_version"),
+                event.get("nominal_interval_ms"),
+                event.get("schedule_hash"),
+                event.get("clock_source"),
+                event.get("clock_epoch"),
+                event.get("clock_domain_id"),
             )
             if event_identity != identity:
                 raise ValueError("raw evidence identity mismatch")
             if event["client_monotonic_ns"] < t0:
                 raise ValueError("raw event precedes t0")
-        if any(event["event_type"] in {"run_failed", "run_cancelled"} for event in group):
-            if run["run_status"] == "complete":
-                raise ValueError("complete run has a failure/cancellation event")
         condition_id = run["condition"]["id"]
-        offsets, terminal_offset = schedule_offsets(profile, condition_id)
+        offsets, _ = schedule_offsets(profile, condition_id)
         times: list[int] = []
         for expected_seq, (event, expected_offset) in enumerate(zip(content, offsets), 1):
             details = event["details"]
+            if set(details) != {"seq", "planned_offset_ms", "payload_id"}:
+                raise ValueError("content details are not canonical")
             if type(details.get("seq")) is not int or type(details.get("planned_offset_ms")) is not int:
                 raise ValueError("content sequence/offset fields are not JSON integers")
             if details["seq"] != expected_seq or details["planned_offset_ms"] != expected_offset:
@@ -1069,114 +1477,156 @@ def verify_e2e_bundle(
             if details["payload_id"] != f"ref-{expected_seq:04d}":
                 raise ValueError("content payload identity mismatch")
             times.append(event["client_monotonic_ns"])
-        receipt = terminal[0]["details"]
-        if not isinstance(receipt, dict):
-            raise ValueError("terminal event does not carry a receipt object")
-        for field in [
-            "run_index",
-            "events_expected",
-            "events_received",
-            "planned_event_count",
-            "emitted_event_count",
-            "nominal_interval_ms",
-            "t0_monotonic_ns",
-            "client_monotonic_ns",
-        ]:
-            if type(receipt.get(field)) is not int:
-                raise ValueError(f"terminal receipt {field} is not a JSON integer")
-        for field in [
-            "receipt_version",
-            "protocol_version",
-            "profile_id",
-            "profile_version",
-            "terminal_status",
-            "campaign_id",
-            "run_id",
-            "campaign_mode",
-            "profile_manifest_sha256",
-            "condition_id",
-            "condition_version",
-            "schedule_hash",
-            "clock_source",
-            "clock_unit",
-            "clock_epoch",
-            "clock_domain_id",
-        ]:
-            if not isinstance(receipt.get(field), str):
-                raise ValueError(f"terminal receipt {field} is not a string")
-        expected_receipt = {
-            "receipt_version": TERMINAL_RECEIPT_VERSION,
-            "protocol_version": PROTOCOL_VERSION,
-            "profile_id": profile["workload"]["id"],
-            "profile_version": profile["workload"]["version"],
-            "terminal_status": "complete",
-            "campaign_id": run["campaign_id"],
-            "run_id": run_id,
-            "campaign_mode": run["campaign_mode"],
-            "run_index": run["run_index"],
-            "events_expected": 120,
-            "events_received": 120,
-            "planned_event_count": 120,
-            "emitted_event_count": 120,
-            "profile_manifest_sha256": profile_hash,
-            "condition_id": run["condition"]["id"],
-            "condition_version": run["condition"]["version"],
-            "nominal_interval_ms": run["condition"]["nominal_interval_ms"],
-            "schedule_hash": run["schedule_hash"],
-            "clock_source": run["clock"]["source"],
-            "clock_unit": run["clock"]["unit"],
-            "clock_epoch": run["clock"]["epoch"],
-            "clock_domain_id": run["clock"]["domain_id"],
-            "t0_monotonic_ns": t0,
-            "client_monotonic_ns": receipt["client_monotonic_ns"],
-        }
-        if receipt != expected_receipt:
-            raise ValueError("terminal receipt fields do not match the protocol authority")
-        receipt_identity = (
-            receipt.get("campaign_id"),
-            receipt.get("run_id"),
-            receipt.get("campaign_mode"),
-            receipt.get("run_index"),
-            receipt.get("profile_manifest_sha256"),
-            receipt.get("condition_id"),
-            receipt.get("condition_version"),
-            receipt.get("nominal_interval_ms"),
-            receipt.get("schedule_hash"),
-            "android.os.SystemClock.elapsedRealtimeNanos",
-            "device_boot",
-            receipt.get("clock_domain_id"),
-        )
-        if receipt_identity != identity:
-            raise ValueError("terminal receipt identity does not match raw/run identity")
-        if receipt.get("t0_monotonic_ns") != t0:
-            raise ValueError("terminal receipt t0 does not match run")
+        if any(right <= left for left, right in zip(times, times[1:])):
+            raise ValueError("content timestamps are not strictly increasing")
+        scoring_types = [event["event_type"] for event in group if event["event_type"] in SCORING_EVENT_TYPES]
+        if run["run_status"] == "complete":
+            if len(content) != 120 or len(terminal) != 1 or failures:
+                raise ValueError("complete event topology is invalid")
+            expected_types = ["run_started"] + ["content_event"] * 120 + ["terminal_event"]
+            if scoring_types != expected_types:
+                raise ValueError("per-run scoring event order is invalid")
+            receipt = terminal[0]["details"]
+            if set(receipt) != {
+                "receipt_version", "protocol_version", "profile_id", "profile_version", "terminal_status",
+                "campaign_id", "run_id", "campaign_mode", "run_index", "events_expected",
+                "events_received", "planned_event_count", "emitted_event_count", "profile_manifest_sha256",
+                "condition_id", "condition_version", "nominal_interval_ms", "schedule_hash", "clock_domain_id",
+                "clock_source", "clock_unit", "clock_epoch", "t0_monotonic_ns", "client_monotonic_ns",
+            }:
+                raise ValueError("terminal receipt has missing or extra fields")
+            for field in [
+                "run_index", "events_expected", "events_received", "planned_event_count",
+                "emitted_event_count", "nominal_interval_ms", "t0_monotonic_ns", "client_monotonic_ns",
+            ]:
+                if type(receipt.get(field)) is not int:
+                    raise ValueError(f"terminal receipt {field} is not a JSON integer")
+            for field in [
+                "receipt_version", "protocol_version", "profile_id", "profile_version", "terminal_status",
+                "campaign_id", "run_id", "campaign_mode", "profile_manifest_sha256", "condition_id",
+                "condition_version", "schedule_hash", "clock_source", "clock_unit", "clock_epoch",
+                "clock_domain_id",
+            ]:
+                if not isinstance(receipt.get(field), str):
+                    raise ValueError(f"terminal receipt {field} is not a string")
+            expected_receipt = {
+                "receipt_version": TERMINAL_RECEIPT_VERSION,
+                "protocol_version": PROTOCOL_VERSION,
+                "profile_id": profile["workload"]["id"],
+                "profile_version": profile["workload"]["version"],
+                "terminal_status": "complete",
+                "campaign_id": run["campaign_id"],
+                "run_id": run_id,
+                "campaign_mode": run["campaign_mode"],
+                "run_index": run["run_index"],
+                "events_expected": 120,
+                "events_received": 120,
+                "planned_event_count": 120,
+                "emitted_event_count": 120,
+                "profile_manifest_sha256": profile_hash,
+                "condition_id": run["condition"]["id"],
+                "condition_version": run["condition"]["version"],
+                "nominal_interval_ms": run["condition"]["nominal_interval_ms"],
+                "schedule_hash": run["schedule_hash"],
+                "clock_source": run["clock"]["source"],
+                "clock_unit": run["clock"]["unit"],
+                "clock_epoch": run["clock"]["epoch"],
+                "clock_domain_id": run["clock"]["domain_id"],
+                "t0_monotonic_ns": t0,
+                "client_monotonic_ns": receipt["client_monotonic_ns"],
+            }
+            if receipt != expected_receipt:
+                raise ValueError("terminal receipt fields do not match the protocol authority")
+            if terminal[0]["client_monotonic_ns"] != receipt["client_monotonic_ns"]:
+                raise ValueError("terminal event timestamp does not match terminal receipt")
+            if receipt["client_monotonic_ns"] <= times[-1]:
+                raise ValueError("terminal timestamp is not after the last observed content event")
+            expected = derive_raw_metrics(
+                times,
+                receipt["client_monotonic_ns"],
+                run["condition"]["nominal_interval_ms"],
+                t0,
+            )
+            for key, value in expected.items():
+                if not math.isclose(
+                    float(run["metrics"][key]),
+                    float(value),
+                    rel_tol=0,
+                    abs_tol=SERIALIZED_NUMBER_TOLERANCE,
+                ):
+                    raise ValueError(f"runs.csv metric mismatch for {key}")
+            end_by_index[run["run_index"]] = receipt["client_monotonic_ns"]
+            continue
+
+        if len(terminal) != 0 or len(failures) != 1:
+            raise ValueError("failed/partial event topology is invalid")
+        expected_count = run["events_received"]
+        if expected_count != len(content) or not 0 <= expected_count < 120:
+            raise ValueError("failed/partial content count does not match run record")
+        expected_failure_type = "run_cancelled" if run["run_status"] == "cancelled" else "run_failed"
+        if failures[0]["event_type"] != expected_failure_type:
+            raise ValueError("failure event type does not match run status")
+        failure_details = failures[0]["details"]
+        if set(failure_details) != {"failure_reason", "events_received"}:
+            raise ValueError("failure event details are not canonical")
         if (
-            receipt.get("terminal_status") != "complete"
-            or receipt.get("planned_event_count") != 120
-            or receipt.get("events_expected") != 120
-            or receipt.get("events_received") != 120
-            or receipt.get("emitted_event_count") != 120
+            failure_details["failure_reason"] != run["failure_reason"]
+            or type(failure_details["events_received"]) is not int
+            or failure_details["events_received"] != expected_count
         ):
-            raise ValueError("terminal receipt completion/count fields are invalid")
-        if terminal[0]["client_monotonic_ns"] != receipt["client_monotonic_ns"]:
-            raise ValueError("terminal event timestamp does not match terminal receipt")
-        if receipt["client_monotonic_ns"] <= times[-1]:
-            raise ValueError("terminal timestamp is not after the last observed content event")
-        expected = derive_raw_metrics(
-            times,
-            receipt["client_monotonic_ns"],
-            run["condition"]["nominal_interval_ms"],
-            t0,
-        )
-        for key, value in expected.items():
-            serialized_expected = float(scalar(value))
-            if not math.isclose(float(run["metrics"][key]), serialized_expected, rel_tol=0, abs_tol=1e-9):
-                raise ValueError(f"runs.csv metric mismatch for {key}")
+            raise ValueError("failure event reason/count does not match run record")
+        expected_types = ["run_started"] + ["content_event"] * expected_count + [expected_failure_type]
+        scoring_and_failure = [
+            event["event_type"]
+            for event in group
+            if event["event_type"] in SCORING_EVENT_TYPES or event["event_type"] in {"run_failed", "run_cancelled"}
+        ]
+        if scoring_and_failure != expected_types:
+            raise ValueError("failed/partial event order is invalid")
+        if failures[0]["client_monotonic_ns"] <= (times[-1] if times else t0):
+            raise ValueError("failure event does not follow observed content")
+        if expected_count == 0:
+            if any(value is not None for value in run["metrics"].values()):
+                raise ValueError("zero-event failure retains numeric metrics")
+        elif run["run_status"] in {"interrupted", "cancelled"}:
+            expected_partial = derive_partial_metrics(
+                times,
+                run["condition"]["nominal_interval_ms"],
+                t0,
+            )
+            for key, value in expected_partial.items():
+                if value is None:
+                    if run["metrics"][key] is not None:
+                        raise ValueError(f"partial metric {key} must be null")
+                elif not math.isclose(
+                    float(run["metrics"][key]),
+                    float(value),
+                    rel_tol=0,
+                    abs_tol=SERIALIZED_NUMBER_TOLERANCE,
+                ):
+                    raise ValueError(f"partial metric mismatch for {key}")
+        else:
+            raise ValueError("non-partial failure status has observed content")
+        end_by_index[run["run_index"]] = failures[0]["client_monotonic_ns"]
+
+    previous_end: int | None = None
+    cooldown_ns = plan["cooldown_ms"] * 1_000_000
+    for run in sorted(runs, key=lambda item: item["run_index"]):
+        if run["run_status"] == "not_started":
+            continue
+        t0 = run["clock"]["t0_monotonic_ns"]
+        if type(t0) is not int:
+            raise ValueError("attempted run has no integer monotonic t0")
+        if previous_end is not None and t0 - previous_end < cooldown_ns:
+            raise ValueError("inter-run chronology/cooldown is invalid")
+        previous_end = end_by_index[run["run_index"]]
     expected_summary = compute_summary_rows(runs, profile, campaign_mode, campaign_status)
     actual_summary = read_csv(root / "summary.csv", SUMMARY_COLUMNS)
     expected_csv = [summary_to_csv_row(row) for row in expected_summary]
-    if len(actual_summary) != len(plan["condition_order"]):
-        raise ValueError("summary.csv does not have one row per planned condition")
+    if len(actual_summary) != len(CONDITION_ORDER) or [
+        row["condition_id"] for row in actual_summary
+    ] != CONDITION_ORDER:
+        raise ValueError("summary.csv does not have one row per unique condition in frozen order")
     for actual, expected in zip(actual_summary, expected_csv):
         if actual["condition_id"] not in CONDITION_ORDER:
             raise ValueError("summary contains an unknown condition")
@@ -1205,15 +1655,19 @@ def verify_e2e_bundle(
         validate_null_reason_row(actual)
     if len(actual_summary) != len(expected_csv):
         raise ValueError("summary.csv row count mismatch")
-    partial_rows = read_csv(root / "summary_partial.csv", SUMMARY_COLUMNS)
-    if len(partial_rows) != 1:
-        raise ValueError("partial summary fixture row count mismatch")
-    validate_null_reason_row(partial_rows[0])
-    if partial_rows[0]["rpi"] != "" or partial_rows[0]["primary_null_reason"] != "campaign_incomplete":
-        raise ValueError("partial summary null semantics mismatch")
+    if (root / "summary_partial.csv").exists():
+        raise ValueError("summary_partial.csv is outside the seven-file campaign contract")
     report_text = (root / "report.html").read_text(encoding="utf-8")
-    if re.search(r"<script\b[^>]*\bsrc\s*=", report_text, flags=re.IGNORECASE):
-        raise ValueError("offline report contains a remote script")
+    if re.search(r"(?:https?:)?//", report_text, flags=re.IGNORECASE):
+        raise ValueError("offline report contains a remote URL")
+    if re.search(r"<[^>]+\b(?:src|href|action)\s*=", report_text, flags=re.IGNORECASE):
+        raise ValueError("offline report contains a resource or form URL attribute")
+    if re.search(
+        r"(?:\burl\s*\(|@import\b|\b(?:fetch|XMLHttpRequest|WebSocket)\s*\()",
+        report_text,
+        flags=re.IGNORECASE,
+    ):
+        raise ValueError("offline report contains an active resource/API reference")
     if re.search(r"<(?:iframe|object|embed)\b", report_text, flags=re.IGNORECASE):
         raise ValueError("offline report contains remote active content")
     matches = re.findall(
@@ -1250,6 +1704,21 @@ def mutate_and_expect_bundle_failure(
 ) -> None:
     build_e2e_bundle(root, profile, profile_hash)
     mutate(root)
+    refresh_bundle_metadata_for_test(root, profile)
+    refresh_bundle_manifest(root)
+    expect_failure(lambda: verify_e2e_bundle(root, profile, profile_hash), label)
+
+
+def mutate_existing_bundle_and_expect_failure(
+    root: Path,
+    profile: dict[str, Any],
+    profile_hash: str,
+    label: str,
+    mutate: Callable[[Path], None],
+) -> None:
+    mutate(root)
+    refresh_bundle_metadata_for_test(root, profile)
+    refresh_bundle_manifest(root)
     expect_failure(lambda: verify_e2e_bundle(root, profile, profile_hash), label)
 
 
@@ -1317,9 +1786,9 @@ def validate_version_fixture(version: dict[str, Any], contract_hashes: dict[str,
 
 def assert_manifest_oracle(profile: dict[str, Any]) -> None:
     binding = profile["condition_binding"]
-    if binding["binding"] != "profile_manifest_sha256_plus_condition_id_version_nominal_interval_plus_schedule_sha256":
-        raise AssertionError("condition binding description omits nominal interval or drifts")
-    if binding["identity_fields"] != ["id", "version", "nominal_interval_ms", "schedule_sha256"]:
+    if binding["binding"] != "profile_manifest_sha256_plus_condition_id_version_plus_schedule_sha256":
+        raise AssertionError("condition binding description drifts from the approved identity tuple")
+    if binding["identity_fields"] != ["id", "version", "schedule_sha256"]:
         raise AssertionError("condition identity fields drift")
     if binding["separate_condition_hash"] is not False:
         raise AssertionError("separate condition hash is outside the contract")
@@ -1364,7 +1833,7 @@ def main() -> int:
     checks: list[str] = ["Draft 2020-12 schemas valid"]
 
     profile_hash = hashlib.sha256(canonical_file_bytes("profile-manifest.json")).hexdigest()
-    assert profile_hash == "592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b"
+    assert profile_hash == EXPECTED_PROFILE_HASH
     assert policy["policy_id"] == "rpi-0.1"
     assert policy["display_name"] == "Relative Prototype Index (same-campaign synthetic comparison)"
     assert policy["success_rate_definition"] == "current_condition_successful_runs_divided_by_current_condition_planned_runs"
@@ -1493,14 +1962,10 @@ def main() -> int:
     interrupted_null_t0 = copy.deepcopy(partial_interrupted_run(profile_hash, profile))
     interrupted_null_t0["clock"]["t0_monotonic_ns"] = None
     expect_invalid(schemas["run-record"], interrupted_null_t0, "interrupted numeric metrics without t0")
-    for status, reason in [
-        ("cancelled", "cancelled"),
-        ("ttft_timeout", "ttft_timeout"),
-        ("server_rejected", "server_rejected"),
-        ("incompatible", "contract_mismatch"),
-    ]:
-        failed = copy.deepcopy(run)
-        failed.update(
+
+    def zero_event_failure(status: str, reason: str) -> dict[str, Any]:
+        candidate = copy.deepcopy(run)
+        candidate.update(
             {
                 "run_status": status,
                 "task_success": False,
@@ -1511,32 +1976,81 @@ def main() -> int:
                 "metrics": {key: None for key in METRIC_KEYS},
             }
         )
-        expect_valid(schemas["run-record"], failed, f"{status} exact failure topology")
-    cancelled_partial = partial_interrupted_run(profile_hash, profile)
-    cancelled_partial["run_status"] = "cancelled"
-    cancelled_partial["failure_reason"] = "cancelled"
-    expect_valid(schemas["run-record"], cancelled_partial, "cancelled partial matrix")
-    cancelled_null_t0 = copy.deepcopy(cancelled_partial)
-    cancelled_null_t0["clock"]["t0_monotonic_ns"] = None
-    expect_invalid(schemas["run-record"], cancelled_null_t0, "cancelled numeric metrics without t0")
-    for status, wrong_reason in [
-        ("cancelled", "stream_interrupted"),
-        ("cancelled", None),
-        ("ttft_timeout", "cancelled"),
-        ("server_rejected", None),
-        ("incompatible", "server_rejected"),
-    ]:
-        survivor = copy.deepcopy(run)
-        survivor.update(
-            {
-                "run_status": status,
-                "task_success": False,
-                "score_eligible": False,
-                "failure_reason": wrong_reason,
-            }
+        return candidate
+
+    def status_fixture(status: str) -> dict[str, Any]:
+        if status == "complete":
+            return copy.deepcopy(run)
+        if status == "interrupted":
+            return partial_interrupted_run(profile_hash, profile)
+        if status == "cancelled":
+            return status_record(
+                valid_run(profile_hash, profile, "baseline_v0.1", 1, "quick"),
+                "cancelled",
+                profile,
+            )
+        if status == "invalid_sequence":
+            return zero_event_failure("invalid_sequence", "invalid_sequence")
+        if status == "not_started":
+            return not_started_run(profile_hash, profile)
+        return zero_event_failure(status, next(iter(ALLOWED_FAILURE_REASONS_BY_STATUS[status])))
+
+    for status, allowed_reasons in ALLOWED_FAILURE_REASONS_BY_STATUS.items():
+        fixture = status_fixture(status)
+        for reason in FAILURE_REASON_DOMAIN:
+            candidate = copy.deepcopy(fixture)
+            candidate["failure_reason"] = reason
+            if reason in allowed_reasons:
+                expect_valid(schemas["run-record"], candidate, f"{status} allowed reason {reason}")
+            else:
+                expect_invalid(schemas["run-record"], candidate, f"{status} forbidden reason {reason}")
+
+    # Each branch gets one reason-only mutation from a fixture that already has
+    # the branch's valid status/event/metric topology.  Removing that branch's
+    # reason constraint must therefore turn this suite red rather than being
+    # masked by an unrelated receipt or evidence failure.
+    attributable_wrong_reason = {
+        "complete": "contract_mismatch",
+        "interrupted": "cancelled",
+        "cancelled": "stream_interrupted",
+        "incompatible": "server_rejected",
+        "invalid_sequence": "cancelled",
+        "ttft_timeout": "cancelled",
+        "server_rejected": None,
+        "not_started": None,
+    }
+    for status, wrong_reason in attributable_wrong_reason.items():
+        candidate = status_fixture(status)
+        candidate["failure_reason"] = wrong_reason
+        expect_invalid(schemas["run-record"], candidate, f"{status} attributable wrong reason")
+    for status, wrong_reason in attributable_wrong_reason.items():
+        patched_schema = copy.deepcopy(schemas["run-record"])
+        patched_branch = False
+        for branch in patched_schema["allOf"]:
+            status_const = (
+                branch.get("if", {})
+                .get("properties", {})
+                .get("run_status", {})
+                .get("const")
+            )
+            if status_const == status:
+                branch["then"].get("properties", {}).pop("failure_reason", None)
+                patched_branch = True
+                break
+        if not patched_branch:
+            raise AssertionError(f"missing failure-reason branch for {status}")
+        candidate = status_fixture(status)
+        candidate["failure_reason"] = wrong_reason
+        expect_failure(
+            lambda candidate=candidate, patched_schema=patched_schema, status=status: expect_invalid(
+                patched_schema,
+                candidate,
+                f"{status} patched reason constraint",
+            ),
+            f"{status} reason constraint attribution",
         )
-        expect_invalid(schemas["run-record"], survivor, f"{status} wrong failure reason survivor")
     checks.append("closed failure status/reason/receipt/event/metric topology")
+    checks.append("all eight status reason domains and attributable branch regressions")
     invalid_sequence = copy.deepcopy(run)
     invalid_sequence.update(
         {
@@ -1863,6 +2377,86 @@ def main() -> int:
                 encoding="utf-8",
             )
 
+        def mutate_partial_missing_failure(path: Path) -> None:
+            events = [
+                json.loads(line)
+                for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            for index, event in enumerate(events):
+                if event["run_id"] == "run-quick-01" and event["event_type"] == "run_failed":
+                    events.pop(index)
+                    break
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+
+        def mutate_not_started_evidence(path: Path) -> None:
+            events = [
+                json.loads(line)
+                for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            source = next(event for event in events if event["run_id"] == "run-quick-02")
+            forged = copy.deepcopy(source)
+            forged["run_id"] = "run-quick-01"
+            forged["run_index"] = 1
+            forged["condition_id"] = "baseline_v0.1"
+            events.append(forged)
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+
+        def shift_run_timeline(path: Path, run_id: str, new_t0: int) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            row = next(row for row in rows if row["run_id"] == run_id)
+            old_t0 = parse_integer(row["t0_monotonic_ns"], "t0_monotonic_ns", nullable=False)
+            delta = new_t0 - old_t0
+            row["t0_monotonic_ns"] = str(new_t0)
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+            events = [
+                json.loads(line)
+                for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            for event in events:
+                if event["run_id"] != run_id:
+                    continue
+                event["client_monotonic_ns"] += delta
+                if event["event_type"] == "run_started":
+                    event["details"]["t0_monotonic_ns"] = new_t0
+                elif event["event_type"] == "terminal_event":
+                    event["details"]["t0_monotonic_ns"] = new_t0
+                    event["details"]["client_monotonic_ns"] += delta
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+
+        def mutate_interrun_overlap(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            first_t0 = parse_integer(
+                next(row for row in rows if row["run_id"] == "run-quick-01")["t0_monotonic_ns"],
+                "t0_monotonic_ns",
+                nullable=False,
+            )
+            shift_run_timeline(path, "run-quick-02", first_t0)
+
+        def mutate_interrun_reorder(path: Path) -> None:
+            events = [
+                json.loads(line)
+                for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            run3_terminal = next(
+                event["client_monotonic_ns"]
+                for event in events
+                if event["run_id"] == "run-quick-03" and event["event_type"] == "terminal_event"
+            )
+            shift_run_timeline(path, "run-quick-02", run3_terminal + 1_000_000_000)
+
         def rewrite_summary_report(path: Path, rows: list[dict[str, str]], campaign_mode: str = "quick") -> None:
             parsed_runs = [csv_row_to_run(row) for row in rows]
             summary = compute_summary_rows(parsed_runs, profile, campaign_mode, "complete")
@@ -1922,7 +2516,75 @@ def main() -> int:
 
         build_e2e_bundle(bundle, profile, profile_hash)
         mutate_observed_jitter(bundle)
+        refresh_bundle_metadata_for_test(bundle, profile)
+        refresh_bundle_manifest(bundle)
         verify_e2e_bundle(bundle, profile, profile_hash)
+
+        acceptance_bundle = bundle / "acceptance"
+        acceptance_bundle.mkdir()
+        build_e2e_bundle(acceptance_bundle, profile, profile_hash, "acceptance")
+        assert not (acceptance_bundle / "terminal_receipts.json").exists()
+        verify_e2e_bundle(acceptance_bundle, profile, profile_hash)
+
+        mixed_acceptance_bundle = bundle / "acceptance-mixed"
+        mixed_acceptance_bundle.mkdir()
+        build_e2e_bundle(
+            mixed_acceptance_bundle,
+            profile,
+            profile_hash,
+            "acceptance",
+            {2: "incompatible", 5: "incompatible", 8: "incompatible"},
+        )
+        verify_e2e_bundle(mixed_acceptance_bundle, profile, profile_hash)
+        mixed_summary = read_csv(mixed_acceptance_bundle / "summary.csv", SUMMARY_COLUMNS)
+        slow_row = next(row for row in mixed_summary if row["condition_id"] == "slow_v0.1")
+        baseline_row = next(row for row in mixed_summary if row["condition_id"] == "baseline_v0.1")
+        unstable_row = next(row for row in mixed_summary if row["condition_id"] == "unstable_v0.1")
+        assert (
+            mixed_summary[0]["campaign_status"] == "complete"
+            and slow_row["attempted_runs"] == "3"
+            and slow_row["successful_runs"] == "0"
+            and slow_row["failed_runs"] == "3"
+            and slow_row["rpi"] == ""
+            and baseline_row["rpi"] != ""
+            and unstable_row["rpi"] != ""
+        )
+
+        partial_bundle = bundle / "partial-interrupted"
+        partial_bundle.mkdir()
+        build_e2e_bundle(partial_bundle, profile, profile_hash, "quick", {1: "interrupted"})
+        assert not (partial_bundle / "summary_partial.csv").exists()
+        verify_e2e_bundle(partial_bundle, profile, profile_hash)
+
+        cancelled_bundle = bundle / "partial-cancelled"
+        cancelled_bundle.mkdir()
+        build_e2e_bundle(
+            cancelled_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {1: "cancelled", 2: "not_started", 3: "not_started"},
+        )
+        verify_e2e_bundle(cancelled_bundle, profile, profile_hash)
+
+        failed_bundle = bundle / "partial-server-rejected"
+        failed_bundle.mkdir()
+        build_e2e_bundle(
+            failed_bundle,
+            profile,
+            profile_hash,
+            "quick",
+            {1: "server_rejected", 2: "not_started", 3: "not_started"},
+            "failed",
+        )
+        verify_e2e_bundle(failed_bundle, profile, profile_hash)
+        failed_summary = read_csv(failed_bundle / "summary.csv", SUMMARY_COLUMNS)
+        assert all(row["campaign_status"] == "failed" and row["rpi"] == "" for row in failed_summary)
+
+        not_started_bundle = bundle / "partial-not-started"
+        not_started_bundle.mkdir()
+        build_e2e_bundle(not_started_bundle, profile, profile_hash, "quick", {1: "not_started"})
+        verify_e2e_bundle(not_started_bundle, profile, profile_hash)
 
         def mutate_duplicate_run_row(path: Path) -> None:
             rows = read_csv(path / "runs.csv", RUN_COLUMNS)
@@ -1999,6 +2661,13 @@ def main() -> int:
             report = (path / "report.html").read_text(encoding="utf-8")
             (path / "report.html").write_text(
                 '<script src="https://example.invalid/remote.js"></script>' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_remote_image(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<img src="https://example.invalid/tracker.png">' + report,
                 encoding="utf-8",
             )
 
@@ -2125,6 +2794,34 @@ def main() -> int:
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal timestamp tamper", mutate_terminal_timestamp)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal-before-content ordering", mutate_terminal_before_content)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "start-after-terminal ordering", mutate_start_after_terminal)
+        mutate_existing_bundle_and_expect_failure(
+            partial_bundle,
+            profile,
+            profile_hash,
+            "partial interrupted missing failure event",
+            mutate_partial_missing_failure,
+        )
+        mutate_existing_bundle_and_expect_failure(
+            not_started_bundle,
+            profile,
+            profile_hash,
+            "not-started raw evidence",
+            mutate_not_started_evidence,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "inter-run overlap/cooldown",
+            mutate_interrun_overlap,
+        )
+        mutate_and_expect_bundle_failure(
+            bundle,
+            profile,
+            profile_hash,
+            "inter-run reorder/cooldown",
+            mutate_interrun_reorder,
+        )
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "duplicate run row/cardinality", mutate_duplicate_run_row)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "Acceptance three-run plan forgery", mutate_acceptance_mode_three_runs)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "unsupported run-failed event", mutate_run_failed_event)
@@ -2141,6 +2838,7 @@ def main() -> int:
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "summary.csv tamper", mutate_summary)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "report tamper", mutate_report)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "remote report script", mutate_report_remote_script)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "remote report image", mutate_report_remote_image)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "duplicate canonical report summary", mutate_report_duplicate_summary)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "forged visible report RPI", mutate_report_visible_rpi)
         mutate_and_expect_bundle_failure(
@@ -2157,9 +2855,11 @@ def main() -> int:
             "clock timestamp regression",
             lambda path: _mutate_event_timestamp_regression(path),
         )
-    checks.append("actual events/terminal/runs/summary/RPI/report chain, formal run schema and tamper stages")
+    checks.append("actual complete/partial/failure/not-started events/runs/summary/RPI/report chains and formal run schema")
+    checks.append("Quick and full 9-run Acceptance positives, mixed-eligibility RPI and 3-run Acceptance forgery negative")
+    checks.append("observed timestamp jitter is accepted only after raw-metric recomputation")
     checks.append("event schema/unit, receipt vocabulary/counts, timestamp/order and frozen-plan cardinality negatives")
-    checks.append("clock-domain splice and timestamp-regression evidence negatives")
+    checks.append("clock-domain splice, timestamp-regression and inter-run cooldown chronology negatives")
 
     print(f"PASS: {len(checks)} contract checks")
     for item in checks:
