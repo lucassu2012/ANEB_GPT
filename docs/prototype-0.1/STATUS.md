@@ -1,7 +1,7 @@
 # ANEB Prototype 0.1 — Program Status
 
 Last PMO update: **2026-08-28**  
-Program state: **G0 — SPEC REVIEW**  
+Program state: **G0 — BLOCKED (SPEC REJECTED)**  
 Product Owner: Lucas  
 Program issue: #13
 
@@ -11,13 +11,15 @@ The product direction has been narrowed and approved. A single product baseline,
 
 The Master PMO dispatch has been delivered to issues #14–#18 through their existing Codex tasks, and every active workstream has posted a durable first acknowledgement to its GitHub issue. The legacy strategy task is frozen. The exact legacy `GitHub Mention: Cloud continuation...` task was not found in the active or archived task index, so no task-to-task delivery is claimed for it; its old scope remains frozen by the Prototype 0.1 governance boundary.
 
+Issue #14 has completed its independent review of frozen PR #20 head `f23d9ca`. The overall verdict is `REJECT`: three files are approved, six require changes and eight are rejected. G0 is blocked pending five Product Owner decisions and a new exact review head with positive and negative contract evidence.
+
 No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains valuable baseline capability, but it is not counted as Prototype 0.1 completion until it satisfies the frozen end-to-end release contract.
 
 ## Gate board
 
 | Gate | State | Evidence | Exit condition |
 |---|---|---|---|
-| G0 — Specification freeze | `REVIEW` | PR #20 at `f23d9ca`; issue #14 | resolve proven spec blockers, approve specs, append decision-log entries, merge specs to integration branch |
+| G0 — Specification freeze | `BLOCKED` | [#14 final review](https://github.com/lucassu2012/ANEB_GPT/issues/14#issuecomment-5447769967); PR #20 at `f23d9ca` | PO decisions DN-1–DN-5, revised exact head, passing positive/negative review, decision-log entries, specs merged |
 | G1 — Core deterministic contract | `BACKLOG` | issue #15 | tested workload/conditions/capability/receipts |
 | G2 — Android vertical slice | `BACKLOG` | issue #16 | Quick + Acceptance campaign and metric gates pass |
 | G3 — Fixed Windows package | `BACKLOG` | issue #17 | self-contained candidate launches from fresh directory |
@@ -29,8 +31,8 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
-| #13 | `20260803_ANEB开发策略与质量_v2` | `IN_PROGRESS` | dispatch receipt and first acknowledgements recorded in issue #13 | G0 review pending |
-| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS` | 17-file review and schedule-hash recomputation in progress | two candidate G0-blocking gaps under review |
+| #13 | `20260803_ANEB开发策略与质量_v2` | `IN_PROGRESS` | dispatch receipt, status PR and [PO decision packet](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5447786590) recorded | waits for DN-1–DN-5 |
+| #14 | `20260710_智能体网络诉求` | `BLOCKED` | 17-file review complete: 3 approve / 6 changes / 8 reject | waits for PO decisions and revised exact head |
 | #15 | `20260715_开发ANEB系统` | `WAITING_G0` | read-only gap analysis and six-part test plan complete | waits for #14 contract freeze; implementation forbidden before G0 |
 | #16 | `20260714_设计ANEB 手机APP界面` | `WAITING_ON_14_15` | dispatch acknowledged; read-only gap/vector mapping only | waits for #14 freeze and #15 versioned interface |
 | #17 | `20260804_ANEB_试点产品体验与上线缺口` | `IN_PROGRESS_SKELETON` | offline verifier/finalizer/launcher/report skeleton started | final ZIP waits for fixed #15 server and #16 APK |
@@ -64,14 +66,11 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 ## Current primary blocker
 
-`G0` cannot pass until issue #14 finishes its independent review, proven blocking defects are resolved, and accepted Product Owner decisions are appended to `docs/DECISION_LOG.md`.
+`G0` cannot pass because issue #14 rejected the current exact review head. The three schedule hashes recompute correctly, but the contracts do not yet force independent implementations to produce the same capability set, run eligibility, evidence chain or RPI.
 
-Issue #14 has currently recorded two candidate blockers:
+The deterministic defects include incomplete canonical schedule-byte rules, capability-condition uniqueness, run-mode/index and score-eligibility constraints, clock/hash/null semantics, raw-event-to-report recomputation, and a release layout that names a nonexistent contract file.
 
-1. the canonical schedule byte serialization is not fully frozen in the prose/manifest contract; and
-2. the capability schema limits the condition array length to three but does not yet enforce exactly one `baseline`, one `slow` and one `unstable` condition.
-
-These are review findings, not yet Product Owner decisions. They do not authorize implementation or a gate advance.
+Five remaining choices alter measurement/evidence schema, scoring or the release gate and therefore require Product Owner decisions: Android monotonic clock boundaries, even-sample median, canonical hash identity, RPI null-reason representation/verifier authority, and the packaged contract set. The [decision packet](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5447786590) contains 2–3 options, a recommendation and schedule impact for each.
 
 There is no current hardware, administrator-rights, cloud-node, PCAP or third-party-App blocker for Prototype 0.1.
 
@@ -89,12 +88,13 @@ There is no current hardware, administrator-rights, cloud-node, PCAP or third-pa
 
 ## Next PMO actions
 
-1. collect #14 per-file verdicts and resolve only proven G0-blocking contradictions;
+1. obtain Product Owner decisions DN-1–DN-5; PMO recommends A/A/A/A/A;
 2. keep #15 and #16 waiting until the binding contracts are frozen;
-3. track #17 skeleton output and #18 selective-reuse evidence without allowing fabricated artifacts, device work or a second product line;
-4. append only approved scope/score/evidence/claim/governance decisions to the decision log;
-5. merge PR #20 to `product/prototype-0.1` only after G0 review evidence is complete;
-6. advance G1–G6 only from issue-bound evidence and exact candidate receipts.
+3. have SPEC revise only the 17 binding files, publish an exact change map and rerun the required positive/negative vectors;
+4. track #17 skeleton output and #18 selective-reuse evidence without allowing fabricated artifacts, device work or a second product line;
+5. append only approved scope/score/evidence/claim/governance decisions to the decision log;
+6. merge PR #20 to `product/prototype-0.1` only after the new exact head passes #14 re-review;
+7. advance G1–G6 only from issue-bound evidence and exact candidate receipts.
 
 ## Dispatch receipt — 2026-08-28
 
