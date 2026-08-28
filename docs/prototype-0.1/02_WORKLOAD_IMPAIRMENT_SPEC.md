@@ -220,6 +220,18 @@ A run request contains only versioned identifiers and run metadata. Arbitrary cl
 
 No failure duration is replaced by a timeout cap for aggregation. Available partial observations may be shown diagnostically but mandatory missing measurements remain `null`.
 
+The status-to-reason mapping is closed and normative: `interrupted` uses
+`stream_interrupted`; `cancelled` uses `cancelled`; `ttft_timeout` uses
+`ttft_timeout`; `server_rejected` uses `server_rejected`; `invalid_sequence`
+uses `invalid_sequence`; and `not_started` uses `not_started`. `incompatible`
+uses `contract_mismatch`, except that an independently detected clock-domain
+failure may use `clock_domain_invalid` or `clock_domain_mismatch`. Every
+non-success status has `task_success=false`, `score_eligible=false` and a
+terminal receipt value of `false` or `null`. `incompatible`, `ttft_timeout` and
+`server_rejected` have zero received events and all metric fields `null`;
+`cancelled` follows the interrupted field-by-field partial matrix in the
+metrics specification. A valid receipt is never accepted for a failed status.
+
 ## 8. Naming restrictions
 
 Allowed descriptions:

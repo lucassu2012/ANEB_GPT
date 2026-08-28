@@ -263,6 +263,13 @@ A verifier must reject:
 
 - One `campaign_id` across all files.
 - One immutable `run_id` per planned run.
+- Every raw event, nested terminal-event details, terminal receipt and run row
+  must agree on `campaign_id`, `run_id`, campaign mode/index, condition
+  id/version/nominal interval, profile/schedule hashes and (for scoring) the
+  same `clock_domain_id` and `t0_monotonic_ns`; a downstream coordinated
+  rewrite cannot establish identity.
+- Event types outside the v0.1 allow-list are rejected unless explicitly
+  namespaced as `diagnostic.*` and excluded from scoring.
 - Profile, condition id/version/nominal interval and schedule hashes match the
   four contracts and server receipts exactly (bare lowercase hex; no
   `sha256:` prefix).

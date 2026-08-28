@@ -167,6 +167,8 @@ PASS when an automated verifier confirms:
 - all mandatory files exist;
 - hashes and sizes match;
 - campaign/run/condition identities agree across files;
+- every `runs.csv` row reconstructs and passes the formal
+  `run-record.schema.json` contract before recomputation;
 - summaries recompute from run records;
 - report values agree with canonical data;
 - raw Android events plus the matching terminal receipt recompute per-run

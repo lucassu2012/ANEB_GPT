@@ -177,8 +177,9 @@ derived from valid same-domain events; it does not authorize a synthetic zero.
 | Observation state | `ttft_ms` | `completion_ms` | `stream_span_ms` | `stream_event_rate_eps` | `stall_threshold_ms` | `stall_count` / `stall_duration_ms` / `stall_fraction` | score eligibility |
 |---|---|---|---|---|---|---|---|
 | no valid content event / not started | `null` | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
-| one valid content event, then interrupted | numeric > 0 | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
-| 2–120 valid events, terminal missing/invalid | numeric > 0 | `null` | numeric > 0 | numeric > 0 | numeric > 0 | numeric / numeric ≥ 0 / numeric `[0,1]` | false |
+| incompatible / TTFT timeout / server rejected before traffic | `null` | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
+| one valid content event, then interrupted/cancelled | numeric > 0 | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
+| 2–120 valid events, terminal missing/invalid (interrupted/cancelled) | numeric > 0 | `null` | numeric > 0 | numeric > 0 | numeric > 0 | numeric / numeric ≥ 0 / numeric `[0,1]` | false |
 | valid terminal + 120 valid events | numeric > 0 | numeric > 0 | numeric > 0 | numeric > 0 | numeric > 0 | numeric / numeric ≥ 0 / numeric `[0,1]` | true only if every contract gate passes |
 | clock domain invalid/mismatched or timestamp regression | `null` | `null` | `null` | `null` | `null` | `null` / `null` / `null` | false |
 

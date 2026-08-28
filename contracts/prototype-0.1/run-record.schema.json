@@ -482,7 +482,28 @@
     {
       "if": {
         "properties": {
-          "run_status": {"const": "interrupted"},
+          "run_status": {"const": "cancelled"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "task_success": {"const": false},
+          "score_eligible": {"const": false},
+          "terminal_receipt_valid": {"enum": [false, null]},
+          "failure_reason": {"const": "cancelled"},
+          "metrics": {
+            "properties": {
+              "completion_ms": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"enum": ["interrupted", "cancelled"]},
           "events_received": {"const": 0}
         },
         "required": ["run_status", "events_received"]
@@ -507,7 +528,7 @@
     {
       "if": {
         "properties": {
-          "run_status": {"const": "interrupted"},
+          "run_status": {"enum": ["interrupted", "cancelled"]},
           "events_received": {"const": 1}
         },
         "required": ["run_status", "events_received"]
@@ -532,7 +553,7 @@
     {
       "if": {
         "properties": {
-          "run_status": {"const": "interrupted"},
+          "run_status": {"enum": ["interrupted", "cancelled"]},
           "events_received": {"minimum": 2}
         },
         "required": ["run_status", "events_received"]
@@ -611,14 +632,15 @@
     {
       "if": {
         "properties": {
-          "failure_reason": {"const": "invalid_evidence"}
+          "run_status": {"enum": ["incompatible", "ttft_timeout", "server_rejected"]}
         },
-        "required": ["failure_reason"]
+        "required": ["run_status"]
       },
       "then": {
         "properties": {
           "task_success": {"const": false},
           "score_eligible": {"const": false},
+          "events_received": {"const": 0},
           "terminal_receipt_valid": {"enum": [false, null]},
           "metrics": {
             "properties": {
@@ -631,6 +653,47 @@
               "stall_duration_ms": {"type": "null"},
               "stall_fraction": {"type": "null"}
             }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "ttft_timeout"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "failure_reason": {"const": "ttft_timeout"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "server_rejected"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "failure_reason": {"const": "server_rejected"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {"const": "incompatible"}
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "failure_reason": {
+            "enum": ["contract_mismatch", "clock_domain_invalid", "clock_domain_mismatch", "invalid_evidence"]
           }
         }
       }

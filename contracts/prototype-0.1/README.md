@@ -33,11 +33,13 @@ These four files are the complete v0.1 machine contract package. There is no
 - validate successful, interrupted, cancelled and not-started run records;
 - prove `task_success=true` requires complete status, 120 events and a valid terminal receipt;
 - prove `score_eligible=true` requires task success;
+- enforce the closed status-to-reason mapping and failed-status receipt/event/
+  metric topology (including cancelled, timeout and server rejection);
 - reject the published duplicate-condition, prefixed-hash, invalid-index and null-success counterexamples;
 - verify Android `elapsedRealtimeNanos` boundaries, arithmetic even median and strict stall equality/`+1ns` vectors;
 - recompute parsed `events.jsonl` + terminal receipt -> run metrics -> RFC4180
-  CSV -> summary/null reasons/RPI -> embedded report summary and reject four
-  independent tamper stages;
+  CSV -> formal run-record schema -> summary/null reasons/RPI -> embedded report
+  summary and reject four independent tamper stages;
 - enforce the Product Owner-approved null precedence with
   `campaign_incomplete` before `contract_mismatch` and `invalid_evidence`,
   deduplicate reasons and set `primary_null_reason` to the first value;
