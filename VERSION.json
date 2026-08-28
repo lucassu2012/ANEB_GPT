@@ -1,0 +1,9 @@
+{
+  "format": "aneb-prototype-0.1-skeleton-release-v0",
+  "release_state": "SKELETON_NOT_RELEASE",
+  "specification_status": "G0_REJECTED",
+  "product_version": "prototype-0.1",
+  "server_artifact": "MISSING",
+  "android_artifact": "MISSING",
+  "contract_values": "PENDING_PRODUCT_OWNER_DECISION"
+}
