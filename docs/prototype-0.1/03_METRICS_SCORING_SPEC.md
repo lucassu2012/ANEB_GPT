@@ -1,7 +1,7 @@
 # 03 — Metrics and Relative Scoring Specification
 
 Status: **G0 rework — reviewable exact head**
-Primary issues: #14 and #16  
+Primary issues: #14 and #16
 Policy id: `rpi-0.1`
 
 ## 1. Measurement clock

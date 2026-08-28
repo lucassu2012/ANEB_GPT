@@ -1,9 +1,9 @@
 # ANEB Prototype 0.1 — Specification Index
 
 Status: **Product scope approved; G0 rework reviewable exact head**
-Product Owner decision date: **2026-08-28**  
-Product baseline: `ANEB_GPT/main`  
-Integration branch: `product/prototype-0.1`  
+Product Owner decision date: **2026-08-28**
+Product baseline: `ANEB_GPT/main`
+Integration branch: `product/prototype-0.1`
 Program issue: **#13**
 
 ## Product statement

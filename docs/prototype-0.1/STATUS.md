@@ -1,8 +1,8 @@
 # ANEB Prototype 0.1 — Program Status
 
-Last PMO update: **2026-08-28**  
+Last PMO update: **2026-08-28**
 Program state: **G0 — SPEC REWORK (HOLD)**
-Product Owner: Lucas  
+Product Owner: Lucas
 Program issue: #13
 
 ## Executive status

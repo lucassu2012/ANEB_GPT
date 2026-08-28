@@ -1,7 +1,7 @@
 # 00 — Product Specification
 
 Status: **G0 rework — reviewable exact head**
-Owner: Program control conversation / issue #13  
+Owner: Program control conversation / issue #13
 Approved product direction: 2026-08-28
 
 ## 1. Objective
