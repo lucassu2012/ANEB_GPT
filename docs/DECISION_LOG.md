@@ -48,6 +48,16 @@
 | D-36 | 2026-07-16 | **ANEB App 的正式测试只执行自建节点可控仿真，第三方 AI 真实 API 不进入 Profile、主测量或评分；AI 真实业务行为建模拆为独立工程并行推进。** App 负责按冻结 Profile 生成/接收确定性的上传、处理阶段、Token/音频事件并测量网络影响；独立 `aneb-ai-behavior-model` 负责从获准观测数据或显式假设拟合业务行为、生成版本化模型/金轨迹/候选 Profile。两者以模型 id、版本、哈希连接。Kimi/DeepSeek/千问仅可作业务原型标签；未经校准必须标 `hypothesis`，不得声称厂商真实性能。现有真实 API 探针不参与新 Profile 或评分，其正式产品入口去留另行裁定。 | Product Owner 明确“ANEB APP 是模拟 Kimi 等 AI 应用行为，不是真实 API；另做模型和算法模拟真实业务行为，与 App 分开并行”；`PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md` |
 | D-37 | 2026-07-16 | **批准 Profile Contract v2 的 provisional v1 质量目标、95% 达标口径、三套独立评分权重与门控作为实验性实施基线；批准真实 API 探针退出正式产品入口。** ①Token、AI 实时交互、网络综合性能各自独立出分，禁止与既有 AQS 或彼此混分；目标来源固定标 `aneb_product_provisional_v1`，后续改数值必须升 target/score policy 版本并追加决策；②必需指标缺失不重分权、分数为 null，invalid 保留原始证据但抑制聚合；③100MiB 视频使用独立 stress Profile；④正式 App 入口只展示自建节点仿真，现有真实 API 探针代码保留为开发诊断能力但不在正式导航/设置中出现、不进入 Profile 或评分。 | Product Owner 回复“按推荐方案”；D-36；`PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md` |
 
+### G0 binding decision packet — DN-1A through DN-5A (2026-08-28)
+
+| Binding ID | Approved outcome | Source |
+|---|---|---|
+| DN-1A | Android `elapsedRealtimeNanos()` is the sole measurement clock; sample at the fixed dispatch/decode boundaries, retain raw nanoseconds, and reject boot/process/clock-domain splicing. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+| DN-2A | For an even number of successful runs, median is the arithmetic mean of the two middle sorted values. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+| DN-3A | Hash identities are bare lowercase 64-hex SHA-256 values; condition identity binds the profile-manifest hash with condition id/version/nominal interval and schedule hash. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+| DN-4A | Null output has deterministic `primary_null_reason` plus ordered, deduplicated `all_null_reasons`; raw-event-to-report recomputation is the verifier authority. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+| DN-5A | VERSION/package binds exactly the four existing machine contracts; no `evidence-schema.json` artifact is invented. | Product Owner binding receipt, Issue #14 comment `5449399284` |
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

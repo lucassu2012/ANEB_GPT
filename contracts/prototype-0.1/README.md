@@ -9,6 +9,12 @@ These files are the executable counterparts of `docs/prototype-0.1/`:
 - `capabilities.schema.json` — fail-closed server capability response contract;
 - `run-record.schema.json` — canonical Android per-run measurement record.
 
+The terminal receipt is the exact object nested in
+`terminal_event.details` in `events.jsonl`; no separate receipt file is part of
+the canonical evidence bundle. Its vocabulary and field types are fixed by the
+workload/evidence specifications and the validator rejects missing, extra or
+renamed fields.
+
 These four files are the complete v0.1 machine contract package. There is no
 `evidence-schema.json` artifact; evidence directory/report rules remain in
 `docs/prototype-0.1/04_EVIDENCE_REPORT_SPEC.md`.
@@ -35,11 +41,15 @@ These four files are the complete v0.1 machine contract package. There is no
 - prove `score_eligible=true` requires task success;
 - enforce the closed status-to-reason mapping and failed-status receipt/event/
   metric topology (including cancelled, timeout and server rejection);
+- bind `mandatory_metric_missing` to the interrupted partial topology and keep
+  incompatible evidence/clock reasons in the documented exception set;
 - reject the published duplicate-condition, prefixed-hash, invalid-index and null-success counterexamples;
 - verify Android `elapsedRealtimeNanos` boundaries, arithmetic even median and strict stall equality/`+1ns` vectors;
 - recompute parsed `events.jsonl` + terminal receipt -> run metrics -> RFC4180
   CSV -> formal run-record schema -> summary/null reasons/RPI -> embedded report
-  summary and reject four independent tamper stages;
+  summary and reject identity, receipt, ordering, cardinality and tamper stages;
+- enforce the normative VERSION product fields with `contract_hashes` and
+  `schedule_hashes` for exactly these four contracts;
 - enforce the Product Owner-approved null precedence with
   `campaign_incomplete` before `contract_mismatch` and `invalid_evidence`,
   deduplicate reasons and set `primary_null_reason` to the first value;

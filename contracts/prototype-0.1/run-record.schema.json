@@ -44,7 +44,7 @@
       "maximum": 9
     },
     "profile_manifest_sha256": {
-      "const": "ed440d42dfcc849cb7bb24c52f6c0623057d83c4d97af1f86b024703eb9370eb"
+      "const": "592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b"
     },
     "condition": {
       "type": "object",
@@ -470,10 +470,38 @@
           "task_success": {"const": false},
           "score_eligible": {"const": false},
           "terminal_receipt_valid": {"enum": [false, null]},
-          "failure_reason": {"const": "stream_interrupted"},
+          "failure_reason": {"enum": ["stream_interrupted", "mandatory_metric_missing"]},
           "metrics": {
             "properties": {
               "completion_ms": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "metrics": {
+            "anyOf": [
+              {"properties": {"ttft_ms": {"type": "number"}}},
+              {"properties": {"completion_ms": {"type": "number"}}},
+              {"properties": {"stream_span_ms": {"type": "number"}}},
+              {"properties": {"stream_event_rate_eps": {"type": "number"}}},
+              {"properties": {"stall_threshold_ms": {"type": "number"}}},
+              {"properties": {"stall_count": {"type": "integer"}}},
+              {"properties": {"stall_duration_ms": {"type": "number"}}},
+              {"properties": {"stall_fraction": {"type": "number"}}}
+            ]
+          }
+        },
+        "required": ["metrics"]
+      },
+      "then": {
+        "properties": {
+          "clock": {
+            "properties": {
+              "t0_monotonic_ns": {"type": "integer", "minimum": 0}
             }
           }
         }
@@ -586,6 +614,7 @@
         "properties": {
           "task_success": {"const": false},
           "score_eligible": {"const": false},
+          "terminal_receipt_valid": {"enum": [false, null]},
           "failure_reason": {"const": "invalid_sequence"},
           "metrics": {
             "properties": {

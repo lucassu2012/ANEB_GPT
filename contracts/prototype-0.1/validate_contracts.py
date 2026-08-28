@@ -152,21 +152,18 @@ CONTRACT_FILES = [
     "score-policy.json",
 ]
 ALLOWED_EVENT_TYPES = {
-    "campaign_started",
-    "run_planned",
     "run_started",
-    "response_headers",
     "content_event",
     "terminal_event",
-    "run_completed",
     "run_failed",
     "run_cancelled",
-    "evidence_upload_started",
-    "evidence_upload_completed",
-    "campaign_completed",
-    "campaign_failed",
-    "diagnostic",
 }
+EVIDENCE_SCHEMA_VERSION = "aneb-prototype-evidence-0.1"
+PROTOCOL_VERSION = "prototype-stream-0.1"
+PROFILE_ID = "streaming_text_reference_v0.1"
+PROFILE_VERSION = "0.1"
+TERMINAL_RECEIPT_VERSION = "prototype-terminal-receipt-0.1"
+SCORING_EVENT_TYPES = {"run_started", "content_event", "terminal_event"}
 
 
 def load_json(name: str) -> dict[str, Any]:
@@ -465,7 +462,7 @@ def partial_interrupted_run(profile_hash: str, profile: dict[str, Any]) -> dict[
         "ttft_ms": 200.0,
         "completion_ms": None,
         "stream_span_ms": 50.0,
-        "stream_event_rate_eps": 2380.0,
+        "stream_event_rate_eps": 20.0,
         "stall_threshold_ms": 500,
         "stall_count": 0,
         "stall_duration_ms": 0.0,
@@ -530,9 +527,21 @@ def parse_bool(value: str, label: str) -> bool | None:
     raise ValueError(f"{label} is not a canonical boolean")
 
 
+def parse_integer(value: str, label: str, nullable: bool = True) -> int | None:
+    if value == "":
+        if nullable:
+            return None
+        raise ValueError(f"{label} is unexpectedly null")
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
+        raise ValueError(f"{label} is not canonical base-10 integer text")
+    return int(value)
+
+
 def parse_number(value: str, label: str) -> float | None:
     if value == "":
         return None
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?", value):
+        raise ValueError(f"{label} is not a canonical decimal with at most six places")
     number = float(value)
     if not math.isfinite(number):
         raise ValueError(f"{label} is not finite")
@@ -543,22 +552,21 @@ def csv_row_to_run(row: dict[str, str]) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     for key in METRIC_KEYS:
         if key == "stall_count":
-            parsed = parse_number(row[key], key)
-            metrics[key] = None if parsed is None else int(parsed)
+            metrics[key] = parse_integer(row[key], key)
         else:
             metrics[key] = parse_number(row[key], key)
-    t0 = parse_number(row["t0_monotonic_ns"], "t0_monotonic_ns")
+    t0 = parse_integer(row["t0_monotonic_ns"], "t0_monotonic_ns")
     return {
         "schema_version": row["schema_version"],
         "campaign_id": row["campaign_id"],
         "run_id": row["run_id"],
         "campaign_mode": row["campaign_mode"],
-        "run_index": int(row["run_index"]),
+        "run_index": parse_integer(row["run_index"], "run_index", nullable=False),
         "profile_manifest_sha256": row["profile_manifest_sha256"],
         "condition": {
             "id": row["condition_id"],
             "version": row["condition_version"],
-            "nominal_interval_ms": int(row["nominal_interval_ms"]),
+            "nominal_interval_ms": parse_integer(row["nominal_interval_ms"], "nominal_interval_ms", nullable=False),
         },
         "run_status": row["run_status"],
         "task_success": parse_bool(row["task_success"], "task_success"),
@@ -575,8 +583,8 @@ def csv_row_to_run(row: dict[str, str]) -> dict[str, Any]:
         },
         "attempt_started_at_utc": row["attempt_started_at_utc"] or None,
         "attempt_ended_at_utc": row["attempt_ended_at_utc"] or None,
-        "events_expected": int(row["events_expected"]),
-        "events_received": int(row["events_received"]),
+        "events_expected": parse_integer(row["events_expected"], "events_expected", nullable=False),
+        "events_received": parse_integer(row["events_received"], "events_received", nullable=False),
         "metrics": metrics,
         "schedule_hash": row["schedule_hash"],
         "terminal_receipt_valid": parse_bool(row["terminal_receipt_valid"], "terminal_receipt_valid"),
@@ -713,12 +721,14 @@ def compute_summary_rows(
             "all_null_reasons": reasons or None,
         }
         rows.append(row)
-    if not any(row["primary_null_reason"] for row in rows):
-        baseline = rows[0]
+    # RPI is decided independently for each condition row.  A failed or
+    # incomplete condition therefore gets its own null reasons without
+    # erasing eligible rows from the same complete Acceptance campaign.
+    baseline = rows[0]
+    if baseline["primary_null_reason"] is None:
         for row in rows:
-            row["rpi"] = 100 if row["condition_id"] == "baseline_v0.1" else rpi_value(
-                baseline, row, float(row["success_rate"])
-            )
+            if row["primary_null_reason"] is None:
+                row["rpi"] = rpi_value(baseline, row, float(row["success_rate"]))
     return rows
 
 
@@ -754,7 +764,7 @@ def make_event(
     condition = record["condition"]
     clock = record["clock"]
     return {
-        "schema_version": "aneb-prototype-evidence-0.1",
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
         "campaign_id": record["campaign_id"],
         "run_id": record["run_id"],
         "campaign_mode": record["campaign_mode"],
@@ -789,7 +799,6 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
         for index, condition_id in enumerate(CONDITION_ORDER, 1)
     ]
     events: list[dict[str, Any]] = []
-    receipts: dict[str, Any] = {}
     for run in runs:
         condition = run["condition"]
         clock = run["clock"]
@@ -816,7 +825,10 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
                 )
             )
         receipt = {
-            "receipt_version": "prototype-terminal-receipt-0.1",
+            "receipt_version": TERMINAL_RECEIPT_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
+            "profile_id": profile["workload"]["id"],
+            "profile_version": profile["workload"]["version"],
             "terminal_status": "complete",
             "campaign_id": run["campaign_id"],
             "run_id": run["run_id"],
@@ -824,6 +836,7 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
             "run_index": run["run_index"],
             "events_expected": 120,
             "events_received": 120,
+            "planned_event_count": 120,
             "emitted_event_count": 120,
             "profile_manifest_sha256": profile_hash,
             "condition_id": condition["id"],
@@ -831,10 +844,12 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
             "nominal_interval_ms": condition["nominal_interval_ms"],
             "schedule_hash": run["schedule_hash"],
             "clock_domain_id": clock["domain_id"],
+            "clock_source": clock["source"],
+            "clock_unit": clock["unit"],
+            "clock_epoch": clock["epoch"],
             "t0_monotonic_ns": clock["t0_monotonic_ns"],
             "client_monotonic_ns": clock["t0_monotonic_ns"] + terminal_offset * 1_000_000,
         }
-        receipts[run["run_id"]] = receipt
         events.append(
             make_event(
                 run,
@@ -846,10 +861,6 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
     with (root / "events.jsonl").open("w", encoding="utf-8", newline="\n") as handle:
         for event in events:
             handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
-    (root / "terminal_receipts.json").write_text(
-        json.dumps(receipts, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
     write_csv(root / "runs.csv", RUN_COLUMNS, [run_to_csv_row(run) for run in runs])
     # The report embeds the same decimal representation that survives the
     # RFC4180 runs.csv round trip; this makes the byte chain canonical.
@@ -866,14 +877,63 @@ def build_e2e_bundle(root: Path, profile: dict[str, Any], profile_hash: str) -> 
         }
     )
     write_csv(root / "summary_partial.csv", SUMMARY_COLUMNS, [summary_to_csv_row(partial)])
-    report_payload = {"summary": summary_rows}
+    report_payload = {"campaign_mode": "quick", "campaign_status": "complete", "summary": summary_rows}
     report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
+    visible_rpi = "".join(
+        f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
+        f'RPI: {scalar(row["rpi"])}</span>'
+        for row in summary_rows
+    )
     (root / "report.html").write_text(
         "<!doctype html><meta charset=\"utf-8\"><script id=\"canonical-summary\" "
-        "type=\"application/json\">" + report_json + "</script>\n",
+        "type=\"application/json\">" + report_json + "</script>"
+        "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
         encoding="utf-8",
     )
     return runs
+
+
+def assert_campaign_plan(runs: list[dict[str, Any]], profile: dict[str, Any], campaign_mode: str) -> dict[str, Any]:
+    plans = [plan for plan in profile["campaign_plans"] if plan["mode"] == campaign_mode]
+    if len(plans) != 1:
+        raise ValueError("campaign mode has no unique frozen plan")
+    plan = plans[0]
+    planned_order = plan["condition_order"]
+    expected_indices = list(range(1, len(planned_order) + 1))
+    if len(runs) != len(planned_order):
+        raise ValueError("run cardinality does not match the frozen campaign plan")
+    run_ids = [run["run_id"] for run in runs]
+    if len(set(run_ids)) != len(run_ids):
+        raise ValueError("run_ids are not unique")
+    indices = [run["run_index"] for run in runs]
+    if sorted(indices) != expected_indices:
+        raise ValueError("run indexes are not exactly the frozen campaign plan")
+    for run in runs:
+        index = run["run_index"]
+        if run["campaign_mode"] != campaign_mode:
+            raise ValueError("run campaign mode does not match the frozen plan")
+        expected_condition = planned_order[index - 1]
+        if run["condition"]["id"] != expected_condition:
+            raise ValueError("run condition does not match the frozen plan")
+    expected_counts = {condition_id: planned_order.count(condition_id) for condition_id in CONDITION_ORDER}
+    actual_counts = {
+        condition_id: sum(run["condition"]["id"] == condition_id for run in runs)
+        for condition_id in CONDITION_ORDER
+    }
+    if actual_counts != expected_counts:
+        raise ValueError("per-condition run counts do not match the frozen plan")
+    return plan
+
+
+def campaign_status_from_runs(runs: list[dict[str, Any]]) -> str:
+    statuses = {run["run_status"] for run in runs}
+    if statuses == {"complete"}:
+        return "complete"
+    if "cancelled" in statuses:
+        return "cancelled"
+    if statuses.intersection({"incompatible", "invalid_sequence", "ttft_timeout", "server_rejected"}):
+        return "failed"
+    return "partial"
 
 
 def verify_e2e_bundle(
@@ -888,7 +948,6 @@ def verify_e2e_bundle(
     for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines():
         if line:
             events.append(json.loads(line))
-    receipts = json.loads((root / "terminal_receipts.json").read_text(encoding="utf-8"))
     run_rows = read_csv(root / "runs.csv", RUN_COLUMNS)
     runs = [csv_row_to_run(row) for row in run_rows]
     for run in runs:
@@ -896,17 +955,38 @@ def verify_e2e_bundle(
         # records must pass the formal Draft 2020-12 run-record contract before
         # any cross-layer recomputation is accepted.
         expect_valid(run_schema, run, f"runs.csv schema_version for {run['run_id']}")
-    if not events or not isinstance(receipts, dict):
+    if not runs:
+        raise ValueError("runs.csv has no run records")
+    campaign_modes = {run["campaign_mode"] for run in runs}
+    if len(campaign_modes) != 1:
+        raise ValueError("run records disagree on campaign mode")
+    campaign_mode = next(iter(campaign_modes))
+    plan = assert_campaign_plan(runs, profile, campaign_mode)
+    campaign_status = campaign_status_from_runs(runs)
+    if not events:
         raise ValueError("raw evidence bundle is empty or malformed")
     for event in events:
+        if event.get("schema_version") != EVIDENCE_SCHEMA_VERSION:
+            raise ValueError("raw event schema_version is not the published evidence version")
         event_type = event.get("event_type")
-        if not (
-            event_type in ALLOWED_EVENT_TYPES
-            or (isinstance(event_type, str) and event_type.startswith("diagnostic."))
-        ):
+        is_diagnostic = isinstance(event_type, str) and re.fullmatch(
+            r"diagnostic\.[a-z0-9][a-z0-9._-]*", event_type
+        )
+        if not (isinstance(event_type, str) and (event_type in ALLOWED_EVENT_TYPES or is_diagnostic)):
             raise ValueError("unknown non-namespaced event type")
         if not isinstance(event.get("run_id"), str):
             raise ValueError("raw event has no run identity")
+        if event_type in SCORING_EVENT_TYPES:
+            if type(event.get("run_index")) is not int or type(event.get("nominal_interval_ms")) is not int:
+                raise ValueError("scoring event integer identity fields are not JSON integers")
+            if event.get("clock_source") != "android.os.SystemClock.elapsedRealtimeNanos":
+                raise ValueError("scoring event clock source is not Android elapsedRealtimeNanos")
+            if event.get("clock_unit") != "ns" or event.get("clock_epoch") != "device_boot":
+                raise ValueError("scoring event clock unit/epoch is not the published contract")
+            if not isinstance(event.get("clock_domain_id"), str):
+                raise ValueError("scoring event has no clock-domain identity")
+            if type(event.get("client_monotonic_ns")) is not int:
+                raise ValueError("scoring event timestamp is not a JSON integer")
     raw_campaign_ids = {event.get("campaign_id") for event in events}
     if len(raw_campaign_ids) != 1 or None in raw_campaign_ids:
         raise ValueError("raw events do not share one campaign identity")
@@ -915,8 +995,8 @@ def verify_e2e_bundle(
     for event in events:
         groups.setdefault(event["run_id"], []).append(event)
     run_ids = {run["run_id"] for run in runs}
-    if set(groups) != run_ids or set(receipts) != run_ids:
-        raise ValueError("raw event/receipt/run id sets disagree")
+    if set(groups) != run_ids:
+        raise ValueError("raw event/run id sets disagree")
     for run in runs:
         run_id = run["run_id"]
         if run["campaign_id"] != raw_campaign_id:
@@ -929,10 +1009,16 @@ def verify_e2e_bundle(
         terminal = [event for event in group if event["event_type"] == "terminal_event"]
         if len(started) != 1 or len(content) != 120 or len(terminal) != 1:
             raise ValueError("event topology is invalid")
+        scoring_types = [event["event_type"] for event in group if event["event_type"] in SCORING_EVENT_TYPES]
+        expected_types = ["run_started"] + ["content_event"] * 120 + ["terminal_event"]
+        if scoring_types != expected_types:
+            raise ValueError("per-run scoring event order is invalid")
         start = started[0]
         t0 = start["details"]["t0_monotonic_ns"]
         if t0 != run["clock"]["t0_monotonic_ns"]:
             raise ValueError("run t0 does not match raw evidence")
+        if start["client_monotonic_ns"] != t0 or start["details"].get("t0_monotonic_ns") != t0:
+            raise ValueError("run_started timestamp/t0 boundary does not match")
         identity = (
             run["campaign_id"],
             run["run_id"],
@@ -948,7 +1034,7 @@ def verify_e2e_bundle(
             run["clock"]["domain_id"],
         )
         for event in group:
-            if event.get("source") != "android" or not isinstance(event.get("client_monotonic_ns"), int):
+            if event.get("source") != "android" or type(event.get("client_monotonic_ns")) is not int:
                 raise ValueError("raw evidence source/timestamp shape mismatch")
             event_identity = (
                 event["campaign_id"],
@@ -968,22 +1054,84 @@ def verify_e2e_bundle(
                 raise ValueError("raw evidence identity mismatch")
             if event["client_monotonic_ns"] < t0:
                 raise ValueError("raw event precedes t0")
+        if any(event["event_type"] in {"run_failed", "run_cancelled"} for event in group):
+            if run["run_status"] == "complete":
+                raise ValueError("complete run has a failure/cancellation event")
         condition_id = run["condition"]["id"]
         offsets, terminal_offset = schedule_offsets(profile, condition_id)
         times: list[int] = []
         for expected_seq, (event, expected_offset) in enumerate(zip(content, offsets), 1):
             details = event["details"]
+            if type(details.get("seq")) is not int or type(details.get("planned_offset_ms")) is not int:
+                raise ValueError("content sequence/offset fields are not JSON integers")
             if details["seq"] != expected_seq or details["planned_offset_ms"] != expected_offset:
                 raise ValueError("content sequence/schedule mismatch")
             if details["payload_id"] != f"ref-{expected_seq:04d}":
                 raise ValueError("content payload identity mismatch")
-            expected_ns = t0 + expected_offset * 1_000_000
-            if event["client_monotonic_ns"] != expected_ns:
-                raise ValueError("content timestamp does not match schedule")
             times.append(event["client_monotonic_ns"])
-        receipt = receipts.get(run_id)
-        if receipt is None or terminal[0]["details"] != receipt:
-            raise ValueError("terminal receipt is absent or mismatched")
+        receipt = terminal[0]["details"]
+        if not isinstance(receipt, dict):
+            raise ValueError("terminal event does not carry a receipt object")
+        for field in [
+            "run_index",
+            "events_expected",
+            "events_received",
+            "planned_event_count",
+            "emitted_event_count",
+            "nominal_interval_ms",
+            "t0_monotonic_ns",
+            "client_monotonic_ns",
+        ]:
+            if type(receipt.get(field)) is not int:
+                raise ValueError(f"terminal receipt {field} is not a JSON integer")
+        for field in [
+            "receipt_version",
+            "protocol_version",
+            "profile_id",
+            "profile_version",
+            "terminal_status",
+            "campaign_id",
+            "run_id",
+            "campaign_mode",
+            "profile_manifest_sha256",
+            "condition_id",
+            "condition_version",
+            "schedule_hash",
+            "clock_source",
+            "clock_unit",
+            "clock_epoch",
+            "clock_domain_id",
+        ]:
+            if not isinstance(receipt.get(field), str):
+                raise ValueError(f"terminal receipt {field} is not a string")
+        expected_receipt = {
+            "receipt_version": TERMINAL_RECEIPT_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
+            "profile_id": profile["workload"]["id"],
+            "profile_version": profile["workload"]["version"],
+            "terminal_status": "complete",
+            "campaign_id": run["campaign_id"],
+            "run_id": run_id,
+            "campaign_mode": run["campaign_mode"],
+            "run_index": run["run_index"],
+            "events_expected": 120,
+            "events_received": 120,
+            "planned_event_count": 120,
+            "emitted_event_count": 120,
+            "profile_manifest_sha256": profile_hash,
+            "condition_id": run["condition"]["id"],
+            "condition_version": run["condition"]["version"],
+            "nominal_interval_ms": run["condition"]["nominal_interval_ms"],
+            "schedule_hash": run["schedule_hash"],
+            "clock_source": run["clock"]["source"],
+            "clock_unit": run["clock"]["unit"],
+            "clock_epoch": run["clock"]["epoch"],
+            "clock_domain_id": run["clock"]["domain_id"],
+            "t0_monotonic_ns": t0,
+            "client_monotonic_ns": receipt["client_monotonic_ns"],
+        }
+        if receipt != expected_receipt:
+            raise ValueError("terminal receipt fields do not match the protocol authority")
         receipt_identity = (
             receipt.get("campaign_id"),
             receipt.get("run_id"),
@@ -1002,10 +1150,18 @@ def verify_e2e_bundle(
             raise ValueError("terminal receipt identity does not match raw/run identity")
         if receipt.get("t0_monotonic_ns") != t0:
             raise ValueError("terminal receipt t0 does not match run")
-        if receipt.get("terminal_status") != "complete" or receipt.get("emitted_event_count") != 120:
-            raise ValueError("terminal receipt completion fields are invalid")
-        if receipt["client_monotonic_ns"] != t0 + terminal_offset * 1_000_000:
-            raise ValueError("terminal timestamp does not match schedule")
+        if (
+            receipt.get("terminal_status") != "complete"
+            or receipt.get("planned_event_count") != 120
+            or receipt.get("events_expected") != 120
+            or receipt.get("events_received") != 120
+            or receipt.get("emitted_event_count") != 120
+        ):
+            raise ValueError("terminal receipt completion/count fields are invalid")
+        if terminal[0]["client_monotonic_ns"] != receipt["client_monotonic_ns"]:
+            raise ValueError("terminal event timestamp does not match terminal receipt")
+        if receipt["client_monotonic_ns"] <= times[-1]:
+            raise ValueError("terminal timestamp is not after the last observed content event")
         expected = derive_raw_metrics(
             times,
             receipt["client_monotonic_ns"],
@@ -1016,10 +1172,34 @@ def verify_e2e_bundle(
             serialized_expected = float(scalar(value))
             if not math.isclose(float(run["metrics"][key]), serialized_expected, rel_tol=0, abs_tol=1e-9):
                 raise ValueError(f"runs.csv metric mismatch for {key}")
-    expected_summary = compute_summary_rows(runs, profile, "quick", "complete")
+    expected_summary = compute_summary_rows(runs, profile, campaign_mode, campaign_status)
     actual_summary = read_csv(root / "summary.csv", SUMMARY_COLUMNS)
     expected_csv = [summary_to_csv_row(row) for row in expected_summary]
+    if len(actual_summary) != len(plan["condition_order"]):
+        raise ValueError("summary.csv does not have one row per planned condition")
     for actual, expected in zip(actual_summary, expected_csv):
+        if actual["condition_id"] not in CONDITION_ORDER:
+            raise ValueError("summary contains an unknown condition")
+        if actual["campaign_mode"] != campaign_mode or actual["campaign_status"] != campaign_status:
+            raise ValueError("summary mode/status does not match raw run authority")
+        planned = parse_integer(actual["planned_runs"], f"{actual['condition_id']} planned_runs", nullable=False)
+        attempted = parse_integer(actual["attempted_runs"], f"{actual['condition_id']} attempted_runs", nullable=False)
+        successful = parse_integer(actual["successful_runs"], f"{actual['condition_id']} successful_runs", nullable=False)
+        failed = parse_integer(actual["failed_runs"], f"{actual['condition_id']} failed_runs", nullable=False)
+        not_started = parse_integer(actual["not_started_runs"], f"{actual['condition_id']} not_started_runs", nullable=False)
+        expected_planned = plan["condition_order"].count(actual["condition_id"])
+        if planned != expected_planned or not 0 <= attempted <= planned:
+            raise ValueError("summary counts exceed the frozen campaign plan")
+        if not 0 <= successful <= attempted or failed != attempted - successful or not_started != planned - attempted:
+            raise ValueError("summary success/failure counts are inconsistent with the plan")
+        if actual["success_rate"] == "":
+            raise ValueError("planned condition has no success rate")
+        parsed_rate = parse_number(actual["success_rate"], f"{actual['condition_id']} success_rate")
+        if parsed_rate is None:
+            raise ValueError("planned condition has no success rate")
+        success_rate = parsed_rate
+        if not 0 <= success_rate <= 1:
+            raise ValueError("summary success rate is outside [0,1]")
         if actual != {key: scalar(expected.get(key)) for key in SUMMARY_COLUMNS}:
             raise ValueError("summary.csv is not recomputed from runs")
         validate_null_reason_row(actual)
@@ -1032,16 +1212,33 @@ def verify_e2e_bundle(
     if partial_rows[0]["rpi"] != "" or partial_rows[0]["primary_null_reason"] != "campaign_incomplete":
         raise ValueError("partial summary null semantics mismatch")
     report_text = (root / "report.html").read_text(encoding="utf-8")
-    match = re.search(
+    if re.search(r"<script\b[^>]*\bsrc\s*=", report_text, flags=re.IGNORECASE):
+        raise ValueError("offline report contains a remote script")
+    if re.search(r"<(?:iframe|object|embed)\b", report_text, flags=re.IGNORECASE):
+        raise ValueError("offline report contains remote active content")
+    matches = re.findall(
         r'<script id="canonical-summary" type="application/json">(.*?)</script>',
         report_text,
         flags=re.DOTALL,
     )
-    if not match:
+    if len(matches) != 1:
         raise ValueError("report has no embedded canonical summary")
-    report_payload = json.loads(match.group(1))
-    if report_payload != {"summary": expected_summary}:
+    report_payload = json.loads(matches[0])
+    if report_payload != {
+        "campaign_mode": campaign_mode,
+        "campaign_status": campaign_status,
+        "summary": expected_summary,
+    }:
         raise ValueError("report summary is not the canonical summary")
+    visible = re.findall(
+        r'<span data-condition="([^"]+)" data-rpi="([^"]*)">RPI: ([^<]*)</span>',
+        report_text,
+    )
+    if len(visible) != len(expected_summary) or report_text.count("RPI:") != len(expected_summary):
+        raise ValueError("report visible RPI values are not a single canonical rendering")
+    expected_visible = [(row["condition_id"], scalar(row["rpi"]), scalar(row["rpi"])) for row in expected_summary]
+    if visible != expected_visible:
+        raise ValueError("report visible RPI values are not derived from canonical summary")
 
 
 def mutate_and_expect_bundle_failure(
@@ -1058,29 +1255,74 @@ def mutate_and_expect_bundle_failure(
 
 def version_fixture(contract_hashes: dict[str, str]) -> dict[str, Any]:
     return {
-        "schema_version": "aneb-prototype-version-0.1",
+        "product_version": "prototype-0.1",
+        "release_candidate": "rc.1",
+        "source_commit": "0" * 40,
+        "built_at_utc": "2026-08-28T00:00:00Z",
+        "server_version": "dev",
+        "android_version_name": "0.1.0",
+        "android_version_code": 1,
+        "workload_id": PROFILE_ID,
+        "condition_versions": list(CONDITION_ORDER),
         "contract_files": list(CONTRACT_FILES),
-        "contract_sha256": dict(contract_hashes),
-        "schedule_sha256": dict(EXPECTED_SCHEDULE_HASHES),
+        "contract_hashes": dict(contract_hashes),
+        "schedule_hashes": dict(EXPECTED_SCHEDULE_HASHES),
+        "evidence_schema": EVIDENCE_SCHEMA_VERSION,
+        "score_policy": "rpi-0.1",
     }
 
 
 def validate_version_fixture(version: dict[str, Any], contract_hashes: dict[str, str]) -> None:
-    if version.get("schema_version") != "aneb-prototype-version-0.1":
-        raise ValueError("VERSION schema version is not exact")
+    required = {
+        "product_version",
+        "release_candidate",
+        "source_commit",
+        "built_at_utc",
+        "server_version",
+        "android_version_name",
+        "android_version_code",
+        "workload_id",
+        "condition_versions",
+        "contract_files",
+        "contract_hashes",
+        "schedule_hashes",
+        "evidence_schema",
+        "score_policy",
+    }
+    if not required.issubset(version):
+        raise ValueError("VERSION is missing a normative field")
+    if version["product_version"] != "prototype-0.1" or version["workload_id"] != PROFILE_ID:
+        raise ValueError("VERSION product/workload identity is not exact")
+    if version["condition_versions"] != CONDITION_ORDER:
+        raise ValueError("VERSION condition order is not exact")
+    if not isinstance(version["source_commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", version["source_commit"]):
+        raise ValueError("VERSION source_commit is not a bare 40-hex value")
+    if not isinstance(version["android_version_code"], int) or version["android_version_code"] < 1:
+        raise ValueError("VERSION android version code is invalid")
+    if version["evidence_schema"] != EVIDENCE_SCHEMA_VERSION or version["score_policy"] != "rpi-0.1":
+        raise ValueError("VERSION evidence/score identity is not exact")
     if version["contract_files"] != CONTRACT_FILES:
         raise ValueError("VERSION contract set/order is not exact")
-    if set(version["contract_sha256"]) != set(CONTRACT_FILES):
+    if set(version["contract_hashes"]) != set(CONTRACT_FILES):
         raise ValueError("VERSION contract hash set is not exact")
-    if version["contract_sha256"] != contract_hashes:
+    if version["contract_hashes"] != contract_hashes:
         raise ValueError("VERSION contract hashes do not match canonical bytes")
-    if version["schedule_sha256"] != EXPECTED_SCHEDULE_HASHES:
+    if set(version["schedule_hashes"]) != set(EXPECTED_SCHEDULE_HASHES):
+        raise ValueError("VERSION schedule hash set is not exact")
+    if version["schedule_hashes"] != EXPECTED_SCHEDULE_HASHES:
         raise ValueError("VERSION schedule hash bindings do not match")
     if "evidence-schema.json" in version["contract_files"]:
         raise ValueError("evidence-schema.json is outside the four-contract package")
 
 
 def assert_manifest_oracle(profile: dict[str, Any]) -> None:
+    binding = profile["condition_binding"]
+    if binding["binding"] != "profile_manifest_sha256_plus_condition_id_version_nominal_interval_plus_schedule_sha256":
+        raise AssertionError("condition binding description omits nominal interval or drifts")
+    if binding["identity_fields"] != ["id", "version", "nominal_interval_ms", "schedule_sha256"]:
+        raise AssertionError("condition identity fields drift")
+    if binding["separate_condition_hash"] is not False:
+        raise AssertionError("separate condition hash is outside the contract")
     if [item["id"] for item in profile["conditions"]] != CONDITION_ORDER:
         raise AssertionError("manifest condition order drift")
     for condition_id in CONDITION_ORDER:
@@ -1122,7 +1364,7 @@ def main() -> int:
     checks: list[str] = ["Draft 2020-12 schemas valid"]
 
     profile_hash = hashlib.sha256(canonical_file_bytes("profile-manifest.json")).hexdigest()
-    assert profile_hash == "ed440d42dfcc849cb7bb24c52f6c0623057d83c4d97af1f86b024703eb9370eb"
+    assert profile_hash == "592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b"
     assert policy["policy_id"] == "rpi-0.1"
     assert policy["display_name"] == "Relative Prototype Index (same-campaign synthetic comparison)"
     assert policy["success_rate_definition"] == "current_condition_successful_runs_divided_by_current_condition_planned_runs"
@@ -1160,7 +1402,11 @@ def main() -> int:
     bad_version = copy.deepcopy(version)
     bad_version["contract_files"].append("evidence-schema.json")
     expect_failure(lambda: validate_version_fixture(bad_version, contract_hashes), "VERSION evidence-schema package")
-    checks.append("VERSION exact four-contract set/hash fixture")
+    legacy_version = copy.deepcopy(version)
+    legacy_version["contract_sha256"] = legacy_version.pop("contract_hashes")
+    legacy_version["schedule_sha256"] = legacy_version.pop("schedule_hashes")
+    expect_failure(lambda: validate_version_fixture(legacy_version, contract_hashes), "VERSION legacy hash shape")
+    checks.append("VERSION normative product fields and exact four-contract set/hash fixture")
 
     capabilities = valid_capabilities(profile_hash, profile)
     expect_valid(schemas["capabilities"], capabilities, "canonical capabilities")
@@ -1231,7 +1477,22 @@ def main() -> int:
         }
     )
     expect_invalid(schemas["run-record"], interrupted_survivor, "interrupted valid-receipt/null-reason survivor")
-    expect_valid(schemas["run-record"], partial_interrupted_run(profile_hash, profile), "partial interrupted matrix")
+    partial = partial_interrupted_run(profile_hash, profile)
+    expect_valid(schemas["run-record"], partial, "partial interrupted matrix")
+    partial_t0 = partial["clock"]["t0_monotonic_ns"]
+    partial_expected = derive_raw_metrics(
+        [partial_t0 + 200_000_000, partial_t0 + 250_000_000],
+        partial_t0 + 250_000_000,
+        50,
+        partial_t0,
+    )
+    assert partial["metrics"]["stream_event_rate_eps"] == partial_expected["stream_event_rate_eps"] == 20.0
+    mandatory_missing = partial_interrupted_run(profile_hash, profile)
+    mandatory_missing["failure_reason"] = "mandatory_metric_missing"
+    expect_valid(schemas["run-record"], mandatory_missing, "interrupted mandatory metric missing topology")
+    interrupted_null_t0 = copy.deepcopy(partial_interrupted_run(profile_hash, profile))
+    interrupted_null_t0["clock"]["t0_monotonic_ns"] = None
+    expect_invalid(schemas["run-record"], interrupted_null_t0, "interrupted numeric metrics without t0")
     for status, reason in [
         ("cancelled", "cancelled"),
         ("ttft_timeout", "ttft_timeout"),
@@ -1255,6 +1516,9 @@ def main() -> int:
     cancelled_partial["run_status"] = "cancelled"
     cancelled_partial["failure_reason"] = "cancelled"
     expect_valid(schemas["run-record"], cancelled_partial, "cancelled partial matrix")
+    cancelled_null_t0 = copy.deepcopy(cancelled_partial)
+    cancelled_null_t0["clock"]["t0_monotonic_ns"] = None
+    expect_invalid(schemas["run-record"], cancelled_null_t0, "cancelled numeric metrics without t0")
     for status, wrong_reason in [
         ("cancelled", "stream_interrupted"),
         ("cancelled", None),
@@ -1285,6 +1549,9 @@ def main() -> int:
         }
     )
     expect_valid(schemas["run-record"], invalid_sequence, "invalid sequence all-null matrix")
+    invalid_sequence_receipt = copy.deepcopy(invalid_sequence)
+    invalid_sequence_receipt["terminal_receipt_valid"] = True
+    expect_invalid(schemas["run-record"], invalid_sequence_receipt, "invalid sequence valid receipt survivor")
     invalid_sequence_numeric = copy.deepcopy(invalid_sequence)
     invalid_sequence_numeric["metrics"]["ttft_ms"] = 1.0
     expect_invalid(schemas["run-record"], invalid_sequence_numeric, "invalid sequence retained metrics")
@@ -1364,16 +1631,53 @@ def main() -> int:
     checks.append("absolute t0 deltas, UTC independence, regression, strict stall and median")
     checks.append("ordered/deduplicated null reasons and primary-first precedence")
 
+    acceptance_runs = [
+        valid_run(
+            profile_hash,
+            profile,
+            run_index=index,
+            campaign_mode="acceptance",
+            run_id=f"run-acceptance-{index:02d}",
+            t0_ns=9_100_000_000_000 + index * 1_000_000_000,
+        )
+        for index in range(1, 10)
+    ]
+    mixed_acceptance = acceptance_runs[:]
+    for failed_index in [1, 4, 7]:
+        mixed_acceptance[failed_index] = copy.deepcopy(mixed_acceptance[failed_index])
+        mixed_acceptance[failed_index].update(
+            {
+                "run_status": "incompatible",
+                "task_success": False,
+                "score_eligible": False,
+                "events_received": 0,
+                "terminal_receipt_valid": None,
+                "failure_reason": "contract_mismatch",
+                "metrics": {key: None for key in METRIC_KEYS},
+            }
+        )
+    mixed_rows = compute_summary_rows(mixed_acceptance, profile, "acceptance", "complete")
+    assert mixed_rows[0]["rpi"] is not None and mixed_rows[0]["primary_null_reason"] is None
+    assert mixed_rows[1]["rpi"] is None and mixed_rows[1]["primary_null_reason"] is not None
+    assert mixed_rows[2]["rpi"] is not None and mixed_rows[2]["primary_null_reason"] is None
+    checks.append("mixed-eligibility Acceptance RPI is computed per row")
+
     with tempfile.TemporaryDirectory(prefix="aneb-prototype-evidence-") as directory:
         bundle = Path(directory)
         build_e2e_bundle(bundle, profile, profile_hash)
+        assert not (bundle / "terminal_receipts.json").exists()
         verify_e2e_bundle(bundle, profile, profile_hash)
 
         def mutate_raw(path: Path) -> None:
             lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
             for index, line in enumerate(lines):
                 event = json.loads(line)
-                if event["event_type"] == "content_event" and event["details"]["seq"] == 2:
+                # Change the first observed arrival so the derived TTFT must
+                # disagree with the published runs.csv metrics.  A middle
+                # event may legitimately jitter when the metrics are
+                # recomputed from raw observations (planned offsets are not
+                # observed timestamps).
+                if event["event_type"] == "content_event" and event["details"]["seq"] == 1:
                     event["client_monotonic_ns"] += 1_000_000
                     lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
                     break
@@ -1390,24 +1694,19 @@ def main() -> int:
             (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         def mutate_terminal(path: Path) -> None:
-            receipts = json.loads((path / "terminal_receipts.json").read_text(encoding="utf-8"))
-            first = next(iter(receipts))
-            receipts[first]["terminal_status"] = "tampered"
-            (path / "terminal_receipts.json").write_text(
-                json.dumps(receipts, sort_keys=True, separators=(",", ":")) + "\n",
-                encoding="utf-8",
-            )
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"]["terminal_status"] = "tampered"
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
         def mutate_terminal_domain(path: Path) -> None:
-            receipts = json.loads((path / "terminal_receipts.json").read_text(encoding="utf-8"))
-            first = next(iter(receipts))
-            forged_domain = "boot-session-forged"
-            receipts[first]["clock_domain_id"] = forged_domain
-            (path / "terminal_receipts.json").write_text(
-                json.dumps(receipts, sort_keys=True, separators=(",", ":")) + "\n",
-                encoding="utf-8",
-            )
             lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            first = next(json.loads(line)["run_id"] for line in lines if json.loads(line)["event_type"] == "terminal_event")
+            forged_domain = "boot-session-forged"
             for index, line in enumerate(lines):
                 event = json.loads(line)
                 if event["run_id"] == first and event["event_type"] == "terminal_event":
@@ -1433,6 +1732,347 @@ def main() -> int:
             rows[0]["schema_version"] = "forged"
             write_csv(path / "runs.csv", RUN_COLUMNS, rows)
 
+        def mutate_event_schema_version(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "content_event":
+                    event["schema_version"] = "forged"
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_event_clock_unit(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "content_event":
+                    event["clock_unit"] = "ms"
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_receipt_version(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"]["receipt_version"] = "forged"
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_receipt_count(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"]["events_received"] = 119
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_receipt_missing_field(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"].pop("events_received", None)
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_receipt_extra_field(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"]["forged_extra"] = "reject-me"
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_receipt_float_field(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["details"]["run_index"] = float(event["details"]["run_index"])
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_run_started_timestamp(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "run_started":
+                    event["client_monotonic_ns"] += 1
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_terminal_timestamp(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                event = json.loads(line)
+                if event["event_type"] == "terminal_event":
+                    event["client_monotonic_ns"] += 1
+                    lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+                    break
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_terminal_before_content(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            events = [json.loads(line) for line in lines]
+            first_run = events[0]["run_id"]
+            terminal_index = next(
+                index for index, event in enumerate(events)
+                if event["run_id"] == first_run and event["event_type"] == "terminal_event"
+            )
+            content_index = next(
+                index for index, event in enumerate(events)
+                if event["run_id"] == first_run and event["event_type"] == "content_event"
+            )
+            terminal_event = events.pop(terminal_index)
+            if terminal_index < content_index:
+                content_index -= 1
+            events.insert(content_index, terminal_event)
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+
+        def mutate_start_after_terminal(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            events = [json.loads(line) for line in lines]
+            first_run = events[0]["run_id"]
+            start_index = next(
+                index for index, event in enumerate(events)
+                if event["run_id"] == first_run and event["event_type"] == "run_started"
+            )
+            terminal_index = next(
+                index for index, event in enumerate(events)
+                if event["run_id"] == first_run and event["event_type"] == "terminal_event"
+            )
+            start_event = events.pop(start_index)
+            terminal_index -= 1
+            events.insert(terminal_index + 1, start_event)
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+
+        def rewrite_summary_report(path: Path, rows: list[dict[str, str]], campaign_mode: str = "quick") -> None:
+            parsed_runs = [csv_row_to_run(row) for row in rows]
+            summary = compute_summary_rows(parsed_runs, profile, campaign_mode, "complete")
+            write_csv(path / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in summary])
+            report_payload = {"campaign_mode": campaign_mode, "campaign_status": "complete", "summary": summary}
+            report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
+            visible_rpi = "".join(
+                f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
+                f'RPI: {scalar(row["rpi"])}</span>'
+                for row in summary
+            )
+            (path / "report.html").write_text(
+                "<!doctype html><meta charset=\"utf-8\"><script id=\"canonical-summary\" "
+                "type=\"application/json\">" + report_json + "</script>"
+                "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
+                encoding="utf-8",
+            )
+
+        def mutate_observed_jitter(path: Path) -> None:
+            """Jitter an observed arrival, then recompute the downstream chain."""
+            events = [
+                json.loads(line)
+                for line in (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            first_run = events[0]["run_id"]
+            for event in events:
+                if (
+                    event["run_id"] == first_run
+                    and event["event_type"] == "content_event"
+                    and event["details"]["seq"] == 1
+                ):
+                    event["client_monotonic_ns"] += 1_000_000
+                    break
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for event in events:
+                grouped.setdefault(event["run_id"], []).append(event)
+            for row in rows:
+                group = grouped[row["run_id"]]
+                observed = [event["client_monotonic_ns"] for event in group if event["event_type"] == "content_event"]
+                receipt = next(event["details"] for event in group if event["event_type"] == "terminal_event")
+                metrics = derive_raw_metrics(
+                    observed,
+                    receipt["client_monotonic_ns"],
+                    parse_integer(row["nominal_interval_ms"], "nominal_interval_ms", nullable=False),
+                    parse_integer(row["t0_monotonic_ns"], "t0_monotonic_ns", nullable=False),
+                )
+                for key in METRIC_KEYS:
+                    row[key] = scalar(metrics[key])
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+            rewrite_summary_report(path, rows)
+
+        build_e2e_bundle(bundle, profile, profile_hash)
+        mutate_observed_jitter(bundle)
+        verify_e2e_bundle(bundle, profile, profile_hash)
+
+        def mutate_duplicate_run_row(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            rows.append(dict(rows[0]))
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+            rewrite_summary_report(path, rows)
+
+        def mutate_acceptance_mode_three_runs(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            for row in rows:
+                row["campaign_mode"] = "acceptance"
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            events = [json.loads(line) for line in lines]
+            for event in events:
+                event["campaign_mode"] = "acceptance"
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            events = [json.loads(line) for line in lines]
+            for event in events:
+                if event["event_type"] == "terminal_event":
+                    event["details"]["campaign_mode"] = "acceptance"
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            rewrite_summary_report(path, rows, "acceptance")
+
+        def mutate_run_failed_event(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            forged = json.loads(lines[1])
+            forged["event_type"] = "run_failed"
+            lines.append(json.dumps(forged, sort_keys=True, separators=(",", ":")))
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_empty_diagnostic(path: Path) -> None:
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            forged = json.loads(lines[1])
+            forged["event_type"] = "diagnostic."
+            lines.append(json.dumps(forged, sort_keys=True, separators=(",", ":")))
+            (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        def mutate_event_run_index_float(path: Path) -> None:
+            _mutate_event_field(path, "content_event", 2, "run_index", 1.0)
+
+        def mutate_event_nominal_float(path: Path) -> None:
+            _mutate_event_field(path, "content_event", 2, "nominal_interval_ms", 50.0)
+
+        def mutate_event_seq_float(path: Path) -> None:
+            _mutate_event_details_field(path, "content_event", 2, "seq", 2.0)
+
+        def mutate_event_offset_float(path: Path) -> None:
+            _mutate_event_details_field(path, "content_event", 2, "planned_offset_ms", 250.0)
+
+        def mutate_csv_t0_fraction(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            rows[0]["t0_monotonic_ns"] += ".5"
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+
+        def mutate_csv_stall_count_fraction(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            rows[0]["stall_count"] = "0.0"
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+
+        def mutate_csv_metric_precision(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            rows[0]["completion_ms"] = "6200.0000001"
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+
+        def mutate_report_remote_script(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            (path / "report.html").write_text(
+                '<script src="https://example.invalid/remote.js"></script>' + report,
+                encoding="utf-8",
+            )
+
+        def mutate_report_duplicate_summary(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            match = re.search(
+                r'<script id="canonical-summary" type="application/json">.*?</script>',
+                report,
+                flags=re.DOTALL,
+            )
+            if not match:
+                raise ValueError("report has no canonical summary to duplicate")
+            (path / "report.html").write_text(report + match.group(0) + "\n", encoding="utf-8")
+
+        def mutate_report_visible_rpi(path: Path) -> None:
+            report = (path / "report.html").read_text(encoding="utf-8")
+            replaced = report.replace(
+                'data-condition="baseline_v0.1" data-rpi="100">RPI: 100',
+                'data-condition="baseline_v0.1" data-rpi="99">RPI: 99',
+                1,
+            )
+            if replaced == report:
+                raise ValueError("report has no baseline visible RPI")
+            (path / "report.html").write_text(replaced, encoding="utf-8")
+
+        def mutate_unique_extra_run(path: Path) -> None:
+            rows = read_csv(path / "runs.csv", RUN_COLUMNS)
+            first_row = dict(rows[0])
+            first_run_id = first_row["run_id"]
+            extra_run_id = "run-quick-extra"
+            old_t0 = int(first_row["t0_monotonic_ns"])
+            new_t0 = old_t0 + 10_000_000_000
+            first_row.update(
+                {
+                    "run_id": extra_run_id,
+                    "clock_domain_id": "boot-session-extra",
+                    "t0_monotonic_ns": str(new_t0),
+                }
+            )
+            rows.append(first_row)
+            write_csv(path / "runs.csv", RUN_COLUMNS, rows)
+
+            lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            cloned: list[dict[str, Any]] = []
+            for line in lines:
+                event = json.loads(line)
+                if event["run_id"] != first_run_id:
+                    continue
+                event["run_id"] = extra_run_id
+                event["clock_domain_id"] = "boot-session-extra"
+                if event["event_type"] == "run_started":
+                    event["client_monotonic_ns"] = new_t0
+                    event["details"]["t0_monotonic_ns"] = new_t0
+                else:
+                    event["client_monotonic_ns"] += new_t0 - old_t0
+                if event["event_type"] == "terminal_event":
+                    for key in ["run_id", "clock_domain_id", "t0_monotonic_ns", "client_monotonic_ns"]:
+                        if key in event["details"]:
+                            if key == "run_id":
+                                event["details"][key] = extra_run_id
+                            elif key == "clock_domain_id":
+                                event["details"][key] = "boot-session-extra"
+                            elif key == "t0_monotonic_ns":
+                                event["details"][key] = new_t0
+                            else:
+                                event["details"][key] += new_t0 - old_t0
+                cloned.append(event)
+            events = [json.loads(line) for line in lines] + cloned
+            (path / "events.jsonl").write_text(
+                "\n".join(json.dumps(event, sort_keys=True, separators=(",", ":")) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            rewrite_summary_report(path, rows)
+
         def mutate_downstream_campaign(path: Path) -> None:
             rows = read_csv(path / "runs.csv", RUN_COLUMNS)
             for row in rows:
@@ -1441,11 +2081,17 @@ def main() -> int:
             forged_runs = [csv_row_to_run(row) for row in rows]
             forged_summary = compute_summary_rows(forged_runs, profile, "quick", "complete")
             write_csv(path / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in forged_summary])
-            report_payload = {"summary": forged_summary}
+            report_payload = {"campaign_mode": "quick", "campaign_status": "complete", "summary": forged_summary}
             report_json = json.dumps(report_payload, sort_keys=True, separators=(",", ":"))
+            visible_rpi = "".join(
+                f'<span data-condition="{row["condition_id"]}" data-rpi="{scalar(row["rpi"])}">'
+                f'RPI: {scalar(row["rpi"])}</span>'
+                for row in forged_summary
+            )
             (path / "report.html").write_text(
                 "<!doctype html><meta charset=\"utf-8\"><script id=\"canonical-summary\" "
-                "type=\"application/json\">" + report_json + "</script>\n",
+                "type=\"application/json\">" + report_json + "</script>"
+                "<section id=\"rpi-values\">" + visible_rpi + "</section>\n",
                 encoding="utf-8",
             )
 
@@ -1468,9 +2114,35 @@ def main() -> int:
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "unknown event type", mutate_unknown_event)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "runs.csv tamper", mutate_runs)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "runs.csv schema-version tamper", mutate_run_schema_version)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "raw event schema-version tamper", mutate_event_schema_version)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "raw event clock-unit tamper", mutate_event_clock_unit)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal receipt-version tamper", mutate_receipt_version)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal receipt event-count tamper", mutate_receipt_count)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal receipt missing field", mutate_receipt_missing_field)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal receipt extra field", mutate_receipt_extra_field)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal receipt float field", mutate_receipt_float_field)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "run-started timestamp tamper", mutate_run_started_timestamp)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal timestamp tamper", mutate_terminal_timestamp)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "terminal-before-content ordering", mutate_terminal_before_content)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "start-after-terminal ordering", mutate_start_after_terminal)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "duplicate run row/cardinality", mutate_duplicate_run_row)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "Acceptance three-run plan forgery", mutate_acceptance_mode_three_runs)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "unsupported run-failed event", mutate_run_failed_event)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "empty diagnostic namespace", mutate_empty_diagnostic)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "float run_index event field", mutate_event_run_index_float)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "float nominal event field", mutate_event_nominal_float)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "float sequence event field", mutate_event_seq_float)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "float planned-offset event field", mutate_event_offset_float)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "fractional CSV t0", mutate_csv_t0_fraction)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "fractional CSV stall count", mutate_csv_stall_count_fraction)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "over-precise CSV metric", mutate_csv_metric_precision)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "unique extra run/plan cardinality", mutate_unique_extra_run)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "downstream campaign rewrite", mutate_downstream_campaign)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "summary.csv tamper", mutate_summary)
         mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "report tamper", mutate_report)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "remote report script", mutate_report_remote_script)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "duplicate canonical report summary", mutate_report_duplicate_summary)
+        mutate_and_expect_bundle_failure(bundle, profile, profile_hash, "forged visible report RPI", mutate_report_visible_rpi)
         mutate_and_expect_bundle_failure(
             bundle,
             profile,
@@ -1486,6 +2158,7 @@ def main() -> int:
             lambda path: _mutate_event_timestamp_regression(path),
         )
     checks.append("actual events/terminal/runs/summary/RPI/report chain, formal run schema and tamper stages")
+    checks.append("event schema/unit, receipt vocabulary/counts, timestamp/order and frozen-plan cardinality negatives")
     checks.append("clock-domain splice and timestamp-regression evidence negatives")
 
     print(f"PASS: {len(checks)} contract checks")
@@ -1503,6 +2176,17 @@ def _mutate_event_field(path: Path, event_type: str, seq: int, field: str, value
         event = json.loads(line)
         if event["event_type"] == event_type and event["details"].get("seq") == seq:
             event[field] = value
+            lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
+            break
+    (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _mutate_event_details_field(path: Path, event_type: str, seq: int, field: str, value: Any) -> None:
+    lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        event = json.loads(line)
+        if event["event_type"] == event_type and event["details"].get("seq") == seq:
+            event["details"][field] = value
             lines[index] = json.dumps(event, sort_keys=True, separators=(",", ":"))
             break
     (path / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")

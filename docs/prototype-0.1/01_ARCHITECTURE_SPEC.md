@@ -56,7 +56,8 @@ The Go node is the sole authority for:
 - deterministic planned event schedules;
 - SSE/event-stream generation;
 - application-layer initial delay, pacing and scheduled stalls;
-- server-side run receipt and schedule hash;
+- server-generated terminal receipt (carried in `terminal_event.details`) and
+  schedule hash;
 - collection of uploaded client evidence;
 - canonical campaign bundle assembly;
 - manifest verification and offline HTML report generation.
@@ -65,7 +66,9 @@ Publication ownership is frozen as follows:
 
 - Android captures raw arrival events and calculates canonical per-run metrics and condition aggregates.
 - Android uploads the canonical records plus raw evidence and retains a local device copy.
-- The Go node binds those records to server receipts, independently validates cross-file identities, publishes the canonical evidence directory, creates `manifest.json` and renders `report.html`.
+- The Go node binds those records to the nested terminal receipt, independently
+  validates cross-file identities, publishes the canonical evidence directory,
+  creates `manifest.json` and renders `report.html`.
 - Android may export a **device fallback bundle** when upload/finalization fails, but that fallback is labeled `device_fallback_unverified`, cannot satisfy G4/G5, and must not compete with the canonical server-published summary.
 
 Android and server must not independently publish conflicting final summaries.
@@ -102,7 +105,7 @@ It must reuse current Compose, Room and foreground-service architecture. Prototy
 
 ADB reverse may expose the local node at `http://127.0.0.1:<port>` for development or recovery. Runs using this path must record:
 
-- `transport_mode = adb_reverse`;
+- `meta.transport.mode = "adb_reverse"`;
 - `acceptance_path = false`.
 
 ADB reverse evidence can prove function but cannot be used as the normal P40 release acceptance path.
@@ -116,8 +119,8 @@ The existing E-01 node may be used for regression, but Prototype 0.1 completion 
 Before sending business traffic, Android calls a capability endpoint and validates at least:
 
 - product protocol version;
-- workload id/version/hash;
-- condition ids/versions/hashes;
+- workload id/version/content-event count and the profile-manifest SHA-256;
+- condition id/version/nominal interval and canonical schedule SHA-256;
 - evidence schema version;
 - score policy id;
 - server build version and binary identity;
@@ -175,10 +178,10 @@ A stream EOF without a valid terminal done receipt is not success.
 ## 7. Data ownership and publication
 
 - Android retains raw event evidence locally even when upload fails.
-- The verifier's authority chain is raw Android receipt events and the matching
-  server terminal receipt -> canonical per-run metrics -> `runs.csv` -> condition
-  summaries/RPI -> `report.html`; a report or summary cannot become authoritative
-  by merely agreeing with a tampered run record.
+- The verifier's authority chain is raw Android scoring events and the nested
+  terminal receipt in `terminal_event.details` -> canonical per-run metrics ->
+  `runs.csv` -> condition summaries/RPI -> `report.html`; a report or summary
+  cannot become authoritative by merely agreeing with a tampered run record.
 - Server stores accepted uploads under a campaign-specific temporary directory.
 - Final campaign publication is atomic as defined in `04_EVIDENCE_REPORT_SPEC.md`.
 - Duplicate upload of the same immutable run record is idempotent.

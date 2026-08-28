@@ -22,22 +22,20 @@ The measured unit is a **logical stream event**. UI text may say “stream event
 
 ## 2. Event contract
 
-Each content event contains at least:
+The deterministic content payload inside each `content_event.details` contains
+at least:
 
 ```json
 {
-  "protocol_version": "prototype-stream-0.1",
-  "campaign_id": "<uuid>",
-  "run_id": "<uuid>",
-  "condition_id": "baseline_v0.1",
-  "profile_manifest_sha256": "<bare lowercase 64-hex>",
-  "schedule_hash": "<bare lowercase 64-hex>",
-  "clock_domain_id": "<opaque boot/session id>",
   "seq": 1,
   "planned_offset_ms": 200,
   "payload_id": "ref-0001"
 }
 ```
+
+The surrounding raw-evidence envelope carries the protocol, campaign/run,
+condition, profile/schedule and Android clock identity fields defined in
+`04_EVIDENCE_REPORT_SPEC.md`; they are not duplicated inside this payload.
 
 Normative rules:
 
@@ -47,10 +45,11 @@ Normative rules:
 - Duplicate, missing, out-of-order or cross-run events invalidate terminal success while retaining raw evidence.
 - Payload content is deterministic and carries no user data.
 
-The terminal `done` event contains:
+The raw `terminal_event.details` object (the terminal `done` receipt) contains:
 
 ```json
 {
+  "receipt_version": "prototype-terminal-receipt-0.1",
   "protocol_version": "prototype-stream-0.1",
   "campaign_id": "<uuid>",
   "run_id": "<uuid>",
@@ -59,12 +58,31 @@ The terminal `done` event contains:
   "profile_version": "0.1",
   "profile_manifest_sha256": "<bare lowercase 64-hex>",
   "schedule_hash": "<bare lowercase 64-hex>",
+  "condition_version": "0.1",
+  "nominal_interval_ms": 50,
   "clock_domain_id": "<opaque boot/session id>",
+  "clock_source": "android.os.SystemClock.elapsedRealtimeNanos",
+  "clock_unit": "ns",
+  "clock_epoch": "device_boot",
+  "t0_monotonic_ns": 9000000001000,
+  "client_monotonic_ns": 9000006201000,
+  "events_expected": 120,
+  "events_received": 120,
   "planned_event_count": 120,
   "emitted_event_count": 120,
   "terminal_status": "complete"
 }
 ```
+
+The terminal receipt envelope uses the exact `receipt_version` value
+`prototype-terminal-receipt-0.1`. Its protocol payload keeps the field names
+shown above: `protocol_version`, `profile_id`, `profile_version` and
+`planned_event_count` are authoritative; `emitted_event_count` is the count
+actually emitted. The evidence envelope additionally carries
+`events_expected`, `events_received`, `clock_source`, `clock_unit`,
+`clock_epoch`, `t0_monotonic_ns` and the terminal `client_monotonic_ns`.
+These are one vocabulary, not aliases: a missing, renamed or mismatched field
+invalidates the receipt.
 
 EOF without a valid matching `done` event is `interrupted`, not success.
 
@@ -155,7 +173,7 @@ The schedule hash is the bare lowercase SHA-256 digest of those exact bytes:
 | `unstable_v0.1` | `d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58` |
 
 For this exact v0.1 contract head, `profile_manifest_sha256` is
-`ed440d42dfcc849cb7bb24c52f6c0623057d83c4d97af1f86b024703eb9370eb`.
+`592f44bbc841c3d6c734702775c7c2faf81fa7192937279c1e584bf3889ae63b`.
 The profile-manifest digest plus `condition_id`, `version`,
 `nominal_interval_ms` and this schedule digest form the complete condition
 identity. There is no separate condition hash. The same version must always
@@ -221,16 +239,20 @@ A run request contains only versioned identifiers and run metadata. Arbitrary cl
 No failure duration is replaced by a timeout cap for aggregation. Available partial observations may be shown diagnostically but mandatory missing measurements remain `null`.
 
 The status-to-reason mapping is closed and normative: `interrupted` uses
-`stream_interrupted`; `cancelled` uses `cancelled`; `ttft_timeout` uses
-`ttft_timeout`; `server_rejected` uses `server_rejected`; `invalid_sequence`
-uses `invalid_sequence`; and `not_started` uses `not_started`. `incompatible`
-uses `contract_mismatch`, except that an independently detected clock-domain
-failure may use `clock_domain_invalid` or `clock_domain_mismatch`. Every
-non-success status has `task_success=false`, `score_eligible=false` and a
-terminal receipt value of `false` or `null`. `incompatible`, `ttft_timeout` and
-`server_rejected` have zero received events and all metric fields `null`;
-`cancelled` follows the interrupted field-by-field partial matrix in the
-metrics specification. A valid receipt is never accepted for a failed status.
+`stream_interrupted` for transport/EOF interruption, or
+`mandatory_metric_missing` when finalization lacks a mandatory metric while
+using the same interrupted partial matrix; `cancelled` uses `cancelled`;
+`ttft_timeout` uses `ttft_timeout`; `server_rejected` uses
+`server_rejected`; `invalid_sequence` uses `invalid_sequence`; and
+`not_started` uses `not_started`. `incompatible` uses `contract_mismatch`,
+except that independently detected evidence/clock failures may use
+`invalid_evidence`, `clock_domain_invalid` or `clock_domain_mismatch`.
+Every non-success status has `task_success=false`, `score_eligible=false` and
+a terminal receipt value of `false` or `null`. `incompatible`,
+`ttft_timeout` and `server_rejected` have zero received events and all metric
+fields `null`; `cancelled` follows the interrupted field-by-field partial
+matrix in the metrics specification. A valid receipt is never accepted for a
+failed status.
 
 ## 8. Naming restrictions
 

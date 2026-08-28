@@ -90,7 +90,7 @@ Fields/actions:
 Successful validation shows:
 
 - server version;
-- workload version/hash abbreviated;
+- workload version and abbreviated profile-manifest hash;
 - three supported conditions;
 - evidence schema and score policy;
 - green `Compatible` state.
@@ -166,7 +166,7 @@ Actions:
 Show:
 
 - run id;
-- condition/version/hash;
+- condition/version/nominal interval/schedule hash;
 - terminal status;
 - sequence/receipt validation;
 - per-run metrics;

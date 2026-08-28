@@ -131,6 +131,8 @@ PASS when:
   canonical bytes (UTF-8/no BOM/LF/final LF/120 content rows/terminal excluded);
 - capabilities and run-record positive/negative fixtures reject duplicate
   conditions, prefixed hashes, invalid indexes and null-success counterexamples;
+- Quick indexes 1..3 and Acceptance indexes 1..9 occur exactly once in the
+  frozen B/S/U plan; summary counts and success rates stay within that plan;
 - all three condition plans pass unit/integration tests;
 - unknown contracts fail closed;
 - server emits valid terminal receipts;
@@ -173,6 +175,8 @@ PASS when an automated verifier confirms:
 - report values agree with canonical data;
 - raw Android events plus the matching terminal receipt recompute per-run
   metrics before `runs.csv`, summaries/RPI and report values are accepted;
+- raw event `schema_version`/clock unit, terminal receipt version/counts,
+  run-start/terminal timestamps and per-run scoring-event order are validated;
 - profile/condition/schedule/policy hashes, clock source/epoch/domain/t0 and
   ordered null reasons are exact;
 - partial/failed campaigns cannot publish non-null RPI;

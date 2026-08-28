@@ -47,6 +47,12 @@ rounding. UTC never participates in TTFT, completion, span, gap or stall math.
 
 Otherwise `task_success = false`. Partial timing evidence is retained but the run is not included in successful-run medians.
 
+An `interrupted` run uses `failure_reason=stream_interrupted` for transport/EOF
+failure. If finalization additionally lacks a mandatory metric, it uses
+`failure_reason=mandatory_metric_missing` with the same field-by-field partial
+matrix; it remains non-successful and ineligible. A numeric partial metric is
+valid only when its same-run integer `t0_monotonic_ns` is present.
+
 ## 3. Per-run metrics
 
 ### 3.1 Time to first stream event

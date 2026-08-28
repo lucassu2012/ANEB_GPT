@@ -35,7 +35,7 @@
     }
   },
   "condition_binding": {
-    "binding": "profile_manifest_sha256_plus_condition_id_version_plus_schedule_sha256",
+    "binding": "profile_manifest_sha256_plus_condition_id_version_nominal_interval_plus_schedule_sha256",
     "condition_order": [
       "baseline_v0.1",
       "slow_v0.1",

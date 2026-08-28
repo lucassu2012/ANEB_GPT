@@ -135,7 +135,7 @@ Each line is one UTF-8 JSON object. Required common fields:
   clock domain; `run_started.details.t0_monotonic_ns` is the nonzero-or-zero
   boot-absolute t0 used for all deltas in that run;
 - `observed_at_utc` when available;
-- `source` = `android` or `server`;
+- `source` = `android` for the supported scoring and diagnostic events;
 - `details` object.
 
 `clock_domain_id` is an opaque boot/session identity generated for the run's
@@ -146,28 +146,40 @@ regression is invalid evidence, not a sortable event.
 
 Allowed event types for v0.1:
 
-- `campaign_started`;
-- `run_planned`;
 - `run_started`;
-- `response_headers`;
 - `content_event`;
 - `terminal_event`;
-- `run_completed`;
 - `run_failed`;
 - `run_cancelled`;
-- `evidence_upload_started`;
-- `evidence_upload_completed`;
-- `campaign_completed`;
-- `campaign_failed`;
-- `diagnostic`.
+- `diagnostic.<non-empty-suffix>` for non-scoring diagnostics only.
 
-For `content_event`, `details` includes `seq`, `planned_offset_ms`,
-`profile_manifest_sha256`, `schedule_hash` and parsed identity fields. The
-terminal event carries the same profile and schedule identities plus the
-terminal receipt fields. It must not include third-party content, credentials or
-arbitrary payload bytes.
+The three scoring event types use one common run-scoped envelope: campaign/run
+identity, campaign mode/index, profile/condition/schedule identity, Android
+clock source/unit/epoch/domain, integer `client_monotonic_ns`, `source=android`,
+and a `details` object. `content_event.details` contains `seq`,
+`planned_offset_ms` and the deterministic `payload_id`; the terminal event's
+`details` is the receipt object below. A diagnostic event may use the same
+envelope but is never counted as a scoring event. `run_failed` and
+`run_cancelled` are run-scoped status events only and are invalid alongside a
+complete run. The bundle does not claim campaign-level or server-side event
+types that this machine contract cannot represent. Events must not include
+third-party content or credentials.
 
 Unknown event types are rejected by the v0.1 finalizer unless explicitly namespaced as non-scoring diagnostics.
+
+### Terminal receipt vocabulary
+
+The matching `terminal_event.details` is the sole canonical terminal receipt
+object; no separate receipt sidecar is part of the v0.1 bundle. `receipt_version` is exactly
+`prototype-terminal-receipt-0.1`; the protocol payload uses
+`protocol_version=prototype-stream-0.1`, `profile_id=streaming_text_reference_v0.1`,
+`profile_version=0.1`, `planned_event_count=120`,
+`emitted_event_count=120` and `terminal_status=complete`. The evidence envelope
+also carries `events_expected=120`, `events_received=120`, the profile,
+condition, schedule and clock identity fields, `t0_monotonic_ns`, and the
+terminal `client_monotonic_ns`. `planned_event_count` is the normative planned
+content count; the two `events_*` fields are receipt accounting and must agree
+with it. No alternate field names are accepted.
 
 ## 5. `runs.csv`
 
@@ -277,12 +289,17 @@ A verifier must reject:
 - `score_eligible=true` implies task success, all mandatory metrics non-null and
   valid, exact profile/condition/schedule/policy identities, a valid single
   Android monotonic clock domain and a matching terminal receipt.
-- A complete Quick campaign has 3 planned attempts; a complete Acceptance campaign has 9.
+- Quick indexes 1..3 and Acceptance indexes 1..9 must each occur exactly once
+  in the frozen B/S/U plan; duplicate or extra runs are invalid evidence.
+- A complete Quick campaign has 3 planned attempts; a complete Acceptance campaign has 9;
+  summary attempted/successful/failed/not-started counts are bounded by the plan
+  and `success_rate` is recomputed in `[0,1]`.
 - A partial campaign has `rpi` empty/null in every summary row.
 - JSON null maps to blank CSV, not zero or the string `null`.
-- The verifier is authoritative in this order: raw Android receipt events and
-  the matching server terminal receipt -> recomputed per-run metrics (including
-  strict stall) -> `runs.csv` -> condition summaries/RPI -> `report.html`.
+- The verifier is authoritative in this order: raw Android scoring events and
+  the nested terminal receipt in `terminal_event.details` -> recomputed per-run
+  metrics (including strict stall) -> `runs.csv` -> condition summaries/RPI ->
+  `report.html`.
   A self-consistent but tampered run record cannot override raw events.
 - `RPI-0.1` is independent of AQS and is not an AQS input, conversion or
   operator/vendor/industry score.
