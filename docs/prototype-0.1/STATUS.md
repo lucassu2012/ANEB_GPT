@@ -27,7 +27,7 @@ G0 passed through PR #23 and merge commit `a3e9e066db39a4869db8a40bd2b59cd43fc45
 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
-| #13 | current PMO conversation | `IN_PROGRESS` | G0/G1 integrated; PR #29/#30 and release P0 work coordinated | G2–G6 pending |
+| #13 | current PMO conversation | `IN_PROGRESS` | G0/G1 integrated; PR #29/#30 and release P0 work coordinated | G2 exit evidence in progress; G3–G6 pending |
 | #14 | `20260710_智能体网络诉求` | `COMPLETE` | issue closed; frozen docs/contracts and machine vectors merged by PR #23 | none |
 | #15 | ANEB_GPT core | `COMPLETE` | deterministic core merged by PR #27 at `9b968378ab7fbc8ae6c69838f6d165d8377f07c2` | none |
 | #16 | ANEB_GPT Android | `IN_PROGRESS` | exact projector merged by PR #29; real `done` SSE fixture and strict single-frame decoder merged by PR #30 | stream runner, Quick/Acceptance orchestration, persistence, UI and G2 exit evidence pending |
