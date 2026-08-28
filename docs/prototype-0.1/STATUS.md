@@ -1,22 +1,22 @@
 # ANEB Prototype 0.1 — Program Status
 
 Last PMO update: **2026-08-28**
-Program state: **G0 — SPEC REWORK (HOLD)**
+Program state: **G1 — CORE DETERMINISTIC CONTRACT (ACTIVE)**
 Product Owner: Lucas
 Program issue: #13
 
 ## Executive status
 
-The product direction has been narrowed and approved. A single product baseline, integration branch, issue hierarchy, workstream allocation and complete first-pass specification set now exist.
+The product direction has been narrowed and approved. A single product baseline, integration branch, issue hierarchy, workstream allocation and frozen G0 specification set now exist.
 
-No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains valuable baseline capability, but it is not counted as Prototype 0.1 completion until it satisfies the frozen end-to-end release contract.
+G0 passed through PR #23 and merge commit `a3e9e066db39a4869db8a40bd2b59cd43fc456b7`. G1 core implementation is now active. Existing ANEB code remains valuable baseline capability, but it is not counted as Prototype 0.1 completion until it satisfies the frozen end-to-end release contract.
 
 ## Gate board
 
 | Gate | State | Evidence | Exit condition |
 |---|---|---|---|
-| G0 — Specification freeze | `REVIEW` | isolated issue #14 rework head (HOLD) | per-file verdict, exact vectors and PO binding receipt reviewed; no gate advance in this task |
-| G1 — Core deterministic contract | `BACKLOG` | issue #15 | tested workload/conditions/capability/receipts |
+| G0 — Specification freeze | `PASS` | PR #23; merge `a3e9e066db39a4869db8a40bd2b59cd43fc456b7`; issue #14 | frozen specification and contract evidence integrated |
+| G1 — Core deterministic contract | `IN_PROGRESS` | issue #15 | tested workload/conditions/capability/receipts |
 | G2 — Android vertical slice | `BACKLOG` | issue #16 | Quick + Acceptance campaign and metric gates pass |
 | G3 — Fixed Windows package | `BACKLOG` | issue #17 | self-contained candidate launches from fresh directory |
 | G4 — Evidence consistency | `BACKLOG` | issue #17 | automated bundle/report verification passes |
@@ -27,12 +27,12 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
-| #13 | current PMO conversation | `IN_PROGRESS` | scope, branches, issues, specs and control model created | G0 review pending |
-| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS` | binding docs/contracts rework and machine vectors | exact new head awaits independent review; G0 remains HOLD |
-| #15 | ANEB_GPT core | `BACKLOG` | implementation contract prepared | waits for #14 freeze |
-| #16 | ANEB_GPT Android | `BACKLOG` | implementation contract prepared | waits for #14 and #15 interface |
-| #17 | release/packaging | `BACKLOG` | package/evidence contract prepared | can prototype verifier; fixed candidate waits for #15/#16 |
-| #18 | `20260801_ANEB_WP2设备运行时` | `READY` | selective-backport and P40 protocol prepared | acceptance waits for fixed candidate |
+| #13 | current PMO conversation | `IN_PROGRESS` | G0 integrated; G1 execution coordinated | G1 core contract active |
+| #14 | `20260710_智能体网络诉求` | `COMPLETE` | frozen docs/contracts and machine vectors merged by PR #23 | none |
+| #15 | ANEB_GPT core | `IN_PROGRESS` | G0 contracts available for implementation | G1 exit evidence pending |
+| #16 | ANEB_GPT Android | `BLOCKED` | implementation contract prepared | waits for #15 versioned interface |
+| #17 | release/packaging | `IN_PROGRESS` | verifier/launcher/offline-report skeleton allowed | fixed package waits for #15 core and #16 app |
+| #18 | `20260801_ANEB_WP2设备运行时` | `WAITING_RC` | selective-backport and P40 protocol prepared | no device action until fixed signed RC |
 | #19 | AI应用网络要求测试 | `READY` | non-blocking Prototype 0.2 protocol task prepared | no 0.1 dependency |
 
 ## Locked product decisions
@@ -62,9 +62,9 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 ## Current primary blocker
 
-`G0` is HOLD until the issue #14 conversation reviews the rework exact head,
-recomputes the raw evidence vectors and records the final per-file verdict. This
-task does not advance G0 or merge the specs.
+`G1` is active. The current critical dependency is the versioned core interface
+and its tested workload, conditions, capability and terminal-receipt evidence
+from issue #15.
 
 There is no current hardware, administrator-rights, cloud-node, PCAP or third-party-App blocker for Prototype 0.1.
 
@@ -82,11 +82,11 @@ There is no current hardware, administrator-rights, cloud-node, PCAP or third-pa
 
 ## Next PMO actions
 
-1. have the issue #14 reviewer inspect the exact rework commit and validation output;
-2. keep #15/#16 blocked until #14 review is complete;
-3. append only the approved binding decisions to the decision log through PMO;
-4. let PMO decide whether to merge the specs to `product/prototype-0.1`;
-5. keep #18 READY for reuse review until a fixed candidate exists.
+1. execute issue #15 against the frozen G0 contracts and collect G1 exit evidence;
+2. keep #16 blocked until #15 exposes the versioned interface;
+3. allow #17 to continue only its verifier, launcher and offline-report skeleton until fixed core and app artifacts exist;
+4. keep #18 in `WAITING_RC` and do not start device work before a fixed signed candidate exists;
+5. append only approved binding decisions and evidence-backed gate changes through PMO.
 
 ## Progress update rule
 
