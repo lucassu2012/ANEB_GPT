@@ -224,6 +224,9 @@ class PrototypeSseTerminalDecoderTest {
         )
         val path = candidates.firstOrNull { Files.isRegularFile(it) }
             ?: error("shared fixture not found: ${candidates.joinToString()}")
-        return Files.readAllBytes(path).toString(Charsets.UTF_8)
+        val raw = Files.readAllBytes(path).toString(Charsets.UTF_8)
+        val normalized = raw.replace("\r\n", "\n")
+        require('\r' !in normalized) { "shared fixture contains a bare CR" }
+        return normalized
     }
 }
