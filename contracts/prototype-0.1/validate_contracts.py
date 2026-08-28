@@ -1400,6 +1400,60 @@ def build_e2e_bundle(
     return runs
 
 
+def extend_failure_bundle_to_120_events(
+    root: Path,
+    profile: dict[str, Any],
+    profile_hash: str,
+    campaign_mode: str,
+    status: str,
+) -> None:
+    """Make a canonical 120-event interrupted/cancelled prefix fixture."""
+    rows = read_csv(root / "runs.csv", RUN_COLUMNS)
+    run = csv_row_to_run(rows[0])
+    if run["run_status"] != status:
+        raise AssertionError("fixture status does not match requested failure status")
+    offsets, _ = schedule_offsets(profile, run["condition"]["id"])
+    t0 = run["clock"]["t0_monotonic_ns"]
+    run["events_received"] = 120
+    run["metrics"] = derive_partial_metrics(
+        [t0 + offset * 1_000_000 for offset in offsets], 50, t0
+    )
+    rows[0] = run_to_csv_row(run)
+    write_csv(root / "runs.csv", RUN_COLUMNS, rows)
+
+    events = [
+        json.loads(line)
+        for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    failure = next(event for event in events if event["event_type"] in {"run_failed", "run_cancelled"})
+    prefix = [event for event in events if event is not failure]
+    content = [
+        make_event(
+            run,
+            "content_event",
+            t0 + offset * 1_000_000,
+            {"seq": seq, "planned_offset_ms": offset, "payload_id": f"ref-{seq:04d}"},
+        )
+        for seq, offset in enumerate(offsets, 1)
+    ]
+    failure["details"]["events_received"] = 120
+    failure["client_monotonic_ns"] = t0 + offsets[-1] * 1_000_000 + 1_000_000
+    events = [prefix[0], *content, failure]
+    (root / "events.jsonl").write_text(
+        "".join(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    parsed_runs = [csv_row_to_run(row) for row in read_csv(root / "runs.csv", RUN_COLUMNS)]
+    campaign_status = campaign_status_from_runs(parsed_runs)
+    summary_rows = compute_summary_rows(parsed_runs, profile, campaign_mode, campaign_status)
+    write_csv(root / "summary.csv", SUMMARY_COLUMNS, [summary_to_csv_row(row) for row in summary_rows])
+    meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
+    meta["campaign_status"] = campaign_status
+    (root / "report.html").write_text(render_report_html(meta, parsed_runs, summary_rows), encoding="utf-8")
+    write_bundle_metadata(root, parsed_runs, profile, profile_hash, campaign_mode, campaign_status, meta)
+
+
 def assert_campaign_plan(runs: list[dict[str, Any]], profile: dict[str, Any], campaign_mode: str) -> dict[str, Any]:
     plans = [plan for plan in profile["campaign_plans"] if plan["mode"] == campaign_mode]
     if len(plans) != 1:
@@ -1999,7 +2053,8 @@ def verify_e2e_bundle(
         if len(terminal) != 0 or len(failures) != 1:
             raise ValueError("failed/partial event topology is invalid")
         expected_count = run["events_received"]
-        if expected_count != len(content) or not 0 <= expected_count < 120:
+        max_prefix = 120 if run["run_status"] in {"interrupted", "cancelled"} else 119
+        if expected_count != len(content) or not 0 <= expected_count <= max_prefix:
             raise ValueError("failed/partial content count does not match run record")
         expected_failure_type = "run_cancelled" if run["run_status"] == "cancelled" else "run_failed"
         if failures[0]["event_type"] != expected_failure_type:
@@ -2363,6 +2418,21 @@ def main() -> int:
         partial_t0,
     )
     assert partial["metrics"]["stream_event_rate_eps"] == partial_expected["stream_event_rate_eps"] == 20.0
+    for status in ["interrupted", "cancelled"]:
+        full_prefix = status_record(
+            valid_run(profile_hash, profile, "baseline_v0.1", 1, "quick"),
+            status,
+            profile,
+        )
+        full_prefix["events_received"] = 120
+        prefix_t0 = full_prefix["clock"]["t0_monotonic_ns"]
+        prefix_offsets, _ = schedule_offsets(profile, "baseline_v0.1")
+        full_prefix["metrics"] = derive_partial_metrics(
+            [prefix_t0 + offset * 1_000_000 for offset in prefix_offsets],
+            50,
+            prefix_t0,
+        )
+        expect_valid(schemas["run-record"], full_prefix, f"{status} 120-event prefix without receipt")
     mandatory_missing = partial_interrupted_run(profile_hash, profile)
     mandatory_missing["failure_reason"] = "mandatory_metric_missing"
     expect_valid(schemas["run-record"], mandatory_missing, "interrupted mandatory metric missing topology")
@@ -3186,6 +3256,28 @@ def main() -> int:
         )
         verify_e2e_bundle(cancelled_bundle, profile, profile_hash)
 
+        for status in ["interrupted", "cancelled"]:
+            full_prefix_bundle = workspace / f"partial-{status}-120-events"
+            full_prefix_bundle.mkdir()
+            build_e2e_bundle(
+                full_prefix_bundle,
+                profile,
+                profile_hash,
+                "quick",
+                {1: status, 2: "not_started", 3: "not_started"},
+            )
+            extend_failure_bundle_to_120_events(
+                full_prefix_bundle, profile, profile_hash, "quick", status
+            )
+            verify_e2e_bundle(full_prefix_bundle, profile, profile_hash)
+            bundle_events = [
+                json.loads(line)
+                for line in (full_prefix_bundle / "events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
+            assert not any(event["event_type"] == "terminal_event" for event in bundle_events)
+            assert sum(event["event_type"] == "content_event" for event in bundle_events) == 120
+
         failed_bundle = workspace / "partial-server-rejected"
         failed_bundle.mkdir()
         build_e2e_bundle(
@@ -3771,6 +3863,7 @@ def main() -> int:
             lambda path: _mutate_event_timestamp_regression(path),
         )
     checks.append("actual complete/partial/failure/not-started events/runs/summary/RPI/report chains and formal run schema")
+    checks.append("interrupted/cancelled 120-event prefixes without terminal receipts")
     checks.append("Quick and full 9-run Acceptance positives, mixed-eligibility RPI and 3-run Acceptance forgery negative")
     checks.append("observed timestamp jitter is accepted only after raw-metric recomputation")
     checks.append("event schema/unit, receipt vocabulary/counts, timestamp/order and frozen-plan cardinality negatives")
