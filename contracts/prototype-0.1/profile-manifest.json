@@ -1,0 +1,108 @@
+{
+  "schema_version": "aneb-prototype-profile-manifest-0.1",
+  "product_version": "prototype-0.1",
+  "protocol_version": "prototype-stream-0.1",
+  "claim_scope": "application_end_to_end_to_probe_node",
+  "evidence_mode": "synthetic_application_impairment",
+  "impairment_layer": "application",
+  "workload": {
+    "id": "streaming_text_reference_v0.1",
+    "version": "0.1",
+    "kind": "deterministic_logical_text_event_stream",
+    "fixed_seed": 20260828,
+    "content_event_count": 120,
+    "terminal_event_count": 1,
+    "logical_unit": "stream_event",
+    "schedule_canonicalization": {
+      "format": "csv",
+      "encoding": "utf-8",
+      "line_endings": "lf",
+      "header": "seq,planned_offset_ms,payload_id",
+      "row_template": "<seq>,<planned_offset_ms>,ref-<seq:04d>",
+      "hash_algorithm": "sha256"
+    }
+  },
+  "conditions": [
+    {
+      "id": "baseline_v0.1",
+      "version": "0.1",
+      "initial_delay_ms": 200,
+      "nominal_interval_ms": 50,
+      "scheduled_pauses": [],
+      "terminal_delay_ms": 50,
+      "planned_first_event_offset_ms": 200,
+      "planned_last_event_offset_ms": 6150,
+      "planned_terminal_offset_ms": 6200,
+      "schedule_sha256": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e"
+    },
+    {
+      "id": "slow_v0.1",
+      "version": "0.1",
+      "initial_delay_ms": 650,
+      "nominal_interval_ms": 125,
+      "scheduled_pauses": [],
+      "terminal_delay_ms": 125,
+      "planned_first_event_offset_ms": 650,
+      "planned_last_event_offset_ms": 15525,
+      "planned_terminal_offset_ms": 15650,
+      "schedule_sha256": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062"
+    },
+    {
+      "id": "unstable_v0.1",
+      "version": "0.1",
+      "initial_delay_ms": 350,
+      "nominal_interval_ms": 65,
+      "scheduled_pauses": [
+        {
+          "after_seq": 40,
+          "extra_delay_ms": 900
+        },
+        {
+          "after_seq": 85,
+          "extra_delay_ms": 1400
+        }
+      ],
+      "terminal_delay_ms": 65,
+      "planned_first_event_offset_ms": 350,
+      "planned_last_event_offset_ms": 10385,
+      "planned_terminal_offset_ms": 10450,
+      "schedule_sha256": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"
+    }
+  ],
+  "campaign_plans": [
+    {
+      "id": "quick_v0.1",
+      "mode": "quick",
+      "cooldown_ms": 1000,
+      "condition_order": [
+        "baseline_v0.1",
+        "slow_v0.1",
+        "unstable_v0.1"
+      ]
+    },
+    {
+      "id": "acceptance_v0.1",
+      "mode": "acceptance",
+      "cooldown_ms": 1000,
+      "condition_order": [
+        "baseline_v0.1",
+        "slow_v0.1",
+        "unstable_v0.1",
+        "baseline_v0.1",
+        "slow_v0.1",
+        "unstable_v0.1",
+        "baseline_v0.1",
+        "slow_v0.1",
+        "unstable_v0.1"
+      ]
+    }
+  ],
+  "forbidden_claims": [
+    "ip_packet_loss",
+    "ran_impairment",
+    "operator_sla",
+    "third_party_vendor_requirement",
+    "model_inference_latency",
+    "true_token_rate"
+  ]
+}
