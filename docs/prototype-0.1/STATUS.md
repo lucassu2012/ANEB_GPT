@@ -1,7 +1,7 @@
 # ANEB Prototype 0.1 — Program Status
 
 - Last PMO update: **2026-08-28**
-- Program state: **G0 — SECOND REWORK (HOLD)**
+- Program state: **G0 — THIRD REWORK (HOLD)**
 - Product Owner: Lucas
 - Program issue: #13
 
@@ -11,7 +11,7 @@ The product direction has been narrowed and approved. A single product baseline,
 
 The Master PMO dispatch has been delivered to issues #14–#18 through their existing Codex tasks, and every active workstream has posted a durable first acknowledgement to its GitHub issue. The legacy strategy task is frozen. The exact legacy `GitHub Mention: Cloud continuation...` task was not found in the active or archived task index, so no task-to-task delivery is claimed for it; its old scope remains frozen by the Prototype 0.1 governance boundary.
 
-Issue #14 has produced two bounded rework commits after the rejected PR #20 head `f23d9ca`. The second exact head, `49fb3e12a156592816f34dfec05cfb1053b56777`, closes the original B/S/U cycle, clock-domain, null-matrix, manifest-oracle and basic evidence-chain defects, but independent review still reproduces failure-state and cross-file evidence-authority survivors. G0 therefore remains unpassed. The Product Owner-approved DN-1A through DN-5A remain the only binding choices; no new decision is needed.
+Issue #14 has produced three bounded rework commits after the rejected PR #20 head `f23d9ca`. The third exact head, `0a8c8cfb0ba4535dfb8984c21c8048fec029b194`, closes the previously published failure-reason and five evidence-authority survivors. Three independent final reviews nevertheless found narrower same-scope gaps in failed-receipt topology, exact campaign run cardinality, event/receipt/time authority and the normative VERSION fixture. G0 therefore remains unpassed. The Product Owner-approved DN-1A through DN-5A remain the only binding choices; no new decision is needed.
 
 No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains valuable baseline capability, but it is not counted as Prototype 0.1 completion until it satisfies the frozen end-to-end release contract.
 
@@ -19,7 +19,7 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 | Gate | State | Evidence | Exit condition |
 |---|---|---|---|
-| G0 — Specification freeze | `REWORK_HOLD` | [PO approval](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5449398997); [49fb independent HOLD](https://github.com/lucassu2012/ANEB_GPT/issues/14#issuecomment-5451262282) | new exact head rejects the published remaining survivors; decision-log entries; specs merged |
+| G0 — Specification freeze | `REWORK_HOLD` | [PO approval](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5449398997); [0a8c independent HOLD](https://github.com/lucassu2012/ANEB_GPT/issues/14#issuecomment-5451413296) | new exact head rejects the published remaining survivors; decision-log entries; specs merged |
 | G1 — Core deterministic contract | `BACKLOG` | issue #15 | tested workload/conditions/capability/receipts |
 | G2 — Android vertical slice | `BACKLOG` | issue #16 | Quick + Acceptance campaign and metric gates pass |
 | G3 — Fixed Windows package | `BACKLOG` | issue #17 | self-contained candidate launches from fresh directory |
@@ -32,7 +32,7 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 | Issue | Conversation | State | Current output | Dependency / blocker |
 |---:|---|---|---|---|
 | #13 | `20260803_ANEB开发策略与质量_v2` | `IN_PROGRESS` | dispatch receipt, status PR and [DN-1A–DN-5A approval](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5449398997) recorded | waits for revised G0 head |
-| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS_REWORK` | second exact head `49fb3e12` independently reviewed; remaining one-fault repros published | must close failure-state topology and raw/cross-file authority survivors; cannot self-advance G0 |
+| #14 | `20260710_智能体网络诉求` | `IN_PROGRESS_REWORK` | third exact head `0a8c8cfb` independently reviewed by schema/evidence/scope tracks; consolidated HOLD published | must close failed-receipt, exact run-plan, event/receipt/time authority and normative VERSION gaps; cannot self-advance G0 |
 | #15 | `20260715_开发ANEB系统` | `WAITING_G0` | read-only contract vectors plus provisional `49fb3e12` interface/test delta map complete | waits for #14 contract freeze; implementation forbidden before G0 |
 | #16 | `20260714_设计ANEB 手机APP界面` | `WAITING_ON_14_15` | Android conformance vectors plus provisional field-to-layer/fixture map complete | waits for #14 freeze and #15 versioned interface |
 | #17 | `20260804_ANEB_试点产品体验与上线缺口` | `HOLD_REBASE_AFTER_G0` | PR #22 preserved as an unmergeable carrier; clean-replay map complete | must replay only applicable mechanical content from an approved G0 head; never merge the rejected `f23d9ca` chain |
@@ -66,9 +66,9 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 
 ## Current primary blocker
 
-`G0` cannot pass because independent review of exact head `49fb3e12a156592816f34dfec05cfb1053b56777` still finds valid instances with mismatched `cancelled`/`ttft_timeout`/`server_rejected`/`incompatible` status and reason topology. Its evidence verifier also accepts a forged single-event campaign id, an unknown event type, a split terminal clock domain, a forged run-record schema version and a coordinated downstream campaign rewrite that disagrees with raw events.
+`G0` cannot pass because independent review of exact head `0a8c8cfb0ba4535dfb8984c21c8048fec029b194` still accepts `invalid_sequence` with a valid terminal receipt; duplicate or coordinated extra runs; forged event schema/clock-unit and receipt fields; one-nanosecond start/terminal timestamp drift; and invalid per-run event ordering. The candidate's VERSION test also exercises non-normative field names, while docs and schema disagree on `incompatible + invalid_evidence` and the run-level placement of `mandatory_metric_missing`.
 
-The earlier schedule-byte, capability-order, B/S/U index, complete/eligibility, clock-domain field, partial/null and manifest-oracle defects are closed at `49fb3e12`; the remaining blocker is the narrower failure-state and cross-file raw-authority proof above.
+The prior failure-reason, single-event campaign, unknown-event, split terminal-domain, forged runs-schema-version and coordinated downstream campaign-rewrite defects are closed at `0a8c8cfb`. The remaining blocker is the narrower exact run-plan, receipt/time topology and published-fixture consistency proof above.
 
 The Product Owner approved option A for all five choices: Android `elapsedRealtimeNanos()` boundaries, arithmetic even-sample median, bare lowercase canonical hash identity, primary plus ordered full null reasons with raw-event verifier authority, and packaging the four existing machine contracts. The [binding receipt](https://github.com/lucassu2012/ANEB_GPT/issues/13#issuecomment-5449398997) creates no sixth decision or additional scope.
 
@@ -91,7 +91,7 @@ There is no current hardware, administrator-rights, cloud-node, PCAP or third-pa
 ## Next PMO actions
 
 1. keep #15 and #16 waiting until the binding contracts are frozen;
-2. have SPEC minimally close only the published `49fb3e12` survivors, publish a new exact commit and rerun focused vectors;
+2. have SPEC minimally close only the consolidated `0a8c8cfb` survivors, publish a new exact commit and rerun focused vectors;
 3. keep PR #22 unmerged; use its clean-replay map only after G0 passes, while #18 remains device-blocked until an exact signed RC;
 4. append the approved DN-1A–DN-5A decisions to the decision log with their exact evidence links;
 5. merge PR #20 to `product/prototype-0.1` only after the new exact head passes #14 re-review;
