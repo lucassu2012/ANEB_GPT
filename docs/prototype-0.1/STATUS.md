@@ -36,7 +36,7 @@ No Prototype 0.1 implementation gate has passed yet. Existing ANEB code remains 
 | #15 | `20260715_开发ANEB系统` | `WAITING_G0` | read-only gap analysis and six-part test plan complete | waits for #14 contract freeze; implementation forbidden before G0 |
 | #16 | `20260714_设计ANEB 手机APP界面` | `WAITING_ON_14_15` | dispatch acknowledged; read-only gap/vector mapping only | waits for #14 freeze and #15 versioned interface |
 | #17 | `20260804_ANEB_试点产品体验与上线缺口` | `IN_PROGRESS_SKELETON` | offline verifier/finalizer/launcher/report skeleton started | final ZIP waits for fixed #15 server and #16 APK |
-| #18 | `20260801_ANEB_WP2设备运行时` | `IN_PROGRESS_READ_ONLY` | selective-reuse review started; `CANDIDATE=NONE`, `DEVICE=NOT_TOUCHED` | P40 acceptance waits for one signed RC |
+| #18 | `20260801_ANEB_WP2设备运行时` | `COMPLETE_PROVISIONAL` | [selective BACKPORT/REJECT table published](https://github.com/lucassu2012/ANEB_GPT/issues/18#issuecomment-5447816886); `CANDIDATE=NONE`, `DEVICE=NOT_TOUCHED` | recommendations remain provisional; P40 waits for new G0 head and one signed RC |
 | #19 | Prototype 0.2 real-App protocol | `FROZEN_POST_0_1` | issue remains non-blocking research only | no work may consume Prototype 0.1 critical-path capacity |
 
 ## Locked product decisions
