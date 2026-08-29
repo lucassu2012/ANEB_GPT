@@ -24,6 +24,8 @@ private data class ContentRunIdentity(
     val runId: String,
 )
 
+private class DuplicateContentIdentityKeyException : IllegalArgumentException()
+
 private fun requireJsonNestingWithinBudget(payload: String) {
     var depth = 0
     var inString = false
@@ -78,11 +80,15 @@ private object ContentRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
         "PrototypeContentRootDuplicateKeyProbe",
     ) {
         element("details", ContentDetailsDuplicateKeyProbe.descriptor, isOptional = true)
+        element("campaign_id", JsonElement.serializer().descriptor, isOptional = true)
+        element("run_id", JsonElement.serializer().descriptor, isOptional = true)
     }
 
     override fun deserialize(decoder: Decoder) {
         decoder.decodeStructure(descriptor) {
             var seenDetails = false
+            var seenCampaignId = false
+            var seenRunId = false
             while (true) {
                 when (val index = decodeElementIndex(descriptor)) {
                     CompositeDecoder.DECODE_DONE -> break
@@ -94,6 +100,16 @@ private object ContentRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
                             index,
                             ContentDetailsDuplicateKeyProbe,
                         )
+                    }
+                    1 -> {
+                        if (seenCampaignId) throw DuplicateContentIdentityKeyException()
+                        seenCampaignId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    2 -> {
+                        if (seenRunId) throw DuplicateContentIdentityKeyException()
+                        seenRunId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
                     }
                     else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
                 }
@@ -140,7 +156,8 @@ class PrototypeRunStreamAdapter(
         ) {
             "prototype SSE stream must contain run_started, 120 content events, and final done"
         }
-        var expectedIdentity = runStartedIdentity(rawEvents.first())
+        val expectedIdentity = runStartedIdentity(rawEvents.first())
+        require(expectedIdentity != null) { CONTENT_IDENTITY_ERROR }
         rawEvents.subList(1, rawEvents.lastIndex).forEachIndexed { index, rawEvent ->
             val expectedSequence = index + 1
             val lines = rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().toList()
@@ -155,6 +172,8 @@ class PrototypeRunStreamAdapter(
             requireJsonNestingWithinBudget(dataPayload)
             try {
                 probeJson.decodeFromString(ContentRootDuplicateKeyProbe, dataPayload)
+            } catch (error: DuplicateContentIdentityKeyException) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
             } catch (error: Exception) {
                 throw IllegalArgumentException(CONTENT_SEQUENCE_ERROR, error)
             }
@@ -178,11 +197,7 @@ class PrototypeRunStreamAdapter(
                 CONTENT_SEQUENCE_ERROR
             }
             val eventIdentity = identityFromEnvelope(envelope)
-            if (expectedIdentity != null) {
-                require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
-            } else if (eventIdentity != null) {
-                expectedIdentity = eventIdentity
-            }
+            require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
         }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
@@ -210,6 +225,7 @@ class PrototypeRunStreamAdapter(
                 ?.removePrefix(DATA_PREFIX)
                 ?: return null
             val envelope = try {
+                probeJson.decodeFromString(ContentRootDuplicateKeyProbe, dataPayload)
                 contentJson.parseToJsonElement(dataPayload)
             } catch (_: Exception) {
                 return null
