@@ -18,8 +18,8 @@ class PrototypeRunStreamAdapterTest {
     @Test
     fun postTransportPreservesProvidedRawEventsAndDecodesSharedTerminalFixture() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
-        // `run_started` remains carrier-only in this atom; content sequence is
-        // claimed, while identity and payload remain NONCLAIMS.
+        // Content sequence and content run identity are claimed in this atom;
+        // request/terminal cross-binding and payload remain NONCLAIMS.
         val blocks = canonicalBlocks(doneFrame, contentCount = 120)
         val streamText = blocks.joinToString(separator = "\n\n", postfix = "\n\n")
         val arrivals = blocks.indices.map { (it + 1) * 1_000L }
@@ -85,7 +85,10 @@ class PrototypeRunStreamAdapterTest {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val sequenceValues = listOf(1, 1) + (3..120).toList()
         val blocks = buildList {
-            add("event: run_started\ndata: {\"event_type\":\"run_started\"}")
+            add(
+                "event: run_started\ndata: " +
+                    "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
             sequenceValues.forEach { seq -> add(serverContentBlock(seq)) }
             add(doneFrame.removeSuffix("\n\n"))
         }
@@ -98,6 +101,239 @@ class PrototypeRunStreamAdapterTest {
                 requestBody = "{\"validated_request\":true}",
             )
             org.junit.Assert.fail("duplicate content sequence was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun contentRunIdentityMismatchFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[0] =
+            "event: run_started\ndata: " +
+                "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}"
+        val mismatchedContentIndex = 1 + 41
+        blocks[mismatchedContentIndex] = blocks[mismatchedContentIndex].replace(
+            "\"campaign_id\":\"campaign-1\"",
+            "\"campaign_id\":\"campaign-mismatch\"",
+        )
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("content campaign identity mismatch was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content event identity must match the run",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun runStartedMissingIdentityCannotAuthorizeContentRun() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).mapIndexed { index, block ->
+            if (index == 0) {
+                "event: run_started\ndata: {\"event_type\":\"run_started\"}"
+            } else if (index in 1..120) {
+                block
+                    .replace("\"campaign_id\":\"campaign-1\"", "\"campaign_id\":\"forged-campaign\"")
+                    .replace("\"run_id\":\"run-1\"", "\"run_id\":\"forged-run\"")
+            } else {
+                block
+            }
+        }
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("content identity was accepted without run_started authority")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content event identity must match the run",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun duplicateCampaignIdentityMemberFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        val original = blocks[1]
+        blocks[1] = original.replace(
+            "\"campaign_id\":\"campaign-1\",\"run_id\"",
+            "\"campaign_id\":\"forged-campaign\",\"\\u0063ampaign_id\":\"campaign-1\",\"run_id\"",
+        )
+        require(blocks[1] != original)
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("duplicate campaign_id member was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content event identity must match the run",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun duplicateRunIdentityMemberFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        val original = blocks[1]
+        blocks[1] = original.replace(
+            "\"run_id\":\"run-1\",\"condition_id\"",
+            "\"run_id\":\"forged-run\",\"\\u0072un_id\":\"run-1\",\"condition_id\"",
+        )
+        require(blocks[1] != original)
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("duplicate run_id member was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content event identity must match the run",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun runStartedIdentityRejectsPartialOrNonStringPair() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "missing campaign_id" to "{\"event_type\":\"run_started\",\"run_id\":\"run-1\"}",
+            "missing run_id" to "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\"}",
+            "numeric campaign_id" to "{\"event_type\":\"run_started\",\"campaign_id\":1,\"run_id\":\"run-1\"}",
+            "null run_id" to "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":null}",
+        )
+        val accepted = mutableListOf<String>()
+        val wrongMessages = mutableListOf<String>()
+        cases.forEach { (name, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = "event: run_started\ndata: $payload"
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                accepted += name
+            } catch (error: IllegalArgumentException) {
+                if (error.message != "prototype SSE content event identity must match the run") {
+                    wrongMessages += "$name -> ${error.message}"
+                }
+            }
+        }
+        assertTrue(
+            "accepted=$accepted; wrongMessages=$wrongMessages",
+            accepted.isEmpty() && wrongMessages.isEmpty(),
+        )
+    }
+
+    @Test
+    fun contentIdentityRejectsMissingOrNonStringPair() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val canonical = serverContentBlock(1)
+        val cases = listOf(
+            "missing campaign_id" to canonical.replace(
+                "\"campaign_id\":\"campaign-1\",",
+                "",
+            ),
+            "missing run_id" to canonical.replace(
+                "\"run_id\":\"run-1\",",
+                "",
+            ),
+            "numeric campaign_id" to canonical.replace(
+                "\"campaign_id\":\"campaign-1\"",
+                "\"campaign_id\":1",
+            ),
+            "null run_id" to canonical.replace(
+                "\"run_id\":\"run-1\"",
+                "\"run_id\":null",
+            ),
+        )
+        val accepted = mutableListOf<String>()
+        val wrongMessages = mutableListOf<String>()
+        cases.forEach { (name, block) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[1] = block
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                accepted += name
+            } catch (error: IllegalArgumentException) {
+                if (error.message != "prototype SSE content event identity must match the run") {
+                    wrongMessages += "$name -> ${error.message}"
+                }
+            }
+        }
+        assertTrue(
+            "accepted=$accepted; wrongMessages=$wrongMessages",
+            accepted.isEmpty() && wrongMessages.isEmpty(),
+        )
+    }
+
+    @Test
+    fun sequenceDuplicatePrecedesIdentityDuplicateWhenIdentityKeyAppearsFirst() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[1] =
+            "event: content_event\ndata: " +
+                "{\"campaign_id\":\"forged-campaign\",\"campaign_id\":\"campaign-1\",\"" +
+                "run_id\":\"run-1\",\"event_type\":\"content_event\",\"details\":{" +
+                "seq\":999,\"seq\":1}}"
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("identity duplicate ahead of sequence duplicate was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun sequenceDuplicatePrecedesIdentityDuplicateWhenSequenceKeyAppearsFirst() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[1] =
+            "event: content_event\ndata: " +
+                "{\"run_id\":\"run-1\",\"event_type\":\"content_event\",\"details\":{" +
+                "seq\":999,\"seq\":1},\"campaign_id\":\"forged-campaign\",\"" +
+                "campaign_id\":\"campaign-1\"}"
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("sequence duplicate was accepted")
         } catch (error: IllegalArgumentException) {
             assertEquals(
                 "prototype SSE content events must have exact seq 1 through 120",
@@ -266,7 +502,7 @@ class PrototypeRunStreamAdapterTest {
 
         cases.forEach { (name, data) ->
             val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
-            blocks[1] = "event: content_event\ndata: $data"
+            blocks[1] = "event: content_event\ndata: ${contentPayloadWithIdentity(data)}"
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
@@ -314,8 +550,10 @@ class PrototypeRunStreamAdapterTest {
         val duplicateDetailsBlocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
         duplicateDetailsBlocks[1] =
             "event: content_event\ndata: " +
-                "{\"event_type\":\"content_event\",\"details\":{\"seq\":999}," +
-                "\"details\":{\"seq\":1}}"
+                contentPayloadWithIdentity(
+                    "{\"event_type\":\"content_event\",\"details\":{\"seq\":999}," +
+                        "\"details\":{\"seq\":1}}",
+                )
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(duplicateDetailsBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
@@ -331,8 +569,10 @@ class PrototypeRunStreamAdapterTest {
         val escapedSeqBlocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
         escapedSeqBlocks[1] =
             "event: content_event\ndata: " +
-                "{\"event_type\":\"content_event\",\"details\":{\"seq\":999," +
-                "\"\\u0073eq\":1}}"
+                contentPayloadWithIdentity(
+                    "{\"event_type\":\"content_event\",\"details\":{\"seq\":999," +
+                        "\"\\u0073eq\":1}}",
+                )
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(escapedSeqBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
@@ -373,8 +613,10 @@ class PrototypeRunStreamAdapterTest {
         val invalidBlocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
         invalidBlocks[1] =
             "event: content_event\ndata: " +
-                "{\"details\":{\"seq\":999},\"det\\u0061ils\":{\"seq\":1}," +
-                "\"event_type\":\"content_event\"}"
+                contentPayloadWithIdentity(
+                    "{\"details\":{\"seq\":999},\"det\\u0061ils\":{\"seq\":1}," +
+                        "\"event_type\":\"content_event\"}",
+                )
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(invalidBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
@@ -416,7 +658,7 @@ class PrototypeRunStreamAdapterTest {
         )
         validCases.forEach { (name, data) ->
             val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
-            blocks[1] = "event: content_event\ndata: $data"
+            blocks[1] = "event: content_event\ndata: ${contentPayloadWithIdentity(data)}"
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
@@ -661,7 +903,10 @@ class PrototypeRunStreamAdapterTest {
     )
 
     private fun canonicalBlocks(doneFrame: String, contentCount: Int): List<String> = buildList {
-        add("event: run_started\ndata: {\"event_type\":\"run_started\"}")
+        add(
+            "event: run_started\ndata: " +
+                "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+        )
         repeat(contentCount) { index ->
             add(serverContentBlock(index + 1))
         }
@@ -679,6 +924,16 @@ class PrototypeRunStreamAdapterTest {
             "\"details\":{\"seq\":$seq,\"planned_offset_ms\":0," +
             "\"payload_id\":\"payload-$seq\",\"profile_manifest_sha256\":\"manifest\"," +
             "\"schedule_hash\":\"schedule\"}}"
+
+    private fun contentPayloadWithIdentity(data: String): String =
+        if (data.trimStart().startsWith("{")) {
+            data.replaceFirst(
+                "{",
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",",
+            )
+        } else {
+            data
+        }
 
     private fun rawStreamOf(
         blocks: List<String>,

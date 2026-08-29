@@ -29,8 +29,8 @@ import kotlin.concurrent.thread
  * Natural RED for the AnebClient-backed Prototype raw POST/SSE bridge.
  *
  * The request JSON is an opaque caller-provided carrier; this atom does not
- * construct or canonicalize the RunRequest. Content sequence/identity,
- * metrics, persistence, and UI remain explicit NONCLAIMS.
+ * construct or canonicalize the RunRequest. Content sequence/identity is
+ * validated by the adapter; metrics, persistence, and UI remain NONCLAIMS.
  */
 class AnebClientPrototypeRawPostTransportTest {
     @Test
@@ -38,7 +38,10 @@ class AnebClientPrototypeRawPostTransportTest {
         val requestBody = "{\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
         val doneFrame = readSharedDoneFixture().removeSuffix("\n\n")
         val expectedFrames = buildList {
-            add("event: run_started\ndata: {\"event_type\":\"run_started\"}")
+            add(
+                "event: run_started\ndata: " +
+                    "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
             repeat(120) { seq ->
                 add(serverContentBlock(seq + 1))
             }
