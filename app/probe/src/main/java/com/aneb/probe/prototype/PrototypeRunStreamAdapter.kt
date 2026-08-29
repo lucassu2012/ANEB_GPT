@@ -23,6 +23,8 @@ private const val TERMINAL_IDENTITY_ERROR =
     "prototype SSE terminal receipt identity must match the run"
 private const val RUN_STARTED_EVENT_TYPE_ERROR =
     "prototype SSE run_started payload event_type must match the SSE event"
+private const val TERMINAL_COMPLETION_ERROR =
+    "prototype SSE terminal receipt must report complete 120-event delivery"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -33,6 +35,8 @@ private data class ContentRunIdentity(
 private class DuplicateContentIdentityKeyException : IllegalArgumentException()
 
 private class DuplicateTerminalIdentityKeyException : IllegalArgumentException()
+
+private class DuplicateTerminalCompletionFactKeyException : IllegalArgumentException()
 
 private class DuplicateRunStartedEventTypeKeyException : IllegalArgumentException()
 
@@ -250,6 +254,78 @@ private object TerminalIdentityDuplicateKeyProbe : DeserializationStrategy<Unit>
     }
 }
 
+private object TerminalCompletionDetailsDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalCompletionDetailsDuplicateKeyProbe",
+    ) {
+        element("planned_event_count", JsonElement.serializer().descriptor, isOptional = true)
+        element("emitted_event_count", JsonElement.serializer().descriptor, isOptional = true)
+        element("terminal_status", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenPlannedEventCount = false
+            var seenEmittedEventCount = false
+            var seenTerminalStatus = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenPlannedEventCount) throw DuplicateTerminalCompletionFactKeyException()
+                        seenPlannedEventCount = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    1 -> {
+                        if (seenEmittedEventCount) throw DuplicateTerminalCompletionFactKeyException()
+                        seenEmittedEventCount = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    2 -> {
+                        if (seenTerminalStatus) throw DuplicateTerminalCompletionFactKeyException()
+                        seenTerminalStatus = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object TerminalCompletionRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalCompletionRootDuplicateKeyProbe",
+    ) {
+        element(
+            "details",
+            TerminalCompletionDetailsDuplicateKeyProbe.descriptor,
+            isOptional = true,
+        )
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenDetails = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        require(!seenDetails) { TERMINAL_COMPLETION_ERROR }
+                        seenDetails = true
+                        decodeSerializableElement(
+                            descriptor,
+                            index,
+                            TerminalCompletionDetailsDuplicateKeyProbe,
+                        )
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
 /** Transport seam for the Prototype 0.1 POST run stream. */
 interface PrototypeRawPostTransport {
     suspend fun post(url: String, requestBody: String): RawSseStream
@@ -371,6 +447,12 @@ class PrototypeRunStreamAdapter(
         ) {
             TERMINAL_IDENTITY_ERROR
         }
+        try {
+            probeJson.decodeFromString(TerminalCompletionRootDuplicateKeyProbe, terminalDataPayload)
+        } catch (error: Exception) {
+            throw IllegalArgumentException(TERMINAL_COMPLETION_ERROR, error)
+        }
+        requireTerminalCompletionFacts(decodedTerminal.envelope)
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
             decodedTerminal = decodedTerminal,
@@ -444,6 +526,26 @@ class PrototypeRunStreamAdapter(
                 ContentRunIdentity(campaignId, runId)
             } else {
                 null
+            }
+        }
+
+        private fun requireTerminalCompletionFacts(envelope: JsonObject) {
+            val details = envelope["details"] as? JsonObject
+            val terminalStatus = details?.get("terminal_status") as? JsonPrimitive
+            val plannedEventCount = details?.get("planned_event_count") as? JsonPrimitive
+            val emittedEventCount = details?.get("emitted_event_count") as? JsonPrimitive
+            require(
+                terminalStatus != null &&
+                    terminalStatus.isString &&
+                    terminalStatus.content == "complete" &&
+                    plannedEventCount != null &&
+                    !plannedEventCount.isString &&
+                    plannedEventCount.content == "120" &&
+                    emittedEventCount != null &&
+                    !emittedEventCount.isString &&
+                    emittedEventCount.content == "120",
+            ) {
+                TERMINAL_COMPLETION_ERROR
             }
         }
     }
