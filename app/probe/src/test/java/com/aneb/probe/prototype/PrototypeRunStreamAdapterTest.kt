@@ -16,6 +16,10 @@ import java.util.concurrent.CancellationException
 
 private const val TERMINAL_COMPLETION_ERROR =
     "prototype SSE terminal receipt must report complete 120-event delivery"
+private const val TERMINAL_IDENTITY_ERROR =
+    "prototype SSE terminal receipt identity must match the run"
+private const val REQUEST_RUN_IDENTITY_ERROR =
+    "prototype SSE run identity must match the outgoing request"
 
 class PrototypeRunStreamAdapterTest {
     @Test
@@ -31,7 +35,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("run_started payload event_type mismatch was accepted")
         } catch (error: IllegalArgumentException) {
@@ -40,6 +44,845 @@ class PrototypeRunStreamAdapterTest {
                 error.message,
             )
         }
+    }
+
+    @Test
+    fun outgoingRequestIdentityMustMatchEveryStreamEvent() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val requestProducer = officialProducerCases.first().copy(
+            campaignId = "campaign-request-a",
+            runId = "run-request-a",
+        )
+        val requestBody = officialRunRequestBody(requestProducer)
+        val endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs"
+        val streamCases = listOf(
+            "campaign only" to requestProducer.copy(campaignId = "campaign-stream-b"),
+            "run only" to requestProducer.copy(runId = "run-stream-b"),
+            "campaign and run" to requestProducer.copy(
+                campaignId = "campaign-stream-b",
+                runId = "run-stream-b",
+            ),
+        )
+        val accepted = mutableListOf<String>()
+
+        streamCases.forEach { (label, streamProducer) ->
+            val transport = FakeRawPostTransport(
+                rawStreamOf(producerShapedBlocks(doneFrame, streamProducer)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = endpoint,
+                    requestBody = requestBody,
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+            }
+            assertEquals(endpoint, transport.postedUrl)
+            assertEquals(requestBody, transport.postedBody)
+        }
+
+        assertTrue(
+            "outgoing request identity variants were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+    }
+
+    @Test
+    fun matchingOfficialRequestIdentityIsAccepted() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = officialProducerCases.first().copy(
+            campaignId = "campaign-request-a",
+            runId = "run-request-a",
+        )
+        val requestBody = officialRunRequestBody(producer)
+        val transport = FakeRawPostTransport(
+            rawStreamOf(producerShapedBlocks(doneFrame, producer)),
+        )
+
+        val result = PrototypeRunStreamAdapter(transport).run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            requestBody = requestBody,
+        )
+
+        assertNotNull(result.decodedTerminal)
+        assertEquals(requestBody, transport.postedBody)
+    }
+
+    @Test
+    fun outgoingRequestIdentityRejectsSemanticDuplicateKeys() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val canonical = officialProducerCases.first().copy(
+            campaignId = "campaign-request-a",
+            runId = "run-request-a",
+        )
+        val forged = canonical.copy(
+            campaignId = "campaign-request-b",
+            runId = "run-request-b",
+        )
+        val campaignForged = canonical.copy(campaignId = forged.campaignId)
+        val runForged = canonical.copy(runId = forged.runId)
+        class DuplicateCase(
+            val label: String,
+            val field: String,
+            val canonicalValue: String,
+            val firstKey: String,
+            val firstValue: String,
+            val secondKey: String,
+            val secondValue: String,
+            val streamProducer: OfficialProducerCase,
+        )
+        val campaignEscaped = "campaign_\\u0069d"
+        val runEscaped = "run_\\u0069d"
+        val cases = listOf(
+            DuplicateCase(
+                "campaign canonical/canonical",
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                canonical,
+            ),
+            DuplicateCase(
+                "campaign canonical/forged",
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                forged.campaignId,
+                campaignForged,
+            ),
+            DuplicateCase(
+                "campaign forged/canonical",
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                forged.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                canonical,
+            ),
+            DuplicateCase(
+                "campaign plain/escaped",
+                "campaign_id",
+                canonical.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                campaignEscaped,
+                forged.campaignId,
+                campaignForged,
+            ),
+            DuplicateCase(
+                "campaign escaped/plain",
+                "campaign_id",
+                canonical.campaignId,
+                campaignEscaped,
+                forged.campaignId,
+                "campaign_id",
+                canonical.campaignId,
+                canonical,
+            ),
+            DuplicateCase(
+                "run canonical/canonical",
+                "run_id",
+                canonical.runId,
+                "run_id",
+                canonical.runId,
+                "run_id",
+                canonical.runId,
+                canonical,
+            ),
+            DuplicateCase(
+                "run canonical/forged",
+                "run_id",
+                canonical.runId,
+                "run_id",
+                canonical.runId,
+                "run_id",
+                forged.runId,
+                runForged,
+            ),
+            DuplicateCase(
+                "run forged/canonical",
+                "run_id",
+                canonical.runId,
+                "run_id",
+                forged.runId,
+                "run_id",
+                canonical.runId,
+                canonical,
+            ),
+            DuplicateCase(
+                "run plain/escaped",
+                "run_id",
+                canonical.runId,
+                "run_id",
+                canonical.runId,
+                runEscaped,
+                forged.runId,
+                runForged,
+            ),
+            DuplicateCase(
+                "run escaped/plain",
+                "run_id",
+                canonical.runId,
+                runEscaped,
+                forged.runId,
+                "run_id",
+                canonical.runId,
+                canonical,
+            ),
+        )
+        val accepted = mutableListOf<String>()
+
+        cases.forEach { case ->
+            val requestBody = requestBodyWithDuplicateIdentity(
+                producer = canonical,
+                field = case.field,
+                canonicalValue = case.canonicalValue,
+                firstKey = case.firstKey,
+                firstValue = case.firstValue,
+                secondKey = case.secondKey,
+                secondValue = case.secondValue,
+            )
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(
+                        rawStreamOf(producerShapedBlocks(doneFrame, case.streamProducer)),
+                    ),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                accepted += case.label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+            }
+        }
+
+        assertTrue(
+            "request identity duplicate cases were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+    }
+
+    @Test
+    fun outgoingRequestIdentityAcceptsOfficialRepresentations() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val representations: List<Pair<String, (OfficialProducerCase) -> String>> = listOf(
+            "canonical" to { producer -> officialRunRequestBody(producer) },
+            "reordered whitespace" to { producer ->
+                officialRunRequestBodyWithRepresentation(producer, reordered = true)
+            },
+            "escaped identity values" to { producer ->
+                officialRunRequestBodyWithRepresentation(producer, escapedIdentityValues = true)
+            },
+        )
+        val accepted = mutableListOf<String>()
+
+        officialProducerCases.forEach { producer ->
+            representations.forEach { (label, bodyFactory) ->
+                val requestBody = bodyFactory(producer)
+                val transport = FakeRawPostTransport(
+                    rawStreamOf(producerShapedBlocks(doneFrame, producer)),
+                )
+                try {
+                    val result = PrototypeRunStreamAdapter(transport).run(
+                        endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                        requestBody = requestBody,
+                    )
+                    assertNotNull(result.decodedTerminal)
+                    assertEquals(requestBody, transport.postedBody)
+                    accepted += "${producer.label}/$label"
+                } catch (error: Throwable) {
+                    org.junit.Assert.fail(
+                        "${producer.label}/$label official representation was rejected: ${error.message}",
+                    )
+                }
+            }
+        }
+
+        assertEquals(
+            "official request representation cases were not all accepted: $accepted",
+            9,
+            accepted.size,
+        )
+    }
+
+    @Test
+    fun outgoingRequestIdentityRejectsValidDistinctIds() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val baseline = officialProducerCases[0]
+        val slow = officialProducerCases[1]
+        val unstable = officialProducerCases[2]
+        val cases = listOf(
+            "baseline campaign case-only" to Pair(
+                baseline,
+                baseline.copy(campaignId = baseline.campaignId.replace("official", "Official")),
+            ),
+            "baseline run case-only" to Pair(
+                baseline,
+                baseline.copy(runId = baseline.runId.replace("official", "Official")),
+            ),
+            "baseline campaign formal forged" to Pair(
+                baseline,
+                baseline.copy(campaignId = "${baseline.campaignId}-forged"),
+            ),
+            "slow campaign suffix" to Pair(
+                slow,
+                slow.copy(campaignId = "${slow.campaignId}-suffix"),
+            ),
+            "slow run suffix" to Pair(
+                slow,
+                slow.copy(runId = "${slow.runId}-suffix"),
+            ),
+            "unstable campaign prefix" to Pair(
+                unstable,
+                unstable.copy(campaignId = "prefix-${unstable.campaignId}"),
+            ),
+            "unstable run prefix" to Pair(
+                unstable,
+                unstable.copy(runId = "prefix-${unstable.runId}"),
+            ),
+        )
+        val accepted = mutableListOf<String>()
+        val rejected = mutableListOf<String>()
+
+        cases.forEach { (label, producers) ->
+            val requestBody = officialRunRequestBody(producers.first)
+            val transport = FakeRawPostTransport(
+                rawStreamOf(producerShapedBlocks(doneFrame, producers.second)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+                rejected += label
+            }
+        }
+
+        assertTrue(
+            "valid distinct request identity cases were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+        assertEquals(7, rejected.size)
+    }
+
+    @Test
+    fun outgoingRequestIdentityRejectsRequestSideDistinctIds() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val baseline = officialProducerCases[0]
+        val slow = officialProducerCases[1]
+        val unstable = officialProducerCases[2]
+        val cases = listOf(
+            "baseline campaign case-only" to Pair(
+                baseline.copy(campaignId = baseline.campaignId.replace("official", "Official")),
+                baseline,
+            ),
+            "baseline run case-only" to Pair(
+                baseline.copy(runId = baseline.runId.replace("official", "Official")),
+                baseline,
+            ),
+            "slow campaign prefix" to Pair(
+                slow.copy(campaignId = "prefix-${slow.campaignId}"),
+                slow,
+            ),
+            "slow run suffix" to Pair(
+                slow.copy(runId = "${slow.runId}-suffix"),
+                slow,
+            ),
+            "unstable campaign suffix" to Pair(
+                unstable.copy(campaignId = "${unstable.campaignId}-suffix"),
+                unstable,
+            ),
+            "unstable run prefix" to Pair(
+                unstable.copy(runId = "prefix-${unstable.runId}"),
+                unstable,
+            ),
+            "unstable campaign and run" to Pair(
+                unstable.copy(
+                    campaignId = "${unstable.campaignId}-suffix",
+                    runId = "prefix-${unstable.runId}",
+                ),
+                unstable,
+            ),
+        )
+        val accepted = mutableListOf<String>()
+        val rejected = mutableListOf<String>()
+
+        cases.forEach { (label, producers) ->
+            val requestBody = officialRunRequestBody(producers.first)
+            val transport = FakeRawPostTransport(
+                rawStreamOf(producerShapedBlocks(doneFrame, producers.second)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+                rejected += label
+            }
+        }
+
+        assertTrue(
+            "request-side distinct identity cases were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+        assertEquals(7, rejected.size)
+    }
+
+    @Test
+    fun outgoingRequestIdentityRejectsParserBoundaryFallbacks() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = buildList {
+            add("malformed left-brace" to "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"")
+            listOf(
+                "null" to "null",
+                "string" to "\"request\"",
+                "number" to "1",
+                "bool" to "true",
+                "array" to "[]",
+            ).forEach { (label, body) -> add("root $label" to body) }
+            listOf(
+                "missing" to null,
+                "null" to "null",
+                "number" to "1",
+                "bool" to "true",
+                "array" to "[]",
+                "object" to "{}",
+                "empty" to "\"\"",
+            ).forEach { (label, value) ->
+                add("campaign $label" to requestBodyWithIdentityValue("campaign_id", value))
+                add("run $label" to requestBodyWithIdentityValue("run_id", value))
+            }
+        }
+        val accepted = mutableListOf<String>()
+        val rejected = mutableListOf<String>()
+
+        cases.forEach { (label, requestBody) ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(
+                        rawStreamOf(canonicalBlocks(doneFrame, contentCount = 120)),
+                    ),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+                rejected += label
+            }
+        }
+
+        assertTrue(
+            "request parser boundary cases were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+        assertEquals(20, rejected.size)
+    }
+
+    @Test
+    fun outgoingRequestIdentityRejectsDecodedWhitespaceAndNormalizationVariants() = runBlocking {
+        // Adapter-internal strict vectors only: the formal Go entrance normally rejects these
+        // request spellings. They prove that this consumer does not trim, coalesce, or normalize.
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "campaign leading space" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\" campaign-1\"",
+            ),
+            "campaign trailing space" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"campaign-1 \"",
+            ),
+            "campaign TAB" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"campaign-1\\t\"",
+            ),
+            "campaign LF" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"campaign-1\\n\"",
+            ),
+            "campaign CR" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"campaign-1\\r\"",
+            ),
+            "campaign NUL" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"campaign-1\\u0000\"",
+            ),
+            "campaign NFKC" to requestBodyWithIdentityValue(
+                "campaign_id",
+                "\"\\uFF43ampaign-1\"",
+            ),
+            "run leading space" to requestBodyWithIdentityValue(
+                "run_id",
+                "\" run-1\"",
+            ),
+            "run trailing space" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"run-1 \"",
+            ),
+            "run TAB" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"run-1\\t\"",
+            ),
+            "run LF" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"run-1\\n\"",
+            ),
+            "run CR" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"run-1\\r\"",
+            ),
+            "run NUL" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"run-1\\u0000\"",
+            ),
+            "run NFKC" to requestBodyWithIdentityValue(
+                "run_id",
+                "\"\\uFF52un-1\"",
+            ),
+        )
+        val accepted = mutableListOf<String>()
+        val rejected = mutableListOf<String>()
+
+        cases.forEach { (label, requestBody) ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(
+                        rawStreamOf(canonicalBlocks(doneFrame, contentCount = 120)),
+                    ),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(REQUEST_RUN_IDENTITY_ERROR, error.message)
+                rejected += label
+            }
+        }
+
+        assertTrue(
+            "request strict vectors were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+        assertEquals(cases.size, rejected.size)
+    }
+
+    @Test
+    fun requestIdentityGateDoesNotStealTerminalErrors() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val streamProducer = officialProducerCases.first().copy(
+            campaignId = "campaign-stream-precedence",
+            runId = "run-stream-precedence",
+        )
+        val requestProducer = streamProducer.copy(
+            campaignId = "campaign-request-precedence",
+            runId = "run-request-precedence",
+        )
+        val requestBody = officialRunRequestBody(requestProducer)
+        val cases = listOf(
+            "terminal identity" to (TERMINAL_IDENTITY_ERROR to { frame: String ->
+                frame.replace(
+                    "\"${streamProducer.campaignId}\"",
+                    "\"forged-terminal\"",
+                )
+            }),
+            "terminal completion" to (TERMINAL_COMPLETION_ERROR to { frame: String ->
+                replaceTerminalDetailValue(
+                    frame,
+                    field = "terminal_status",
+                    canonicalValue = "\"complete\"",
+                    replacementValue = "\"failed\"",
+                )
+            }),
+        )
+
+        cases.forEach { (label, expectedAndMutate) ->
+            val blocks = producerShapedBlocks(doneFrame, streamProducer).toMutableList()
+            blocks[blocks.lastIndex] = expectedAndMutate.second(blocks.last())
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = requestBody,
+                )
+                org.junit.Assert.fail("$label error was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(expectedAndMutate.first, error.message)
+            }
+        }
+    }
+
+    @Test
+    fun requestIdentitySourceInvariantKeepsFinalUnconditionalGate() {
+        val source = readProductionSource()
+        val runStart = source.indexOf("suspend fun run(")
+        val runEnd = source.indexOf("\n    private companion object", runStart)
+        require(runStart >= 0 && runEnd > runStart) { "adapter run source was not found" }
+        val runBody = source.substring(runStart, runEnd)
+        val completionIndex = runBody.indexOf(
+            "requireTerminalCompletionFacts(decodedTerminal.envelope)",
+        )
+        val requestAssignment = Regex(
+            "(?m)^        val requestIdentity = requestIdentity\\(requestBody\\)$",
+        ).findAll(runBody).toList()
+        require(completionIndex >= 0) { "completion gate source was not found" }
+        assertEquals(1, requestAssignment.size)
+        val requestIndex = requestAssignment.single().range.first
+        val requestGate = "require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }"
+        val requestGateIndex = runBody.indexOf(requestGate)
+        val returnIndex = runBody.indexOf("return PrototypeRunStreamResult(", requestIndex)
+        assertTrue(requestIndex > completionIndex)
+        assertTrue(requestGateIndex > requestIndex)
+        assertTrue(returnIndex > requestGateIndex)
+        val finalStatements = """
+            |        requireTerminalCompletionFacts(decodedTerminal.envelope)
+            |        val requestIdentity = requestIdentity(requestBody)
+            |        require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
+            |        return PrototypeRunStreamResult(
+        """.trimMargin()
+        assertTrue(
+            "completion/request/gate/return statements drifted from the frozen top-level chain",
+            runBody.contains(finalStatements),
+        )
+        assertEquals(
+            1,
+            Regex("(?m)^        return\\b").findAll(runBody).count(),
+        )
+        val finalChain = runBody.substring(completionIndex, returnIndex)
+        assertTrue(!finalChain.contains("if ("))
+        assertTrue(!finalChain.contains("when"))
+        assertTrue(!Regex("\\blet\\b").containsMatchIn(finalChain))
+        assertTrue(!finalChain.contains("takeUnless"))
+        assertTrue(!finalChain.contains("runCatching"))
+        assertTrue(!finalChain.contains("endpoint"))
+        assertTrue(!finalChain.contains("condition"))
+
+        val helperStart = source.indexOf("private fun requestIdentity(requestBody: String)")
+        val helperEnd = source.indexOf(
+            "\n        private fun requireTerminalCompletionFacts",
+            helperStart,
+        )
+        require(helperStart >= 0 && helperEnd > helperStart) { "request identity helper was not found" }
+        val helper = source.substring(helperStart, helperEnd)
+        val probeIndex = helper.indexOf(
+            "probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, requestBody)",
+        )
+        val parseIndex = helper.indexOf("contentJson.parseToJsonElement(requestBody)")
+        val identityIndex = helper.indexOf("(envelope as? JsonObject)?.let(::identityFromEnvelope)")
+        assertTrue(probeIndex >= 0)
+        assertTrue(parseIndex > probeIndex)
+        assertTrue(identityIndex > parseIndex)
+        assertTrue(!helper.contains("trim"))
+        assertTrue(!helper.contains("ignoreCase"))
+        assertTrue(!helper.contains("lowercase"))
+        assertTrue(!helper.contains("uppercase"))
+        assertTrue(!helper.contains("?: expectedIdentity"))
+    }
+
+    @Test
+    fun requestIdentityAndExtractorKeepStrictFieldFrame() {
+        val source = readProductionSource()
+        fun compact(value: String): String = value.replace(Regex("\\s+"), "")
+
+        val requestStart = source.indexOf("private fun requestIdentity(requestBody: String)")
+        val requestEnd = source.indexOf(
+            "\n        private fun requireTerminalCompletionFacts",
+            requestStart,
+        )
+        require(requestStart >= 0 && requestEnd > requestStart) {
+            "request identity helper was not found"
+        }
+        val expectedRequest = """
+            private fun requestIdentity(requestBody: String): ContentRunIdentity? {
+                val envelope = try {
+                    probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, requestBody)
+                    contentJson.parseToJsonElement(requestBody)
+                } catch (_: Exception) {
+                    return null
+                }
+                return (envelope as? JsonObject)?.let(::identityFromEnvelope)
+            }
+        """.trimIndent()
+        assertEquals(
+            compact(expectedRequest),
+            compact(source.substring(requestStart, requestEnd)),
+        )
+
+        val identityStart = source.indexOf(
+            "private fun identityFromEnvelope(envelope: JsonObject)",
+        )
+        val identityEnd = source.indexOf(
+            "\n        private fun requestIdentity",
+            identityStart,
+        )
+        require(identityStart >= 0 && identityEnd > identityStart) {
+            "identity extractor was not found"
+        }
+        val expectedIdentity = """
+            private fun identityFromEnvelope(envelope: JsonObject): ContentRunIdentity? {
+                val campaignId = (envelope["campaign_id"] as? JsonPrimitive)
+                    ?.takeIf { it.isString }
+                    ?.content
+                val runId = (envelope["run_id"] as? JsonPrimitive)
+                    ?.takeIf { it.isString }
+                    ?.content
+                return if (campaignId != null && runId != null) {
+                    ContentRunIdentity(campaignId, runId)
+                } else {
+                    null
+                }
+            }
+        """.trimIndent()
+        assertEquals(
+            compact(expectedIdentity),
+            compact(source.substring(identityStart, identityEnd)),
+        )
+    }
+
+    @Test
+    fun requestIdentityProvenanceAndContentRunIdentityRemainUniqueFrames() {
+        // [FRAME] Maintenance-only whitelist: binds provenance and value-object shape; it adds no
+        // product claim and intentionally rejects equivalent refactors outside this exact frame.
+        val source = readProductionSource()
+        fun compact(value: String): String = value.replace(Regex("\\s+"), "")
+
+        assertEquals(
+            1,
+            Regex("(?m)\\bfun\\s+requestIdentity\\s*\\(").findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex("(?m)^\\s*private\\s+fun\\s+requestIdentity\\(requestBody: String\\)")
+                .findAll(source)
+                .count(),
+        )
+        assertEquals(
+            1,
+            Regex("(?m)\\brequestIdentity\\(requestBody\\)").findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex("(?m)^        val requestIdentity = requestIdentity\\(requestBody\\)$")
+                .findAll(source)
+                .count(),
+        )
+
+        assertEquals(
+            1,
+            Regex("(?m)\\bdata\\s+class\\s+ContentRunIdentity\\s*\\(")
+                .findAll(source)
+                .count(),
+        )
+        val identityDataStart = source.indexOf("private data class ContentRunIdentity(")
+        val identityDataEnd = source.indexOf(
+            "\n\nprivate class DuplicateContentIdentityKeyException",
+            identityDataStart,
+        )
+        require(identityDataStart >= 0 && identityDataEnd > identityDataStart) {
+            "content run identity declaration was not found"
+        }
+        val expectedDataClass = """
+            private data class ContentRunIdentity(
+                val campaignId: String,
+                val runId: String,
+            )
+        """.trimIndent()
+        assertEquals(
+            compact(expectedDataClass),
+            compact(source.substring(identityDataStart, identityDataEnd)),
+        )
+
+        assertEquals(
+            1,
+            Regex("(?m)\\bfun\\s+identityFromEnvelope\\s*\\(")
+                .findAll(source)
+                .count(),
+        )
+        assertTrue(
+            source.contains("val eventIdentity = identityFromEnvelope(envelope)"),
+        )
+        assertTrue(
+            source.contains("identityFromEnvelope(decodedTerminal.envelope) == expectedIdentity"),
+        )
+        assertTrue(
+            source.contains("return (envelope as? JsonObject)?.let(::identityFromEnvelope)"),
+        )
+
+        val runStart = source.indexOf("suspend fun run(")
+        val runEnd = source.indexOf("\n    private companion object", runStart)
+        require(runStart >= 0 && runEnd > runStart) { "adapter run source was not found" }
+        val runBody = source.substring(runStart, runEnd)
+        assertEquals(
+            0,
+            Regex("(?m)^\\s*(?:private\\s+)?fun\\s+(?:requestIdentity|identityFromEnvelope)\\s*\\(")
+                .findAll(runBody)
+                .count(),
+        )
+    }
+
+    @Test
+    fun requestIdentityErrorHasOnlyTheFrozenLateConsumer() {
+        // [FRAME] Maintenance-only whitelist: binds this stable error's provenance and late
+        // placement; it adds no product claim and rejects early conditional error consumers.
+        val source = readProductionSource()
+        val stableMessage = "prototype SSE run identity must match the outgoing request"
+
+        assertEquals(
+            2,
+            Regex("(?m)\\bREQUEST_RUN_IDENTITY_ERROR\\b").findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex(
+                "(?m)^private const val REQUEST_RUN_IDENTITY_ERROR =$",
+            ).findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex(Regex.escape(stableMessage)).findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex(
+                "(?m)^        require\\(requestIdentity == expectedIdentity\\) \\{ REQUEST_RUN_IDENTITY_ERROR \\}$",
+            ).findAll(source).count(),
+        )
+
+        val runStart = source.indexOf("suspend fun run(")
+        val runEnd = source.indexOf("\n    private companion object", runStart)
+        require(runStart >= 0 && runEnd > runStart) { "adapter run source was not found" }
+        val runBody = source.substring(runStart, runEnd)
+        val completionIndex = runBody.indexOf(
+            "requireTerminalCompletionFacts(decodedTerminal.envelope)",
+        )
+        val requestAssignmentIndex = runBody.indexOf(
+            "val requestIdentity = requestIdentity(requestBody)",
+        )
+        val requestGateIndex = runBody.indexOf(
+            "require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }",
+        )
+        val returnIndex = runBody.indexOf("return PrototypeRunStreamResult(")
+        assertTrue(completionIndex >= 0)
+        assertTrue(requestAssignmentIndex > completionIndex)
+        assertTrue(requestGateIndex > requestAssignmentIndex)
+        assertTrue(returnIndex > requestGateIndex)
     }
 
     @Test
@@ -62,7 +905,7 @@ class PrototypeRunStreamAdapterTest {
                     FakeRawPostTransport(rawStreamOf(blocks)),
                 ).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 assertNotNull(result.decodedTerminal)
             } catch (error: Throwable) {
@@ -93,7 +936,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 org.junit.Assert.fail("$label with event_type drift was accepted")
             } catch (error: IllegalArgumentException) {
@@ -132,7 +975,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStream)).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 org.junit.Assert.fail("$label error was hidden by acceptance")
             } catch (error: IllegalArgumentException) {
@@ -178,7 +1021,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 org.junit.Assert.fail("$label event_type was accepted")
             } catch (error: IllegalArgumentException) {
@@ -227,7 +1070,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 org.junit.Assert.fail("$label run_started event_type was accepted")
             } catch (error: IllegalArgumentException) {
@@ -261,7 +1104,7 @@ class PrototypeRunStreamAdapterTest {
                     FakeRawPostTransport(rawStreamOf(blocks)),
                 ).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = officialRunRequestBody(producer),
                 )
                 assertNotNull(result.decodedTerminal)
             } catch (error: Throwable) {
@@ -294,7 +1137,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 org.junit.Assert.fail("$label event_type duplicate was accepted")
             } catch (error: IllegalArgumentException) {
@@ -317,7 +1160,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("topology drift hid behind payload event_type")
         } catch (error: IllegalArgumentException) {
@@ -408,7 +1251,7 @@ class PrototypeRunStreamAdapterTest {
             eofNanos = 4_000L,
         )
         val endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs"
-        val requestBody = "{\"validated_request\":true}"
+        val requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}"
         val transport = FakeRawPostTransport(rawStream)
 
         val result = PrototypeRunStreamAdapter(transport).run(endpoint, requestBody)
@@ -440,7 +1283,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("119 content events were accepted")
         } catch (error: IllegalArgumentException) {
@@ -469,7 +1312,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("duplicate content sequence was accepted")
         } catch (error: IllegalArgumentException) {
@@ -555,7 +1398,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 accepted += label
             } catch (error: IllegalArgumentException) {
@@ -1540,7 +2383,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("deeply nested content payload was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1563,7 +2406,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("content event with a third data line was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1591,7 +2434,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 acceptedTokens += token
             } catch (error: IllegalArgumentException) {
@@ -1622,7 +2465,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("out-of-order content sequence was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1647,7 +2490,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("invalid topology was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1688,7 +2531,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 accepted += name
             } catch (error: IllegalArgumentException) {
@@ -1720,7 +2563,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(duplicateBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             acceptedRed += "literal duplicate seq"
         } catch (error: IllegalArgumentException) {
@@ -1739,7 +2582,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(duplicateDetailsBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             acceptedRed += "duplicate details"
         } catch (error: IllegalArgumentException) {
@@ -1758,7 +2601,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(escapedSeqBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             acceptedRed += "escaped duplicate seq"
         } catch (error: IllegalArgumentException) {
@@ -1775,7 +2618,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(reverseControlBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("reverse duplicate seq control was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1802,7 +2645,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(invalidBlocks))).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("escaped duplicate details member was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1844,7 +2687,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"validated_request\":true}",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
                 )
                 accepted += name
             } catch (error: IllegalArgumentException) {
@@ -1894,7 +2737,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("truncated stream was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1932,7 +2775,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("duplicate final done stream was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1950,7 +2793,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("empty stream was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1969,7 +2812,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("stream without done was accepted")
         } catch (error: IllegalArgumentException) {
@@ -1990,7 +2833,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("content after done was accepted")
         } catch (error: IllegalArgumentException) {
@@ -2010,7 +2853,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("malformed final done was accepted")
         } catch (error: IllegalArgumentException) {
@@ -2032,7 +2875,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("IOException was swallowed")
         } catch (error: IOException) {
@@ -2055,7 +2898,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("CancellationException was swallowed")
         } catch (error: CancellationException) {
@@ -2091,6 +2934,7 @@ class PrototypeRunStreamAdapterTest {
         val label: String,
         val campaignId: String,
         val runId: String,
+        val runIndex: Int,
         val conditionId: String,
         val scheduleHash: String,
         val nominalIntervalMs: Int,
@@ -2103,6 +2947,7 @@ class PrototypeRunStreamAdapterTest {
             label = "baseline",
             campaignId = "campaign-official-baseline",
             runId = "run-official-baseline",
+            runIndex = 1,
             conditionId = "baseline_v0.1",
             scheduleHash = "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
             nominalIntervalMs = 50,
@@ -2113,6 +2958,7 @@ class PrototypeRunStreamAdapterTest {
             label = "slow",
             campaignId = "campaign-official-slow",
             runId = "run-official-slow",
+            runIndex = 2,
             conditionId = "slow_v0.1",
             scheduleHash = "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
             nominalIntervalMs = 125,
@@ -2123,6 +2969,7 @@ class PrototypeRunStreamAdapterTest {
             label = "unstable",
             campaignId = "campaign-official-unstable",
             runId = "run-official-unstable",
+            runIndex = 3,
             conditionId = "unstable_v0.1",
             scheduleHash = "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58",
             nominalIntervalMs = 65,
@@ -2176,7 +3023,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(FakeRawPostTransport(rawStream)).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             org.junit.Assert.fail("$label was accepted")
         } catch (error: IllegalArgumentException) {
@@ -2193,7 +3040,7 @@ class PrototypeRunStreamAdapterTest {
                 FakeRawPostTransport(rawStreamOf(blocks)),
             ).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"validated_request\":true}",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
             )
             assertNotNull(result.decodedTerminal)
         } catch (error: Throwable) {
@@ -2304,6 +3151,113 @@ class PrototypeRunStreamAdapterTest {
             .replace("\"run-1\"", "\"$runId\"")
     }
 
+    private fun officialRunRequestBody(producer: OfficialProducerCase): String =
+        "{\"protocol_version\":\"prototype-stream-0.1\"," +
+            "\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\"," +
+            "\"campaign_mode\":\"quick\",\"run_index\":${producer.runIndex}," +
+            "\"workload_id\":\"streaming_text_reference_v0.1\",\"workload_version\":\"0.1\"," +
+            "\"profile_id\":\"streaming_text_reference_v0.1\",\"profile_version\":\"0.1\"," +
+            "\"profile_manifest_sha256\":\"44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc\"," +
+            "\"condition_id\":\"${producer.conditionId}\",\"condition_version\":\"0.1\"}"
+
+    private fun officialRunRequestBodyWithRepresentation(
+        producer: OfficialProducerCase,
+        reordered: Boolean = false,
+        escapedIdentityValues: Boolean = false,
+    ): String {
+        val campaignId = if (escapedIdentityValues) {
+            unicodeEscapedJsonValue(producer.campaignId)
+        } else {
+            producer.campaignId
+        }
+        val runId = if (escapedIdentityValues) {
+            unicodeEscapedJsonValue(producer.runId)
+        } else {
+            producer.runId
+        }
+        val members = listOf(
+            "\"protocol_version\":\"prototype-stream-0.1\"",
+            "\"campaign_id\":\"$campaignId\"",
+            "\"run_id\":\"$runId\"",
+            "\"campaign_mode\":\"quick\"",
+            "\"run_index\":${producer.runIndex}",
+            "\"workload_id\":\"streaming_text_reference_v0.1\"",
+            "\"workload_version\":\"0.1\"",
+            "\"profile_id\":\"streaming_text_reference_v0.1\"",
+            "\"profile_version\":\"0.1\"",
+            "\"profile_manifest_sha256\":\"44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc\"",
+            "\"condition_id\":\"${producer.conditionId}\"",
+            "\"condition_version\":\"0.1\"",
+        )
+        if (!reordered) {
+            return "{${members.joinToString(",")}}"
+        }
+        val spaced = members.asReversed().map { member ->
+            member.replace("\":", "\" : ")
+        }
+        return "{ \t${spaced.joinToString(" ,\t")} \t}"
+    }
+
+    private fun unicodeEscapedJsonValue(value: String): String =
+        value.asIterable().joinToString("") { char ->
+            "\\u" + char.code.toString(16).padStart(4, '0')
+        }
+
+    private fun requestBodyWithIdentityValue(field: String, value: String?): String {
+        val members = mutableListOf<String>()
+        if (field != "campaign_id") {
+            members += "\"campaign_id\":\"campaign-1\""
+        } else if (value != null) {
+            members += "\"campaign_id\":$value"
+        }
+        if (field != "run_id") {
+            members += "\"run_id\":\"run-1\""
+        } else if (value != null) {
+            members += "\"run_id\":$value"
+        }
+        return "{${members.joinToString(",")}}"
+    }
+
+    private fun requestBodyWithDuplicateIdentity(
+        producer: OfficialProducerCase,
+        field: String,
+        canonicalValue: String,
+        firstKey: String,
+        firstValue: String,
+        secondKey: String,
+        secondValue: String,
+    ): String {
+        val canonicalMember = "\"$field\":\"$canonicalValue\""
+        val firstMember = "\"$firstKey\":\"$firstValue\""
+        val secondMember = "\"$secondKey\":\"$secondValue\""
+        val original = officialRunRequestBody(producer)
+        require(original.contains(canonicalMember))
+        val withFirst = original.replaceFirst(canonicalMember, firstMember)
+        return withFirst.replaceFirst(firstMember, "$firstMember,$secondMember")
+    }
+
+    private fun producerShapedBlocks(
+        doneFrame: String,
+        producer: OfficialProducerCase,
+    ): List<String> = buildList {
+        add(runStartedBlock(producerRunStartedPayload(producer = producer)))
+        repeat(120) { index ->
+            add(serverContentBlock(index + 1, producer))
+        }
+        add(doneFrameForProducer(doneFrame, producer).removeSuffix("\n\n"))
+    }
+
+    private fun doneFrameForProducer(
+        doneFrame: String,
+        producer: OfficialProducerCase,
+    ): String = doneFrame
+        .replace("\"campaign-fixture-01\"", "\"${producer.campaignId}\"")
+        .replace("\"run-fixture-01\"", "\"${producer.runId}\"")
+        .replace(
+            "\"server_monotonic_ns\":0",
+            "\"server_monotonic_ns\":${producer.serverMonotonicNs + 121}",
+        )
+
     private fun doneFrameForRun(doneFrame: String): String = doneFrame
         .replace("\"campaign-fixture-01\"", "\"campaign-1\"")
         .replace("\"run-fixture-01\"", "\"run-1\"")
@@ -2361,6 +3315,20 @@ class PrototypeRunStreamAdapterTest {
             "\"payload_id\":\"payload-$seq\",\"profile_manifest_sha256\":\"manifest\"," +
             "\"schedule_hash\":\"schedule\"}}"
 
+    private fun serverContentBlock(seq: Int, producer: OfficialProducerCase): String =
+        "event: content_event\ndata: " +
+            "{\"schema_version\":\"aneb-prototype-evidence-0.1\"," +
+            "\"protocol_version\":\"prototype-stream-0.1\"," +
+            "\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\"," +
+            "\"condition_id\":\"${producer.conditionId}\",\"event_type\":\"content_event\"," +
+            "\"server_monotonic_ns\":${producer.serverMonotonicNs + seq}," +
+            "\"clock_source\":\"server.monotonic\",\"clock_unit\":\"ns\"," +
+            "\"clock_epoch\":\"process\",\"source\":\"server\"," +
+            "\"details\":{\"seq\":$seq,\"planned_offset_ms\":${200 + (seq - 1) * producer.nominalIntervalMs}," +
+            "\"payload_id\":\"ref-${"%04d".format(seq)}\"," +
+            "\"profile_manifest_sha256\":\"44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc\"," +
+            "\"schedule_hash\":\"${producer.scheduleHash}\"}}"
+
     private fun contentPayloadWithIdentity(data: String): String =
         if (data.trimStart().startsWith("{")) {
             data.replaceFirst(
@@ -2411,6 +3379,20 @@ class PrototypeRunStreamAdapterTest {
         val raw = Files.readAllBytes(path).toString(Charsets.UTF_8)
         val normalized = raw.replace("\r\n", "\n")
         require('\r' !in normalized) { "shared fixture contains a bare CR" }
+        return normalized
+    }
+
+    private fun readProductionSource(): String {
+        val candidates = listOf(
+            Path.of("app/probe/src/main/java/com/aneb/probe/prototype/PrototypeRunStreamAdapter.kt"),
+            Path.of("src/main/java/com/aneb/probe/prototype/PrototypeRunStreamAdapter.kt"),
+            Path.of("../../app/probe/src/main/java/com/aneb/probe/prototype/PrototypeRunStreamAdapter.kt"),
+        )
+        val path = candidates.firstOrNull { Files.isRegularFile(it) }
+            ?: error("adapter source not found: ${candidates.joinToString()}")
+        val raw = Files.readAllBytes(path).toString(Charsets.UTF_8)
+        val normalized = raw.replace("\r\n", "\n")
+        require('\r' !in normalized) { "adapter source contains a bare CR" }
         return normalized
     }
 }

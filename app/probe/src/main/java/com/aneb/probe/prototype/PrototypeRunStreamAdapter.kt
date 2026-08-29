@@ -25,6 +25,8 @@ private const val RUN_STARTED_EVENT_TYPE_ERROR =
     "prototype SSE run_started payload event_type must match the SSE event"
 private const val TERMINAL_COMPLETION_ERROR =
     "prototype SSE terminal receipt must report complete 120-event delivery"
+private const val REQUEST_RUN_IDENTITY_ERROR =
+    "prototype SSE run identity must match the outgoing request"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -453,6 +455,8 @@ class PrototypeRunStreamAdapter(
             throw IllegalArgumentException(TERMINAL_COMPLETION_ERROR, error)
         }
         requireTerminalCompletionFacts(decodedTerminal.envelope)
+        val requestIdentity = requestIdentity(requestBody)
+        require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
             decodedTerminal = decodedTerminal,
@@ -527,6 +531,16 @@ class PrototypeRunStreamAdapter(
             } else {
                 null
             }
+        }
+
+        private fun requestIdentity(requestBody: String): ContentRunIdentity? {
+            val envelope = try {
+                probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, requestBody)
+                contentJson.parseToJsonElement(requestBody)
+            } catch (_: Exception) {
+                return null
+            }
+            return (envelope as? JsonObject)?.let(::identityFromEnvelope)
         }
 
         private fun requireTerminalCompletionFacts(envelope: JsonObject) {

@@ -35,7 +35,8 @@ import kotlin.concurrent.thread
 class AnebClientPrototypeRawPostTransportTest {
     @Test
     fun loopbackPostPreservesOpaqueRequestHeadersAndFramesThroughAdapter() = runBlocking {
-        val requestBody = "{\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
+        val requestBody =
+            "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
         val doneFrame = doneFrameForRun(readSharedDoneFixture()).removeSuffix("\n\n")
         val expectedFrames = buildList {
             add(
