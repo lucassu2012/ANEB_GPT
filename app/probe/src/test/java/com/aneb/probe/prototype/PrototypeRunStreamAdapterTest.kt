@@ -295,6 +295,116 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
+    fun contentArrivalTimestampRegressionFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }.toMutableList()
+        arrivals[42] = arrivals[41] - 1L
+
+        try {
+            PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamWithArrivals(blocks, arrivals)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("content arrival timestamp regression was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun contentArrivalTimestampAllowsZeroAndEqualAdjacentValues() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }.toMutableList()
+        arrivals[1] = 0L
+        arrivals[2] = 0L
+
+        val result = PrototypeRunStreamAdapter(
+            FakeRawPostTransport(rawStreamWithArrivals(blocks, arrivals)),
+        ).run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+        )
+
+        assertEquals(0L, result.rawEvents[1].arrivalNanos)
+        assertEquals(0L, result.rawEvents[2].arrivalNanos)
+    }
+
+    @Test
+    fun negativeContentArrivalTimestampFailsWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }.toMutableList()
+        arrivals[42] = -1L
+
+        val message = runCatching {
+            PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamWithArrivals(blocks, arrivals)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+        }.exceptionOrNull()?.message
+
+        assertEquals(
+            "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+            message,
+        )
+    }
+
+    @Test
+    fun contentSemanticErrorsPrecedeArrivalChronology() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val baseArrivals = canonicalBlocks(doneFrame, contentCount = 120)
+            .indices
+            .map { (it + 1) * 1_000L }
+        val sequenceBlocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        sequenceBlocks[1] = serverContentBlock(2)
+        val sequenceArrivals = baseArrivals.toMutableList().also {
+            it[42] = it[41] - 1L
+        }
+        val sequenceMessage = runCatching {
+            PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamWithArrivals(sequenceBlocks, sequenceArrivals)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+        }.exceptionOrNull()?.message
+        assertEquals(
+            "prototype SSE content events must have exact seq 1 through 120",
+            sequenceMessage,
+        )
+
+        val identityBlocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        identityBlocks[1] = serverContentBlock(1).replace(
+            "\"campaign_id\":\"campaign-1\"",
+            "\"campaign_id\":\"campaign-mismatch\"",
+        )
+        val identityArrivals = baseArrivals.toMutableList().also {
+            it[42] = it[41] - 1L
+        }
+        val identityMessage = runCatching {
+            PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamWithArrivals(identityBlocks, identityArrivals)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+        }.exceptionOrNull()?.message
+        assertEquals(
+            "prototype SSE content event identity must match the run",
+            identityMessage,
+        )
+    }
+
+    @Test
     fun sequenceDuplicatePrecedesIdentityDuplicateWhenIdentityKeyAppearsFirst() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
@@ -939,12 +1049,22 @@ class PrototypeRunStreamAdapterTest {
         blocks: List<String>,
         truncatedTail: Boolean = false,
     ): RawSseStream {
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }
+        return rawStreamWithArrivals(blocks, arrivals, truncatedTail)
+    }
+
+    private fun rawStreamWithArrivals(
+        blocks: List<String>,
+        arrivals: List<Long>,
+        truncatedTail: Boolean = false,
+    ): RawSseStream {
+        require(arrivals.size == blocks.size)
         val streamText = blocks.joinToString(separator = "\n\n", postfix = "\n\n")
         return RawSseStream(
             events = blocks.mapIndexed { index, block ->
                 RawSseEvent(
                     bytes = block.toByteArray(Charsets.UTF_8),
-                    arrivalNanos = (index + 1) * 1_000L,
+                    arrivalNanos = arrivals[index],
                     sameReadBatch = false,
                 )
             },
