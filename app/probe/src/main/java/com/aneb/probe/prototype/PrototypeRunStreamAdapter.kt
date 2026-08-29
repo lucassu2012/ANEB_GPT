@@ -21,6 +21,8 @@ private const val CONTENT_ARRIVAL_CHRONOLOGY_ERROR =
     "prototype SSE content arrival timestamps must be non-negative and nondecreasing"
 private const val TERMINAL_IDENTITY_ERROR =
     "prototype SSE terminal receipt identity must match the run"
+private const val RUN_STARTED_EVENT_TYPE_ERROR =
+    "prototype SSE run_started payload event_type must match the SSE event"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -31,6 +33,8 @@ private data class ContentRunIdentity(
 private class DuplicateContentIdentityKeyException : IllegalArgumentException()
 
 private class DuplicateTerminalIdentityKeyException : IllegalArgumentException()
+
+private class DuplicateRunStartedEventTypeKeyException : IllegalArgumentException()
 
 private fun requireJsonNestingWithinBudget(payload: String) {
     var depth = 0
@@ -133,6 +137,31 @@ private object ContentIdentityDuplicateKeyProbe : DeserializationStrategy<Unit> 
                     1 -> {
                         if (seenRunId) throw DuplicateContentIdentityKeyException()
                         seenRunId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object RunStartedEventTypeDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeRunStartedEventTypeDuplicateKeyProbe",
+    ) {
+        element("event_type", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenEventType = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenEventType) throw DuplicateRunStartedEventTypeKeyException()
+                        seenEventType = true
                         decodeSerializableElement(descriptor, index, JsonElement.serializer())
                     }
                     else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
@@ -261,6 +290,7 @@ class PrototypeRunStreamAdapter(
         }
         val expectedIdentity = runStartedIdentity(rawEvents.first())
         require(expectedIdentity != null) { CONTENT_IDENTITY_ERROR }
+        requireRunStartedEventType(rawEvents.first())
         rawEvents.subList(1, rawEvents.lastIndex).forEachIndexed { index, rawEvent ->
             val expectedSequence = index + 1
             val lines = rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().toList()
@@ -357,6 +387,34 @@ class PrototypeRunStreamAdapter(
             isLenient = false
         }
         private const val DATA_PREFIX = "data: "
+
+        private fun requireRunStartedEventType(rawEvent: RawSseEvent) {
+            val dataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
+                .lineSequence()
+                .toList()
+                .getOrNull(1)
+                ?.takeIf { it.startsWith(DATA_PREFIX) }
+                ?.removePrefix(DATA_PREFIX)
+                ?: throw IllegalArgumentException(RUN_STARTED_EVENT_TYPE_ERROR)
+            try {
+                probeJson.decodeFromString(RunStartedEventTypeDuplicateKeyProbe, dataPayload)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(RUN_STARTED_EVENT_TYPE_ERROR, error)
+            }
+            val envelope = try {
+                contentJson.parseToJsonElement(dataPayload)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(RUN_STARTED_EVENT_TYPE_ERROR, error)
+            }
+            val eventType = (envelope as? JsonObject)?.get("event_type") as? JsonPrimitive
+            require(
+                eventType != null &&
+                    eventType.isString &&
+                    eventType.content == "run_started",
+            ) {
+                RUN_STARTED_EVENT_TYPE_ERROR
+            }
+        }
 
         private fun runStartedIdentity(rawEvent: RawSseEvent): ContentRunIdentity? {
             val dataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
