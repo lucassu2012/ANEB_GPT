@@ -36,7 +36,7 @@ class AnebClientPrototypeRawPostTransportTest {
     @Test
     fun loopbackPostPreservesOpaqueRequestHeadersAndFramesThroughAdapter() = runBlocking {
         val requestBody = "{\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
-        val doneFrame = readSharedDoneFixture().removeSuffix("\n\n")
+        val doneFrame = doneFrameForRun(readSharedDoneFixture()).removeSuffix("\n\n")
         val expectedFrames = buildList {
             add(
                 "event: run_started\ndata: " +
@@ -125,6 +125,10 @@ class AnebClientPrototypeRawPostTransportTest {
         require(normalized.endsWith("\n\n")) { "shared done fixture must end with LF-LF" }
         return normalized
     }
+
+    private fun doneFrameForRun(doneFrame: String): String = doneFrame
+        .replace("\"campaign-fixture-01\"", "\"campaign-1\"")
+        .replace("\"run-fixture-01\"", "\"run-1\"")
 
     private fun serverContentBlock(seq: Int): String =
         "event: content_event\ndata: " +

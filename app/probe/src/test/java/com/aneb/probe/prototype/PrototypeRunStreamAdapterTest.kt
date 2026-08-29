@@ -138,6 +138,422 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
+    fun terminalReceiptIdentityMismatchFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList().also {
+            it[it.lastIndex] = doneFrame.removeSuffix("\n\n")
+        }
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("cross-run terminal receipt identity was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE terminal receipt identity must match the run",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun terminalReceiptIdentityRequiresBothLayersToMatchRun() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val campaignKey = "\"campaign_id\":\"campaign-1\""
+        val runKey = "\"run_id\":\"run-1\""
+        val forgedCampaign = "\"campaign_id\":\"forged-campaign\""
+        val forgedRun = "\"run_id\":\"forged-run\""
+        val variants = listOf(
+            "outer-only" to doneFrame
+                .replaceFirst(campaignKey, forgedCampaign)
+                .replaceFirst(runKey, forgedRun),
+            "outer-campaign-only" to doneFrame.replaceFirst(campaignKey, forgedCampaign),
+            "outer-run-only" to doneFrame.replaceFirst(runKey, forgedRun),
+            "details-only" to replaceSecondOccurrence(
+                replaceSecondOccurrence(doneFrame, campaignKey, forgedCampaign),
+                runKey,
+                forgedRun,
+            ),
+            "details-campaign-only" to replaceSecondOccurrence(doneFrame, campaignKey, forgedCampaign),
+            "details-run-only" to replaceSecondOccurrence(doneFrame, runKey, forgedRun),
+            "outer-and-details" to doneFrame
+                .replace(campaignKey, forgedCampaign)
+                .replace(runKey, forgedRun),
+            "outer-and-details-campaign-only" to doneFrame.replace(campaignKey, forgedCampaign),
+            "outer-and-details-run-only" to doneFrame.replace(runKey, forgedRun),
+        )
+
+        variants.forEach { (label, forgedDoneFrame) ->
+            val transport = FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(forgedDoneFrame, contentCount = 120)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                org.junit.Assert.fail("$label terminal identity was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalReceiptDuplicateIdentityMemberFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val campaignKey = "\"campaign_id\":\"campaign-1\""
+        val runKey = "\"run_id\":\"run-1\""
+        val duplicateVariants = listOf(
+            "outer campaign" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":\"forged-campaign\",\"\\u0063ampaign_id\":\"campaign-1\"",
+            ),
+            "outer run" to doneFrame.replaceFirst(
+                runKey,
+                "\"run_id\":\"forged-run\",\"\\u0072un_id\":\"run-1\"",
+            ),
+            "details campaign" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":\"forged-campaign\",\"\\u0063ampaign_id\":\"campaign-1\"",
+            ),
+            "details run" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":\"forged-run\",\"\\u0072un_id\":\"run-1\"",
+            ),
+        )
+
+        duplicateVariants.forEach { (label, duplicateDoneFrame) ->
+            val transport = FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(duplicateDoneFrame, contentCount = 120)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                org.junit.Assert.fail("$label duplicate terminal identity member was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalReceiptDuplicateDetailsMemberFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val forgedDetails = "{\"campaign_id\":\"forged-campaign\",\"run_id\":\"forged-run\"}"
+        listOf(
+            "literal" to (false to forgedDetails),
+            "escaped" to (true to forgedDetails),
+            "scalar-first" to (false to "7"),
+        ).forEach { (keyKind, variant) ->
+            val escapedCanonicalLast = variant.first
+            val duplicateDoneFrame = duplicateRootDetails(
+                doneFrame,
+                escapedCanonicalLast = escapedCanonicalLast,
+                firstDetails = variant.second,
+            )
+            val transport = FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(duplicateDoneFrame, contentCount = 120)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                org.junit.Assert.fail(
+                    "duplicate " + keyKind + " terminal details member was accepted",
+                )
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalReceiptIdentityRejectsMissingNullAndNumberAtEitherLayer() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val campaignKey = "\"campaign_id\":\"campaign-1\""
+        val runKey = "\"run_id\":\"run-1\""
+        val campaignField = ",$campaignKey"
+        val runField = ",$runKey"
+        val variants = listOf(
+            "outer campaign missing" to removeFirstOccurrence(doneFrame, campaignField),
+            "outer campaign null" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":null",
+            ),
+            "outer campaign number" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":7",
+            ),
+            "outer run missing" to removeFirstOccurrence(doneFrame, runField),
+            "outer run null" to doneFrame.replaceFirst(runKey, "\"run_id\":null"),
+            "outer run number" to doneFrame.replaceFirst(runKey, "\"run_id\":7"),
+            "details campaign missing" to removeSecondOccurrence(doneFrame, campaignField),
+            "details campaign null" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":null",
+            ),
+            "details campaign number" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":7",
+            ),
+            "details run missing" to removeSecondOccurrence(doneFrame, runField),
+            "details run null" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":null",
+            ),
+            "details run number" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":7",
+            ),
+        )
+
+        variants.forEach { (label, invalidDoneFrame) ->
+            val transport = FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(invalidDoneFrame, contentCount = 120)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                org.junit.Assert.fail("$label terminal identity was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalReceiptIdentityRejectsSpaceCaseAndNfkcNormalizationAtEitherLayer() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val campaignKey = "\"campaign_id\":\"campaign-1\""
+        val runKey = "\"run_id\":\"run-1\""
+        val variants = listOf(
+            "outer campaign space" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":\"campaign-1 " + "\"",
+            ),
+            "outer campaign case" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":\"CAMPAIGN-1\"",
+            ),
+            "outer campaign nfkc" to doneFrame.replaceFirst(
+                campaignKey,
+                "\"campaign_id\":\"\\uFF43ampaign-1\"",
+            ),
+            "outer run space" to doneFrame.replaceFirst(
+                runKey,
+                "\"run_id\":\" run-1\"",
+            ),
+            "outer run case" to doneFrame.replaceFirst(
+                runKey,
+                "\"run_id\":\"RUN-1\"",
+            ),
+            "outer run nfkc" to doneFrame.replaceFirst(
+                runKey,
+                "\"run_id\":\"run-\\uFF11\"",
+            ),
+            "details campaign space" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":\"campaign-1 " + "\"",
+            ),
+            "details campaign case" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":\"CAMPAIGN-1\"",
+            ),
+            "details campaign nfkc" to replaceSecondOccurrence(
+                doneFrame,
+                campaignKey,
+                "\"campaign_id\":\"\\uFF43ampaign-1\"",
+            ),
+            "details run space" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":\"run-1 " + "\"",
+            ),
+            "details run case" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":\"RUN-1\"",
+            ),
+            "details run nfkc" to replaceSecondOccurrence(
+                doneFrame,
+                runKey,
+                "\"run_id\":\"run-\\uFF11\"",
+            ),
+        )
+
+        variants.forEach { (label, invalidDoneFrame) ->
+            val transport = FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(invalidDoneFrame, contentCount = 120)),
+            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                )
+                org.junit.Assert.fail("$label terminal identity was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalReceiptIdentityAcceptsEscapedKeysAndReorderedMembers() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+        val campaignKey = "\"campaign_id\":\"campaign-1\""
+        val runKey = "\"run_id\":\"run-1\""
+        val escapedCampaignDoneFrame = doneFrame.replaceFirst(
+            campaignKey,
+            "\"\\u0063ampaign_id\":\"campaign-1\"",
+        )
+        val reorderedDoneFrame = doneFrame.replaceFirst(
+            "$campaignKey,\"run_id\":\"run-1\"",
+            "\"run_id\":\"run-1\",$campaignKey",
+        )
+        val escapedKeysBothLayers = doneFrame
+            .replace("\"campaign_id\"", "\"\\u0063ampaign_id\"")
+            .replace("\"run_id\"", "\"\\u0072un_id\"")
+        val reorderedKeysBothLayers = doneFrame
+            .replaceFirst(
+                "$campaignKey,\"run_id\":\"run-1\"",
+                "\"run_id\":\"run-1\",$campaignKey",
+            )
+            .replaceFirst(
+                "$campaignKey,\"run_id\":\"run-1\"",
+                "\"run_id\":\"run-1\",$campaignKey",
+            )
+        val equivalentEscapedValues = doneFrame
+            .replace("\"campaign-1\"", "\"campaign-\\u0031\"")
+            .replace("\"run-1\"", "\"run-\\u0031\"")
+        val detailsBeforeOuterIdentity = run {
+            val frame = doneFrame.removeSuffix("\n\n")
+            val payload = frame.substringAfter("data: ")
+            val detailsMarker = ",\"details\":"
+            val detailsIndex = payload.indexOf(detailsMarker)
+            require(detailsIndex >= 0)
+            val rootMembers = payload.substring(1, detailsIndex)
+            val detailsMember = payload.substring(detailsIndex + 1, payload.length - 1)
+            val nestedStart = detailsMember.indexOf('{')
+            val nestedBody = detailsMember.substring(nestedStart + 1, detailsMember.length - 1)
+            val nestedIdentity = "$campaignKey,$runKey,"
+            val nestedWithoutIdentity = nestedBody.replace(nestedIdentity, "")
+            val reorderedDetailsMember = detailsMember.substring(0, nestedStart + 1) +
+                nestedWithoutIdentity + ",$campaignKey,$runKey}"
+            val rootWithoutIdentity = rootMembers
+                .replace("$campaignKey,", "")
+                .replace("$runKey,", "")
+            val reorderedPayload = "{$reorderedDetailsMember,$rootWithoutIdentity,$campaignKey,$runKey}"
+            frame.substringBefore("data: ") + "data: " + reorderedPayload
+        }
+        val escapedRootDetailsOnly = doneFrame.replaceFirst(
+            ",\"details\":",
+            ",\"\\u0064etails\":",
+        )
+
+        listOf(
+            escapedCampaignDoneFrame,
+            reorderedDoneFrame,
+            escapedKeysBothLayers,
+            reorderedKeysBothLayers,
+            equivalentEscapedValues,
+            detailsBeforeOuterIdentity,
+            escapedRootDetailsOnly,
+        ).forEach { equivalentDoneFrame ->
+            PrototypeRunStreamAdapter(FakeRawPostTransport(
+                rawStreamOf(canonicalBlocks(equivalentDoneFrame, contentCount = 120)),
+            )).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+        }
+    }
+
+    @Test
+    fun terminalIdentityErrorsFollowArrivalChronology() = runBlocking {
+        val doneFrame = doneFrameForRun(readFixture("prototype_option_a_done_frame.sse"))
+            .replaceFirst(
+                "\"campaign_id\":\"campaign-1\"",
+                "\"campaign_id\":\"forged-campaign\"",
+            )
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }.toMutableList()
+        arrivals[42] = arrivals[41] - 1L
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(
+                rawStreamWithArrivals(blocks, arrivals),
+            )).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("terminal identity was checked before chronology")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun terminalDuplicateDetailsErrorsFollowArrivalChronology() = runBlocking {
+        val doneFrame = duplicateRootDetails(
+            doneFrameForRun(readFixture("prototype_option_a_done_frame.sse")),
+            escapedCanonicalLast = false,
+        )
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }.toMutableList()
+        arrivals[42] = arrivals[41] - 1L
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(
+                rawStreamWithArrivals(blocks, arrivals),
+            )).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("terminal duplicate details was checked before chronology")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+                error.message,
+            )
+        }
+    }
+
+    @Test
     fun runStartedMissingIdentityCannotAuthorizeContentRun() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val blocks = canonicalBlocks(doneFrame, contentCount = 120).mapIndexed { index, block ->
@@ -1020,7 +1436,52 @@ class PrototypeRunStreamAdapterTest {
         repeat(contentCount) { index ->
             add(serverContentBlock(index + 1))
         }
-        add(doneFrame.removeSuffix("\n\n"))
+        add(doneFrameForRun(doneFrame).removeSuffix("\n\n"))
+    }
+
+    private fun doneFrameForRun(doneFrame: String): String = doneFrame
+        .replace("\"campaign-fixture-01\"", "\"campaign-1\"")
+        .replace("\"run-fixture-01\"", "\"run-1\"")
+
+    private fun replaceSecondOccurrence(
+        input: String,
+        target: String,
+        replacement: String,
+    ): String {
+        val first = input.indexOf(target)
+        val second = input.indexOf(target, first + target.length)
+        require(first >= 0 && second >= 0)
+        return input.substring(0, second) + replacement + input.substring(second + target.length)
+    }
+
+    private fun removeFirstOccurrence(input: String, target: String): String {
+        val first = input.indexOf(target)
+        require(first >= 0)
+        return input.removeRange(first, first + target.length)
+    }
+
+    private fun removeSecondOccurrence(input: String, target: String): String {
+        val first = input.indexOf(target)
+        val second = input.indexOf(target, first + target.length)
+        require(first >= 0 && second >= 0)
+        return input.removeRange(second, second + target.length)
+    }
+
+    private fun duplicateRootDetails(
+        doneFrame: String,
+        escapedCanonicalLast: Boolean,
+        firstDetails: String = "{\"campaign_id\":\"forged-campaign\",\"run_id\":\"forged-run\"}",
+    ): String {
+        val frame = doneFrame.removeSuffix("\n\n")
+        val marker = ",\"details\":"
+        val prefix = frame.substringBefore(marker)
+        val canonicalDetails = frame.substringAfter(marker).removeSuffix("}")
+        val canonicalMarker = if (escapedCanonicalLast) {
+            ",\"\\u0064etails\":"
+        } else {
+            marker
+        }
+        return prefix + marker + firstDetails + canonicalMarker + canonicalDetails + "}"
     }
 
     private fun serverContentBlock(seq: Int): String =
