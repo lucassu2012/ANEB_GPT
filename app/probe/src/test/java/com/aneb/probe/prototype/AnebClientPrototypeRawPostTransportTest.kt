@@ -39,8 +39,8 @@ class AnebClientPrototypeRawPostTransportTest {
         val doneFrame = readSharedDoneFixture().removeSuffix("\n\n")
         val expectedFrames = buildList {
             add("event: run_started\ndata: {\"event_type\":\"run_started\"}")
-            repeat(120) {
-                add("event: content_event\ndata: {\"event_type\":\"content_event\"}")
+            repeat(120) { seq ->
+                add(serverContentBlock(seq + 1))
             }
             add(doneFrame)
         }
@@ -122,6 +122,18 @@ class AnebClientPrototypeRawPostTransportTest {
         require(normalized.endsWith("\n\n")) { "shared done fixture must end with LF-LF" }
         return normalized
     }
+
+    private fun serverContentBlock(seq: Int): String =
+        "event: content_event\ndata: " +
+            "{\"schema_version\":\"aneb-prototype-evidence-0.1\"," +
+            "\"protocol_version\":\"prototype-stream-0.1\"," +
+            "\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+            "\"condition_id\":\"condition-1\",\"event_type\":\"content_event\"," +
+            "\"server_monotonic_ns\":0,\"clock_source\":\"server.monotonic\"," +
+            "\"clock_unit\":\"ns\",\"clock_epoch\":\"process\",\"source\":\"server\"," +
+            "\"details\":{\"seq\":$seq,\"planned_offset_ms\":0," +
+            "\"payload_id\":\"payload-$seq\",\"profile_manifest_sha256\":\"manifest\"," +
+            "\"schedule_hash\":\"schedule\"}}"
 
     private data class CapturedRequest(
         val method: String,
