@@ -34,11 +34,18 @@ import kotlin.coroutines.resumeWithException
  *  - [bound] 非 null 时同时绑定 socketFactory 与 Dns（R-01：否则域名解析仍走默认
  *    网络 DNS，解析与承载路径分裂）。AUTO 模式传 null＝不绑定仅监控。
  */
-class AnebClient(bound: BoundNetwork? = null) {
+class AnebClient private constructor(
+    bound: BoundNetwork?,
+    clock: MonotonicNanosClock,
+) {
 
-    private val timingFactory = TimingEventListener.Factory()
+    /** Preserve the existing public default-argument constructor and Android clock behavior. */
+    @JvmOverloads
+    constructor(bound: BoundNetwork? = null) : this(bound, AndroidMonotonicNanosClock)
+
+    private val timingFactory = TimingEventListener.Factory.createForTest(clock)
     private val json = Json { ignoreUnknownKeys = true }
-    private val sseReader = SseReader(json)
+    private val sseReader = SseReader.createForTest(json, clock)
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
@@ -61,6 +68,10 @@ class AnebClient(bound: BoundNetwork? = null) {
     fun evictConnections() {
         client.connectionPool.evictAll()
     }
+
+    /** Narrow test-only observability for cancellation cleanup. */
+    @JvmSynthetic
+    internal fun activeTimingRecordCountForTest(): Int = timingFactory.activeRecordCountForTest()
 
     // ------------------------------------------------------------------ echo
 
@@ -216,6 +227,38 @@ class AnebClient(bound: BoundNetwork? = null) {
                 requestStartNanos, null, 0, 0, null, null, e.toString(),
                 timingFactory.recordFor(call), truncatedEarly = false,
             )
+        }
+    }
+
+    /**
+     * Prototype 0.1 的真实 POST SSE 原始流入口。
+     *
+     * 请求体由调用方预先校验；此层只按 UTF-8 原样发送，不构造或重排 run request。
+     * 2xx 响应交给 [SseReader.readRaw]，非 2xx 先完整读取 JSON 错误体并 fail closed，
+     * 绝不把错误响应送进 SSE scanner。原有 [stream] 的 GET/指标语义保持不变。
+     */
+    suspend fun postPrototypeRawSse(url: String, requestBody: String): RawSseStream {
+        val call = client.newCall(
+            Request.Builder()
+                .url(url)
+                .header("Accept", "text/event-stream")
+                .post(requestBody.toRequestBody("application/json".toMediaType()))
+                .build(),
+        )
+        return try {
+            executeCancellable(call) { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    throw IllegalStateException("http ${response.code}: $errorBody")
+                }
+                sseReader.readRaw(
+                    checkNotNull(response.body) { "empty body for 2xx" }.source(),
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } finally {
+            timingFactory.recordFor(call)
         }
     }
 
@@ -651,7 +694,13 @@ class AnebClient(bound: BoundNetwork? = null) {
 
     private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
 
-    private companion object {
+    internal companion object {
+        /** Construct a clock-injected client without exposing a public overload. */
+        @JvmStatic
+        @JvmSynthetic
+        internal fun createForTest(bound: BoundNetwork?, clock: MonotonicNanosClock): AnebClient =
+            AnebClient(bound, clock)
+
         const val THROUGHPUT_READ_BYTES: Long = 64L * 1024L
         /** 服务端固定 "\n\n" 分隔（与 SseReader 同一 wire 约定） */
         private val SSE_EVENT_DELIMITER = "\n\n".encodeUtf8()
