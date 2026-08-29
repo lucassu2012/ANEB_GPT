@@ -295,6 +295,54 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
+    fun sequenceDuplicatePrecedesIdentityDuplicateWhenIdentityKeyAppearsFirst() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[1] =
+            "event: content_event\ndata: " +
+                "{\"campaign_id\":\"forged-campaign\",\"campaign_id\":\"campaign-1\",\"" +
+                "run_id\":\"run-1\",\"event_type\":\"content_event\",\"details\":{" +
+                "seq\":999,\"seq\":1}}"
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("identity duplicate ahead of sequence duplicate was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun sequenceDuplicatePrecedesIdentityDuplicateWhenSequenceKeyAppearsFirst() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[1] =
+            "event: content_event\ndata: " +
+                "{\"run_id\":\"run-1\",\"event_type\":\"content_event\",\"details\":{" +
+                "seq\":999,\"seq\":1},\"campaign_id\":\"forged-campaign\",\"" +
+                "campaign_id\":\"campaign-1\"}"
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("sequence duplicate was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
+    }
+
+    @Test
     fun deeplyNestedContentPayloadFailsWithStableSequenceMessage() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()

@@ -80,15 +80,11 @@ private object ContentRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
         "PrototypeContentRootDuplicateKeyProbe",
     ) {
         element("details", ContentDetailsDuplicateKeyProbe.descriptor, isOptional = true)
-        element("campaign_id", JsonElement.serializer().descriptor, isOptional = true)
-        element("run_id", JsonElement.serializer().descriptor, isOptional = true)
     }
 
     override fun deserialize(decoder: Decoder) {
         decoder.decodeStructure(descriptor) {
             var seenDetails = false
-            var seenCampaignId = false
-            var seenRunId = false
             while (true) {
                 when (val index = decodeElementIndex(descriptor)) {
                     CompositeDecoder.DECODE_DONE -> break
@@ -101,12 +97,34 @@ private object ContentRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
                             ContentDetailsDuplicateKeyProbe,
                         )
                     }
-                    1 -> {
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object ContentIdentityDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeContentIdentityDuplicateKeyProbe",
+    ) {
+        element("campaign_id", JsonElement.serializer().descriptor, isOptional = true)
+        element("run_id", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenCampaignId = false
+            var seenRunId = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
                         if (seenCampaignId) throw DuplicateContentIdentityKeyException()
                         seenCampaignId = true
                         decodeSerializableElement(descriptor, index, JsonElement.serializer())
                     }
-                    2 -> {
+                    1 -> {
                         if (seenRunId) throw DuplicateContentIdentityKeyException()
                         seenRunId = true
                         decodeSerializableElement(descriptor, index, JsonElement.serializer())
@@ -196,6 +214,13 @@ class PrototypeRunStreamAdapter(
             ) {
                 CONTENT_SEQUENCE_ERROR
             }
+            try {
+                probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, dataPayload)
+            } catch (error: DuplicateContentIdentityKeyException) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
+            }
             val eventIdentity = identityFromEnvelope(envelope)
             require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
         }
@@ -225,7 +250,7 @@ class PrototypeRunStreamAdapter(
                 ?.removePrefix(DATA_PREFIX)
                 ?: return null
             val envelope = try {
-                probeJson.decodeFromString(ContentRootDuplicateKeyProbe, dataPayload)
+                probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, dataPayload)
                 contentJson.parseToJsonElement(dataPayload)
             } catch (_: Exception) {
                 return null
