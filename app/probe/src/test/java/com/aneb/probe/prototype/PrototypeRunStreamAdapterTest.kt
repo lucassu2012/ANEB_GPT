@@ -16,6 +16,374 @@ import java.util.concurrent.CancellationException
 
 class PrototypeRunStreamAdapterTest {
     @Test
+    fun runStartedPayloadEventTypeMustMatchSseEvent() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[0] = blocks[0].replace(
+            "\"event_type\":\"run_started\"",
+            "\"event_type\":\"content_event\"",
+        )
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"validated_request\":true}",
+            )
+            org.junit.Assert.fail("run_started payload event_type mismatch was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE run_started payload event_type must match the SSE event",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun runStartedPayloadAcceptsReorderedAndEscapedEventTypeRepresentations() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val payloads = listOf(
+            "reordered keys" to
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"event_type\":\"run_started\"}",
+            "escaped key" to
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"\\u0065vent_type\":\"run_started\"}",
+            "escaped value" to
+                "{\"event_type\":\"run_\\u0073tarted\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+        )
+
+        payloads.forEach { (label, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = "event: run_started\ndata: $payload"
+            try {
+                val result = PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                assertNotNull(result.decodedTerminal)
+            } catch (error: Throwable) {
+                org.junit.Assert.fail("$label representation was rejected: ${error.message}")
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadEventTypeDoesNotStealIdentityError() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "missing campaign_id" to
+                "{\"event_type\":\"content_event\",\"run_id\":\"run-1\"}",
+            "null campaign_id" to
+                "{\"event_type\":\"content_event\",\"campaign_id\":null,\"run_id\":\"run-1\"}",
+            "non-string run_id" to
+                "{\"event_type\":\"content_event\",\"campaign_id\":\"campaign-1\",\"run_id\":1}",
+            "duplicate campaign_id" to
+                "{\"event_type\":\"content_event\",\"campaign_id\":\"forged\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "malformed JSON" to
+                "{\"event_type\":\"content_event\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"",
+        )
+
+        cases.forEach { (label, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = runStartedBlock(payload)
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                org.junit.Assert.fail("$label with event_type drift was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE content event identity must match the run",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadEventTypePrecedesDownstreamErrors() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf("content sequence", "arrival chronology", "terminal identity")
+
+        cases.forEach { label ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = blocks[0].replace(
+                "\"event_type\":\"run_started\"",
+                "\"event_type\":\"content_event\"",
+            )
+            val arrivals = if (label == "arrival chronology") {
+                blocks.indices.map { (it + 1) * 1_000L }.toMutableList().also {
+                    it[42] = it[41] - 1L
+                }
+            } else {
+                null
+            }
+            when (label) {
+                "content sequence" -> blocks[1] = serverContentBlock(2)
+                "terminal identity" -> blocks[blocks.lastIndex] =
+                    blocks[blocks.lastIndex].replace("\"campaign-1\"", "\"forged-terminal\"")
+            }
+            val rawStream = arrivals?.let { rawStreamWithArrivals(blocks, it) } ?: rawStreamOf(blocks)
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStream)).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                org.junit.Assert.fail("$label error was hidden by acceptance")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE run_started payload event_type must match the SSE event",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadEventTypeRejectsDuplicateWrongAndNormalizedValues() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "literal duplicate wrong then canonical" to
+                "{\"event_type\":\"content_event\",\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "literal duplicate canonical then wrong" to
+                "{\"event_type\":\"run_started\",\"event_type\":\"content_event\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "escaped duplicate wrong then canonical" to
+                "{\"event_type\":\"content_event\",\"\\u0065vent_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "escaped duplicate canonical then wrong" to
+                "{\"\\u0065vent_type\":\"run_started\",\"event_type\":\"content_event\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "number" to
+                "{\"event_type\":1,\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "null" to
+                "{\"event_type\":null,\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "array" to
+                "{\"event_type\":[],\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "object" to
+                "{\"event_type\":{},\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "case drift" to
+                "{\"event_type\":\"RUN_STARTED\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "space drift" to
+                "{\"event_type\":\" run_started \",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            "NFKC drift" to
+                "{\"event_type\":\"\\uFF52un_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+        )
+
+        cases.forEach { (label, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = runStartedBlock(payload)
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                org.junit.Assert.fail("$label event_type was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE run_started payload event_type must match the SSE event",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadRequiresEventTypeAndRejectsBoundaryWrongStrings() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "missing" to producerRunStartedPayload(eventTypeMembers = emptyList()),
+            "empty" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"\""),
+            ),
+            "prefix" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"xrun_started\""),
+            ),
+            "suffix" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"run_startedx\""),
+            ),
+            "NUL" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"run_started\\u0000\""),
+            ),
+            "TAB" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"run_started\\t\""),
+            ),
+            "LF" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"run_started\\n\""),
+            ),
+            "CR" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":\"run_started\\r\""),
+            ),
+            "bool" to producerRunStartedPayload(
+                eventTypeMembers = listOf("\"event_type\":true"),
+            ),
+        )
+
+        cases.forEach { (label, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = runStartedBlock(payload)
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                org.junit.Assert.fail("$label run_started event_type was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE run_started payload event_type must match the SSE event",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadAcceptsProducerEnvelopeInAnyKeyOrder() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val payloads = listOf(
+            "canonical" to producerRunStartedPayload(),
+            "reordered" to producerRunStartedPayload(reordered = true),
+        )
+
+        payloads.forEach { (label, payload) ->
+            val producer = officialProducerCases.first()
+            val blocks = canonicalBlocksForIdentity(
+                doneFrame = doneFrame,
+                contentCount = 120,
+                campaignId = producer.campaignId,
+                runId = producer.runId,
+            ).toMutableList()
+            blocks[0] = runStartedBlock(payload)
+            try {
+                val result = PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                assertNotNull(result.decodedTerminal)
+            } catch (error: Throwable) {
+                org.junit.Assert.fail("$label producer-shaped run_started was rejected: ${error.message}")
+            }
+        }
+    }
+
+    @Test
+    fun runStartedPayloadRejectsSameValueEventTypeDuplicates() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val cases = listOf(
+            "plain/plain" to producerRunStartedPayload(
+                eventTypeMembers = listOf(
+                    "\"event_type\":\"run_started\"",
+                    "\"event_type\":\"run_started\"",
+                ),
+            ),
+            "plain/escaped" to producerRunStartedPayload(
+                eventTypeMembers = listOf(
+                    "\"event_type\":\"run_started\"",
+                    "\"\\u0065vent_type\":\"run_started\"",
+                ),
+            ),
+        )
+
+        cases.forEach { (label, payload) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[0] = runStartedBlock(payload)
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                org.junit.Assert.fail("$label event_type duplicate was accepted")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE run_started payload event_type must match the SSE event",
+                    error.message,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun runStartedSseEventLinePrecedesBadPayloadEventType() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[0] = "event: forged\ndata: " + producerRunStartedPayload(
+            eventTypeMembers = listOf("\"event_type\":\"content_event\""),
+        )
+
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"validated_request\":true}",
+            )
+            org.junit.Assert.fail("topology drift hid behind payload event_type")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE stream must contain run_started, 120 content events, and final done",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun producerShapedRunStartedEventTypeControlsAcrossOfficialConditions() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        officialProducerCases.forEach { producer ->
+            listOf(
+                true to "run_started",
+                false to "content_event",
+            ).forEach { (accepted, eventType) ->
+                val payload = producerRunStartedPayload(
+                    eventTypeMembers = listOf("\"event_type\":\"$eventType\""),
+                    producer = producer,
+                )
+                val blocks = canonicalBlocksForIdentity(
+                    doneFrame = doneFrame,
+                    contentCount = 120,
+                    campaignId = producer.campaignId,
+                    runId = producer.runId,
+                ).toMutableList()
+                blocks[0] = runStartedBlock(payload)
+                val endpoint = if (producer.label == "slow") {
+                    "http://127.0.0.1:19001/api/v1/prototype/runs?condition=slow_v0.1"
+                } else {
+                    "http://127.0.0.1:18088/api/v1/prototype/runs"
+                }
+                val requestBody = if (producer.label == "slow") {
+                    "{\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\",\"condition_id\":\"slow_v0.1\"}"
+                } else {
+                    "{\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\"}"
+                }
+                val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+                try {
+                    val result = PrototypeRunStreamAdapter(transport).run(endpoint, requestBody)
+                    if (!accepted) {
+                        org.junit.Assert.fail(
+                            "${producer.label} event_type=$eventType was accepted",
+                        )
+                    }
+                    assertNotNull(result.decodedTerminal)
+                    if (producer.label == "slow") {
+                        assertEquals(endpoint, transport.postedUrl)
+                        assertEquals(requestBody, transport.postedBody)
+                    }
+                } catch (error: IllegalArgumentException) {
+                    if (accepted) {
+                        org.junit.Assert.fail(
+                            "${producer.label} canonical producer event_type was rejected: ${error.message}",
+                        )
+                    }
+                    assertEquals(
+                        "prototype SSE run_started payload event_type must match the SSE event",
+                        error.message,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun postTransportPreservesProvidedRawEventsAndDecodesSharedTerminalFixture() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         // Content sequence and content run identity are claimed in this atom;
@@ -1428,6 +1796,88 @@ class PrototypeRunStreamAdapterTest {
         "event: content_event\ndata: {\"event_type\":\"content_event\"}",
     )
 
+    private fun runStartedBlock(payload: String): String =
+        "event: run_started\ndata: $payload"
+
+    private data class OfficialProducerCase(
+        val label: String,
+        val campaignId: String,
+        val runId: String,
+        val conditionId: String,
+        val scheduleHash: String,
+        val nominalIntervalMs: Int,
+        val serverMonotonicNs: Long,
+        val t0MonotonicNs: Long,
+    )
+
+    private val officialProducerCases = listOf(
+        OfficialProducerCase(
+            label = "baseline",
+            campaignId = "campaign-official-baseline",
+            runId = "run-official-baseline",
+            conditionId = "baseline_v0.1",
+            scheduleHash = "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
+            nominalIntervalMs = 50,
+            serverMonotonicNs = 4_200_000_000L,
+            t0MonotonicNs = 4_200_000_000L,
+        ),
+        OfficialProducerCase(
+            label = "slow",
+            campaignId = "campaign-official-slow",
+            runId = "run-official-slow",
+            conditionId = "slow_v0.1",
+            scheduleHash = "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
+            nominalIntervalMs = 125,
+            serverMonotonicNs = 5_300_000_000L,
+            t0MonotonicNs = 5_300_000_000L,
+        ),
+        OfficialProducerCase(
+            label = "unstable",
+            campaignId = "campaign-official-unstable",
+            runId = "run-official-unstable",
+            conditionId = "unstable_v0.1",
+            scheduleHash = "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58",
+            nominalIntervalMs = 65,
+            serverMonotonicNs = 6_400_000_000L,
+            t0MonotonicNs = 6_400_000_000L,
+        ),
+    )
+
+    private fun producerRunStartedPayload(
+        eventTypeMembers: List<String> = listOf("\"event_type\":\"run_started\""),
+        reordered: Boolean = false,
+        producer: OfficialProducerCase = officialProducerCases.first(),
+    ): String {
+        val eventEnvelope = listOf(
+            "\"schema_version\":\"aneb-prototype-evidence-0.1\"",
+            "\"protocol_version\":\"prototype-stream-0.1\"",
+            "\"campaign_id\":\"${producer.campaignId}\"",
+            "\"run_id\":\"${producer.runId}\"",
+            "\"condition_id\":\"${producer.conditionId}\"",
+        )
+        val serverClock = listOf(
+            "\"server_monotonic_ns\":${producer.serverMonotonicNs}",
+            "\"clock_source\":\"server.monotonic\"",
+            "\"clock_unit\":\"ns\"",
+            "\"clock_epoch\":\"process\"",
+            "\"source\":\"server\"",
+        )
+        val details =
+            "\"details\":{" +
+                "\"profile_id\":\"streaming_text_reference_v0.1\"," +
+                "\"profile_version\":\"0.1\"," +
+                "\"profile_manifest_sha256\":\"44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc\"," +
+                "\"schedule_hash\":\"${producer.scheduleHash}\"," +
+                "\"nominal_interval_ms\":${producer.nominalIntervalMs}," +
+                "\"t0_monotonic_ns\":${producer.t0MonotonicNs}}"
+        val members = if (reordered) {
+            eventEnvelope + serverClock + listOf(details) + eventTypeMembers
+        } else {
+            eventEnvelope + eventTypeMembers + serverClock + listOf(details)
+        }
+        return "{${members.joinToString(",")}}"
+    }
+
     private fun canonicalBlocks(doneFrame: String, contentCount: Int): List<String> = buildList {
         add(
             "event: run_started\ndata: " +
@@ -1437,6 +1887,17 @@ class PrototypeRunStreamAdapterTest {
             add(serverContentBlock(index + 1))
         }
         add(doneFrameForRun(doneFrame).removeSuffix("\n\n"))
+    }
+
+    private fun canonicalBlocksForIdentity(
+        doneFrame: String,
+        contentCount: Int,
+        campaignId: String,
+        runId: String,
+    ): List<String> = canonicalBlocks(doneFrame, contentCount).map { block ->
+        block
+            .replace("\"campaign-1\"", "\"$campaignId\"")
+            .replace("\"run-1\"", "\"$runId\"")
     }
 
     private fun doneFrameForRun(doneFrame: String): String = doneFrame
