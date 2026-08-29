@@ -14,6 +14,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CancellationException
 
+private const val TERMINAL_COMPLETION_ERROR =
+    "prototype SSE terminal receipt must report complete 120-event delivery"
+
 class PrototypeRunStreamAdapterTest {
     @Test
     fun runStartedPayloadEventTypeMustMatchSseEvent() = runBlocking {
@@ -525,6 +528,291 @@ class PrototypeRunStreamAdapterTest {
                 error.message,
             )
         }
+    }
+
+    @Test
+    fun terminalCompletionFactsMustReportComplete120() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val variants = listOf(
+            "terminal status" to
+                ("\"terminal_status\":\"complete\"" to
+                    "\"terminal_status\":\"failed\""),
+            "planned event count" to
+                ("\"planned_event_count\":120" to
+                    "\"planned_event_count\":119"),
+            "emitted event count" to
+                ("\"emitted_event_count\":120" to
+                    "\"emitted_event_count\":119"),
+        )
+        val accepted = mutableListOf<String>()
+
+        variants.forEach { (label, replacement) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            val original = blocks[blocks.lastIndex]
+            blocks[blocks.lastIndex] = original.replace(replacement.first, replacement.second)
+            require(blocks[blocks.lastIndex] != original) { "$label fixture mutation did not apply" }
+
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = "{\"validated_request\":true}",
+                )
+                accepted += label
+            } catch (error: IllegalArgumentException) {
+                assertEquals(
+                    "prototype SSE terminal receipt must report complete 120-event delivery",
+                    error.message,
+                )
+            }
+        }
+
+        assertTrue(
+            "terminal completion fact variants were accepted: $accepted",
+            accepted.isEmpty(),
+        )
+    }
+
+    @Test
+    fun terminalCompletionStatusRequiresExactString() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val invalidCases = listOf(
+            "missing" to null,
+            "null" to "null",
+            "number" to "1",
+            "boolean" to "true",
+            "array" to "[]",
+            "object" to "{}",
+            "empty" to "\"\"",
+            "case" to "\"Complete\"",
+            "leading space" to "\" complete\"",
+            "trailing space" to "\"complete \"",
+            "tab" to "\"com\\tplete\"",
+            "line feed" to "\"com\\nplete\"",
+            "carriage return" to "\"com\\rplete\"",
+            "NUL" to "\"com\\u0000plete\"",
+            "NFKC" to "\"\\uFF43omplete\"",
+            "prefix" to "\"xcomplete\"",
+            "suffix" to "\"completex\"",
+        )
+        invalidCases.forEach { (label, replacement) ->
+            val blocks = completionBlocks(doneFrame) { frame ->
+                if (replacement == null) {
+                    removeTerminalDetailValue(frame, "terminal_status", "\"complete\"")
+                } else {
+                    replaceTerminalDetailValue(
+                        frame,
+                        "terminal_status",
+                        "\"complete\"",
+                        replacement,
+                    )
+                }
+            }
+            assertTerminalCompletionRejected(label, blocks)
+        }
+
+        val escapedStatus = completionBlocks(doneFrame) { frame ->
+            replaceTerminalDetailValue(
+                frame,
+                "terminal_status",
+                "\"complete\"",
+                "\"com\\u0070lete\"",
+            )
+        }
+        assertTerminalCompletionAccepted("escaped status", escapedStatus)
+    }
+
+    @Test
+    fun terminalCompletionCountsRequireExactJsonInteger120() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val fields = listOf(
+            "planned_event_count",
+            "emitted_event_count",
+        )
+        val invalidValues = listOf(
+            "null" to "null",
+            "boolean" to "true",
+            "string" to "\"120\"",
+            "119" to "119",
+            "121" to "121",
+            "float" to "120.0",
+            "exponent" to "1.2e2",
+            "array" to "[]",
+            "object" to "{}",
+        )
+        fields.forEach { field ->
+            assertTerminalCompletionRejected(
+                "$field missing",
+                completionBlocks(doneFrame) { frame ->
+                    removeTerminalDetailValue(frame, field, "120")
+                },
+            )
+            invalidValues.forEach { (label, replacement) ->
+                assertTerminalCompletionRejected(
+                    "$field $label",
+                    completionBlocks(doneFrame) { frame ->
+                        replaceTerminalDetailValue(frame, field, "120", replacement)
+                    },
+                )
+            }
+        }
+
+        val coordinatedMismatch = completionBlocks(doneFrame) { frame ->
+            replaceTerminalDetailValue(
+                replaceTerminalDetailValue(frame, "planned_event_count", "120", "119"),
+                "emitted_event_count",
+                "120",
+                "119",
+            )
+        }
+        assertTerminalCompletionRejected("coordinated 119/119", coordinatedMismatch)
+
+        val surroundingWhitespace = completionBlocks(doneFrame) { frame ->
+            frame
+                .replace(
+                    "\"planned_event_count\":120",
+                    "\"planned_event_count\" : \t120",
+                )
+                .replace(
+                    "\"emitted_event_count\":120",
+                    "\"emitted_event_count\" : \t120",
+                )
+        }
+        assertTerminalCompletionAccepted("numeric surrounding whitespace", surroundingWhitespace)
+    }
+
+    @Test
+    fun terminalCompletionLiteralDuplicatesAreRejectedForEveryField() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val fields = listOf(
+            "planned_event_count" to ("120" to "119"),
+            "emitted_event_count" to ("120" to "119"),
+            "terminal_status" to ("\"complete\"" to "\"failed\""),
+        )
+        fields.forEach { (field, values) ->
+            listOf(
+                "canonical/canonical" to (values.first to values.first),
+                "canonical/bad" to (values.first to values.second),
+                "bad/canonical" to (values.second to values.first),
+            ).forEach { (label, order) ->
+                assertTerminalCompletionRejected(
+                    "$field $label",
+                    completionBlocks(doneFrame) { frame ->
+                        duplicateTerminalDetailValues(frame, field, order.first, order.second)
+                    },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun terminalCompletionSemanticDuplicatesRejectBothKeyOrdersAndAllowSingleEscapes() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val fields = listOf(
+            "planned_event_count" to ("\\u0070lanned_event_count" to "120"),
+            "emitted_event_count" to ("\\u0065mitted_event_count" to "120"),
+            "terminal_status" to ("terminal_\\u0073tatus" to "\"complete\""),
+        )
+        fields.forEach { (field, escaped) ->
+            listOf(false, true).forEach { escapedFirst ->
+                assertTerminalCompletionRejected(
+                    "$field plain/escaped order=$escapedFirst",
+                    completionBlocks(doneFrame) { frame ->
+                        duplicateTerminalDetailKeys(
+                            frame,
+                            field,
+                            escaped.first,
+                            escaped.second,
+                            escapedFirst,
+                        )
+                    },
+                )
+            }
+            assertTerminalCompletionAccepted(
+                "$field single escaped key",
+                completionBlocks(doneFrame) { frame ->
+                    replaceTerminalDetailKey(frame, field, escaped.first, escaped.second)
+                },
+            )
+        }
+    }
+
+    @Test
+    fun terminalCompletionPreservesUnknownOrderAndExistingErrorPrecedence() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val reorderedWithUnknown = completionBlocks(doneFrame) { frame ->
+            frame
+                .replace(
+                    "\"planned_event_count\":120,\"emitted_event_count\":120,\"terminal_status\":\"complete\"",
+                    "\"terminal_status\":\"complete\",\"emitted_event_count\":120,\"planned_event_count\":120",
+                )
+                .replace(
+                    "\"terminal_status\":\"complete\"",
+                    "\"terminal_status\":\"complete\",\"unknown_nested\":1",
+                )
+                .replaceFirst(
+                    "{",
+                    "{\"unknown_root\":1,",
+                )
+        }
+        assertTerminalCompletionAccepted("reordered fields and unknown keys", reorderedWithUnknown)
+
+        val rootNamedExtras = completionBlocks(doneFrame) { frame ->
+            frame.replaceFirst(
+                "{",
+                "{\"terminal_status\":\"failed\",\"planned_event_count\":119,\"emitted_event_count\":119,",
+            )
+        }
+        assertTerminalCompletionAccepted("root-layer completion names", rootNamedExtras)
+
+        val nestedCompletionMissing = completionBlocks(doneFrame) { frame ->
+            var mutated = frame
+            mutated = removeTerminalDetailValue(mutated, "planned_event_count", "120")
+            mutated = removeTerminalDetailValue(mutated, "emitted_event_count", "120")
+            mutated = removeTerminalDetailValue(mutated, "terminal_status", "\"complete\"")
+            mutated.replaceFirst(
+                "{",
+                "{\"terminal_status\":\"complete\",\"planned_event_count\":120,\"emitted_event_count\":120,",
+            )
+        }
+        assertTerminalCompletionRejected("root-only completion facts", nestedCompletionMissing)
+
+        val chronologyAndCompletion = completionBlocks(doneFrame) { frame ->
+            replaceTerminalDetailValue(frame, "terminal_status", "\"complete\"", "\"failed\"")
+        }
+        val chronologyArrivals = chronologyAndCompletion.indices.map { (it + 1) * 1_000L }
+            .toMutableList()
+            .also { it[42] = it[41] - 1L }
+        assertTerminalCompletionRejected(
+            "chronology before completion",
+            chronologyAndCompletion,
+            chronologyArrivals,
+            "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+        )
+
+        val identityAndCompletion = completionBlocks(doneFrame) { frame ->
+            replaceTerminalDetailValue(
+                frame
+                    .replace("\"campaign-1\"", "\"forged-terminal\"")
+                    .replace("\"run-1\"", "\"forged-terminal-run\""),
+                "terminal_status",
+                "\"complete\"",
+                "\"failed\"",
+            )
+        }
+        assertTerminalCompletionRejected(
+            "identity before completion",
+            identityAndCompletion,
+            expectedMessage = "prototype SSE terminal receipt identity must match the run",
+        )
+
+        val rootDetailsDuplicate = completionBlocks(doneFrame) { frame ->
+            duplicateRootDetails(frame, escapedCanonicalLast = false)
+        }
+        assertTerminalCompletionRejected(
+            "duplicate root details before completion",
+            rootDetailsDuplicate,
+            expectedMessage = "prototype SSE terminal receipt identity must match the run",
+        )
     }
 
     @Test
@@ -1876,6 +2164,122 @@ class PrototypeRunStreamAdapterTest {
             eventEnvelope + eventTypeMembers + serverClock + listOf(details)
         }
         return "{${members.joinToString(",")}}"
+    }
+
+    private suspend fun assertTerminalCompletionRejected(
+        label: String,
+        blocks: List<String>,
+        arrivals: List<Long>? = null,
+        expectedMessage: String = TERMINAL_COMPLETION_ERROR,
+    ) {
+        val rawStream = arrivals?.let { rawStreamWithArrivals(blocks, it) } ?: rawStreamOf(blocks)
+        try {
+            PrototypeRunStreamAdapter(FakeRawPostTransport(rawStream)).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"validated_request\":true}",
+            )
+            org.junit.Assert.fail("$label was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(expectedMessage, error.message)
+        }
+    }
+
+    private suspend fun assertTerminalCompletionAccepted(
+        label: String,
+        blocks: List<String>,
+    ) {
+        try {
+            val result = PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamOf(blocks)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"validated_request\":true}",
+            )
+            assertNotNull(result.decodedTerminal)
+        } catch (error: Throwable) {
+            org.junit.Assert.fail("$label was rejected: ${error.message}")
+        }
+    }
+
+    private fun completionBlocks(
+        doneFrame: String,
+        mutate: (String) -> String,
+    ): MutableList<String> = canonicalBlocks(doneFrame, contentCount = 120).toMutableList().also { blocks ->
+        val original = blocks[blocks.lastIndex]
+        val mutated = mutate(original)
+        require(mutated != original) { "terminal completion fixture mutation did not apply" }
+        blocks[blocks.lastIndex] = mutated
+    }
+
+    private fun replaceTerminalDetailValue(
+        frame: String,
+        field: String,
+        canonicalValue: String,
+        replacementValue: String,
+    ): String {
+        val canonicalMember = "\"$field\":$canonicalValue"
+        val replacementMember = "\"$field\":$replacementValue"
+        require(frame.contains(canonicalMember)) { "terminal field missing: $field" }
+        return frame.replace(canonicalMember, replacementMember)
+    }
+
+    private fun removeTerminalDetailValue(
+        frame: String,
+        field: String,
+        canonicalValue: String,
+    ): String {
+        val canonicalMember = "\"$field\":$canonicalValue"
+        val withComma = frame.replace("$canonicalMember,", "")
+        if (withComma != frame) return withComma
+        val withLeadingComma = frame.replace(",$canonicalMember", "")
+        if (withLeadingComma != frame) return withLeadingComma
+        val withoutComma = frame.replace(canonicalMember, "")
+        require(withoutComma != frame) { "terminal field missing: $field" }
+        return withoutComma
+    }
+
+    private fun duplicateTerminalDetailValues(
+        frame: String,
+        field: String,
+        firstValue: String,
+        secondValue: String,
+    ): String {
+        val canonicalMember = "\"$field\":120"
+        val statusMember = "\"$field\":\"complete\""
+        val target = if (field == "terminal_status") statusMember else canonicalMember
+        val replacement = "\"$field\":$firstValue,\"$field\":$secondValue"
+        require(frame.contains(target)) { "terminal field missing: $field" }
+        return frame.replace(target, replacement)
+    }
+
+    private fun duplicateTerminalDetailKeys(
+        frame: String,
+        field: String,
+        escapedField: String,
+        canonicalValue: String,
+        escapedFirst: Boolean,
+    ): String {
+        val canonicalMember = "\"$field\":$canonicalValue"
+        val escapedMember = "\"$escapedField\":$canonicalValue"
+        val replacement = if (escapedFirst) {
+            "$escapedMember,$canonicalMember"
+        } else {
+            "$canonicalMember,$escapedMember"
+        }
+        require(frame.contains(canonicalMember)) { "terminal field missing: $field" }
+        return frame.replace(canonicalMember, replacement)
+    }
+
+    private fun replaceTerminalDetailKey(
+        frame: String,
+        field: String,
+        escapedField: String,
+        canonicalValue: String,
+    ): String {
+        val canonicalMember = "\"$field\":$canonicalValue"
+        val escapedMember = "\"$escapedField\":$canonicalValue"
+        require(frame.contains(canonicalMember)) { "terminal field missing: $field" }
+        return frame.replace(canonicalMember, escapedMember)
     }
 
     private fun canonicalBlocks(doneFrame: String, contentCount: Int): List<String> = buildList {
