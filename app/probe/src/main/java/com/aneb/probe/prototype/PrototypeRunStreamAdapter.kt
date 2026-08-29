@@ -19,6 +19,8 @@ private const val CONTENT_IDENTITY_ERROR =
     "prototype SSE content event identity must match the run"
 private const val CONTENT_ARRIVAL_CHRONOLOGY_ERROR =
     "prototype SSE content arrival timestamps must be non-negative and nondecreasing"
+private const val TERMINAL_IDENTITY_ERROR =
+    "prototype SSE terminal receipt identity must match the run"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -27,6 +29,8 @@ private data class ContentRunIdentity(
 )
 
 private class DuplicateContentIdentityKeyException : IllegalArgumentException()
+
+private class DuplicateTerminalIdentityKeyException : IllegalArgumentException()
 
 private fun requireJsonNestingWithinBudget(payload: String) {
     var depth = 0
@@ -138,6 +142,85 @@ private object ContentIdentityDuplicateKeyProbe : DeserializationStrategy<Unit> 
     }
 }
 
+private object TerminalDetailsIdentityDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalDetailsIdentityDuplicateKeyProbe",
+    ) {
+        element("campaign_id", JsonElement.serializer().descriptor, isOptional = true)
+        element("run_id", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenCampaignId = false
+            var seenRunId = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenCampaignId) throw DuplicateTerminalIdentityKeyException()
+                        seenCampaignId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    1 -> {
+                        if (seenRunId) throw DuplicateTerminalIdentityKeyException()
+                        seenRunId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object TerminalIdentityDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalIdentityDuplicateKeyProbe",
+    ) {
+        element("campaign_id", JsonElement.serializer().descriptor, isOptional = true)
+        element("run_id", JsonElement.serializer().descriptor, isOptional = true)
+        element(
+            "details",
+            TerminalDetailsIdentityDuplicateKeyProbe.descriptor,
+            isOptional = true,
+        )
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenCampaignId = false
+            var seenRunId = false
+            var seenDetails = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenCampaignId) throw DuplicateTerminalIdentityKeyException()
+                        seenCampaignId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    1 -> {
+                        if (seenRunId) throw DuplicateTerminalIdentityKeyException()
+                        seenRunId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    2 -> {
+                        if (seenDetails) throw DuplicateTerminalIdentityKeyException()
+                        seenDetails = true
+                        decodeSerializableElement(
+                            descriptor,
+                            index,
+                            TerminalDetailsIdentityDuplicateKeyProbe,
+                        )
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
 /** Transport seam for the Prototype 0.1 POST run stream. */
 interface PrototypeRawPostTransport {
     suspend fun post(url: String, requestBody: String): RawSseStream
@@ -236,6 +319,27 @@ class PrototypeRunStreamAdapter(
                 CONTENT_ARRIVAL_CHRONOLOGY_ERROR
             }
             previousArrivalNanos = arrivalNanos
+        }
+        val terminalDataPayload = rawEvents.last().bytes.toString(Charsets.UTF_8)
+            .lineSequence()
+            .toList()
+            .getOrNull(1)
+            ?.removePrefix(DATA_PREFIX)
+            ?: throw IllegalArgumentException(TERMINAL_IDENTITY_ERROR)
+        try {
+            probeJson.decodeFromString(TerminalIdentityDuplicateKeyProbe, terminalDataPayload)
+        } catch (error: DuplicateTerminalIdentityKeyException) {
+            throw IllegalArgumentException(TERMINAL_IDENTITY_ERROR, error)
+        } catch (error: Exception) {
+            throw IllegalArgumentException(TERMINAL_IDENTITY_ERROR, error)
+        }
+        val terminalDetailsIdentity = (decodedTerminal.envelope["details"] as? JsonObject)
+            ?.let(::identityFromEnvelope)
+        require(
+            identityFromEnvelope(decodedTerminal.envelope) == expectedIdentity &&
+                terminalDetailsIdentity == expectedIdentity,
+        ) {
+            TERMINAL_IDENTITY_ERROR
         }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
