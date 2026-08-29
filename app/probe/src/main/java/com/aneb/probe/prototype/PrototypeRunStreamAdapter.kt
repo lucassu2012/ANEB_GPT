@@ -17,6 +17,8 @@ private const val CONTENT_SEQUENCE_ERROR =
     "prototype SSE content events must have exact seq 1 through 120"
 private const val CONTENT_IDENTITY_ERROR =
     "prototype SSE content event identity must match the run"
+private const val CONTENT_ARRIVAL_CHRONOLOGY_ERROR =
+    "prototype SSE content arrival timestamps must be non-negative and nondecreasing"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -223,6 +225,17 @@ class PrototypeRunStreamAdapter(
             }
             val eventIdentity = identityFromEnvelope(envelope)
             require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
+        }
+        var previousArrivalNanos: Long? = null
+        rawEvents.subList(1, rawEvents.lastIndex).forEach { rawEvent ->
+            val arrivalNanos = rawEvent.arrivalNanos
+            require(
+                arrivalNanos >= 0L &&
+                    (previousArrivalNanos == null || arrivalNanos >= previousArrivalNanos!!),
+            ) {
+                CONTENT_ARRIVAL_CHRONOLOGY_ERROR
+            }
+            previousArrivalNanos = arrivalNanos
         }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
