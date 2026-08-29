@@ -2,9 +2,9 @@ name: ANEB CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, product/prototype-0.1]
   pull_request:
-    branches: [main]
+    branches: [main, product/prototype-0.1]
 
 permissions:
   contents: read
