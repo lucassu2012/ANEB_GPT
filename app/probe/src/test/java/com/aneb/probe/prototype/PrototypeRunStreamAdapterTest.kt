@@ -18,15 +18,11 @@ class PrototypeRunStreamAdapterTest {
     @Test
     fun postTransportPreservesProvidedRawEventsAndDecodesSharedTerminalFixture() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
-        // `run_started` and `content_event` are transport carriers only in this
-        // atom; full 122-frame topology and outer-sequence validation are NONCLAIMS.
-        val streamText = buildString {
-            append("event: run_started\ndata: {\"event_type\":\"run_started\"}\n\n")
-            append("event: content_event\ndata: {\"event_type\":\"content_event\"}\n\n")
-            append(doneFrame)
-        }
-        val blocks = streamText.split("\n\n").filter(String::isNotBlank)
-        val arrivals = listOf(1_000L, 2_000L, 3_000L)
+        // `run_started` and `content_event` payloads remain carrier-only in this
+        // atom; content sequence, identity, and outer validation are NONCLAIMS.
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120)
+        val streamText = blocks.joinToString(separator = "\n\n", postfix = "\n\n")
+        val arrivals = blocks.indices.map { (it + 1) * 1_000L }
         val rawStream = RawSseStream(
             events = blocks.mapIndexed { index, block ->
                 RawSseEvent(
@@ -62,6 +58,26 @@ class PrototypeRunStreamAdapterTest {
             result.decodedTerminal.envelope.getValue("event_type").jsonPrimitive.content,
         )
         assertTrue(result.rawEvents.last().bytes.contentEquals(blocks.last().toByteArray(Charsets.UTF_8)))
+    }
+
+    @Test
+    fun missingContentTopologyFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val rawStream = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 119))
+        val transport = FakeRawPostTransport(rawStream)
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"validated_request\":true}",
+            )
+            org.junit.Assert.fail("119 content events were accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE stream must contain run_started, 120 content events, and final done",
+                error.message,
+            )
+        }
     }
 
     @Test
@@ -287,6 +303,14 @@ class PrototypeRunStreamAdapterTest {
         "event: run_started\ndata: {\"event_type\":\"run_started\"}",
         "event: content_event\ndata: {\"event_type\":\"content_event\"}",
     )
+
+    private fun canonicalBlocks(doneFrame: String, contentCount: Int): List<String> = buildList {
+        add("event: run_started\ndata: {\"event_type\":\"run_started\"}")
+        repeat(contentCount) {
+            add("event: content_event\ndata: {\"event_type\":\"content_event\"}")
+        }
+        add(doneFrame.removeSuffix("\n\n"))
+    }
 
     private fun rawStreamOf(
         blocks: List<String>,

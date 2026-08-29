@@ -30,6 +30,17 @@ class PrototypeRunStreamAdapter(
         }
         val terminalFrame = rawEvents.last().bytes.toString(Charsets.UTF_8) + "\n\n"
         val decodedTerminal = PrototypeSseTerminalDecoder.decodeDoneFrame(terminalFrame)
+        val eventLines = rawEvents.map { rawEvent ->
+            rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull()
+        }
+        require(
+            rawEvents.size == 122 &&
+                eventLines.firstOrNull() == "event: run_started" &&
+                eventLines.drop(1).dropLast(1).all { it == "event: content_event" } &&
+                eventLines.lastOrNull() == "event: done",
+        ) {
+            "prototype SSE stream must contain run_started, 120 content events, and final done"
+        }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
             decodedTerminal = decodedTerminal,
