@@ -173,9 +173,14 @@ class SseBoundaryScanner(
  *  - token:  `event: token\ndata: {"seq":N,"sched_us":...,"pre_flush_us":...,"payload":"<base64>"}\n\n`
  *  - 结尾:   `event: summary\ndata: {...}\n\n`
  */
-class SseReader(
-    private val json: Json = Json { ignoreUnknownKeys = true },
+class SseReader private constructor(
+    private val json: Json,
+    private val clock: MonotonicNanosClock,
 ) {
+
+    /** Preserve the existing public default-argument constructor and Android clock behavior. */
+    @JvmOverloads
+    constructor(json: Json = Json { ignoreUnknownKeys = true }) : this(json, AndroidMonotonicNanosClock)
 
     @Serializable
     private data class TokenWire(
@@ -199,10 +204,10 @@ class SseReader(
             val n = source.read(readBuf, READ_CHUNK_BYTES)
             if (n == -1L) break
             // 一次 read 返回打一次戳（R-04），戳在读线程就地打
-            scanner.onRead(readBuf, n, SystemClock.elapsedRealtimeNanos())
+            scanner.onRead(readBuf, n, clock.now())
         }
         // P0-C12：EOF 打戳——解析阶段与读循环的时间边界
-        return scanner.finish(SystemClock.elapsedRealtimeNanos())
+        return scanner.finish(clock.now())
     }
 
     /**
@@ -302,6 +307,11 @@ class SseReader(
 
     companion object {
         private const val READ_CHUNK_BYTES = 8192L
+
+        /** Construct a clock-injected reader without exposing a public overload. */
+        @JvmSynthetic
+        internal fun createForTest(json: Json, clock: MonotonicNanosClock): SseReader =
+            SseReader(json, clock)
     }
 }
 

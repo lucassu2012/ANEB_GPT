@@ -12,6 +12,16 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.ConcurrentHashMap
 
+/** Monotonic clock seam shared by transport timing and raw SSE boundary stamps. */
+internal fun interface MonotonicNanosClock {
+    fun now(): Long
+}
+
+/** Production clock authority; tests may provide a strictly increasing fake. */
+internal object AndroidMonotonicNanosClock : MonotonicNanosClock {
+    override fun now(): Long = SystemClock.elapsedRealtimeNanos()
+}
+
 /**
  * 单次 HTTP call 的传输层计时点集合。
  * 全部用 [SystemClock.elapsedRealtimeNanos]（设计文档 §4.1），未发生的事件保持 null
@@ -45,9 +55,15 @@ data class TimingRecord(
 /**
  * OkHttp EventListener：在回调线程就地打戳（不经主线程），写入本 call 专属的 [TimingRecord]。
  */
-class TimingEventListener(private val record: TimingRecord) : EventListener() {
+class TimingEventListener private constructor(
+    private val record: TimingRecord,
+    private val clock: MonotonicNanosClock,
+) : EventListener() {
 
-    private fun now(): Long = SystemClock.elapsedRealtimeNanos()
+    /** Preserve the existing public constructor and Android clock behavior. */
+    constructor(record: TimingRecord) : this(record, AndroidMonotonicNanosClock)
+
+    private fun now(): Long = clock.now()
 
     override fun callStart(call: Call) {
         record.callStartNs = now()
@@ -101,15 +117,41 @@ class TimingEventListener(private val record: TimingRecord) : EventListener() {
     /**
      * 每个 call 一份 TimingRecord；调用方在 call 结束后用 [recordFor] 取走（取走即移除，防泄漏）。
      */
-    class Factory : EventListener.Factory {
+    class Factory private constructor(
+        private val clock: MonotonicNanosClock,
+    ) : EventListener.Factory {
         private val records = ConcurrentHashMap<Call, TimingRecord>()
+
+        /** Preserve the existing public no-arg factory. */
+        constructor() : this(AndroidMonotonicNanosClock)
 
         override fun create(call: Call): EventListener {
             val record = TimingRecord()
             records[call] = record
-            return TimingEventListener(record)
+            return TimingEventListener(record, clock)
         }
 
         fun recordFor(call: Call): TimingRecord? = records.remove(call)
+
+        /** Narrow test-only observability for cancellation cleanup. */
+        @JvmSynthetic
+        internal fun activeRecordCountForTest(): Int = records.size
+
+        internal companion object {
+            /** Construct a clock-injected factory without exposing a public overload. */
+            @JvmStatic
+            @JvmSynthetic
+            internal fun createForTest(clock: MonotonicNanosClock): Factory = Factory(clock)
+        }
+    }
+
+    private companion object {
+        /** Construct a clock-injected listener without exposing a public overload. */
+        @JvmStatic
+        @JvmSynthetic
+        internal fun createForTest(
+            record: TimingRecord,
+            clock: MonotonicNanosClock,
+        ): TimingEventListener = TimingEventListener(record, clock)
     }
 }
