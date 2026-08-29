@@ -18,8 +18,8 @@ class PrototypeRunStreamAdapterTest {
     @Test
     fun postTransportPreservesProvidedRawEventsAndDecodesSharedTerminalFixture() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
-        // `run_started` remains carrier-only in this atom; content sequence is
-        // claimed, while identity and payload remain NONCLAIMS.
+        // Content sequence and content run identity are claimed in this atom;
+        // request/terminal cross-binding and payload remain NONCLAIMS.
         val blocks = canonicalBlocks(doneFrame, contentCount = 120)
         val streamText = blocks.joinToString(separator = "\n\n", postfix = "\n\n")
         val arrivals = blocks.indices.map { (it + 1) * 1_000L }
@@ -101,6 +101,34 @@ class PrototypeRunStreamAdapterTest {
         } catch (error: IllegalArgumentException) {
             assertEquals(
                 "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
+    }
+
+    @Test
+    fun contentRunIdentityMismatchFailsClosedWithStableMessage() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+        blocks[0] =
+            "event: run_started\ndata: " +
+                "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}"
+        val mismatchedContentIndex = 1 + 41
+        blocks[mismatchedContentIndex] = blocks[mismatchedContentIndex].replace(
+            "\"campaign_id\":\"campaign-1\"",
+            "\"campaign_id\":\"campaign-mismatch\"",
+        )
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            )
+            org.junit.Assert.fail("content campaign identity mismatch was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content event identity must match the run",
                 error.message,
             )
         }

@@ -15,7 +15,14 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private const val CONTENT_SEQUENCE_ERROR =
     "prototype SSE content events must have exact seq 1 through 120"
+private const val CONTENT_IDENTITY_ERROR =
+    "prototype SSE content event identity must match the run"
 private const val MAX_JSON_NESTING_DEPTH = 64
+
+private data class ContentRunIdentity(
+    val campaignId: String,
+    val runId: String,
+)
 
 private fun requireJsonNestingWithinBudget(payload: String) {
     var depth = 0
@@ -133,6 +140,7 @@ class PrototypeRunStreamAdapter(
         ) {
             "prototype SSE stream must contain run_started, 120 content events, and final done"
         }
+        var expectedIdentity = runStartedIdentity(rawEvents.first())
         rawEvents.subList(1, rawEvents.lastIndex).forEachIndexed { index, rawEvent ->
             val expectedSequence = index + 1
             val lines = rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().toList()
@@ -169,6 +177,12 @@ class PrototypeRunStreamAdapter(
             ) {
                 CONTENT_SEQUENCE_ERROR
             }
+            val eventIdentity = identityFromEnvelope(envelope)
+            if (expectedIdentity != null) {
+                require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
+            } else if (eventIdentity != null) {
+                expectedIdentity = eventIdentity
+            }
         }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
@@ -186,5 +200,35 @@ class PrototypeRunStreamAdapter(
             isLenient = false
         }
         private const val DATA_PREFIX = "data: "
+
+        private fun runStartedIdentity(rawEvent: RawSseEvent): ContentRunIdentity? {
+            val dataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
+                .lineSequence()
+                .toList()
+                .getOrNull(1)
+                ?.takeIf { it.startsWith(DATA_PREFIX) }
+                ?.removePrefix(DATA_PREFIX)
+                ?: return null
+            val envelope = try {
+                contentJson.parseToJsonElement(dataPayload)
+            } catch (_: Exception) {
+                return null
+            }
+            return (envelope as? JsonObject)?.let(::identityFromEnvelope)
+        }
+
+        private fun identityFromEnvelope(envelope: JsonObject): ContentRunIdentity? {
+            val campaignId = (envelope["campaign_id"] as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
+            val runId = (envelope["run_id"] as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
+            return if (campaignId != null && runId != null) {
+                ContentRunIdentity(campaignId, runId)
+            } else {
+                null
+            }
+        }
     }
 }
