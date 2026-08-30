@@ -238,6 +238,27 @@ class AnebClient private constructor(
      * 绝不把错误响应送进 SSE scanner。原有 [stream] 的 GET/指标语义保持不变。
      */
     suspend fun postPrototypeRawSse(url: String, requestBody: String): RawSseStream {
+        return postPrototypeRawSse(
+            url = url,
+            requestBody = requestBody,
+            beforeDispatch = {},
+            onRawEvent = {},
+        )
+    }
+
+    /**
+     * Prototype measurement entry point. [beforeDispatch] is invoked immediately before the
+     * OkHttp call is enqueued; [onRawEvent] observes each complete raw frame synchronously while
+     * the response is still streaming. Both callbacks stay internal so the existing public ABI
+     * and the generic raw POST/SSE contract remain unchanged.
+     */
+    @JvmSynthetic
+    internal suspend fun postPrototypeRawSse(
+        url: String,
+        requestBody: String,
+        beforeDispatch: () -> Unit,
+        onRawEvent: (RawSseEvent) -> Unit,
+    ): RawSseStream {
         val call = client.newCall(
             Request.Builder()
                 .url(url)
@@ -246,13 +267,14 @@ class AnebClient private constructor(
                 .build(),
         )
         return try {
-            executeCancellable(call) { response ->
+            executeCancellable(call, beforeDispatch) { response ->
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string().orEmpty()
                     throw IllegalStateException("http ${response.code}: $errorBody")
                 }
                 sseReader.readRaw(
                     checkNotNull(response.body) { "empty body for 2xx" }.source(),
+                    onRawEvent = onRawEvent,
                 )
             }
         } catch (e: CancellationException) {
@@ -673,8 +695,21 @@ class AnebClient private constructor(
      * OkHttp 回调线程打戳）。
      */
     private suspend fun <T> executeCancellable(call: Call, consume: (Response) -> T): T =
+        executeCancellable(call, beforeDispatch = {}, consume = consume)
+
+    private suspend fun <T> executeCancellable(
+        call: Call,
+        beforeDispatch: () -> Unit,
+        consume: (Response) -> T,
+    ): T =
         suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { call.cancel() }
+            try {
+                beforeDispatch()
+            } catch (error: Exception) {
+                cont.resumeWithException(error)
+                return@suspendCancellableCoroutine
+            }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     if (!cont.isCancelled) cont.resumeWithException(e)

@@ -110,6 +110,12 @@ class SseBoundaryScanner(
      * 调用发生在读线程，回调实现必须为常数时间且无阻塞。
      */
     private val onEventArrival: ((Long) -> Unit)? = null,
+    /**
+     * Optional synchronous complete-frame observer. Prototype measurement uses this narrow seam
+     * to decode and validate a frame before sampling its canonical client timestamp. The raw
+     * read/boundary [RawSseEvent.arrivalNanos] remains diagnostic only.
+     */
+    private val onRawEvent: ((RawSseEvent) -> Unit)? = null,
 ) {
     private val acc = Buffer()
     private val events = ArrayList<RawSseEvent>(1024)
@@ -132,14 +138,14 @@ class SseBoundaryScanner(
             val eventBytes = acc.readByteArray(boundary)
             acc.skip(EVENT_DELIMITER.size.toLong())
             if (eventBytes.isEmpty()) continue
-            events.add(
-                RawSseEvent(
-                    bytes = eventBytes,
-                    arrivalNanos = arrivalNanos,
-                    // 同一 read 内第 2..n 个 event：到达间隔是伪 0（R-04）
-                    sameReadBatch = eventsInThisRead > 0,
-                )
+            val rawEvent = RawSseEvent(
+                bytes = eventBytes,
+                arrivalNanos = arrivalNanos,
+                // 同一 read 内第 2..n 个 event：到达间隔是伪 0（R-04）
+                sameReadBatch = eventsInThisRead > 0,
             )
+            events.add(rawEvent)
+            onRawEvent?.invoke(rawEvent)
             onEventArrival?.invoke(arrivalNanos)
             eventsInThisRead++
         }
@@ -194,9 +200,13 @@ class SseReader private constructor(
      * 批读打戳层（阶段 2 抽出，供 LLM API 探针复用）：只做 read → 打戳 → `\n\n`
      * 切边界 → 存原始字节，绝不解析。语义与原 readStream 读循环完全一致。
      */
-    fun readRaw(source: BufferedSource, onEventArrival: ((Long) -> Unit)? = null): RawSseStream {
+    fun readRaw(
+        source: BufferedSource,
+        onEventArrival: ((Long) -> Unit)? = null,
+        onRawEvent: ((RawSseEvent) -> Unit)? = null,
+    ): RawSseStream {
         // 切边界/打戳语义收敛在 SseBoundaryScanner（P2-C05：Cronet 路径共用同一实现）
-        val scanner = SseBoundaryScanner(onEventArrival)
+        val scanner = SseBoundaryScanner(onEventArrival, onRawEvent)
         val readBuf = Buffer()
 
         // ---- 读循环：read → 打戳 → 切边界 → 存原始字节，别的都不做 ----

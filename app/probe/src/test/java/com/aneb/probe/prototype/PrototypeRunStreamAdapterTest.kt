@@ -1,5 +1,6 @@
 package com.aneb.probe.prototype
 
+import com.aneb.probe.net.MonotonicNanosClock
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
 import kotlinx.coroutines.runBlocking
@@ -536,9 +537,11 @@ class PrototypeRunStreamAdapterTest {
             |        } catch (error: DuplicateConditionIdentityKeyException) {
             |            throw IllegalArgumentException(CONDITION_IDENTITY_ERROR, error)
             |        }
-            |        return PrototypeRunStreamResult(
         """.trimMargin()
         assertEquals(1, runBody.split(expectedGate).size - 1)
+        val conditionGateIndex = runBody.indexOf(expectedGate)
+        val resultReturnIndex = runBody.indexOf("        return PrototypeRunStreamResult(")
+        assertTrue(conditionGateIndex >= 0 && resultReturnIndex > conditionGateIndex)
 
         fun compact(value: String): String = value.replace(Regex("\\s+"), "")
         val helperStart = source.indexOf("private fun conditionIdFromPayload(dataPayload: String)")
@@ -1909,14 +1912,27 @@ class PrototypeRunStreamAdapterTest {
                 .count(),
         )
         assertEquals(
-            1,
+            3,
             Regex("(?m)\\brequestIdentity\\(requestBody\\)").findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex("(?m)^        val observationIdentity = requestIdentity\\(requestBody\\)$")
+                .findAll(source)
+                .count(),
         )
         assertEquals(
             1,
             Regex("(?m)^        val requestIdentity = requestIdentity\\(requestBody\\)$")
                 .findAll(source)
                 .count(),
+        )
+        assertEquals(
+            1,
+            Regex(
+                "(?m)^            require\\(requestIdentity\\(requestBody\\) == expectedIdentity\\) " +
+                    "\\{ REQUEST_RUN_IDENTITY_ERROR \\}$",
+            ).findAll(source).count(),
         )
 
         assertEquals(
@@ -1927,7 +1943,7 @@ class PrototypeRunStreamAdapterTest {
         )
         val identityDataStart = source.indexOf("private data class ContentRunIdentity(")
         val identityDataEnd = source.indexOf(
-            "\n\nprivate class DuplicateContentIdentityKeyException",
+            "\n\nprivate data class ValidatedContentPayload",
             identityDataStart,
         )
         require(identityDataStart >= 0 && identityDataEnd > identityDataStart) {
@@ -1951,7 +1967,10 @@ class PrototypeRunStreamAdapterTest {
                 .count(),
         )
         assertTrue(
-            source.contains("val eventIdentity = identityFromEnvelope(envelope)"),
+            source.contains(
+                "require(identityFromEnvelope(envelope) == expectedIdentity) " +
+                    "{ CONTENT_IDENTITY_ERROR }",
+            ),
         )
         assertTrue(
             source.contains("identityFromEnvelope(decodedTerminal.envelope) == expectedIdentity"),
@@ -1973,14 +1992,14 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
-    fun requestIdentityErrorHasOnlyTheFrozenLateConsumer() {
-        // [FRAME] Maintenance-only whitelist: binds this stable error's provenance and late
-        // placement; it adds no product claim and rejects early conditional error consumers.
+    fun requestIdentityErrorHasOnlyTheFrozenCompleteAndInterruptedConsumers() {
+        // [FRAME] Maintenance-only whitelist: binds this stable error's provenance after the
+        // complete-stream and interrupted-prefix validations; it adds no product claim.
         val source = readProductionSource()
         val stableMessage = "prototype SSE run identity must match the outgoing request"
 
         assertEquals(
-            2,
+            3,
             Regex("(?m)\\bREQUEST_RUN_IDENTITY_ERROR\\b").findAll(source).count(),
         )
         assertEquals(
@@ -1997,6 +2016,13 @@ class PrototypeRunStreamAdapterTest {
             1,
             Regex(
                 "(?m)^        require\\(requestIdentity == expectedIdentity\\) \\{ REQUEST_RUN_IDENTITY_ERROR \\}$",
+            ).findAll(source).count(),
+        )
+        assertEquals(
+            1,
+            Regex(
+                "(?m)^            require\\(requestIdentity\\(requestBody\\) == expectedIdentity\\) " +
+                    "\\{ REQUEST_RUN_IDENTITY_ERROR \\}$",
             ).findAll(source).count(),
         )
 
@@ -3803,9 +3829,6 @@ class PrototypeRunStreamAdapterTest {
             "duplicate unknown root" to
                 "{\"noise\":{\"v\":1},\"noise\":{\"v\":2}," +
                     "\"event_type\":\"content_event\",\"details\":{\"seq\":1}}",
-            "duplicate nested planned offset" to
-                "{\"event_type\":\"content_event\",\"details\":{\"seq\":1," +
-                    "\"planned_offset_ms\":0,\"planned_offset_ms\":0}}",
         )
         validCases.forEach { (name, data) ->
             val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
@@ -3827,30 +3850,52 @@ class PrototypeRunStreamAdapterTest {
             "accepted=$accepted; rejected=$rejected",
             accepted == validCases.map { it.first } && rejected.isEmpty(),
         )
+
+        val duplicateClaimedFields = listOf(
+            "seq" to "\"seq\":1,\"seq\":1",
+            "planned offset" to "\"seq\":1,\"planned_offset_ms\":0,\"planned_offset_ms\":0",
+            "payload id" to "\"seq\":1,\"payload_id\":\"payload-1\",\"payload_id\":\"payload-1\"",
+            "profile manifest" to
+                "\"seq\":1,\"profile_manifest_sha256\":\"manifest\"," +
+                    "\"profile_manifest_sha256\":\"manifest\"",
+            "schedule hash" to
+                "\"seq\":1,\"schedule_hash\":\"schedule\",\"schedule_hash\":\"schedule\"",
+        )
+        val duplicateAccepted = mutableListOf<String>()
+        val duplicateWrongErrors = mutableListOf<String>()
+        duplicateClaimedFields.forEach { (name, details) ->
+            val blocks = canonicalBlocks(doneFrame, contentCount = 120).toMutableList()
+            blocks[1] =
+                "event: content_event\ndata: " +
+                    contentPayloadWithIdentity("{\"event_type\":\"content_event\",\"details\":{$details}}")
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+                duplicateAccepted += name
+            } catch (error: IllegalArgumentException) {
+                if (error.message != stableMessage) {
+                    duplicateWrongErrors += "$name -> ${error.message}"
+                }
+            } catch (error: Throwable) {
+                duplicateWrongErrors += "$name -> ${error::class.simpleName}: ${error.message}"
+            }
+        }
+        assertTrue(
+            "duplicateAccepted=$duplicateAccepted; duplicateWrongErrors=$duplicateWrongErrors",
+            duplicateAccepted.isEmpty() && duplicateWrongErrors.isEmpty(),
+        )
     }
 
     @Test
     fun truncatedPostStreamFailsClosedBeforeTerminalDecode() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
-        val streamText = buildString {
-            append("event: run_started\ndata: {\"event_type\":\"run_started\"}\n\n")
-            append("event: content_event\ndata: {\"event_type\":\"content_event\"}\n\n")
-            append(doneFrame)
-        }
-        val blocks = streamText.split("\n\n").filter(String::isNotBlank)
-        val arrivals = listOf(1_000L, 2_000L, 3_000L)
-        val rawStream = RawSseStream(
-            events = blocks.mapIndexed { index, block ->
-                RawSseEvent(
-                    bytes = block.toByteArray(Charsets.UTF_8),
-                    arrivalNanos = arrivals[index],
-                    sameReadBatch = false,
-                )
-            },
-            readCount = blocks.size,
-            totalBytes = streamText.toByteArray(Charsets.UTF_8).size.toLong(),
+        val blocks = canonicalBlocks(doneFrame, contentCount = 1).dropLast(1)
+        val rawStream = rawStreamWithArrivals(
+            blocks = blocks,
+            arrivals = listOf(1_000L, 2_000L),
             truncatedTail = true,
-            eofNanos = 4_000L,
         )
         var postCalls = 0
         val transport = object : PrototypeRawPostTransport {
@@ -3863,13 +3908,37 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
             org.junit.Assert.fail("truncated stream was accepted")
         } catch (error: IllegalArgumentException) {
             assertEquals("prototype SSE stream has a truncated tail", error.message)
         }
         assertEquals(1, postCalls)
+    }
+
+    @Test
+    fun interruptedPrefixContentErrorPrecedesOutgoingRequestIdentity() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val blocks = canonicalBlocks(doneFrame, contentCount = 1).dropLast(1).toMutableList()
+        blocks[1] = serverContentBlock(seq = 2)
+        val transport = FakeRawPostTransport(rawStreamOf(blocks))
+        val mismatchedRequest =
+            "{\"campaign_id\":\"campaign-other\",\"run_id\":\"run-1\"," +
+                "\"condition_id\":\"baseline_v0.1\"}"
+
+        try {
+            PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = mismatchedRequest,
+            )
+            org.junit.Assert.fail("invalid interrupted prefix was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE content events must have exact seq 1 through 120",
+                error.message,
+            )
+        }
     }
 
     @Test
@@ -3913,7 +3982,7 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
-    fun emptyPostStreamFailsClosedWithUniqueFinalDoneMessage() = runBlocking {
+    fun emptyPostStreamFailsClosedBeforeInterruptedEvidence() = runBlocking {
         val transport = FakeRawPostTransport(rawStreamOf(emptyList()))
 
         try {
@@ -3924,26 +3993,27 @@ class PrototypeRunStreamAdapterTest {
             org.junit.Assert.fail("empty stream was accepted")
         } catch (error: IllegalArgumentException) {
             assertEquals(
-                "prototype SSE stream must contain exactly one final done event",
+                "prototype SSE content events must have exact seq 1 through 120",
                 error.message,
             )
         }
     }
 
     @Test
-    fun postStreamWithoutDoneCarrierFailsClosedWithUniqueFinalDoneMessage() = runBlocking {
-        val rawStream = rawStreamOf(carrierBlocks())
+    fun canonicalPrefixWithoutDoneReturnsMissingTerminalInterruption() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val rawStream = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 1).dropLast(1))
         val transport = FakeRawPostTransport(rawStream)
 
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
             org.junit.Assert.fail("stream without done was accepted")
         } catch (error: IllegalArgumentException) {
             assertEquals(
-                "prototype SSE stream must contain exactly one final done event",
+                "prototype SSE stream ended without a terminal done event",
                 error.message,
             )
         }
@@ -4033,6 +4103,165 @@ class PrototypeRunStreamAdapterTest {
         assertEquals(1, postCalls)
     }
 
+    @Test
+    fun validObservedPrefixIOExceptionBecomesInterruptedWithCauseAndClockSample() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val prefix = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 1).dropLast(1)).events
+        val failure = IOException("forced observed-prefix interruption")
+        val clock = RecordingTestClock()
+        val adapter = com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+            transport = failingObservedTransport(prefix, failure),
+            clock = clock,
+        )
+
+        try {
+            adapter.run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+            )
+            org.junit.Assert.fail("observed-prefix IOException was not converted to interruption")
+        } catch (error: PrototypeRunStreamInterruptedException) {
+            assertSame(failure, error.cause)
+            assertEquals(2, error.evidence.rawEvents.size)
+            prefix.indices.forEach { index ->
+                assertSame(prefix[index], error.evidence.rawEvents[index])
+            }
+            assertEquals(1, error.evidence.validatedContentEvents.size)
+            assertEquals(clock.samples.last(), error.evidence.interruptionClientMonotonicNanos)
+            assertTrue(
+                error.evidence.interruptionClientMonotonicNanos >
+                    error.evidence.validatedContentEvents.single().clientMonotonicNanos,
+            )
+        }
+        assertEquals(3, clock.samples.size)
+    }
+
+    @Test
+    fun malformedObservedPrefixIOExceptionPreservesValidationErrors() = runBlocking {
+        data class Case(
+            val label: String,
+            val blocks: List<String>,
+            val requestBody: String,
+            val expectedMessage: String,
+        )
+
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val canonicalPrefix = canonicalBlocks(doneFrame, contentCount = 1).dropLast(1)
+        val canonicalContent = canonicalPrefix[1]
+        val cases = listOf(
+            Case(
+                label = "content sequence",
+                blocks = listOf(canonicalPrefix[0], serverContentBlock(seq = 2)),
+                requestBody = canonicalRequestBody(),
+                expectedMessage = "prototype SSE content events must have exact seq 1 through 120",
+            ),
+            Case(
+                label = "content run identity",
+                blocks = listOf(
+                    canonicalPrefix[0],
+                    canonicalContent.replaceFirst(
+                        "\"campaign_id\":\"campaign-1\"",
+                        "\"campaign_id\":\"campaign-other\"",
+                    ),
+                ),
+                requestBody = canonicalRequestBody(),
+                expectedMessage = "prototype SSE content event identity must match the run",
+            ),
+            Case(
+                label = "outgoing request run identity",
+                blocks = canonicalPrefix,
+                requestBody =
+                    "{\"campaign_id\":\"campaign-other\",\"run_id\":\"run-1\"," +
+                        "\"condition_id\":\"baseline_v0.1\"}",
+                expectedMessage = REQUEST_RUN_IDENTITY_ERROR,
+            ),
+            Case(
+                label = "condition identity",
+                blocks = listOf(
+                    canonicalPrefix[0],
+                    canonicalContent.replaceFirst(
+                        "\"condition_id\":\"baseline_v0.1\"",
+                        "\"condition_id\":\"slow_v0.1\"",
+                    ),
+                ),
+                requestBody = canonicalRequestBody(),
+                expectedMessage = CONDITION_IDENTITY_ERROR,
+            ),
+        )
+
+        cases.forEach { case ->
+            val prefix = rawStreamOf(case.blocks).events
+            try {
+                com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                    transport = failingObservedTransport(
+                        prefix,
+                        IOException("forced ${case.label} interruption"),
+                    ),
+                    clock = IncrementingTestClock(),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = case.requestBody,
+                )
+                org.junit.Assert.fail("${case.label} prefix was repaired as interrupted")
+            } catch (error: IllegalArgumentException) {
+                assertTrue(
+                    "${case.label} was converted to typed interruption",
+                    error !is PrototypeRunStreamInterruptedException,
+                )
+                assertEquals(case.label, case.expectedMessage, error.message)
+            }
+        }
+    }
+
+    @Test
+    fun validObservedPrefixCancellationIsPropagatedUnchanged() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val prefix = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 1).dropLast(1)).events
+        val failure = CancellationException("forced observed-prefix cancellation")
+
+        try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = failingObservedTransport(prefix, failure),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+            )
+            org.junit.Assert.fail("observed-prefix CancellationException was swallowed")
+        } catch (error: CancellationException) {
+            assertSame(failure, error)
+        }
+    }
+
+    /** Keeps local JVM tests off the Android SystemClock while exercising production logic. */
+    private class PrototypeRunStreamAdapter(
+        transport: PrototypeRawPostTransport,
+    ) {
+        private val delegate = com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+            transport = transport,
+            clock = IncrementingTestClock(),
+        )
+
+        suspend fun run(endpoint: String, requestBody: String): PrototypeRunStreamResult =
+            delegate.run(endpoint, requestBody)
+    }
+
+    private class IncrementingTestClock : MonotonicNanosClock {
+        private var nextNanos = 1L
+
+        override fun now(): Long = nextNanos++
+    }
+
+    private class RecordingTestClock : MonotonicNanosClock {
+        private var nextNanos = 1_000L
+        val samples = mutableListOf<Long>()
+
+        override fun now(): Long = nextNanos.also { sample ->
+            samples += sample
+            nextNanos += 10L
+        }
+    }
+
     private class FakeRawPostTransport(
         private val response: RawSseStream,
     ) : PrototypeRawPostTransport {
@@ -4045,6 +4274,24 @@ class PrototypeRunStreamAdapterTest {
             postedUrl = url
             postedBody = requestBody
             return response
+        }
+    }
+
+    private fun failingObservedTransport(
+        prefix: List<RawSseEvent>,
+        failure: Throwable,
+    ): PrototypeRawPostTransport = object : PrototypeRawPostTransport {
+        override suspend fun post(url: String, requestBody: String): RawSseStream =
+            error("observed transport path required")
+
+        override suspend fun postObserved(
+            url: String,
+            requestBody: String,
+            observer: PrototypeRawPostObserver,
+        ): RawSseStream {
+            observer.beforeDispatch()
+            prefix.forEach(observer.onRawEvent)
+            throw failure
         }
     }
 

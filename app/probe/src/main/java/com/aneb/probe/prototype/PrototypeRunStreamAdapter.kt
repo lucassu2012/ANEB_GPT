@@ -2,6 +2,8 @@ package com.aneb.probe.prototype
 
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
+import com.aneb.probe.net.AndroidMonotonicNanosClock
+import com.aneb.probe.net.MonotonicNanosClock
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -12,6 +14,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.io.IOException
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicLong
 
 private const val CONTENT_SEQUENCE_ERROR =
     "prototype SSE content events must have exact seq 1 through 120"
@@ -29,11 +34,20 @@ private const val REQUEST_RUN_IDENTITY_ERROR =
     "prototype SSE run identity must match the outgoing request"
 private const val CONDITION_IDENTITY_ERROR =
     "prototype SSE condition identity must match the outgoing request"
+private const val TRUNCATED_STREAM_ERROR = "prototype SSE stream has a truncated tail"
+private const val MISSING_TERMINAL_STREAM_ERROR =
+    "prototype SSE stream ended without a terminal done event"
 private const val MAX_JSON_NESTING_DEPTH = 64
+private const val UNSET_TIMESTAMP = -1L
 
 private data class ContentRunIdentity(
     val campaignId: String,
     val runId: String,
+)
+
+private data class ValidatedContentPayload(
+    val dataPayload: String,
+    val envelope: JsonObject,
 )
 
 private class DuplicateContentIdentityKeyException : IllegalArgumentException()
@@ -75,17 +89,21 @@ private object ContentDetailsDuplicateKeyProbe : DeserializationStrategy<Unit> {
         "PrototypeContentDetailsDuplicateKeyProbe",
     ) {
         element("seq", JsonElement.serializer().descriptor, isOptional = true)
+        element("planned_offset_ms", JsonElement.serializer().descriptor, isOptional = true)
+        element("payload_id", JsonElement.serializer().descriptor, isOptional = true)
+        element("profile_manifest_sha256", JsonElement.serializer().descriptor, isOptional = true)
+        element("schedule_hash", JsonElement.serializer().descriptor, isOptional = true)
     }
 
     override fun deserialize(decoder: Decoder) {
         decoder.decodeStructure(descriptor) {
-            var seenSeq = false
+            val seen = BooleanArray(descriptor.elementsCount)
             while (true) {
                 when (val index = decodeElementIndex(descriptor)) {
                     CompositeDecoder.DECODE_DONE -> break
-                    0 -> {
-                        require(!seenSeq) { CONTENT_SEQUENCE_ERROR }
-                        seenSeq = true
+                    in seen.indices -> {
+                        require(!seen[index]) { CONTENT_SEQUENCE_ERROR }
+                        seen[index] = true
                         decodeSerializableElement(descriptor, index, JsonElement.serializer())
                     }
                     else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
@@ -420,24 +438,190 @@ private object TerminalConditionRootDuplicateKeyProbe : DeserializationStrategy<
 /** Transport seam for the Prototype 0.1 POST run stream. */
 interface PrototypeRawPostTransport {
     suspend fun post(url: String, requestBody: String): RawSseStream
+
+    /**
+     * Observed product path. Generic fakes retain source compatibility through this default;
+     * the AnebClient transport overrides it so dispatch/frame callbacks occur at their real
+     * network boundaries.
+     */
+    suspend fun postObserved(
+        url: String,
+        requestBody: String,
+        observer: PrototypeRawPostObserver,
+    ): RawSseStream {
+        observer.beforeDispatch()
+        return post(url, requestBody).also { stream ->
+            stream.events.forEach(observer.onRawEvent)
+        }
+    }
+}
+
+data class PrototypeRawPostObserver(
+    val beforeDispatch: () -> Unit,
+    val onRawEvent: (RawSseEvent) -> Unit,
+)
+
+data class PrototypeValidatedContentEvent(
+    val sequence: Int,
+    val rawEvent: RawSseEvent,
+    val clientMonotonicNanos: Long,
+)
+
+/** Evidence observed before a Prototype stream ended without a valid terminal receipt. */
+data class PrototypeInterruptedStreamEvidence(
+    val rawEvents: List<RawSseEvent>,
+    val t0MonotonicNanos: Long,
+    val validatedContentEvents: List<PrototypeValidatedContentEvent>,
+    val interruptionClientMonotonicNanos: Long,
+) {
+    constructor(
+        rawEvents: List<RawSseEvent>,
+        t0MonotonicNanos: Long,
+        validatedContentEvents: List<PrototypeValidatedContentEvent>,
+    ) : this(
+        rawEvents = rawEvents,
+        t0MonotonicNanos = t0MonotonicNanos,
+        validatedContentEvents = validatedContentEvents,
+        interruptionClientMonotonicNanos = UNSET_TIMESTAMP,
+    )
+}
+
+internal class PrototypeRunStreamInterruptedException(
+    message: String,
+    val evidence: PrototypeInterruptedStreamEvidence,
+) : IllegalArgumentException(message) {
+    constructor(
+        message: String,
+        evidence: PrototypeInterruptedStreamEvidence,
+        cause: IOException,
+    ) : this(message, evidence) {
+        initCause(cause)
+    }
 }
 
 /** The raw transport evidence plus the decoded terminal frame. */
 data class PrototypeRunStreamResult(
     val rawEvents: List<RawSseEvent>,
     val decodedTerminal: PrototypeSseTerminalDecoder.DecodedDoneFrame,
+    val t0MonotonicNanos: Long,
+    val validatedContentEvents: List<PrototypeValidatedContentEvent>,
+    val terminalClientMonotonicNanos: Long,
 )
 
 /** Connects the injected POST transport to the existing terminal-frame decoder. */
-class PrototypeRunStreamAdapter(
+class PrototypeRunStreamAdapter internal constructor(
     private val transport: PrototypeRawPostTransport,
+    private val clock: MonotonicNanosClock,
 ) {
+    constructor(transport: PrototypeRawPostTransport) : this(
+        transport = transport,
+        clock = AndroidMonotonicNanosClock,
+    )
+
     suspend fun run(endpoint: String, requestBody: String): PrototypeRunStreamResult {
-        val stream = transport.post(endpoint, requestBody)
-        require(!stream.truncatedTail) { "prototype SSE stream has a truncated tail" }
+        val t0MonotonicNanos = AtomicLong(UNSET_TIMESTAMP)
+        val terminalClientMonotonicNanos = AtomicLong(UNSET_TIMESTAMP)
+        val observedContentEvents = Collections.synchronizedList(
+            mutableListOf<PrototypeValidatedContentEvent>(),
+        )
+        val observedRawEvents = Collections.synchronizedList(mutableListOf<RawSseEvent>())
+        val observationIdentity = requestIdentity(requestBody)
+        val observationConditionId = runCatching { requestConditionId(requestBody) }.getOrNull()
+        val stream = try {
+            transport.postObserved(
+                url = endpoint,
+                requestBody = requestBody,
+                observer = PrototypeRawPostObserver(
+                    beforeDispatch = {
+                        check(t0MonotonicNanos.compareAndSet(UNSET_TIMESTAMP, clock.now())) {
+                            "prototype transport dispatch was observed more than once"
+                        }
+                    },
+                    onRawEvent = { rawEvent ->
+                        observedRawEvents += rawEvent
+                        when (rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull()) {
+                            "event: content_event" -> {
+                                val expectedSequence = observedContentEvents.size + 1
+                                val identity = observationIdentity
+                                val conditionId = observationConditionId
+                                if (identity != null && conditionId != null && expectedSequence <= 120) {
+                                    val validated = runCatching {
+                                        validateContentEvent(rawEvent, expectedSequence, identity)
+                                    }.getOrNull()
+                                    val observedConditionId = validated?.let { content ->
+                                        runCatching { conditionIdFromPayload(content.dataPayload) }.getOrNull()
+                                    }
+                                    if (validated != null && observedConditionId == conditionId) {
+                                        observedContentEvents += PrototypeValidatedContentEvent(
+                                            sequence = expectedSequence,
+                                            rawEvent = rawEvent,
+                                            clientMonotonicNanos = clock.now(),
+                                        )
+                                    }
+                                }
+                            }
+                            "event: done" -> {
+                                val identity = observationIdentity
+                                val conditionId = observationConditionId
+                                if (identity != null && conditionId != null) {
+                                    val valid = runCatching {
+                                        validateTerminalForObservation(rawEvent, identity, conditionId)
+                                    }.isSuccess
+                                    if (valid) {
+                                        terminalClientMonotonicNanos.compareAndSet(
+                                            UNSET_TIMESTAMP,
+                                            clock.now(),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+            )
+        } catch (error: IOException) {
+            val rawEvents = synchronized(observedRawEvents) { observedRawEvents.toList() }
+            if (rawEvents.isEmpty()) {
+                throw error
+            }
+            val interruptionClientMonotonicNanos = clock.now()
+            val contentEvents = synchronized(observedContentEvents) {
+                observedContentEvents.toList()
+            }
+            val evidence = validateInterruptedPrefix(
+                rawEvents = rawEvents,
+                requestBody = requestBody,
+                t0MonotonicNanos = t0MonotonicNanos.get(),
+                observedContentEvents = contentEvents,
+                interruptionClientMonotonicNanos = interruptionClientMonotonicNanos,
+            )
+            throw PrototypeRunStreamInterruptedException(
+                message = MISSING_TERMINAL_STREAM_ERROR,
+                evidence = evidence,
+                cause = error,
+            )
+        }
         val rawEvents = stream.events
         val finalDoneCount = rawEvents.count { rawEvent ->
             rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull() == "event: done"
+        }
+        if (stream.truncatedTail || finalDoneCount == 0) {
+            val interruptionClientMonotonicNanos = clock.now()
+            val evidence = validateInterruptedPrefix(
+                rawEvents = rawEvents,
+                requestBody = requestBody,
+                t0MonotonicNanos = t0MonotonicNanos.get(),
+                observedContentEvents = observedContentEvents.toList(),
+                interruptionClientMonotonicNanos = interruptionClientMonotonicNanos,
+            )
+            throw PrototypeRunStreamInterruptedException(
+                message = if (stream.truncatedTail) {
+                    TRUNCATED_STREAM_ERROR
+                } else {
+                    MISSING_TERMINAL_STREAM_ERROR
+                },
+                evidence = evidence,
+            )
         }
         require(finalDoneCount == 1) {
             "prototype SSE stream must contain exactly one final done event"
@@ -461,52 +645,11 @@ class PrototypeRunStreamAdapter(
         requireRunStartedEventType(rawEvents.first())
         rawEvents.subList(1, rawEvents.lastIndex).forEachIndexed { index, rawEvent ->
             val expectedSequence = index + 1
-            val lines = rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().toList()
-            require(lines.size == 2) {
-                CONTENT_SEQUENCE_ERROR
-            }
-            val dataLine = lines[1]
-            require(dataLine.startsWith(DATA_PREFIX)) {
-                CONTENT_SEQUENCE_ERROR
-            }
-            val dataPayload = dataLine.removePrefix(DATA_PREFIX)
-            requireJsonNestingWithinBudget(dataPayload)
-            try {
-                probeJson.decodeFromString(ContentRootDuplicateKeyProbe, dataPayload)
-            } catch (error: DuplicateContentIdentityKeyException) {
-                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
-            } catch (error: Exception) {
-                throw IllegalArgumentException(CONTENT_SEQUENCE_ERROR, error)
-            }
-            val envelope = try {
-                contentJson.parseToJsonElement(dataPayload)
-            } catch (error: Exception) {
-                throw IllegalArgumentException(CONTENT_SEQUENCE_ERROR, error)
-            }
-            require(envelope is JsonObject) { CONTENT_SEQUENCE_ERROR }
-            require(envelope["event_type"] == JsonPrimitive("content_event")) {
-                CONTENT_SEQUENCE_ERROR
-            }
-            val details = envelope["details"]
-            require(details is JsonObject) { CONTENT_SEQUENCE_ERROR }
-            val sequence = details["seq"] as? JsonPrimitive
-            require(
-                sequence != null &&
-                    !sequence.isString &&
-                    sequence.content == expectedSequence.toString(),
-            ) {
-                CONTENT_SEQUENCE_ERROR
-            }
-            try {
-                probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, dataPayload)
-            } catch (error: DuplicateContentIdentityKeyException) {
-                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
-            } catch (error: Exception) {
-                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
-            }
-            val eventIdentity = identityFromEnvelope(envelope)
-            require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
-            contentDataPayloads += dataPayload
+            contentDataPayloads += validateContentEvent(
+                rawEvent = rawEvent,
+                expectedSequence = expectedSequence,
+                expectedIdentity = expectedIdentity,
+            ).dataPayload
         }
         var previousArrivalNanos: Long? = null
         rawEvents.subList(1, rawEvents.lastIndex).forEach { rawEvent ->
@@ -568,9 +711,27 @@ class PrototypeRunStreamAdapter(
         } catch (error: DuplicateConditionIdentityKeyException) {
             throw IllegalArgumentException(CONDITION_IDENTITY_ERROR, error)
         }
+        val observedT0 = t0MonotonicNanos.get().also { timestamp ->
+            check(timestamp >= 0L) { "prototype transport dispatch was not observed" }
+        }
+        val validatedEvents = observedContentEvents.toList().also { events ->
+            check(events.map { it.sequence } == (1..120).toList()) {
+                "prototype content validation timestamps are incomplete"
+            }
+        }
+        requireContentObservationChronology(observedT0, validatedEvents)
+        val observedTerminal = terminalClientMonotonicNanos.get().also { timestamp ->
+            check(timestamp >= 0L) { "prototype terminal validation timestamp is missing" }
+        }
+        require(observedTerminal > validatedEvents.last().clientMonotonicNanos) {
+            "prototype terminal validation timestamp must follow content observations"
+        }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
             decodedTerminal = decodedTerminal,
+            t0MonotonicNanos = observedT0,
+            validatedContentEvents = validatedEvents,
+            terminalClientMonotonicNanos = observedTerminal,
         )
     }
 
@@ -584,6 +745,182 @@ class PrototypeRunStreamAdapter(
             isLenient = false
         }
         private const val DATA_PREFIX = "data: "
+
+        private fun validateContentEvent(
+            rawEvent: RawSseEvent,
+            expectedSequence: Int,
+            expectedIdentity: ContentRunIdentity,
+        ): ValidatedContentPayload {
+            val lines = rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().toList()
+            require(lines.size == 2) { CONTENT_SEQUENCE_ERROR }
+            val dataLine = lines[1]
+            require(dataLine.startsWith(DATA_PREFIX)) { CONTENT_SEQUENCE_ERROR }
+            val dataPayload = dataLine.removePrefix(DATA_PREFIX)
+            requireJsonNestingWithinBudget(dataPayload)
+            try {
+                probeJson.decodeFromString(ContentRootDuplicateKeyProbe, dataPayload)
+            } catch (error: DuplicateContentIdentityKeyException) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(CONTENT_SEQUENCE_ERROR, error)
+            }
+            val envelope = try {
+                contentJson.parseToJsonElement(dataPayload)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(CONTENT_SEQUENCE_ERROR, error)
+            }
+            require(envelope is JsonObject) { CONTENT_SEQUENCE_ERROR }
+            require(envelope["event_type"] == JsonPrimitive("content_event")) {
+                CONTENT_SEQUENCE_ERROR
+            }
+            val details = envelope["details"]
+            require(details is JsonObject) { CONTENT_SEQUENCE_ERROR }
+            val sequence = details["seq"] as? JsonPrimitive
+            require(
+                sequence != null &&
+                    !sequence.isString &&
+                    sequence.content == expectedSequence.toString(),
+            ) {
+                CONTENT_SEQUENCE_ERROR
+            }
+            try {
+                probeJson.decodeFromString(ContentIdentityDuplicateKeyProbe, dataPayload)
+            } catch (error: DuplicateContentIdentityKeyException) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
+            } catch (error: Exception) {
+                throw IllegalArgumentException(CONTENT_IDENTITY_ERROR, error)
+            }
+            require(identityFromEnvelope(envelope) == expectedIdentity) { CONTENT_IDENTITY_ERROR }
+            return ValidatedContentPayload(dataPayload, envelope)
+        }
+
+        private fun validateTerminalForObservation(
+            rawEvent: RawSseEvent,
+            expectedIdentity: ContentRunIdentity,
+            expectedConditionId: String,
+        ) {
+            val rawFrame = rawEvent.bytes.toString(Charsets.UTF_8) + "\n\n"
+            val decodedTerminal = PrototypeSseTerminalDecoder.decodeDoneFrame(rawFrame)
+            val terminalDataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
+                .lineSequence()
+                .toList()
+                .getOrNull(1)
+                ?.takeIf { it.startsWith(DATA_PREFIX) }
+                ?.removePrefix(DATA_PREFIX)
+                ?: throw IllegalArgumentException(TERMINAL_IDENTITY_ERROR)
+            probeJson.decodeFromString(TerminalIdentityDuplicateKeyProbe, terminalDataPayload)
+            val terminalDetails = decodedTerminal.envelope["details"] as? JsonObject
+            require(
+                identityFromEnvelope(decodedTerminal.envelope) == expectedIdentity &&
+                    terminalDetails?.let(::identityFromEnvelope) == expectedIdentity,
+            ) {
+                TERMINAL_IDENTITY_ERROR
+            }
+            probeJson.decodeFromString(
+                TerminalCompletionRootDuplicateKeyProbe,
+                terminalDataPayload,
+            )
+            requireTerminalCompletionFacts(decodedTerminal.envelope)
+            requireNoDuplicateTerminalConditionKeys(terminalDataPayload)
+            require(
+                conditionIdFromEnvelope(decodedTerminal.envelope) == expectedConditionId &&
+                    terminalDetails?.let(::conditionIdFromEnvelope) == expectedConditionId,
+            ) {
+                CONDITION_IDENTITY_ERROR
+            }
+        }
+
+        private fun validateInterruptedPrefix(
+            rawEvents: List<RawSseEvent>,
+            requestBody: String,
+            t0MonotonicNanos: Long,
+            observedContentEvents: List<PrototypeValidatedContentEvent>,
+            interruptionClientMonotonicNanos: Long,
+        ): PrototypeInterruptedStreamEvidence {
+            val eventLines = rawEvents.map { rawEvent ->
+                rawEvent.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull()
+            }
+            require(
+                rawEvents.isNotEmpty() &&
+                    rawEvents.size <= 121 &&
+                    eventLines.first() == "event: run_started" &&
+                    eventLines.drop(1).all { it == "event: content_event" },
+            ) {
+                CONTENT_SEQUENCE_ERROR
+            }
+            val expectedIdentity = runStartedIdentity(rawEvents.first())
+            require(expectedIdentity != null) { CONTENT_IDENTITY_ERROR }
+            requireRunStartedEventType(rawEvents.first())
+            val contentPayloads = rawEvents.drop(1).mapIndexed { index, rawEvent ->
+                validateContentEvent(
+                    rawEvent = rawEvent,
+                    expectedSequence = index + 1,
+                    expectedIdentity = expectedIdentity,
+                ).dataPayload
+            }
+            var previousArrivalNanos: Long? = null
+            rawEvents.drop(1).forEach { rawEvent ->
+                val arrivalNanos = rawEvent.arrivalNanos
+                require(
+                    arrivalNanos >= 0L &&
+                        (previousArrivalNanos == null || arrivalNanos >= previousArrivalNanos!!),
+                ) {
+                    CONTENT_ARRIVAL_CHRONOLOGY_ERROR
+                }
+                previousArrivalNanos = arrivalNanos
+            }
+            require(requestIdentity(requestBody) == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
+            try {
+                val outgoingConditionId = requestConditionId(requestBody)
+                require(
+                    outgoingConditionId != null &&
+                        conditionIdFromRawEvent(rawEvents.first()) == outgoingConditionId &&
+                        contentPayloads.all { payload ->
+                            conditionIdFromPayload(payload) == outgoingConditionId
+                        },
+                ) {
+                    CONDITION_IDENTITY_ERROR
+                }
+            } catch (error: DuplicateConditionIdentityKeyException) {
+                throw IllegalArgumentException(CONDITION_IDENTITY_ERROR, error)
+            }
+            require(
+                observedContentEvents.map { it.sequence } == contentPayloads.indices.map { it + 1 } &&
+                    observedContentEvents.map { it.rawEvent } == rawEvents.drop(1),
+            ) {
+                CONTENT_SEQUENCE_ERROR
+            }
+            check(t0MonotonicNanos >= 0L) { "prototype transport dispatch was not observed" }
+            requireContentObservationChronology(t0MonotonicNanos, observedContentEvents)
+            val lastObservation = observedContentEvents.lastOrNull()?.clientMonotonicNanos
+                ?: t0MonotonicNanos
+            require(interruptionClientMonotonicNanos > lastObservation) {
+                "prototype interruption validation timestamp must follow observed content"
+            }
+            return PrototypeInterruptedStreamEvidence(
+                rawEvents = rawEvents.toList(),
+                t0MonotonicNanos = t0MonotonicNanos,
+                validatedContentEvents = observedContentEvents.toList(),
+                interruptionClientMonotonicNanos = interruptionClientMonotonicNanos,
+            )
+        }
+
+        private fun requireContentObservationChronology(
+            t0MonotonicNanos: Long,
+            events: List<PrototypeValidatedContentEvent>,
+        ) {
+            var previousContentTimestamp: Long? = null
+            events.forEach { event ->
+                require(
+                    event.clientMonotonicNanos >= t0MonotonicNanos &&
+                        (previousContentTimestamp == null ||
+                            event.clientMonotonicNanos > previousContentTimestamp!!),
+                ) {
+                    "prototype Android content observations must be nondecreasing from t0 and strictly ordered"
+                }
+                previousContentTimestamp = event.clientMonotonicNanos
+            }
+        }
 
         private fun requireRunStartedEventType(rawEvent: RawSseEvent) {
             val dataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
