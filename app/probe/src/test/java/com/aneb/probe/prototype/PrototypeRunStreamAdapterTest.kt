@@ -3,6 +3,7 @@ package com.aneb.probe.prototype
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -20,6 +21,8 @@ private const val TERMINAL_IDENTITY_ERROR =
     "prototype SSE terminal receipt identity must match the run"
 private const val REQUEST_RUN_IDENTITY_ERROR =
     "prototype SSE run identity must match the outgoing request"
+private const val CONDITION_IDENTITY_ERROR =
+    "prototype SSE condition identity must match the outgoing request"
 
 class PrototypeRunStreamAdapterTest {
     @Test
@@ -43,6 +46,1135 @@ class PrototypeRunStreamAdapterTest {
                 "prototype SSE run_started payload event_type must match the SSE event",
                 error.message,
             )
+        }
+    }
+
+    @Test
+    fun outgoingRequestConditionIdentityMustMatchEveryStreamEvent() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val baseline = officialProducerCases.first()
+        val requestBody = officialRunRequestBody(baseline)
+        val blocks = producerShapedBlocks(doneFrame, baseline).map { block ->
+            block.replace(
+                "\"condition_id\":\"${baseline.conditionId}\"",
+                "\"condition_id\":\"slow_v0.1\"",
+            )
+        }
+        assertEquals(122, blocks.size)
+        assertTrue(blocks[0].contains("\"condition_id\":\"slow_v0.1\""))
+        assertTrue(blocks.drop(1).dropLast(1).all { block ->
+            block.contains("\"condition_id\":\"slow_v0.1\"")
+        })
+        assertTrue(blocks.last().contains("\"condition_id\":\"slow_v0.1\""))
+
+        try {
+            PrototypeRunStreamAdapter(
+                FakeRawPostTransport(rawStreamOf(blocks)),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = requestBody,
+            )
+            org.junit.Assert.fail("condition identity mismatch was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(CONDITION_IDENTITY_ERROR, error.message)
+        }
+    }
+
+    @Test
+    fun conditionIdentityRejectsPlainDuplicatesAtEveryClaimedLayer() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val baseline = officialProducerCases.first()
+        val canonicalRequest = officialRunRequestBody(baseline)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, baseline)
+        val forgedCondition = "slow_v0.1"
+        val canonicalConditionMember = "\"condition_id\":\"${baseline.conditionId}\""
+        data class DuplicateCase(
+            val label: String,
+            val requestBody: String,
+            val blocks: List<String>,
+        )
+
+        data class DuplicateVariant(
+            val label: String,
+            val firstKey: String,
+            val firstValue: String,
+            val secondKey: String,
+            val secondValue: String,
+        )
+
+        val variants = listOf(
+            DuplicateVariant(
+                "plain forged then plain canonical",
+                "condition_id",
+                forgedCondition,
+                "condition_id",
+                baseline.conditionId,
+            ),
+            DuplicateVariant(
+                "plain canonical then plain forged",
+                "condition_id",
+                baseline.conditionId,
+                "condition_id",
+                forgedCondition,
+            ),
+            DuplicateVariant(
+                "escaped forged then plain canonical",
+                "condition_\\u0069d",
+                forgedCondition,
+                "condition_id",
+                baseline.conditionId,
+            ),
+            DuplicateVariant(
+                "plain canonical then escaped forged",
+                "condition_id",
+                baseline.conditionId,
+                "condition_\\u0069d",
+                forgedCondition,
+            ),
+        )
+        val cases = mutableListOf<DuplicateCase>()
+        variants.forEach { variant ->
+            val firstMember = "\"" + variant.firstKey + "\":\"" + variant.firstValue + "\""
+            val secondMember = "\"" + variant.secondKey + "\":\"" + variant.secondValue + "\""
+            val duplicateConditionMember = "$firstMember,$secondMember"
+            cases += DuplicateCase(
+                "outgoing request root / " + variant.label,
+                canonicalRequest.replaceFirst(canonicalConditionMember, duplicateConditionMember),
+                canonicalBlocks,
+            )
+            cases += DuplicateCase(
+                "run_started root / " + variant.label,
+                canonicalRequest,
+                canonicalBlocks.toMutableList().also { blocks ->
+                    blocks[0] = blocks[0].replaceFirst(
+                        canonicalConditionMember,
+                        duplicateConditionMember,
+                    )
+                },
+            )
+            cases += DuplicateCase(
+                "middle content root / " + variant.label,
+                canonicalRequest,
+                canonicalBlocks.toMutableList().also { blocks ->
+                    val middleContentIndex = 1 + 59
+                    blocks[middleContentIndex] = blocks[middleContentIndex].replaceFirst(
+                        canonicalConditionMember,
+                        duplicateConditionMember,
+                    )
+                },
+            )
+            cases += DuplicateCase(
+                "terminal root / " + variant.label,
+                canonicalRequest,
+                canonicalBlocks.toMutableList().also { blocks ->
+                    blocks[blocks.lastIndex] = blocks[blocks.lastIndex].replaceFirst(
+                        canonicalConditionMember,
+                        duplicateConditionMember,
+                    )
+                },
+            )
+            cases += DuplicateCase(
+                "terminal details / " + variant.label,
+                canonicalRequest,
+                canonicalBlocks.toMutableList().also { blocks ->
+                    blocks[blocks.lastIndex] = replaceSecondOccurrence(
+                        blocks[blocks.lastIndex],
+                        canonicalConditionMember,
+                        duplicateConditionMember,
+                    )
+                },
+            )
+        }
+        assertEquals(20, cases.size)
+        assertTrue(cases.all { it.blocks.size == 122 })
+
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        cases.forEach { case ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(case.blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = case.requestBody,
+                )
+                accepted += case.label
+            } catch (error: IllegalArgumentException) {
+                if (error.message != CONDITION_IDENTITY_ERROR) {
+                    wrongErrors += "${case.label}: ${error.message}"
+                }
+            }
+        }
+
+        assertTrue(
+            "condition duplicate cases accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun conditionIdentityRejectsOfficialContextSurfaceDrift() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+
+        data class SurfaceCase(
+            val label: String,
+            val requestBody: String,
+            val blocks: List<String>,
+        )
+
+        val surfaces = listOf(
+            "request root",
+            "run_started root",
+            "content seq1",
+            "content seq60",
+            "content seq120",
+            "terminal root",
+            "terminal details",
+        )
+        val cases = mutableListOf<SurfaceCase>()
+        officialProducerCases.forEachIndexed { producerIndex, producer ->
+            val alternate = officialProducerCases[(producerIndex + 1) % officialProducerCases.size]
+            val canonicalRequest = officialRunRequestBody(producer)
+            val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+            val canonicalMember = "\"condition_id\":\"" + producer.conditionId + "\""
+            val alternateMember = "\"condition_id\":\"" + alternate.conditionId + "\""
+            surfaces.forEach { surface ->
+                if (surface == "request root") {
+                    cases += SurfaceCase(
+                        producer.label + " / " + surface,
+                        canonicalRequest.replaceFirst(canonicalMember, alternateMember),
+                        canonicalBlocks,
+                    )
+                } else {
+                    val blocks = canonicalBlocks.toMutableList()
+                    val blockIndex = when (surface) {
+                        "run_started root" -> 0
+                        "content seq1" -> 1
+                        "content seq60" -> 60
+                        "content seq120" -> 120
+                        "terminal root", "terminal details" -> blocks.lastIndex
+                        else -> error("unsupported condition surface: $surface")
+                    }
+                    blocks[blockIndex] = if (surface == "terminal details") {
+                        replaceSecondOccurrence(
+                            blocks[blockIndex],
+                            canonicalMember,
+                            alternateMember,
+                        )
+                    } else {
+                        blocks[blockIndex].replaceFirst(canonicalMember, alternateMember)
+                    }
+                    cases += SurfaceCase(
+                        producer.label + " / " + surface,
+                        canonicalRequest,
+                        blocks,
+                    )
+                }
+            }
+        }
+        assertEquals(21, cases.size)
+        assertTrue(cases.all { it.blocks.size == 122 })
+
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        cases.forEach { case ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(case.blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = case.requestBody,
+                )
+                accepted += case.label
+            } catch (error: IllegalArgumentException) {
+                if (error.message != CONDITION_IDENTITY_ERROR) {
+                    wrongErrors += case.label + ": " + error.message
+                }
+            }
+        }
+
+        assertTrue(
+            "official condition surface cases accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun acceptanceRunIndexesFourThroughNineUseAlternateEndpointAndConditionIdentity() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producers = acceptanceProducerCases()
+        val endpoint = "http://192.168.50.9:19009/api/v1/prototype/runs?mode=acceptance"
+        val surfaces = listOf(
+            "request root",
+            "run_started root",
+            "content seq60",
+            "terminal root",
+            "terminal details",
+        )
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        var canonicalPasses = 0
+        var driftCases = 0
+
+        producers.forEachIndexed { producerIndex, producer ->
+            val alternate = producers[(producerIndex + 1) % producers.size]
+            val canonicalRequest = officialRunRequestBody(producer)
+            val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+            val canonicalTransport = FakeRawPostTransport(rawStreamOf(canonicalBlocks))
+            val canonicalResult = PrototypeRunStreamAdapter(canonicalTransport).run(
+                endpoint = endpoint,
+                requestBody = canonicalRequest,
+            )
+            assertNotNull(canonicalResult.decodedTerminal)
+            assertTrue(canonicalRequest.contains("\"campaign_mode\":\"acceptance\""))
+            assertTrue(canonicalRequest.contains("\"run_index\":${producer.runIndex}"))
+            val terminalDetails = canonicalResult.decodedTerminal.envelope
+                .getValue("details") as JsonObject
+            assertEquals(
+                "acceptance",
+                terminalDetails.getValue("campaign_mode").jsonPrimitive.content,
+            )
+            assertEquals(
+                producer.runIndex.toString(),
+                terminalDetails.getValue("run_index").jsonPrimitive.content,
+            )
+            assertEquals(endpoint, canonicalTransport.postedUrl)
+            assertEquals(canonicalRequest, canonicalTransport.postedBody)
+            canonicalPasses += 1
+
+            surfaces.forEach { surface ->
+                val (requestBody, blocks) = conditionSurfaceVariant(
+                    surface = surface,
+                    canonicalRequest = canonicalRequest,
+                    canonicalBlocks = canonicalBlocks,
+                    canonicalCondition = producer.conditionId,
+                    replacementCondition = alternate.conditionId,
+                )
+                driftCases += 1
+                val transport = FakeRawPostTransport(rawStreamOf(blocks))
+                val label = "${producer.label} run_index=${producer.runIndex} / $surface"
+                try {
+                    PrototypeRunStreamAdapter(transport).run(endpoint, requestBody)
+                    accepted += label
+                } catch (error: IllegalArgumentException) {
+                    if (error.message != CONDITION_IDENTITY_ERROR) {
+                        wrongErrors += "$label: ${error.message}"
+                    }
+                }
+                assertEquals(endpoint, transport.postedUrl)
+                assertEquals(requestBody, transport.postedBody)
+            }
+        }
+
+        assertEquals((4..9).toList(), producers.map(OfficialProducerCase::runIndex))
+        assertEquals(6, canonicalPasses)
+        assertEquals(30, driftCases)
+        assertTrue(
+            "acceptance condition cases accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun acceptanceNineAlternateEndpointRejectsConditionDriftAtEveryContentPosition() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = acceptanceProducerCases().last()
+        val alternateCondition = acceptanceProducerCases().first().conditionId
+        val endpoint = "http://192.168.50.9:19009/api/v1/prototype/runs?mode=acceptance"
+        val canonicalRequest = officialRunRequestBody(producer)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+        val canonicalMember = "\"condition_id\":\"${producer.conditionId}\""
+        val accepted = mutableListOf<Int>()
+        val wrongErrors = mutableListOf<String>()
+        var cases = 0
+
+        (1..120).forEach { sequence ->
+            val blocks = canonicalBlocks.toMutableList()
+            val original = blocks[sequence]
+            blocks[sequence] = original.replaceFirst(
+                canonicalMember,
+                "\"condition_id\":\"$alternateCondition\"",
+            )
+            require(blocks[sequence] != original) {
+                "content seq=$sequence condition mutation did not apply"
+            }
+            cases += 1
+            val transport = FakeRawPostTransport(rawStreamOf(blocks))
+            try {
+                PrototypeRunStreamAdapter(transport).run(endpoint, canonicalRequest)
+                accepted += sequence
+            } catch (error: IllegalArgumentException) {
+                if (error.message != CONDITION_IDENTITY_ERROR) {
+                    wrongErrors += "content seq=$sequence: ${error.message}"
+                }
+            }
+            assertEquals(endpoint, transport.postedUrl)
+            assertEquals(canonicalRequest, transport.postedBody)
+        }
+
+        assertEquals(120, cases)
+        assertTrue(
+            "content condition positions accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun acceptanceNineAlternateEndpointRejectsConditionDuplicatesAtBoundaryContentPositions() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = acceptanceProducerCases().last()
+        val endpoint = "http://192.168.50.9:19009/api/v1/prototype/runs?mode=acceptance"
+        val canonicalRequest = officialRunRequestBody(producer)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+        val canonicalConditionMember = "\"condition_id\":\"${producer.conditionId}\""
+        val forgedCondition = acceptanceProducerCases().first().conditionId
+        data class DuplicateVariant(
+            val label: String,
+            val firstKey: String,
+            val firstValue: String,
+            val secondKey: String,
+            val secondValue: String,
+        )
+        val variants = listOf(
+            DuplicateVariant(
+                "plain forged then plain canonical",
+                "condition_id",
+                forgedCondition,
+                "condition_id",
+                producer.conditionId,
+            ),
+            DuplicateVariant(
+                "plain canonical then plain forged",
+                "condition_id",
+                producer.conditionId,
+                "condition_id",
+                forgedCondition,
+            ),
+            DuplicateVariant(
+                "escaped forged then plain canonical",
+                "condition_\\u0069d",
+                forgedCondition,
+                "condition_id",
+                producer.conditionId,
+            ),
+            DuplicateVariant(
+                "plain canonical then escaped forged",
+                "condition_id",
+                producer.conditionId,
+                "condition_\\u0069d",
+                forgedCondition,
+            ),
+        )
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        var cases = 0
+
+        listOf(1, 60, 120).forEach { sequence ->
+            variants.forEach { variant ->
+                val firstMember = "\"${variant.firstKey}\":\"${variant.firstValue}\""
+                val secondMember = "\"${variant.secondKey}\":\"${variant.secondValue}\""
+                val blocks = canonicalBlocks.toMutableList()
+                val original = blocks[sequence]
+                blocks[sequence] = original.replaceFirst(
+                    canonicalConditionMember,
+                    "$firstMember,$secondMember",
+                )
+                require(blocks[sequence] != original) {
+                    "content seq=$sequence ${variant.label} condition mutation did not apply"
+                }
+                val label = "content seq=$sequence / ${variant.label}"
+                cases += 1
+                val transport = FakeRawPostTransport(rawStreamOf(blocks))
+                try {
+                    PrototypeRunStreamAdapter(transport).run(endpoint, canonicalRequest)
+                    accepted += label
+                } catch (error: IllegalArgumentException) {
+                    if (error.message != CONDITION_IDENTITY_ERROR) {
+                        wrongErrors += "$label: ${error.message}"
+                    }
+                }
+                assertEquals(endpoint, transport.postedUrl)
+                assertEquals(canonicalRequest, transport.postedBody)
+            }
+        }
+
+        assertEquals(12, cases)
+        assertTrue(
+            "boundary content condition duplicate cases accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun conditionIdentityKeepsUnconditionalFullSurfaceFrame() {
+        // [FRAME] Maintenance-only: this freezes the bounded, unconditional all-content dataflow.
+        // The product claim remains the behavior tests above; equivalent refactors may require review.
+        val source = readProductionSource()
+        val runStart = source.indexOf("suspend fun run(")
+        val runEnd = source.indexOf("\n    private companion object", runStart)
+        require(runStart >= 0 && runEnd > runStart) { "adapter run source was not found" }
+        val runBody = source.substring(runStart, runEnd)
+        val expectedGate = """
+            |        require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
+            |        try {
+            |            val outgoingConditionId = requestConditionId(requestBody)
+            |            val runStartedConditionId = conditionIdFromRawEvent(rawEvents.first())
+            |            val contentConditionIds = contentDataPayloads.map(::conditionIdFromPayload)
+            |            requireNoDuplicateTerminalConditionKeys(terminalDataPayload)
+            |            val terminalConditionId = conditionIdFromEnvelope(decodedTerminal.envelope)
+            |            val terminalDetailsConditionId = (decodedTerminal.envelope["details"] as? JsonObject)
+            |                ?.let(::conditionIdFromEnvelope)
+            |            require(
+            |                outgoingConditionId != null &&
+            |                    runStartedConditionId == outgoingConditionId &&
+            |                    contentConditionIds.all { it == outgoingConditionId } &&
+            |                    terminalConditionId == outgoingConditionId &&
+            |                    terminalDetailsConditionId == outgoingConditionId,
+            |            ) {
+            |                CONDITION_IDENTITY_ERROR
+            |            }
+            |        } catch (error: DuplicateConditionIdentityKeyException) {
+            |            throw IllegalArgumentException(CONDITION_IDENTITY_ERROR, error)
+            |        }
+            |        return PrototypeRunStreamResult(
+        """.trimMargin()
+        assertEquals(1, runBody.split(expectedGate).size - 1)
+
+        fun compact(value: String): String = value.replace(Regex("\\s+"), "")
+        val helperStart = source.indexOf("private fun conditionIdFromPayload(dataPayload: String)")
+        val helperEnd = source.indexOf(
+            "\n        private fun requestConditionId",
+            helperStart,
+        )
+        require(helperStart >= 0 && helperEnd > helperStart) {
+            "condition payload helper was not found"
+        }
+        val expectedHelper = """
+            private fun conditionIdFromPayload(dataPayload: String): String? {
+                probeJson.decodeFromString(ConditionRootDuplicateKeyProbe, dataPayload)
+                val envelope = try {
+                    contentJson.parseToJsonElement(dataPayload)
+                } catch (_: Exception) {
+                    return null
+                }
+                return (envelope as? JsonObject)?.let(::conditionIdFromEnvelope)
+            }
+        """.trimIndent()
+        assertEquals(
+            compact(expectedHelper),
+            compact(source.substring(helperStart, helperEnd)),
+        )
+    }
+
+    @Test
+    fun conditionIdentityRejectsInvalidRepresentationsAtEveryClaimedSurface() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = officialProducerCases.first()
+        val canonicalRequest = officialRunRequestBody(producer)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+        val canonicalMember = "\"condition_id\":\"" + producer.conditionId + "\""
+
+        data class InvalidRepresentation(
+            val label: String,
+            val value: String?,
+        )
+
+        data class SurfaceCase(
+            val label: String,
+            val requestBody: String,
+            val blocks: List<String>,
+        )
+
+        val invalidRepresentations = listOf(
+            InvalidRepresentation("missing", null),
+            InvalidRepresentation("null", "null"),
+            InvalidRepresentation("boolean", "true"),
+            InvalidRepresentation("number", "1"),
+            InvalidRepresentation("object", "{}"),
+            InvalidRepresentation("array", "[]"),
+        )
+        val surfaces = listOf(
+            "request root",
+            "run_started root",
+            "content seq60",
+            "terminal root",
+            "terminal details",
+        )
+        fun replaceCondition(source: String, value: String?): String {
+            if (value == null) {
+                val withoutTrailingComma = source.replace(canonicalMember + ",", "")
+                if (withoutTrailingComma != source) return withoutTrailingComma
+                val withoutLeadingComma = source.replace("," + canonicalMember, "")
+                require(withoutLeadingComma != source) {
+                    "condition member missing while constructing missing representation"
+                }
+                return withoutLeadingComma
+            }
+            return source.replaceFirst(
+                canonicalMember,
+                "\"condition_id\":" + value,
+            )
+        }
+
+        val cases = mutableListOf<SurfaceCase>()
+        invalidRepresentations.forEach { representation ->
+            surfaces.forEach { surface ->
+                if (surface == "request root") {
+                    cases += SurfaceCase(
+                        "request root / " + representation.label,
+                        replaceCondition(canonicalRequest, representation.value),
+                        canonicalBlocks,
+                    )
+                } else {
+                    val blocks = canonicalBlocks.toMutableList()
+                    val blockIndex = when (surface) {
+                        "run_started root" -> 0
+                        "content seq60" -> 60
+                        "terminal root", "terminal details" -> blocks.lastIndex
+                        else -> error("unsupported condition surface: " + surface)
+                    }
+                    blocks[blockIndex] = if (surface == "terminal details") {
+                        val terminal = blocks[blockIndex]
+                        if (representation.value == null) {
+                            val first = terminal.indexOf(canonicalMember)
+                            val second = terminal.indexOf(
+                                canonicalMember,
+                                first + canonicalMember.length,
+                            )
+                            require(first >= 0 && second >= 0)
+                            require(terminal.startsWith(canonicalMember + ",", second))
+                            terminal.removeRange(
+                                second,
+                                second + canonicalMember.length + 1,
+                            )
+                        } else {
+                            replaceSecondOccurrence(
+                                terminal,
+                                canonicalMember,
+                                "\"condition_id\":" + representation.value,
+                            )
+                        }
+                    } else if (surface == "terminal root" && representation.value == null) {
+                        val terminal = blocks[blockIndex]
+                        val first = terminal.indexOf(canonicalMember)
+                        require(first >= 0)
+                        require(terminal.startsWith(canonicalMember + ",", first))
+                        terminal.removeRange(
+                            first,
+                            first + canonicalMember.length + 1,
+                        )
+                    } else {
+                        replaceCondition(blocks[blockIndex], representation.value)
+                    }
+                    cases += SurfaceCase(
+                        surface + " / " + representation.label,
+                        canonicalRequest,
+                        blocks,
+                    )
+                }
+            }
+        }
+        assertEquals(30, cases.size)
+        assertTrue(cases.all { it.blocks.size == 122 })
+
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        cases.forEach { case ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(case.blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = case.requestBody,
+                )
+                accepted += case.label
+            } catch (error: IllegalArgumentException) {
+                if (error.message != CONDITION_IDENTITY_ERROR) {
+                    wrongErrors += case.label + ": " + error.message
+                }
+            }
+        }
+
+        assertTrue(
+            "invalid condition representations accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun conditionIdentityRejectsDecodedStringVariantsAtEveryClaimedSurface() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = officialProducerCases.first()
+        val canonicalRequest = officialRunRequestBody(producer)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+        val canonicalMember = "\"condition_id\":\"" + producer.conditionId + "\""
+
+        data class StringVariant(
+            val label: String,
+            val decoded: String,
+        )
+
+        data class SurfaceCase(
+            val label: String,
+            val requestBody: String,
+            val blocks: List<String>,
+        )
+
+        fun jsonStringLiteral(decoded: String): String = buildString {
+            append('"')
+            decoded.forEach { character ->
+                when (character) {
+                    '\\' -> append("\\\\")
+                    '"' -> append("\\\"")
+                    '\b' -> append("\\b")
+                    '\t' -> append("\\t")
+                    '\n' -> append("\\n")
+                    '\u000C' -> append("\\f")
+                    '\r' -> append("\\r")
+                    else -> if (character.code < 0x20) {
+                        append("\\u")
+                        append(character.code.toString(16).padStart(4, '0'))
+                    } else {
+                        append(character)
+                    }
+                }
+            }
+            append('"')
+        }
+
+        val stringVariants = listOf(
+            StringVariant("empty", ""),
+            StringVariant("upper/case", producer.conditionId.uppercase()),
+            StringVariant("leading space", " " + producer.conditionId),
+            StringVariant("trailing space", producer.conditionId + " "),
+            StringVariant("TAB", producer.conditionId + "\t"),
+            StringVariant("LF", producer.conditionId + "\n"),
+            StringVariant("CR", producer.conditionId + "\r"),
+            StringVariant("NUL", producer.conditionId + "\u0000"),
+            StringVariant(
+                "NFKC-fullwidth-to-canonical",
+                "\uFF42\uFF41\uFF53\uFF45\uFF4C\uFF49\uFF4E\uFF45\uFF3F\uFF56\uFF10\uFF0E\uFF11",
+            ),
+            StringVariant("prefix", "x" + producer.conditionId),
+            StringVariant("suffix", producer.conditionId + "-x"),
+        )
+        val surfaces = listOf(
+            "request",
+            "run_started",
+            "content seq60",
+            "terminal root",
+            "terminal details",
+        )
+        val cases = mutableListOf<SurfaceCase>()
+        stringVariants.forEach { variant ->
+            val replacement = "\"condition_id\":" + jsonStringLiteral(variant.decoded)
+            surfaces.forEach { surface ->
+                if (surface == "request") {
+                    cases += SurfaceCase(
+                        "request / " + variant.label,
+                        canonicalRequest.replaceFirst(canonicalMember, replacement),
+                        canonicalBlocks,
+                    )
+                } else {
+                    val blocks = canonicalBlocks.toMutableList()
+                    val blockIndex = when (surface) {
+                        "run_started" -> 0
+                        "content seq60" -> 60
+                        "terminal root", "terminal details" -> blocks.lastIndex
+                        else -> error("unsupported condition surface: " + surface)
+                    }
+                    blocks[blockIndex] = if (surface == "terminal details") {
+                        replaceSecondOccurrence(
+                            blocks[blockIndex],
+                            canonicalMember,
+                            replacement,
+                        )
+                    } else {
+                        blocks[blockIndex].replaceFirst(canonicalMember, replacement)
+                    }
+                    cases += SurfaceCase(
+                        surface + " / " + variant.label,
+                        canonicalRequest,
+                        blocks,
+                    )
+                }
+            }
+        }
+        assertEquals(55, cases.size)
+        assertTrue(cases.all { it.blocks.size == 122 })
+
+        val accepted = mutableListOf<String>()
+        val wrongErrors = mutableListOf<String>()
+        cases.forEach { case ->
+            try {
+                PrototypeRunStreamAdapter(
+                    FakeRawPostTransport(rawStreamOf(case.blocks)),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = case.requestBody,
+                )
+                accepted += case.label
+            } catch (error: IllegalArgumentException) {
+                if (error.message != CONDITION_IDENTITY_ERROR) {
+                    wrongErrors += case.label + ": " + error.message
+                }
+            }
+        }
+
+        assertTrue(
+            "decoded string variants accepted=$accepted wrongErrors=$wrongErrors",
+            accepted.isEmpty() && wrongErrors.isEmpty(),
+        )
+    }
+
+    @Test
+    fun conditionIdentityAcceptsEquivalentRepresentationsAtEveryClaimedSurface() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = officialProducerCases.first()
+        val canonicalRequest = officialRunRequestBody(producer)
+        val canonicalBlocks = producerShapedBlocks(doneFrame, producer)
+        val canonicalMember = "\"condition_id\":\"" + producer.conditionId + "\""
+
+        data class Representation(
+            val label: String,
+        )
+
+        data class SurfaceCase(
+            val surface: String,
+            val label: String,
+            val requestBody: String,
+            val blocks: List<String>,
+        )
+
+        fun splitObjectMembers(objectJson: String): MutableList<String> {
+            require(objectJson.startsWith("{") && objectJson.endsWith("}"))
+            val body = objectJson.substring(1, objectJson.length - 1)
+            if (body.isEmpty()) return mutableListOf()
+            val members = mutableListOf<String>()
+            var start = 0
+            var depth = 0
+            var inString = false
+            var escaped = false
+            body.forEachIndexed { index, character ->
+                if (inString) {
+                    if (escaped) {
+                        escaped = false
+                    } else if (character == '\\') {
+                        escaped = true
+                    } else if (character == '"') {
+                        inString = false
+                    }
+                } else {
+                    when (character) {
+                        '"' -> inString = true
+                        '{', '[' -> depth++
+                        '}', ']' -> depth--
+                        ',' -> if (depth == 0) {
+                            members += body.substring(start, index)
+                            start = index + 1
+                        }
+                    }
+                }
+            }
+            require(!inString && !escaped && depth == 0)
+            members += body.substring(start)
+            return members
+        }
+
+        fun reorderedWithUnknown(objectJson: String, unknownKey: String): String {
+            val members = splitObjectMembers(objectJson)
+            val conditionIndex = members.indexOfFirst {
+                it.trimStart().startsWith("\"condition_id\":")
+            }
+            require(conditionIndex >= 0)
+            val conditionMember = members.removeAt(conditionIndex)
+            members.add(0, conditionMember)
+            members += "\"$unknownKey\":true"
+            return "{" + members.joinToString(",") + "}"
+        }
+
+        fun reorderedBlockWithUnknown(block: String, nestedDetails: Boolean): String {
+            val prefix = block.substringBefore("data: ") + "data: "
+            val payload = block.substringAfter("data: ")
+            if (!nestedDetails) {
+                return prefix + reorderedWithUnknown(payload, "step_g_unknown")
+            }
+            val members = splitObjectMembers(payload)
+            val detailsIndex = members.indexOfFirst {
+                it.trimStart().startsWith("\"details\":")
+            }
+            require(detailsIndex >= 0)
+            val detailsMember = members[detailsIndex]
+            val colon = detailsMember.indexOf(':')
+            require(colon >= 0)
+            val detailsJson = detailsMember.substring(colon + 1).trim()
+            members[detailsIndex] =
+                detailsMember.substring(0, colon + 1) +
+                    reorderedWithUnknown(detailsJson, "step_g_nested_unknown")
+            return prefix + "{" + members.joinToString(",") + "}"
+        }
+
+        val representations = listOf(
+            Representation("escaped semantic key"),
+            Representation("unicode-escaped value"),
+            Representation("reordered with unknown"),
+        )
+        val surfaces = listOf(
+            "request",
+            "run_started",
+            "content seq60",
+            "terminal root",
+            "terminal details",
+        )
+        val cases = mutableListOf<SurfaceCase>()
+        representations.forEach { representation ->
+            surfaces.forEach { surface ->
+                when (representation.label) {
+                    "escaped semantic key" -> {
+                        val replacement = "\"condition_\\u0069d\":\"${producer.conditionId}\""
+                        if (surface == "request") {
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                canonicalRequest.replaceFirst(canonicalMember, replacement),
+                                canonicalBlocks,
+                            )
+                        } else {
+                            val blocks = canonicalBlocks.toMutableList()
+                            val blockIndex = when (surface) {
+                                "run_started" -> 0
+                                "content seq60" -> 60
+                                "terminal root", "terminal details" -> blocks.lastIndex
+                                else -> error("unsupported condition surface: " + surface)
+                            }
+                            blocks[blockIndex] = if (surface == "terminal details") {
+                                replaceSecondOccurrence(
+                                    blocks[blockIndex],
+                                    canonicalMember,
+                                    replacement,
+                                )
+                            } else {
+                                blocks[blockIndex].replaceFirst(canonicalMember, replacement)
+                            }
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                canonicalRequest,
+                                blocks,
+                            )
+                        }
+                    }
+
+                    "unicode-escaped value" -> {
+                        val replacement =
+                            "\"condition_id\":\"" +
+                                unicodeEscapedJsonValue(producer.conditionId) +
+                                "\""
+                        if (surface == "request") {
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                canonicalRequest.replaceFirst(canonicalMember, replacement),
+                                canonicalBlocks,
+                            )
+                        } else {
+                            val blocks = canonicalBlocks.toMutableList()
+                            val blockIndex = when (surface) {
+                                "run_started" -> 0
+                                "content seq60" -> 60
+                                "terminal root", "terminal details" -> blocks.lastIndex
+                                else -> error("unsupported condition surface: " + surface)
+                            }
+                            blocks[blockIndex] = if (surface == "terminal details") {
+                                replaceSecondOccurrence(
+                                    blocks[blockIndex],
+                                    canonicalMember,
+                                    replacement,
+                                )
+                            } else {
+                                blocks[blockIndex].replaceFirst(canonicalMember, replacement)
+                            }
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                canonicalRequest,
+                                blocks,
+                            )
+                        }
+                    }
+
+                    "reordered with unknown" -> {
+                        if (surface == "request") {
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                reorderedWithUnknown(canonicalRequest, "step_g_unknown"),
+                                canonicalBlocks,
+                            )
+                        } else {
+                            val blocks = canonicalBlocks.toMutableList()
+                            val blockIndex = when (surface) {
+                                "run_started" -> 0
+                                "content seq60" -> 60
+                                "terminal root", "terminal details" -> blocks.lastIndex
+                                else -> error("unsupported condition surface: " + surface)
+                            }
+                            blocks[blockIndex] = reorderedBlockWithUnknown(
+                                blocks[blockIndex],
+                                nestedDetails = surface == "terminal details",
+                            )
+                            cases += SurfaceCase(
+                                surface,
+                                surface + " / " + representation.label,
+                                canonicalRequest,
+                                blocks,
+                            )
+                        }
+                    }
+
+                    else -> error("unsupported representation: " + representation.label)
+                }
+            }
+        }
+        assertEquals(15, cases.size)
+        assertTrue(cases.all { it.blocks.size == 122 })
+
+        cases.forEach { case ->
+            val transport = FakeRawPostTransport(rawStreamOf(case.blocks))
+            val result = PrototypeRunStreamAdapter(transport).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = case.requestBody,
+            )
+            assertNotNull(result.decodedTerminal)
+            if (case.surface == "request") {
+                assertEquals(case.requestBody, transport.postedBody)
+            }
+        }
+    }
+
+    @Test
+    fun conditionIdentityDoesNotStealUpstreamErrors() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val producer = officialProducerCases.first()
+        val canonicalConditionMember = "\"condition_id\":\"${producer.conditionId}\""
+        val conditionDriftMember = "\"condition_id\":\"slow_v0.1\""
+        val endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs"
+        val canonicalRequest = officialRunRequestBody(producer)
+
+        data class PrecedenceCase(
+            val label: String,
+            val requestBody: String,
+            val stream: RawSseStream,
+            val expectedMessage: String,
+        )
+
+        fun addConditionDrift(blocks: List<String>): MutableList<String> =
+            blocks.toMutableList().also { mutated ->
+                val original = mutated[0]
+                mutated[0] = original.replaceFirst(canonicalConditionMember, conditionDriftMember)
+                require(mutated[0] != original) { "condition drift mutation did not apply" }
+            }
+
+        val cases = mutableListOf<PrecedenceCase>()
+
+        val topologyBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        topologyBlocks.removeAt(60)
+        cases += PrecedenceCase(
+            label = "outer topology",
+            requestBody = canonicalRequest,
+            stream = rawStreamOf(topologyBlocks),
+            expectedMessage =
+                "prototype SSE stream must contain run_started, 120 content events, and final done",
+        )
+
+        val sequenceBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        val originalSequence = sequenceBlocks[60]
+        sequenceBlocks[60] = originalSequence.replace("\"seq\":60,", "\"seq\":61,")
+        require(sequenceBlocks[60] != originalSequence)
+        cases += PrecedenceCase(
+            label = "content sequence",
+            requestBody = canonicalRequest,
+            stream = rawStreamOf(sequenceBlocks),
+            expectedMessage = "prototype SSE content events must have exact seq 1 through 120",
+        )
+
+        val contentIdentityBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        val originalContentIdentity = contentIdentityBlocks[60]
+        contentIdentityBlocks[60] = originalContentIdentity.replace(
+            "\"campaign_id\":\"${producer.campaignId}\"",
+            "\"campaign_id\":\"campaign-content-forged\"",
+        )
+        require(contentIdentityBlocks[60] != originalContentIdentity)
+        cases += PrecedenceCase(
+            label = "content campaign/run identity",
+            requestBody = canonicalRequest,
+            stream = rawStreamOf(contentIdentityBlocks),
+            expectedMessage = "prototype SSE content event identity must match the run",
+        )
+
+        val chronologyBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        val chronologyArrivals = chronologyBlocks.indices
+            .map { (it + 1) * 1_000L }
+            .toMutableList()
+            .also { arrivals -> arrivals[42] = arrivals[41] - 1L }
+        cases += PrecedenceCase(
+            label = "arrival chronology",
+            requestBody = canonicalRequest,
+            stream = rawStreamWithArrivals(chronologyBlocks, chronologyArrivals),
+            expectedMessage =
+                "prototype SSE content arrival timestamps must be non-negative and nondecreasing",
+        )
+
+        val terminalIdentityBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        val originalTerminalIdentity = terminalIdentityBlocks.last()
+        terminalIdentityBlocks[terminalIdentityBlocks.lastIndex] = originalTerminalIdentity.replaceFirst(
+            "\"campaign_id\":\"${producer.campaignId}\"",
+            "\"campaign_id\":\"campaign-terminal-forged\"",
+        )
+        require(terminalIdentityBlocks.last() != originalTerminalIdentity)
+        cases += PrecedenceCase(
+            label = "terminal campaign/run identity",
+            requestBody = canonicalRequest,
+            stream = rawStreamOf(terminalIdentityBlocks),
+            expectedMessage = TERMINAL_IDENTITY_ERROR,
+        )
+
+        val completionBlocks = addConditionDrift(producerShapedBlocks(doneFrame, producer))
+        val originalCompletion = completionBlocks.last()
+        completionBlocks[completionBlocks.lastIndex] = originalCompletion.replace(
+            "\"terminal_status\":\"complete\"",
+            "\"terminal_status\":\"failed\"",
+        )
+        require(completionBlocks.last() != originalCompletion)
+        cases += PrecedenceCase(
+            label = "terminal completion facts",
+            requestBody = canonicalRequest,
+            stream = rawStreamOf(completionBlocks),
+            expectedMessage = TERMINAL_COMPLETION_ERROR,
+        )
+
+        val requestProducer = producer.copy(
+            campaignId = "campaign-request-forged",
+            runId = "run-request-forged",
+        )
+        cases += PrecedenceCase(
+            label = "outgoing request campaign/run identity",
+            requestBody = officialRunRequestBody(requestProducer),
+            stream = rawStreamOf(addConditionDrift(producerShapedBlocks(doneFrame, producer))),
+            expectedMessage = REQUEST_RUN_IDENTITY_ERROR,
+        )
+
+        assertEquals(7, cases.size)
+        cases.forEach { case ->
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(case.stream)).run(
+                    endpoint = endpoint,
+                    requestBody = case.requestBody,
+                )
+                org.junit.Assert.fail("${case.label} error was hidden by condition validation")
+            } catch (error: IllegalArgumentException) {
+                assertEquals(case.expectedMessage, error.message)
+            }
         }
     }
 
@@ -651,28 +1783,30 @@ class PrototypeRunStreamAdapterTest {
         assertTrue(requestIndex > completionIndex)
         assertTrue(requestGateIndex > requestIndex)
         assertTrue(returnIndex > requestGateIndex)
-        val finalStatements = """
+        val requestStatements = """
             |        requireTerminalCompletionFacts(decodedTerminal.envelope)
             |        val requestIdentity = requestIdentity(requestBody)
             |        require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
-            |        return PrototypeRunStreamResult(
         """.trimMargin()
         assertTrue(
-            "completion/request/gate/return statements drifted from the frozen top-level chain",
-            runBody.contains(finalStatements),
+            "completion/request/gate statements drifted from the frozen top-level chain",
+            runBody.contains(requestStatements),
         )
         assertEquals(
             1,
             Regex("(?m)^        return\\b").findAll(runBody).count(),
         )
-        val finalChain = runBody.substring(completionIndex, returnIndex)
-        assertTrue(!finalChain.contains("if ("))
-        assertTrue(!finalChain.contains("when"))
-        assertTrue(!Regex("\\blet\\b").containsMatchIn(finalChain))
-        assertTrue(!finalChain.contains("takeUnless"))
-        assertTrue(!finalChain.contains("runCatching"))
-        assertTrue(!finalChain.contains("endpoint"))
-        assertTrue(!finalChain.contains("condition"))
+        val requestChain = runBody.substring(
+            completionIndex,
+            requestGateIndex + requestGate.length,
+        )
+        assertTrue(!requestChain.contains("if ("))
+        assertTrue(!requestChain.contains("when"))
+        assertTrue(!Regex("\\blet\\b").containsMatchIn(requestChain))
+        assertTrue(!requestChain.contains("takeUnless"))
+        assertTrue(!requestChain.contains("runCatching"))
+        assertTrue(!requestChain.contains("endpoint"))
+        assertTrue(!requestChain.contains("condition"))
 
         val helperStart = source.indexOf("private fun requestIdentity(requestBody: String)")
         val helperEnd = source.indexOf(
@@ -728,10 +1862,11 @@ class PrototypeRunStreamAdapterTest {
         val identityStart = source.indexOf(
             "private fun identityFromEnvelope(envelope: JsonObject)",
         )
-        val identityEnd = source.indexOf(
-            "\n        private fun requestIdentity",
-            identityStart,
-        )
+        val identityEnd = Regex("(?m)^        private fun ")
+            .find(source, identityStart + 1)
+            ?.range
+            ?.first
+            ?: -1
         require(identityStart >= 0 && identityEnd > identityStart) {
             "identity extractor was not found"
         }
@@ -890,11 +2025,11 @@ class PrototypeRunStreamAdapterTest {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val payloads = listOf(
             "reordered keys" to
-                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"event_type\":\"run_started\"}",
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\",\"event_type\":\"run_started\"}",
             "escaped key" to
-                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"\\u0065vent_type\":\"run_started\"}",
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\",\"\\u0065vent_type\":\"run_started\"}",
             "escaped value" to
-                "{\"event_type\":\"run_\\u0073tarted\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                "{\"event_type\":\"run_\\u0073tarted\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\"}",
         )
 
         payloads.forEach { (label, payload) ->
@@ -905,7 +2040,7 @@ class PrototypeRunStreamAdapterTest {
                     FakeRawPostTransport(rawStreamOf(blocks)),
                 ).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                    requestBody = canonicalRequestBody(),
                 )
                 assertNotNull(result.decodedTerminal)
             } catch (error: Throwable) {
@@ -1183,23 +2318,14 @@ class PrototypeRunStreamAdapterTest {
                     eventTypeMembers = listOf("\"event_type\":\"$eventType\""),
                     producer = producer,
                 )
-                val blocks = canonicalBlocksForIdentity(
-                    doneFrame = doneFrame,
-                    contentCount = 120,
-                    campaignId = producer.campaignId,
-                    runId = producer.runId,
-                ).toMutableList()
+                val blocks = producerShapedBlocks(doneFrame, producer).toMutableList()
                 blocks[0] = runStartedBlock(payload)
                 val endpoint = if (producer.label == "slow") {
                     "http://127.0.0.1:19001/api/v1/prototype/runs?condition=slow_v0.1"
                 } else {
                     "http://127.0.0.1:18088/api/v1/prototype/runs"
                 }
-                val requestBody = if (producer.label == "slow") {
-                    "{\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\",\"condition_id\":\"slow_v0.1\"}"
-                } else {
-                    "{\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\"}"
-                }
+                val requestBody = officialRunRequestBody(producer)
                 val transport = FakeRawPostTransport(rawStreamOf(blocks))
 
                 try {
@@ -1251,7 +2377,7 @@ class PrototypeRunStreamAdapterTest {
             eofNanos = 4_000L,
         )
         val endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs"
-        val requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}"
+        val requestBody = canonicalRequestBody()
         val transport = FakeRawPostTransport(rawStream)
 
         val result = PrototypeRunStreamAdapter(transport).run(endpoint, requestBody)
@@ -1283,7 +2409,7 @@ class PrototypeRunStreamAdapterTest {
         try {
             PrototypeRunStreamAdapter(transport).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
             org.junit.Assert.fail("119 content events were accepted")
         } catch (error: IllegalArgumentException) {
@@ -1994,7 +3120,7 @@ class PrototypeRunStreamAdapterTest {
                 rawStreamOf(canonicalBlocks(equivalentDoneFrame, contentCount = 120)),
             )).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
         }
     }
@@ -2149,7 +3275,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                    requestBody = canonicalRequestBody(),
                 )
                 accepted += name
             } catch (error: IllegalArgumentException) {
@@ -2244,7 +3370,7 @@ class PrototypeRunStreamAdapterTest {
             FakeRawPostTransport(rawStreamWithArrivals(blocks, arrivals)),
         ).run(
             endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-            requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+            requestBody = canonicalRequestBody(),
         )
 
         assertEquals(0L, result.rawEvents[1].arrivalNanos)
@@ -2263,7 +3389,7 @@ class PrototypeRunStreamAdapterTest {
                 FakeRawPostTransport(rawStreamWithArrivals(blocks, arrivals)),
             ).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
         }.exceptionOrNull()?.message
 
@@ -2434,7 +3560,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                    requestBody = canonicalRequestBody(),
                 )
                 acceptedTokens += token
             } catch (error: IllegalArgumentException) {
@@ -2687,7 +3813,7 @@ class PrototypeRunStreamAdapterTest {
             try {
                 PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                    requestBody = canonicalRequestBody(),
                 )
                 accepted += name
             } catch (error: IllegalArgumentException) {
@@ -2935,6 +4061,7 @@ class PrototypeRunStreamAdapterTest {
         val campaignId: String,
         val runId: String,
         val runIndex: Int,
+        val campaignMode: String,
         val conditionId: String,
         val scheduleHash: String,
         val nominalIntervalMs: Int,
@@ -2948,6 +4075,7 @@ class PrototypeRunStreamAdapterTest {
             campaignId = "campaign-official-baseline",
             runId = "run-official-baseline",
             runIndex = 1,
+            campaignMode = "quick",
             conditionId = "baseline_v0.1",
             scheduleHash = "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
             nominalIntervalMs = 50,
@@ -2959,6 +4087,7 @@ class PrototypeRunStreamAdapterTest {
             campaignId = "campaign-official-slow",
             runId = "run-official-slow",
             runIndex = 2,
+            campaignMode = "quick",
             conditionId = "slow_v0.1",
             scheduleHash = "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
             nominalIntervalMs = 125,
@@ -2970,6 +4099,7 @@ class PrototypeRunStreamAdapterTest {
             campaignId = "campaign-official-unstable",
             runId = "run-official-unstable",
             runIndex = 3,
+            campaignMode = "quick",
             conditionId = "unstable_v0.1",
             scheduleHash = "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58",
             nominalIntervalMs = 65,
@@ -2977,6 +4107,49 @@ class PrototypeRunStreamAdapterTest {
             t0MonotonicNs = 6_400_000_000L,
         ),
     )
+
+    private fun acceptanceProducerCases(): List<OfficialProducerCase> = (4..9).map { runIndex ->
+        val template = officialProducerCases[(runIndex - 4) % officialProducerCases.size]
+        val suffix = runIndex.toString().padStart(2, '0')
+        template.copy(
+            label = "acceptance-$suffix",
+            campaignId = "campaign-official-acceptance-$suffix",
+            runId = "run-official-acceptance-$suffix",
+            runIndex = runIndex,
+            campaignMode = "acceptance",
+        )
+    }
+
+    private fun conditionSurfaceVariant(
+        surface: String,
+        canonicalRequest: String,
+        canonicalBlocks: List<String>,
+        canonicalCondition: String,
+        replacementCondition: String,
+    ): Pair<String, List<String>> {
+        val canonicalMember = "\"condition_id\":\"$canonicalCondition\""
+        val replacementMember = "\"condition_id\":\"$replacementCondition\""
+        if (surface == "request root") {
+            val requestBody = canonicalRequest.replaceFirst(canonicalMember, replacementMember)
+            require(requestBody != canonicalRequest) { "request condition mutation did not apply" }
+            return requestBody to canonicalBlocks
+        }
+        val blocks = canonicalBlocks.toMutableList()
+        val blockIndex = when (surface) {
+            "run_started root" -> 0
+            "content seq60" -> 60
+            "terminal root", "terminal details" -> blocks.lastIndex
+            else -> error("unsupported condition surface: $surface")
+        }
+        val original = blocks[blockIndex]
+        blocks[blockIndex] = if (surface == "terminal details") {
+            replaceSecondOccurrence(original, canonicalMember, replacementMember)
+        } else {
+            original.replaceFirst(canonicalMember, replacementMember)
+        }
+        require(blocks[blockIndex] != original) { "$surface condition mutation did not apply" }
+        return canonicalRequest to blocks
+    }
 
     private fun producerRunStartedPayload(
         eventTypeMembers: List<String> = listOf("\"event_type\":\"run_started\""),
@@ -3040,7 +4213,7 @@ class PrototypeRunStreamAdapterTest {
                 FakeRawPostTransport(rawStreamOf(blocks)),
             ).run(
                 endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                requestBody = canonicalRequestBody(),
             )
             assertNotNull(result.decodedTerminal)
         } catch (error: Throwable) {
@@ -3132,7 +4305,8 @@ class PrototypeRunStreamAdapterTest {
     private fun canonicalBlocks(doneFrame: String, contentCount: Int): List<String> = buildList {
         add(
             "event: run_started\ndata: " +
-                "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+                "\"condition_id\":\"baseline_v0.1\"}",
         )
         repeat(contentCount) { index ->
             add(serverContentBlock(index + 1))
@@ -3154,11 +4328,15 @@ class PrototypeRunStreamAdapterTest {
     private fun officialRunRequestBody(producer: OfficialProducerCase): String =
         "{\"protocol_version\":\"prototype-stream-0.1\"," +
             "\"campaign_id\":\"${producer.campaignId}\",\"run_id\":\"${producer.runId}\"," +
-            "\"campaign_mode\":\"quick\",\"run_index\":${producer.runIndex}," +
+            "\"campaign_mode\":\"${producer.campaignMode}\",\"run_index\":${producer.runIndex}," +
             "\"workload_id\":\"streaming_text_reference_v0.1\",\"workload_version\":\"0.1\"," +
             "\"profile_id\":\"streaming_text_reference_v0.1\",\"profile_version\":\"0.1\"," +
             "\"profile_manifest_sha256\":\"44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc\"," +
             "\"condition_id\":\"${producer.conditionId}\",\"condition_version\":\"0.1\"}"
+
+    private fun canonicalRequestBody(): String =
+        "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+            "\"condition_id\":\"baseline_v0.1\"}"
 
     private fun officialRunRequestBodyWithRepresentation(
         producer: OfficialProducerCase,
@@ -3179,7 +4357,7 @@ class PrototypeRunStreamAdapterTest {
             "\"protocol_version\":\"prototype-stream-0.1\"",
             "\"campaign_id\":\"$campaignId\"",
             "\"run_id\":\"$runId\"",
-            "\"campaign_mode\":\"quick\"",
+            "\"campaign_mode\":\"${producer.campaignMode}\"",
             "\"run_index\":${producer.runIndex}",
             "\"workload_id\":\"streaming_text_reference_v0.1\"",
             "\"workload_version\":\"0.1\"",
@@ -3250,13 +4428,42 @@ class PrototypeRunStreamAdapterTest {
     private fun doneFrameForProducer(
         doneFrame: String,
         producer: OfficialProducerCase,
-    ): String = doneFrame
-        .replace("\"campaign-fixture-01\"", "\"${producer.campaignId}\"")
-        .replace("\"run-fixture-01\"", "\"${producer.runId}\"")
-        .replace(
+    ): String {
+        val frame = doneFrame
+            .replace("\"campaign-fixture-01\"", "\"${producer.campaignId}\"")
+            .replace("\"run-fixture-01\"", "\"${producer.runId}\"")
+        val baselineConditionMember = "\"condition_id\":\"baseline_v0.1\""
+        require(frame.split(baselineConditionMember).size - 1 == 2) {
+            "done fixture must contain exactly two baseline condition_id members"
+        }
+        val withCondition = frame.replace(
+            baselineConditionMember,
+            "\"condition_id\":\"${producer.conditionId}\"",
+        )
+        require(withCondition != frame || producer.conditionId == "baseline_v0.1") {
+            "done fixture condition replacement was a no-op"
+        }
+        val baselineCampaignModeMember = "\"campaign_mode\":\"quick\""
+        require(frame.split(baselineCampaignModeMember).size - 1 == 1) {
+            "done fixture must contain exactly one terminal campaign_mode member"
+        }
+        val withCampaignMode = withCondition.replace(
+            baselineCampaignModeMember,
+            "\"campaign_mode\":\"${producer.campaignMode}\"",
+        )
+        val baselineRunIndexMember = "\"run_index\":1"
+        require(withCampaignMode.split(baselineRunIndexMember).size - 1 == 1) {
+            "done fixture must contain exactly one terminal run_index member"
+        }
+        val withRunIndex = withCampaignMode.replace(
+            baselineRunIndexMember,
+            "\"run_index\":${producer.runIndex}",
+        )
+        return withRunIndex.replace(
             "\"server_monotonic_ns\":0",
             "\"server_monotonic_ns\":${producer.serverMonotonicNs + 121}",
         )
+    }
 
     private fun doneFrameForRun(doneFrame: String): String = doneFrame
         .replace("\"campaign-fixture-01\"", "\"campaign-1\"")
@@ -3308,7 +4515,7 @@ class PrototypeRunStreamAdapterTest {
             "{\"schema_version\":\"aneb-prototype-evidence-0.1\"," +
             "\"protocol_version\":\"prototype-stream-0.1\"," +
             "\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
-            "\"condition_id\":\"condition-1\",\"event_type\":\"content_event\"," +
+            "\"condition_id\":\"baseline_v0.1\",\"event_type\":\"content_event\"," +
             "\"server_monotonic_ns\":0,\"clock_source\":\"server.monotonic\"," +
             "\"clock_unit\":\"ns\",\"clock_epoch\":\"process\",\"source\":\"server\"," +
             "\"details\":{\"seq\":$seq,\"planned_offset_ms\":0," +
@@ -3333,7 +4540,8 @@ class PrototypeRunStreamAdapterTest {
         if (data.trimStart().startsWith("{")) {
             data.replaceFirst(
                 "{",
-                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",",
+                "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+                    "\"condition_id\":\"baseline_v0.1\",",
             )
         } else {
             data

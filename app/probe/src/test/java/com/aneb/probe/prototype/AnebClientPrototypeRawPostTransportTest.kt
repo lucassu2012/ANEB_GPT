@@ -36,12 +36,14 @@ class AnebClientPrototypeRawPostTransportTest {
     @Test
     fun loopbackPostPreservesOpaqueRequestHeadersAndFramesThroughAdapter() = runBlocking {
         val requestBody =
-            "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
+            "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\",\"opaque\":true,\"order\":[3,1,2],\"unicode\":\"端到端\"}"
         val doneFrame = doneFrameForRun(readSharedDoneFixture()).removeSuffix("\n\n")
+        val terminalConditionMember = "\"condition_id\":\"baseline_v0.1\""
+        assertEquals(2, doneFrame.split(terminalConditionMember).size - 1)
         val expectedFrames = buildList {
             add(
                 "event: run_started\ndata: " +
-                    "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"}",
+                    "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\"}",
             )
             repeat(120) { seq ->
                 add(serverContentBlock(seq + 1))
@@ -136,7 +138,7 @@ class AnebClientPrototypeRawPostTransportTest {
             "{\"schema_version\":\"aneb-prototype-evidence-0.1\"," +
             "\"protocol_version\":\"prototype-stream-0.1\"," +
             "\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
-            "\"condition_id\":\"condition-1\",\"event_type\":\"content_event\"," +
+            "\"condition_id\":\"baseline_v0.1\",\"event_type\":\"content_event\"," +
             "\"server_monotonic_ns\":0,\"clock_source\":\"server.monotonic\"," +
             "\"clock_unit\":\"ns\",\"clock_epoch\":\"process\",\"source\":\"server\"," +
             "\"details\":{\"seq\":$seq,\"planned_offset_ms\":0," +

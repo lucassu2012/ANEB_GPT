@@ -27,6 +27,8 @@ private const val TERMINAL_COMPLETION_ERROR =
     "prototype SSE terminal receipt must report complete 120-event delivery"
 private const val REQUEST_RUN_IDENTITY_ERROR =
     "prototype SSE run identity must match the outgoing request"
+private const val CONDITION_IDENTITY_ERROR =
+    "prototype SSE condition identity must match the outgoing request"
 private const val MAX_JSON_NESTING_DEPTH = 64
 
 private data class ContentRunIdentity(
@@ -41,6 +43,8 @@ private class DuplicateTerminalIdentityKeyException : IllegalArgumentException()
 private class DuplicateTerminalCompletionFactKeyException : IllegalArgumentException()
 
 private class DuplicateRunStartedEventTypeKeyException : IllegalArgumentException()
+
+private class DuplicateConditionIdentityKeyException : IllegalArgumentException()
 
 private fun requireJsonNestingWithinBudget(payload: String) {
     var depth = 0
@@ -328,6 +332,91 @@ private object TerminalCompletionRootDuplicateKeyProbe : DeserializationStrategy
     }
 }
 
+private object ConditionRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeConditionRootDuplicateKeyProbe",
+    ) {
+        element("condition_id", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenConditionId = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenConditionId) throw DuplicateConditionIdentityKeyException()
+                        seenConditionId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object TerminalConditionDetailsDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalConditionDetailsDuplicateKeyProbe",
+    ) {
+        element("condition_id", JsonElement.serializer().descriptor, isOptional = true)
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenConditionId = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenConditionId) throw DuplicateConditionIdentityKeyException()
+                        seenConditionId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
+private object TerminalConditionRootDuplicateKeyProbe : DeserializationStrategy<Unit> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
+        "PrototypeTerminalConditionRootDuplicateKeyProbe",
+    ) {
+        element("condition_id", JsonElement.serializer().descriptor, isOptional = true)
+        element(
+            "details",
+            TerminalConditionDetailsDuplicateKeyProbe.descriptor,
+            isOptional = true,
+        )
+    }
+
+    override fun deserialize(decoder: Decoder) {
+        decoder.decodeStructure(descriptor) {
+            var seenConditionId = false
+            while (true) {
+                when (val index = decodeElementIndex(descriptor)) {
+                    CompositeDecoder.DECODE_DONE -> break
+                    0 -> {
+                        if (seenConditionId) throw DuplicateConditionIdentityKeyException()
+                        seenConditionId = true
+                        decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                    }
+                    1 -> decodeSerializableElement(
+                        descriptor,
+                        index,
+                        TerminalConditionDetailsDuplicateKeyProbe,
+                    )
+                    else -> decodeSerializableElement(descriptor, index, JsonElement.serializer())
+                }
+            }
+        }
+    }
+}
+
 /** Transport seam for the Prototype 0.1 POST run stream. */
 interface PrototypeRawPostTransport {
     suspend fun post(url: String, requestBody: String): RawSseStream
@@ -368,6 +457,7 @@ class PrototypeRunStreamAdapter(
         }
         val expectedIdentity = runStartedIdentity(rawEvents.first())
         require(expectedIdentity != null) { CONTENT_IDENTITY_ERROR }
+        val contentDataPayloads = mutableListOf<String>()
         requireRunStartedEventType(rawEvents.first())
         rawEvents.subList(1, rawEvents.lastIndex).forEachIndexed { index, rawEvent ->
             val expectedSequence = index + 1
@@ -416,6 +506,7 @@ class PrototypeRunStreamAdapter(
             }
             val eventIdentity = identityFromEnvelope(envelope)
             require(eventIdentity == expectedIdentity) { CONTENT_IDENTITY_ERROR }
+            contentDataPayloads += dataPayload
         }
         var previousArrivalNanos: Long? = null
         rawEvents.subList(1, rawEvents.lastIndex).forEach { rawEvent ->
@@ -457,6 +548,26 @@ class PrototypeRunStreamAdapter(
         requireTerminalCompletionFacts(decodedTerminal.envelope)
         val requestIdentity = requestIdentity(requestBody)
         require(requestIdentity == expectedIdentity) { REQUEST_RUN_IDENTITY_ERROR }
+        try {
+            val outgoingConditionId = requestConditionId(requestBody)
+            val runStartedConditionId = conditionIdFromRawEvent(rawEvents.first())
+            val contentConditionIds = contentDataPayloads.map(::conditionIdFromPayload)
+            requireNoDuplicateTerminalConditionKeys(terminalDataPayload)
+            val terminalConditionId = conditionIdFromEnvelope(decodedTerminal.envelope)
+            val terminalDetailsConditionId = (decodedTerminal.envelope["details"] as? JsonObject)
+                ?.let(::conditionIdFromEnvelope)
+            require(
+                outgoingConditionId != null &&
+                    runStartedConditionId == outgoingConditionId &&
+                    contentConditionIds.all { it == outgoingConditionId } &&
+                    terminalConditionId == outgoingConditionId &&
+                    terminalDetailsConditionId == outgoingConditionId,
+            ) {
+                CONDITION_IDENTITY_ERROR
+            }
+        } catch (error: DuplicateConditionIdentityKeyException) {
+            throw IllegalArgumentException(CONDITION_IDENTITY_ERROR, error)
+        }
         return PrototypeRunStreamResult(
             rawEvents = rawEvents,
             decodedTerminal = decodedTerminal,
@@ -531,6 +642,46 @@ class PrototypeRunStreamAdapter(
             } else {
                 null
             }
+        }
+
+        private fun conditionIdFromEnvelope(envelope: JsonObject): String? =
+            (envelope["condition_id"] as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.content
+
+        private fun conditionIdFromRawEvent(rawEvent: RawSseEvent): String? {
+            val dataPayload = rawEvent.bytes.toString(Charsets.UTF_8)
+                .lineSequence()
+                .toList()
+                .getOrNull(1)
+                ?.takeIf { it.startsWith(DATA_PREFIX) }
+                ?.removePrefix(DATA_PREFIX)
+                ?: return null
+            return conditionIdFromPayload(dataPayload)
+        }
+
+        private fun conditionIdFromPayload(dataPayload: String): String? {
+            probeJson.decodeFromString(ConditionRootDuplicateKeyProbe, dataPayload)
+            val envelope = try {
+                contentJson.parseToJsonElement(dataPayload)
+            } catch (_: Exception) {
+                return null
+            }
+            return (envelope as? JsonObject)?.let(::conditionIdFromEnvelope)
+        }
+
+        private fun requestConditionId(requestBody: String): String? {
+            probeJson.decodeFromString(ConditionRootDuplicateKeyProbe, requestBody)
+            val envelope = try {
+                contentJson.parseToJsonElement(requestBody)
+            } catch (_: Exception) {
+                return null
+            }
+            return (envelope as? JsonObject)?.let(::conditionIdFromEnvelope)
+        }
+
+        private fun requireNoDuplicateTerminalConditionKeys(dataPayload: String) {
+            probeJson.decodeFromString(TerminalConditionRootDuplicateKeyProbe, dataPayload)
         }
 
         private fun requestIdentity(requestBody: String): ContentRunIdentity? {
