@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
@@ -40,6 +41,274 @@ import kotlin.concurrent.thread
  */
 class AnebClientPrototypeRawPostTransportTest {
     @Test
+    fun compatibleCapabilityIdentityDriftAfterNodePreflightStopsBeforeRunPost() = runBlocking {
+        val initialBody = canonicalCapabilityResponse()
+            .replaceExactlyOnce(
+                "\"server_version\":\"prototype-server-0.1\"",
+                "\"server_version\":\"prototype-server-a\"",
+            )
+        val driftedBody = canonicalCapabilityResponse()
+            .replaceExactlyOnce(
+                "\"server_version\":\"prototype-server-0.1\"",
+                "\"server_version\":\"prototype-server-b\"",
+            )
+            .replaceExactlyOnce(
+                "\"server_binary_sha256\":\"${"0".repeat(64)}\"",
+                "\"server_binary_sha256\":\"${"1".repeat(64)}\"",
+            )
+        CapabilityAwareSseServer(
+            capabilityBody = initialBody.toByteArray(UTF_8),
+            capabilityBodies = listOf(
+                initialBody.toByteArray(UTF_8),
+                driftedBody.toByteArray(UTF_8),
+            ),
+            runBody = canonicalRunResponseBody(),
+            expectedRequests = 2,
+        ).use { server ->
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, StrictClock()),
+            )
+            val runUrl = server.url("/api/v1/prototype/runs")
+            val ticket = transport.check(runUrl)
+            assertEquals("prototype-server-a", ticket.identity.serverVersion)
+            assertEquals(initialBody, ticket.rawCapabilityBody)
+
+            val thrown = runCatching {
+                PrototypeRunStreamAdapter(transport.forTicket(ticket), StrictClock()).run(
+                    endpoint = runUrl,
+                    requestBody =
+                        "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+                            "\"condition_id\":\"baseline_v0.1\"}",
+                )
+            }.exceptionOrNull()
+
+            assertEquals("prototype capability changed since node preflight", thrown?.message)
+            val requests = server.awaitRequests()
+            assertEquals(listOf("GET", "GET"), requests.map(CapturedRequest::method))
+        }
+    }
+
+    @Test
+    fun ticketIsRecheckedBeforeEveryQuickRunAndIdentityDriftAbortsBeforeThatPost() = runBlocking {
+        val initialBody = canonicalCapabilityResponse()
+        val driftedBody = canonicalCapabilityResponse()
+            .replaceExactlyOnce(
+                "\"server_version\":\"prototype-server-0.1\"",
+                "\"server_version\":\"prototype-server-drifted\"",
+            )
+            .replaceExactlyOnce(
+                "\"server_binary_sha256\":\"${"0".repeat(64)}\"",
+                "\"server_binary_sha256\":\"${"2".repeat(64)}\"",
+            )
+
+        for (driftRunIndex in 1..3) {
+            val capabilityBodies = buildList {
+                add(initialBody.toByteArray(UTF_8))
+                repeat(3) { runOffset ->
+                    add(
+                        if (runOffset + 1 == driftRunIndex) {
+                            driftedBody.toByteArray(UTF_8)
+                        } else {
+                            initialBody.toByteArray(UTF_8)
+                        },
+                    )
+                }
+            }
+            CapabilityAwareSseServer(
+                capabilityBody = initialBody.toByteArray(UTF_8),
+                capabilityBodies = capabilityBodies,
+                runBody = ByteArray(0),
+                runBodyForRequest = ::producerShapedRunResponseBody,
+                expectedRequests = driftRunIndex * 2,
+            ).use { server ->
+                val clock = StrictClock()
+                val transport = AnebClientPrototypeRawPostTransport(
+                    AnebClient.createForTest(null, clock),
+                )
+                val runUrl = server.url("/api/v1/prototype/runs")
+                val ticket = transport.check(runUrl)
+                val runner = PrototypeQuickCampaignRunner(
+                    streamAdapter = PrototypeRunStreamAdapter(transport.forTicket(ticket), clock),
+                    runIdFactory = { index -> "run-ticket-$driftRunIndex-$index" },
+                    waitBetweenRuns = { _ -> },
+                )
+
+                val thrown = runCatching {
+                    runner.run(runUrl, "campaign-ticket-$driftRunIndex")
+                }.exceptionOrNull()
+
+                assertEquals(
+                    "drift at run $driftRunIndex",
+                    "prototype capability changed since node preflight",
+                    thrown?.message,
+                )
+                val expectedMethods = buildList {
+                    add("GET")
+                    repeat(driftRunIndex - 1) {
+                        add("GET")
+                        add("POST")
+                    }
+                    add("GET")
+                }
+                val requests = server.awaitRequests()
+                assertEquals("drift at run $driftRunIndex", expectedMethods, requests.map(CapturedRequest::method))
+                assertEquals(
+                    "drift at run $driftRunIndex POST count",
+                    driftRunIndex - 1,
+                    requests.count { it.method == "POST" },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun ticketRuntimeComparisonUsesTypedIdentityInsteadOfRawJsonText() = runBlocking {
+        val initialBody = canonicalCapabilityResponse()
+        val equivalentBody = sameIdentityReorderedCapabilityResponse()
+        CapabilityAwareSseServer(
+            capabilityBody = initialBody.toByteArray(UTF_8),
+            capabilityBodies = listOf(
+                initialBody.toByteArray(UTF_8),
+                equivalentBody.toByteArray(UTF_8),
+            ),
+            runBody = canonicalRunResponseBody(),
+            expectedRequests = 3,
+        ).use { server ->
+            val clock = StrictClock()
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, clock),
+            )
+            val runUrl = server.url("/api/v1/prototype/runs")
+            val ticket = transport.check(runUrl)
+
+            val result = PrototypeRunStreamAdapter(
+                transport.forTicket(ticket),
+                clock,
+            ).run(
+                endpoint = runUrl,
+                requestBody =
+                    "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
+                        "\"condition_id\":\"baseline_v0.1\"}",
+            )
+
+            assertFalse(result.decodedTerminal.envelope.isEmpty())
+            assertEquals(initialBody, ticket.rawCapabilityBody)
+            assertTrue(initialBody != equivalentBody)
+            assertEquals(
+                listOf("GET", "GET", "POST"),
+                server.awaitRequests().map(CapturedRequest::method),
+            )
+        }
+    }
+
+    @Test
+    fun ticketForOneCanonicalNodeCannotStartAnotherNodeUrl() = runBlocking {
+        CapabilityAwareSseServer(
+            capabilityBody = canonicalCapabilityResponse().toByteArray(UTF_8),
+            runBody = ByteArray(0),
+            expectedRequests = 1,
+        ).use { server ->
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, StrictClock()),
+            )
+            val ticket = transport.check(server.url("/api/v1/prototype/runs"))
+
+            val thrown = runCatching {
+                transport.forTicket(ticket).post(
+                    url = "http://127.0.0.1:1/api/v1/prototype/runs",
+                    requestBody = "{}",
+                )
+            }.exceptionOrNull()
+
+            assertTrue(thrown is IllegalArgumentException)
+            assertEquals("prototype node ticket does not match run URL", thrown?.message)
+            assertEquals(listOf("GET"), server.awaitRequests().map(CapturedRequest::method))
+        }
+    }
+
+    @Test
+    fun compatibleCapabilityCheckReturnsUiDetailsWithoutPostingRun() = runBlocking {
+        val capabilityBody = canonicalCapabilityResponse()
+            .replaceExactlyOnce(
+                "\"server_version\":\"prototype-server-0.1\"",
+                "\"server_version\":\"prototype-server-ticket-build-7\"",
+            )
+            .replaceExactlyOnce(
+                "\"server_binary_sha256\":\"${"0".repeat(64)}\"",
+                "\"server_binary_sha256\":\"${"a".repeat(64)}\"",
+            )
+        CapabilityAwareSseServer(
+            capabilityBody = capabilityBody.toByteArray(UTF_8),
+            runBody = ByteArray(0),
+            expectedRequests = 1,
+        ).use { server ->
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, StrictClock()),
+            )
+
+            val ticket = transport.check(
+                server.url("/api/v1/prototype/runs"),
+            )
+            val capability = ticket.capability
+
+            assertEquals(server.url("").removeSuffix("/"), ticket.nodeBaseUrl)
+            assertEquals(server.url("/api/v1/prototype/runs"), ticket.runUrl)
+            assertEquals(server.url("/api/v1/prototype/capabilities"), ticket.capabilityUrl)
+            assertEquals(capabilityBody, ticket.rawCapabilityBody)
+            assertEquals("prototype-server-ticket-build-7", capability.serverVersion)
+            assertEquals("aneb-prototype-capabilities-0.1", ticket.identity.schemaVersion)
+            assertEquals("prototype-0.1", ticket.identity.productVersion)
+            assertEquals("prototype-stream-0.1", ticket.identity.protocolVersion)
+            assertEquals("a".repeat(64), ticket.identity.serverBinarySha256)
+            assertEquals(
+                "application_end_to_end_to_probe_node",
+                ticket.identity.claimScope,
+            )
+            assertEquals("synthetic_application_impairment", ticket.identity.evidenceMode)
+            assertEquals("application", ticket.identity.impairmentLayer)
+            assertEquals("0.1", capability.workloadVersion)
+            assertEquals("streaming_text_reference_v0.1", ticket.identity.workload.id)
+            assertEquals(120, ticket.identity.workload.contentEventCount)
+            assertEquals(
+                "44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc",
+                capability.profileManifestSha256,
+            )
+            assertEquals(
+                listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1"),
+                capability.conditions,
+            )
+            assertEquals("aneb-prototype-evidence-0.1", capability.evidenceSchemaVersion)
+            assertEquals("rpi-0.1", capability.scorePolicyId)
+            assertEquals(
+                listOf(50, 125, 65),
+                ticket.identity.conditions.map(PrototypeCapabilityConditionIdentity::nominalIntervalMs),
+            )
+            assertEquals(
+                listOf("0.1", "0.1", "0.1"),
+                ticket.identity.conditions.map(PrototypeCapabilityConditionIdentity::version),
+            )
+            assertEquals(
+                listOf(
+                    "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
+                    "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
+                    "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58",
+                ),
+                ticket.identity.conditions.map(PrototypeCapabilityConditionIdentity::scheduleSha256),
+            )
+            assertEquals(
+                "prototype-terminal-receipt-0.1",
+                ticket.identity.terminalReceiptVersion,
+            )
+            val requests = server.awaitRequests()
+            assertEquals(listOf("GET"), requests.map(CapturedRequest::method))
+            assertEquals(
+                listOf("/api/v1/prototype/capabilities"),
+                requests.map(CapturedRequest::path),
+            )
+        }
+    }
+
+    @Test
     fun quickCampaignRunnerUsesCapabilityCheckedAnebClientStreamAdapterInOfficialOrder() = runBlocking {
         val campaignId = "campaign-g2a-integration"
         CapabilityAwareSseServer(
@@ -49,10 +318,11 @@ class AnebClientPrototypeRawPostTransportTest {
             runBodyForRequest = ::producerShapedRunResponseBody,
         ).use { server ->
             val clock = StrictClock()
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, clock),
+            )
             val streamAdapter = PrototypeRunStreamAdapter(
-                AnebClientPrototypeRawPostTransport(
-                    AnebClient.createForTest(null, clock),
-                ),
+                transport.boundForTest(server.url("/api/v1/prototype/runs")),
                 clock,
             )
             val runner = PrototypeQuickCampaignRunner(
@@ -223,7 +493,10 @@ class AnebClientPrototypeRawPostTransportTest {
             val transport = AnebClientPrototypeRawPostTransport(
                 AnebClient.createForTest(null, clock),
             )
-            val result = PrototypeRunStreamAdapter(transport, clock).run(
+            val result = PrototypeRunStreamAdapter(
+                transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                clock,
+            ).run(
                 endpoint = server.url("/api/v1/prototype/runs"),
                 requestBody = requestBody,
             )
@@ -270,7 +543,10 @@ class AnebClientPrototypeRawPostTransportTest {
         BlockingSseServer(canonicalCapabilityResponse().toByteArray(UTF_8)).use { server ->
             val job = launch(Dispatchers.IO) {
                 try {
-                    PrototypeRunStreamAdapter(transport, clock).run(
+                    PrototypeRunStreamAdapter(
+                        transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                        clock,
+                    ).run(
                         endpoint = server.url("/api/v1/prototype/runs"),
                         requestBody = "{\"opaque\":\"cancel\"}",
                     )
@@ -302,7 +578,9 @@ class AnebClientPrototypeRawPostTransportTest {
         BlockingCapabilityServer().use { server ->
             val job = launch(Dispatchers.IO) {
                 try {
-                    PrototypeRunStreamAdapter(transport).run(
+                    PrototypeRunStreamAdapter(
+                        transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                    ).run(
                         endpoint = server.url("/api/v1/prototype/runs"),
                         requestBody =
                             "{\"campaign_id\":\"campaign-1\",\"run_id\":\"run-1\"," +
@@ -346,8 +624,10 @@ class AnebClientPrototypeRawPostTransportTest {
             val transport = AnebClientPrototypeRawPostTransport(client)
             var thrown: Throwable? = null
             try {
-                PrototypeRunStreamAdapter(transport).run(
-                    endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                PrototypeRunStreamAdapter(
+                    transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                ).run(
+                    endpoint = server.url("/api/v1/prototype/runs"),
                     requestBody = requestBody,
                 )
             } catch (error: Throwable) {
@@ -384,13 +664,14 @@ class AnebClientPrototypeRawPostTransportTest {
             expectedRequests = 2,
         ).use { server ->
             val clock = StrictClock()
+            val transport = AnebClientPrototypeRawPostTransport(
+                AnebClient.createForTest(null, clock),
+            )
             val result = PrototypeRunStreamAdapter(
-                AnebClientPrototypeRawPostTransport(
-                    AnebClient.createForTest(null, clock),
-                ),
+                transport.boundForTest(server.url("/api/v1/prototype/runs")),
                 clock,
             ).run(
-                endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                endpoint = server.url("/api/v1/prototype/runs"),
                 requestBody = requestBody,
             )
 
@@ -399,7 +680,7 @@ class AnebClientPrototypeRawPostTransportTest {
             assertEquals(
                 listOf(
                     "GET /api/v1/prototype/capabilities",
-                    "POST /api/v1/prototype/runs?mode=acceptance",
+                    "POST /api/v1/prototype/runs",
                 ),
                 requests.map { "${it.method} ${it.path}" },
             )
@@ -422,8 +703,10 @@ class AnebClientPrototypeRawPostTransportTest {
             val transport = AnebClientPrototypeRawPostTransport(client)
             var thrown: Throwable? = null
             try {
-                PrototypeRunStreamAdapter(transport).run(
-                    endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                PrototypeRunStreamAdapter(
+                    transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                ).run(
+                    endpoint = server.url("/api/v1/prototype/runs"),
                     requestBody = requestBody,
                 )
             } catch (error: Throwable) {
@@ -462,8 +745,10 @@ class AnebClientPrototypeRawPostTransportTest {
             val transport = AnebClientPrototypeRawPostTransport(client)
             var thrown: Throwable? = null
             try {
-                PrototypeRunStreamAdapter(transport).run(
-                    endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                PrototypeRunStreamAdapter(
+                    transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                ).run(
+                    endpoint = server.url("/api/v1/prototype/runs"),
                     requestBody = requestBody,
                 )
             } catch (error: Throwable) {
@@ -503,8 +788,10 @@ class AnebClientPrototypeRawPostTransportTest {
             val transport = AnebClientPrototypeRawPostTransport(client)
             var thrown: Throwable? = null
             try {
-                PrototypeRunStreamAdapter(transport).run(
-                    endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                PrototypeRunStreamAdapter(
+                    transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                ).run(
+                    endpoint = server.url("/api/v1/prototype/runs"),
                     requestBody = requestBody,
                 )
             } catch (error: Throwable) {
@@ -562,8 +849,10 @@ class AnebClientPrototypeRawPostTransportTest {
                 val transport = AnebClientPrototypeRawPostTransport(client)
                 var thrown: Throwable? = null
                 try {
-                    PrototypeRunStreamAdapter(transport).run(
-                        endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                    PrototypeRunStreamAdapter(
+                        transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                    ).run(
+                        endpoint = server.url("/api/v1/prototype/runs"),
                         requestBody = requestBody,
                     )
                 } catch (error: Throwable) {
@@ -624,8 +913,10 @@ class AnebClientPrototypeRawPostTransportTest {
                 val transport = AnebClientPrototypeRawPostTransport(client)
                 var thrown: Throwable? = null
                 try {
-                    PrototypeRunStreamAdapter(transport).run(
-                        endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                    PrototypeRunStreamAdapter(
+                        transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                    ).run(
+                        endpoint = server.url("/api/v1/prototype/runs"),
                         requestBody = requestBody,
                     )
                 } catch (error: Throwable) {
@@ -829,8 +1120,10 @@ class AnebClientPrototypeRawPostTransportTest {
                 )
                 var thrown: Throwable? = null
                 try {
-                    PrototypeRunStreamAdapter(transport).run(
-                        endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                    PrototypeRunStreamAdapter(
+                        transport.boundForTest(server.url("/api/v1/prototype/runs")),
+                    ).run(
+                        endpoint = server.url("/api/v1/prototype/runs"),
                         requestBody = requestBody,
                     )
                 } catch (error: Throwable) {
@@ -879,13 +1172,17 @@ class AnebClientPrototypeRawPostTransportTest {
                 expectedRequests = 2,
             ).use { server ->
                 val clock = StrictClock()
+                val transport = AnebClientPrototypeRawPostTransport(
+                    AnebClient.createForTest(null, clock),
+                )
                 val result = PrototypeRunStreamAdapter(
-                    AnebClientPrototypeRawPostTransport(
-                        AnebClient.createForTest(null, clock),
+                    transport.boundForTest(
+                        server.url("/api/v1/prototype/runs"),
+                        capabilityBody,
                     ),
                     clock,
                 ).run(
-                    endpoint = server.url("/api/v1/prototype/runs?mode=acceptance"),
+                    endpoint = server.url("/api/v1/prototype/runs"),
                     requestBody = requestBody,
                 )
 
@@ -895,7 +1192,7 @@ class AnebClientPrototypeRawPostTransportTest {
                     "$name request sequence",
                     listOf(
                         "GET /api/v1/prototype/capabilities",
-                        "POST /api/v1/prototype/runs?mode=acceptance",
+                        "POST /api/v1/prototype/runs",
                     ),
                     requests.map { "${it.method} ${it.path}" },
                 )
@@ -1062,6 +1359,13 @@ class AnebClientPrototypeRawPostTransportTest {
             "\"claim_scope\":\"application_end_to_end_to_probe_node\"",
         )
 
+    private fun AnebClientPrototypeRawPostTransport.boundForTest(
+        runUrl: String,
+        capabilityBody: String = canonicalCapabilityResponse(),
+    ): PrototypeRawPostTransport = forTicket(
+        ticketFromValidatedSnapshot(runUrl, capabilityBody),
+    )
+
     private fun reorderedWhitespaceCapabilityResponse(): String =
         """
         {
@@ -1104,6 +1408,12 @@ class AnebClientPrototypeRawPostTransportTest {
           "schema_version" : "aneb-prototype-capabilities-0.1"
         }
         """.trimIndent()
+
+    private fun sameIdentityReorderedCapabilityResponse(): String =
+        reorderedWhitespaceCapabilityResponse().replaceExactlyOnce(
+            "\"server_version\" : \"prototype-server-reordered-2026.08.30\"",
+            "\"server_version\" : \"prototype-server-0.1\"",
+        )
 
     private fun String.replaceExactlyOnce(oldValue: String, newValue: String): String {
         val first = indexOf(oldValue)
@@ -1266,11 +1576,13 @@ class AnebClientPrototypeRawPostTransportTest {
         private val expectedRequests: Int = 1,
         private val capabilityStatus: Int = 200,
         private val runBodyForRequest: ((CapturedRequest) -> ByteArray)? = null,
+        private val capabilityBodies: List<ByteArray> = listOf(capabilityBody),
     ) : AutoCloseable {
         private val socket = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
         private val requestReady = CountDownLatch(expectedRequests)
         private val captured = CopyOnWriteArrayList<CapturedRequest>()
         private val failure = AtomicReference<Throwable?>()
+        private val capabilityRequestIndex = AtomicInteger(0)
         @Volatile
         var responseStreamWasTruncated: Boolean = false
             private set
@@ -1335,7 +1647,13 @@ class AnebClientPrototypeRawPostTransportTest {
 
             val (status, contentType, responseBody) = when {
                 requestLine[0] == "GET" && requestLine[1] == "/api/v1/prototype/capabilities" ->
-                    Triple(capabilityStatus, "application/json", capabilityBody)
+                    Triple(
+                        capabilityStatus,
+                        "application/json",
+                        capabilityBodies.getOrElse(capabilityRequestIndex.getAndIncrement()) {
+                            capabilityBodies.last()
+                        },
+                    )
 
                 requestLine[0] == "POST" &&
                     requestLine[1].substringBefore('?') == "/api/v1/prototype/runs" ->

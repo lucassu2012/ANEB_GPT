@@ -47,11 +47,19 @@ class AnebClient private constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val sseReader = SseReader.createForTest(json, clock)
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    private val client: OkHttpClient = clientBuilder(bound, prototypePrivate = false).build()
+    private val prototypeClient: OkHttpClient = clientBuilder(bound, prototypePrivate = true)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
+    private fun clientBuilder(bound: BoundNetwork?, prototypePrivate: Boolean): OkHttpClient.Builder =
+        OkHttpClient.Builder()
         .retryOnConnectionFailure(false)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
+        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate))
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
         .apply {
             if (bound != null) {
@@ -59,7 +67,6 @@ class AnebClient private constructor(
                 dns(bound.dns)
             }
         }
-        .build()
 
     /**
      * 清空连接池。设计文档 §5：每场景新建连接，消除 TCP/TLS 连接复用导致的 TTFT/T1
@@ -67,6 +74,7 @@ class AnebClient private constructor(
      */
     fun evictConnections() {
         client.connectionPool.evictAll()
+        prototypeClient.connectionPool.evictAll()
     }
 
     /** Narrow test-only observability for cancellation cleanup. */
@@ -259,7 +267,7 @@ class AnebClient private constructor(
         beforeDispatch: () -> Unit,
         onRawEvent: (RawSseEvent) -> Unit,
     ): RawSseStream {
-        val call = client.newCall(
+        val call = prototypeClient.newCall(
             Request.Builder()
                 .url(url)
                 .header("Accept", "text/event-stream")
@@ -652,6 +660,10 @@ class AnebClient private constructor(
     /** GET /api/v1/profiles（P1 范围 1：拉不到用打包内置 assets 副本并告警） */
     suspend fun fetchProfiles(url: String): HttpTextResult =
         simpleCall(client.newCall(Request.Builder().url(url).get().build()))
+
+    /** Capability preflight uses the same redirect-free, private-tagged Prototype client as POST. */
+    internal suspend fun fetchPrototypeCapability(url: String): HttpTextResult =
+        simpleCall(prototypeClient.newCall(Request.Builder().url(url).get().build()))
 
     /** POST /api/v1/results（P1 范围 8：400 时 body 含 errors 清单，调用方打日志） */
     suspend fun postResults(url: String, jsonBody: String): HttpTextResult =

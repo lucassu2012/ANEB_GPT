@@ -1,6 +1,7 @@
 package com.aneb.probe.apiprobe
 
 import android.util.Log
+import com.aneb.probe.net.EngineeringCleartextPolicy
 import com.aneb.probe.net.TimingEventListener
 import com.aneb.probe.net.TimingRecord
 import kotlinx.coroutines.CancellationException
@@ -83,6 +84,7 @@ class AiReachabilityProbe {
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
+        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate = false))
         .build()
 
     /**

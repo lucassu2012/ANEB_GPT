@@ -1,6 +1,7 @@
 package com.aneb.probe.data
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -502,4 +503,63 @@ data class RadioSampleEntity(
     val lon: Double? = null,
     /** fix 水平精度（米）；无精度信息 null */
     val accuracyM: Double? = null,
+)
+
+/** Prototype 0.1 campaign authority persisted without recomputing any ticket or result JSON. */
+@Entity(tableName = "prototype_campaign")
+data class PrototypeCampaignEntity(
+    @PrimaryKey val campaignId: String,
+    val nodeBaseUrl: String,
+    val runUrl: String,
+    val capabilityUrl: String,
+    val rawCapabilityBody: String,
+    val capabilityIdentityJson: String,
+    val summaryJson: String,
+)
+
+/** One normalized Prototype run. Nullable fields retain the runner's partial/not-started semantics. */
+@Entity(
+    tableName = "prototype_run",
+    primaryKeys = ["campaignId", "runId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = PrototypeCampaignEntity::class,
+            parentColumns = ["campaignId"],
+            childColumns = ["campaignId"],
+        ),
+    ],
+    indices = [Index(value = ["campaignId", "runIndex"], unique = true)],
+)
+data class PrototypeRunEntity(
+    val campaignId: String,
+    val runId: String,
+    val runIndex: Int,
+    val conditionId: String,
+    val status: String,
+    val taskSuccess: Boolean,
+    val scoreEligible: Boolean,
+    val eventsExpected: Int,
+    val eventsReceived: Int,
+    val failureReason: String?,
+    val terminalReceiptValid: Boolean?,
+    val metricsJson: String?,
+)
+
+/** Canonical evidence JSON retained lexically and ordered by its normalized stream coordinate. */
+@Entity(
+    tableName = "prototype_evidence_event",
+    primaryKeys = ["campaignId", "runId", "eventOrdinal"],
+    foreignKeys = [
+        ForeignKey(
+            entity = PrototypeRunEntity::class,
+            parentColumns = ["campaignId", "runId"],
+            childColumns = ["campaignId", "runId"],
+        ),
+    ],
+)
+data class PrototypeEvidenceEventEntity(
+    val campaignId: String,
+    val runId: String,
+    val eventOrdinal: Int,
+    val eventJson: String,
 )

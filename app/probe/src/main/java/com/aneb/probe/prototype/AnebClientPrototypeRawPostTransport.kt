@@ -16,50 +16,86 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.math.BigDecimal
 
 /** Bridges the Prototype runner transport seam to the existing AnebClient HTTP/SSE path. */
 class AnebClientPrototypeRawPostTransport(
     private val client: AnebClient,
-) : PrototypeRawPostTransport {
-    override suspend fun post(url: String, requestBody: String): RawSseStream =
-        postObserved(
-            url = url,
-            requestBody = requestBody,
-            observer = PrototypeRawPostObserver(beforeDispatch = {}, onRawEvent = {}),
-        )
-
-    override suspend fun postObserved(
-        url: String,
-        requestBody: String,
-        observer: PrototypeRawPostObserver,
-    ): RawSseStream {
-        val capabilityUrl = url.toHttpUrlOrNull()
-            ?.newBuilder()
-            ?.query(null)
-            ?.fragment(null)
-            ?.encodedPath(CAPABILITY_PATH)
-            ?.build()
-            ?.toString()
-            ?: throw IllegalArgumentException("invalid prototype run URL")
-        val capability = client.fetchProfiles(capabilityUrl)
+) : PrototypeNodeCompatibilityChecker {
+    override suspend fun check(runUrl: String): CompatibleNodeTicket {
+        val endpoint = PrototypeNodeEndpoint.parseRunUrl(runUrl)
+        val capability = client.fetchPrototypeCapability(endpoint.capabilityUrl)
         if (capability.httpCode !in 200..299) {
             throw IllegalStateException(capability.error ?: "prototype capability request failed")
         }
         val body = capability.body
-        require(body != null && isCompatibleCapability(body)) { CAPABILITY_ERROR }
-        return client.postPrototypeRawSse(
-            url = url,
-            requestBody = requestBody,
-            beforeDispatch = observer.beforeDispatch,
-            onRawEvent = observer.onRawEvent,
+        if (body == null || !isCompatibleCapability(body)) {
+            throw PrototypeNodeIncompatibleException(CAPABILITY_ERROR)
+        }
+        return CompatibleNodeTicket.fromValidatedCapability(
+            endpoint = endpoint,
+            rawCapabilityBody = body,
+            identity = capabilityIdentity(body),
         )
     }
 
-    private companion object {
-        private const val CAPABILITY_PATH = "/api/v1/prototype/capabilities"
+    internal fun ticketFromValidatedSnapshot(
+        runUrl: String,
+        rawCapabilityBody: String,
+    ): CompatibleNodeTicket {
+        val endpoint = PrototypeNodeEndpoint.parseRunUrl(runUrl)
+        if (!isCompatibleCapability(rawCapabilityBody)) {
+            throw PrototypeNodeIncompatibleException(CAPABILITY_ERROR)
+        }
+        return CompatibleNodeTicket.fromValidatedCapability(
+            endpoint = endpoint,
+            rawCapabilityBody = rawCapabilityBody,
+            identity = capabilityIdentity(rawCapabilityBody),
+        )
+    }
+
+    fun forTicket(ticket: CompatibleNodeTicket): PrototypeRawPostTransport =
+        TicketBoundTransport(ticket)
+
+    private inner class TicketBoundTransport(
+        private val ticket: CompatibleNodeTicket,
+    ) : PrototypeRawPostTransport {
+        override suspend fun post(url: String, requestBody: String): RawSseStream =
+            postObserved(
+                url = url,
+                requestBody = requestBody,
+                observer = PrototypeRawPostObserver(beforeDispatch = {}, onRawEvent = {}),
+            )
+
+        override suspend fun postObserved(
+            url: String,
+            requestBody: String,
+            observer: PrototypeRawPostObserver,
+        ): RawSseStream {
+            val endpoint = PrototypeNodeEndpoint.parseRunUrl(url)
+            require(
+                endpoint.baseUrl == ticket.nodeBaseUrl &&
+                    endpoint.runUrl == ticket.runUrl &&
+                    endpoint.capabilityUrl == ticket.capabilityUrl
+            ) { TICKET_URL_ERROR }
+            val current = check(endpoint.runUrl)
+            if (current.identity != ticket.identity) {
+                throw PrototypeNodeIncompatibleException(CAPABILITY_CHANGED_ERROR)
+            }
+            return client.postPrototypeRawSse(
+                url = endpoint.runUrl,
+                requestBody = requestBody,
+                beforeDispatch = observer.beforeDispatch,
+                onRawEvent = observer.onRawEvent,
+            )
+        }
+    }
+
+    internal companion object {
         private const val CAPABILITY_ERROR = "prototype capability response is incompatible"
+        private const val CAPABILITY_CHANGED_ERROR =
+            "prototype capability changed since node preflight"
+        private const val TICKET_URL_ERROR = "prototype node ticket does not match run URL"
         private const val PROFILE_MANIFEST_SHA256 =
             "44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc"
         private const val CLAIM_SCOPE = "application_end_to_end_to_probe_node"
@@ -74,6 +110,15 @@ class AnebClientPrototypeRawPostTransport(
             isLenient = false
         }
         private val hashPattern = Regex("^[a-f0-9]{64}$")
+
+        @JvmSynthetic
+        internal fun validatedCapabilityIdentityOrNull(
+            body: String,
+        ): PrototypeCapabilityIdentity? = try {
+            if (isCompatibleCapability(body)) capabilityIdentity(body) else null
+        } catch (_: Exception) {
+            null
+        }
 
         private object CapabilityWorkloadDuplicateKeyProbe : DeserializationStrategy<Unit> {
             override val descriptor: SerialDescriptor = buildClassSerialDescriptor(
@@ -264,6 +309,50 @@ class AnebClientPrototypeRawPostTransport(
                 false
             }
         }
+
+        private fun capabilityIdentity(body: String): PrototypeCapabilityIdentity {
+            val root = capabilityJson.parseToJsonElement(body) as JsonObject
+            val workload = root.getValue("workload") as JsonObject
+            val conditions = root.getValue("conditions") as JsonArray
+            return PrototypeCapabilityIdentity(
+                schemaVersion = (root.getValue("schema_version") as JsonPrimitive).content,
+                productVersion = (root.getValue("product_version") as JsonPrimitive).content,
+                protocolVersion = (root.getValue("protocol_version") as JsonPrimitive).content,
+                serverVersion = (root.getValue("server_version") as JsonPrimitive).content,
+                serverBinarySha256 =
+                    (root.getValue("server_binary_sha256") as JsonPrimitive).content,
+                claimScope = (root.getValue("claim_scope") as JsonPrimitive).content,
+                evidenceMode = (root.getValue("evidence_mode") as JsonPrimitive).content,
+                impairmentLayer = (root.getValue("impairment_layer") as JsonPrimitive).content,
+                profileManifestSha256 =
+                    (root.getValue("profile_manifest_sha256") as JsonPrimitive).content,
+                workload = PrototypeCapabilityWorkloadIdentity(
+                    id = (workload.getValue("id") as JsonPrimitive).content,
+                    version = (workload.getValue("version") as JsonPrimitive).content,
+                    contentEventCount = integerValue(workload.getValue("content_event_count")),
+                ),
+                conditions = conditions.map { element ->
+                    val condition = element as JsonObject
+                    PrototypeCapabilityConditionIdentity(
+                        id = (condition.getValue("id") as JsonPrimitive).content,
+                        version = (condition.getValue("version") as JsonPrimitive).content,
+                        nominalIntervalMs = integerValue(
+                            condition.getValue("nominal_interval_ms"),
+                        ),
+                        scheduleSha256 =
+                            (condition.getValue("schedule_sha256") as JsonPrimitive).content,
+                    )
+                }.toList(),
+                evidenceSchemaVersion =
+                    (root.getValue("evidence_schema_version") as JsonPrimitive).content,
+                scorePolicyId = (root.getValue("score_policy_id") as JsonPrimitive).content,
+                terminalReceiptVersion =
+                    (root.getValue("terminal_receipt_version") as JsonPrimitive).content,
+            )
+        }
+
+        private fun integerValue(element: JsonElement): Int =
+            (element as JsonPrimitive).content.toBigDecimal().intValueExact()
 
         private fun stringEquals(root: JsonObject, key: String, expected: String): Boolean =
             (root[key] as? JsonPrimitive)?.let { it.isString && it.content == expected } == true

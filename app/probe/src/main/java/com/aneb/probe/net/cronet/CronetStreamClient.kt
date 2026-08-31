@@ -2,12 +2,14 @@ package com.aneb.probe.net.cronet
 
 import android.content.Context
 import android.os.SystemClock
+import com.aneb.probe.net.EngineeringCleartextPolicy
 import com.aneb.probe.net.RawSseStream
 import com.aneb.probe.net.SseBoundaryScanner
 import com.aneb.probe.net.SseReader
 import com.aneb.probe.net.SseStreamResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.Buffer
 import org.chromium.net.CronetEngine
 import org.chromium.net.CronetException
@@ -171,6 +173,8 @@ class CronetStreamClient(
      * 引擎静默后才 shutdown，见类 KDoc 生命周期协议）。
      */
     suspend fun streamSse(url: String): Result {
+        val parsedUrl = url.toHttpUrlOrNull() ?: throw IllegalArgumentException("invalid Cronet URL")
+        EngineeringCleartextPolicy.requireAllowed(parsedUrl, prototypePrivate = false)
         val requestStartNanos = SystemClock.elapsedRealtimeNanos()
         return suspendCancellableCoroutine { cont ->
             val scanner = SseBoundaryScanner()

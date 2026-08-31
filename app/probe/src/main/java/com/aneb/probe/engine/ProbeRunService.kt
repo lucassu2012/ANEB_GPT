@@ -23,13 +23,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Activity 可重建、应用切后台时仍可观察的主测量会话状态。 */
 internal sealed interface ProbeRunSession {
@@ -80,6 +83,48 @@ internal object ProbeRunLogParser {
     }
 }
 
+internal class ProbeRunServiceExecutionHost(
+    beginForeground: () -> Unit,
+    publish: (ProbeRunSession) -> Unit,
+    finishRejected: () -> Unit,
+    executionLease: ProbeExecutionLease = ProbeExecutionLease.process,
+) {
+    private data class Request(
+        val autorun: Boolean,
+        val testMode: AnebTestMode,
+    )
+
+    private val leaseHost = ProbeExecutionLeaseHost(
+        beginForeground = { _: Request -> beginForeground() },
+        publishBusy = { request ->
+            publish(
+                ProbeRunSession.Failed(
+                    request.autorun,
+                    BUSY_MESSAGE,
+                    request.testMode,
+                ),
+            )
+        },
+        finishRejected = finishRejected,
+        executionLease = executionLease,
+    )
+
+    fun start(
+        autorun: Boolean,
+        testMode: AnebTestMode,
+        startOwned: (ProbeExecutionLease.Token) -> Boolean,
+    ): ProbeExecutionStartResult = leaseHost.start(
+        Request(autorun, testMode),
+        startOwned,
+    )
+
+    fun finish(token: ProbeExecutionLease.Token): Boolean = leaseHost.finish(token)
+
+    private companion object {
+        const val BUSY_MESSAGE = "另一项测试仍在结束处理中，请稍后重试。"
+    }
+}
+
 /**
  * V1 主测量前台 Service。它拥有 [TestEngine] 与协程作用域；Activity 只订阅 StateFlow，
  * 因此切后台和配置重建不会取消 run。通知提供明确的“取消测试”动作。
@@ -99,10 +144,25 @@ class ProbeRunService : Service() {
     private var telemetryJob: Job? = null
     private var resultJob: Job? = null
     private var cancelRequested = false
+    private lateinit var executionHost: ProbeRunServiceExecutionHost
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        executionHost = ProbeRunServiceExecutionHost(
+            beginForeground = {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification("正在准备测试", ongoing = true),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            },
+            publish = { _session.value = it },
+            finishRejected = {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            },
+        )
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -136,79 +196,87 @@ class ProbeRunService : Service() {
             driveTest = intent.getBooleanExtra(EXTRA_DRIVE_TEST, false),
         )
 
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification("正在准备测试", ongoing = true),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
-        cancelRequested = false
-        _logs.value = emptyList()
-        _telemetry.value = LiveTelemetry()
-        _basicTelemetry.value = BasicSpeedTelemetry()
-        _basicResult.value = null
-        _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
+        executionHost.start(autorun, config.testMode) { executionToken ->
+            cancelRequested = false
+            _logs.value = emptyList()
+            _telemetry.value = LiveTelemetry()
+            _basicTelemetry.value = BasicSpeedTelemetry()
+            _basicResult.value = null
+            _session.value = ProbeRunSession.Running(autorun, testMode = config.testMode)
 
-        runJob = serviceScope.launch {
-            var runId: String? = null
-            try {
-                val lines: Flow<String> = when (config.testMode) {
-                    AnebTestMode.TOKEN_EXPERIENCE -> {
-                        val engine = TestEngine(applicationContext)
-                        telemetryJob = serviceScope.launch {
-                            engine.telemetry.collect { _telemetry.value = it }
+            runJob = serviceScope.launch {
+                var runId: String? = null
+                try {
+                    val lines: Flow<String> = when (config.testMode) {
+                        AnebTestMode.TOKEN_EXPERIENCE -> {
+                            val engine = TestEngine(applicationContext)
+                            telemetryJob = serviceScope.launch {
+                                engine.telemetry.collect { _telemetry.value = it }
+                            }
+                            engine.run(
+                                TestEngine.RunConfig(
+                                    serverBase = config.serverBase,
+                                    mode = config.mode,
+                                    transport = config.transport,
+                                    inject = config.inject,
+                                    driveTest = config.driveTest,
+                                ),
+                            )
                         }
-                        engine.run(
-                            TestEngine.RunConfig(
-                                serverBase = config.serverBase,
-                                mode = config.mode,
-                                transport = config.transport,
-                                inject = config.inject,
-                                driveTest = config.driveTest,
-                            ),
-                        )
-                    }
-                    AnebTestMode.NETWORK_BASIC -> {
-                        val engine = NetworkSpeedEngine(applicationContext)
-                        telemetryJob = serviceScope.launch {
-                            engine.telemetry.collect { _basicTelemetry.value = it }
+                        AnebTestMode.NETWORK_BASIC -> {
+                            val engine = NetworkSpeedEngine(applicationContext)
+                            telemetryJob = serviceScope.launch {
+                                engine.telemetry.collect { _basicTelemetry.value = it }
+                            }
+                            resultJob = serviceScope.launch {
+                                engine.result.collect { _basicResult.value = it }
+                            }
+                            engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
                         }
-                        resultJob = serviceScope.launch {
-                            engine.result.collect { _basicResult.value = it }
+                    }
+                    lines.collect { line ->
+                        addLog(line)
+                        ProbeRunLogParser.runId(line)?.let { id ->
+                            runId = id
+                            _session.value = ProbeRunSession.Running(autorun, id, config.testMode)
                         }
-                        engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
+                        ProbeRunLogParser.progressText(line)?.let(::updateNotification)
+                    }
+                    val completedId = runId
+                    _session.value = if (completedId != null) {
+                        ProbeRunSession.Completed(autorun, completedId, config.testMode)
+                    } else {
+                        ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
+                    }
+                } catch (e: CancellationException) {
+                    if (cancelRequested) {
+                        _session.value = ProbeRunSession.Cancelled(autorun, config.testMode)
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    addLog("RUN_FAILED error=$e")
+                    _session.value = ProbeRunSession.Failed(
+                        autorun,
+                        RunFailureMessage.forError(e),
+                        config.testMode,
+                    )
+                } finally {
+                    withContext(NonCancellable) {
+                        try {
+                            telemetryJob?.cancelAndJoin()
+                            telemetryJob = null
+                            resultJob?.cancelAndJoin()
+                            resultJob = null
+                            runJob = null
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                        } finally {
+                            executionHost.finish(executionToken)
+                        }
                     }
                 }
-                lines.collect { line ->
-                    addLog(line)
-                    ProbeRunLogParser.runId(line)?.let { id ->
-                        runId = id
-                        _session.value = ProbeRunSession.Running(autorun, id, config.testMode)
-                    }
-                    ProbeRunLogParser.progressText(line)?.let(::updateNotification)
-                }
-                val completedId = runId
-                _session.value = if (completedId != null) {
-                    ProbeRunSession.Completed(autorun, completedId, config.testMode)
-                } else {
-                    ProbeRunSession.Failed(autorun, "测试未生成结果，请重试。", config.testMode)
-                }
-            } catch (e: CancellationException) {
-                if (cancelRequested) {
-                    _session.value = ProbeRunSession.Cancelled(autorun, config.testMode)
-                }
-                throw e
-            } catch (e: Exception) {
-                addLog("RUN_FAILED error=$e")
-                _session.value = ProbeRunSession.Failed(autorun, RunFailureMessage.forError(e), config.testMode)
-            } finally {
-                telemetryJob?.cancel()
-                telemetryJob = null
-                resultJob?.cancel()
-                resultJob = null
-                runJob = null
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
             }
+            true
         }
     }
 

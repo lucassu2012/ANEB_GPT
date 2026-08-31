@@ -21,8 +21,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
 
 class PrototypeQuickCampaignRunnerTest {
     @Test
@@ -94,6 +92,120 @@ class PrototypeQuickCampaignRunnerTest {
         assertEquals(3, result.summary.attemptedRuns)
         assertEquals(3, result.summary.successfulRuns)
         assertEquals(PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE, result.summary.status)
+    }
+
+    @Test
+    fun quickCampaignPublishesRunningAfterClockDomainValidationBeforeEachExecution() = runBlocking {
+        val campaignId = "campaign-quick-running-progress"
+        val runIds = listOf("run-progress-01", "run-progress-02", "run-progress-03")
+        val conditions = listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+        val streams = ArrayDeque(
+            conditions.mapIndexed { index, conditionId ->
+                completeStream(campaignId, runIds[index], conditionId)
+            },
+        )
+        val timeline = mutableListOf<String>()
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String) =
+                streams.removeFirst().also {
+                    val request = Json.parseToJsonElement(requestBody).jsonObject
+                    timeline += "execute:${request.getValue("condition_id").jsonPrimitive.content}"
+                }
+        }
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index ->
+                timeline += "clock:$index"
+                "progress-domain-$index"
+            },
+            waitBetweenRuns = { _ -> },
+            publishProgress = { progress ->
+                if (progress is PrototypeCampaignProgress.Running) {
+                    timeline +=
+                        "running:${progress.currentRunRef.runIndex}:" +
+                            "${progress.currentRunRef.runId}:" +
+                            "${progress.currentRunRef.conditionId}:" +
+                            "${progress.processedRuns}/${progress.totalRuns}"
+                }
+            },
+        )
+
+        runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = campaignId,
+        )
+
+        assertEquals(
+            listOf(
+                "clock:1",
+                "running:1:run-progress-01:baseline_v0.1:0/3",
+                "execute:baseline_v0.1",
+                "clock:2",
+                "running:2:run-progress-02:slow_v0.1:1/3",
+                "execute:slow_v0.1",
+                "clock:3",
+                "running:3:run-progress-03:unstable_v0.1:2/3",
+                "execute:unstable_v0.1",
+            ),
+            timeline,
+        )
+    }
+
+    @Test
+    fun quickCampaignPublishesCooldownForTheNextRunBeforeWaiting() = runBlocking {
+        val timeline = mutableListOf<String>()
+        val runIds = listOf("run-cooldown-01", "run-cooldown-02", "run-cooldown-03")
+        val runner = PrototypeQuickCampaignRunner(
+            runIdFactory = { index -> runIds[index - 1] },
+            executeRun = { plan ->
+                timeline += "execute:${plan.runIndex}"
+                PrototypeQuickCampaignRunner.RunResult.completeForTest(
+                    runIndex = plan.runIndex,
+                    runId = plan.runId,
+                    conditionId = plan.conditionId,
+                    streamResult = testStreamResult(plan.runIndex),
+                )
+            },
+            waitBetweenRuns = { timeline += "wait" },
+            publishProgress = { progress ->
+                when (progress) {
+                    is PrototypeCampaignProgress.Running ->
+                        timeline += "running:${progress.currentRunRef.runIndex}:${progress.processedRuns}"
+
+                    is PrototypeCampaignProgress.Cooldown ->
+                        timeline +=
+                            "cooldown:${progress.nextRunRef.runIndex}:" +
+                                "${progress.nextRunRef.runId}:" +
+                                "${progress.nextRunRef.conditionId}:" +
+                                "${progress.processedRuns}/${progress.totalRuns}"
+
+                    is PrototypeCampaignProgress.Saving ->
+                        error("Quick runner must not publish persistence progress")
+                }
+            },
+        )
+
+        runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = "campaign-quick-cooldown-progress",
+        )
+
+        assertEquals(
+            listOf(
+                "running:1:0",
+                "execute:1",
+                "cooldown:2:run-cooldown-02:slow_v0.1:1/3",
+                "wait",
+                "running:2:1",
+                "execute:2",
+                "cooldown:3:run-cooldown-03:unstable_v0.1:2/3",
+                "wait",
+                "running:3:2",
+                "execute:3",
+            ),
+            timeline,
+        )
     }
 
     @Test
@@ -1317,10 +1429,13 @@ class PrototypeQuickCampaignRunnerTest {
                 ),
             )
             val cooldowns = mutableListOf<Long>()
+            val progress = mutableListOf<PrototypeCampaignProgress>()
             val runner = PrototypeQuickCampaignRunner(
                 streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
                 runIdFactory = { index -> runIds[index - 1] },
+                clockDomainIdFactory = { index -> "partial-progress-domain-$index" },
                 waitBetweenRuns = { cooldowns += it },
+                publishProgress = progress::add,
             )
 
             val result = runner.run(
@@ -1339,6 +1454,29 @@ class PrototypeQuickCampaignRunnerTest {
             assertEquals(
                 listOf("COMPLETE", "INTERRUPTED", "NOT_STARTED"),
                 result.runs.map { it.status.name },
+            )
+            assertEquals(
+                listOf(
+                    PrototypeCampaignProgress.Running(
+                        campaignId,
+                        PrototypeCampaignRunRef(1, runIds[0], "baseline_v0.1"),
+                        0,
+                        3,
+                    ),
+                    PrototypeCampaignProgress.Cooldown(
+                        campaignId,
+                        PrototypeCampaignRunRef(2, runIds[1], "slow_v0.1"),
+                        1,
+                        3,
+                    ),
+                    PrototypeCampaignProgress.Running(
+                        campaignId,
+                        PrototypeCampaignRunRef(2, runIds[1], "slow_v0.1"),
+                        1,
+                        3,
+                    ),
+                ),
+                progress,
             )
 
             val baselineRun = result.runs[0]
@@ -2742,167 +2880,6 @@ class PrototypeQuickCampaignRunnerTest {
             terminalClientMonotonicNanos = runIndex.toLong(),
         )
 
-    private fun completeBaselineStream(campaignId: String, runId: String): RawSseStream =
-        completeStream(campaignId, runId, "baseline_v0.1")
-
-    private fun completeStream(
-        campaignId: String,
-        runId: String,
-        conditionId: String,
-    ): RawSseStream {
-        val blocks = buildList {
-            add(runStartedBlock(campaignId, runId, conditionId))
-            repeat(120) { index ->
-                add(contentBlock(campaignId, runId, conditionId, index + 1))
-            }
-            add(doneBlock(campaignId, runId, conditionId))
-        }
-        return rawStream(blocks, truncatedTail = false)
-    }
-
-    private fun interruptedSlowStream(campaignId: String, runId: String): RawSseStream =
-        interruptedStream(campaignId, runId, "slow_v0.1")
-
-    private fun interruptedStream(
-        campaignId: String,
-        runId: String,
-        conditionId: String,
-        truncatedTail: Boolean = false,
-    ): RawSseStream =
-        rawStream(
-            blocks = listOf(
-                runStartedBlock(campaignId, runId, conditionId),
-                contentBlock(campaignId, runId, conditionId, sequence = 1),
-            ),
-            truncatedTail = truncatedTail,
-        )
-
-    private fun runStartedBlock(campaignId: String, runId: String, conditionId: String): String {
-        val condition = evidenceCondition(conditionId)
-        val serverT0 = condition.runIndex * 1_000_000L
-        return "event: run_started\ndata: " +
-            buildJsonObject {
-                put("schema_version", JsonPrimitive("aneb-prototype-evidence-0.1"))
-                put("protocol_version", JsonPrimitive("prototype-stream-0.1"))
-                put("campaign_id", JsonPrimitive(campaignId))
-                put("run_id", JsonPrimitive(runId))
-                put("condition_id", JsonPrimitive(conditionId))
-                put("event_type", JsonPrimitive("run_started"))
-                put("server_monotonic_ns", JsonPrimitive(serverT0))
-                put("clock_source", JsonPrimitive("server.monotonic"))
-                put("clock_unit", JsonPrimitive("ns"))
-                put("clock_epoch", JsonPrimitive("process"))
-                put("source", JsonPrimitive("server"))
-                put("details", buildJsonObject {
-                    put("profile_id", JsonPrimitive("streaming_text_reference_v0.1"))
-                    put("profile_version", JsonPrimitive("0.1"))
-                    put("profile_manifest_sha256", JsonPrimitive(PROFILE_MANIFEST_SHA256))
-                    put("schedule_hash", JsonPrimitive(condition.scheduleHash))
-                    put("nominal_interval_ms", JsonPrimitive(condition.nominalIntervalMs))
-                    put("t0_monotonic_ns", JsonPrimitive(serverT0))
-                })
-            }
-    }
-
-    private fun contentBlock(
-        campaignId: String,
-        runId: String,
-        conditionId: String,
-        sequence: Int,
-    ): String {
-        val condition = evidenceCondition(conditionId)
-        return "event: content_event\ndata: " +
-            buildJsonObject {
-                put("schema_version", JsonPrimitive("aneb-prototype-evidence-0.1"))
-                put("protocol_version", JsonPrimitive("prototype-stream-0.1"))
-                put("event_type", JsonPrimitive("content_event"))
-                put("campaign_id", JsonPrimitive(campaignId))
-                put("run_id", JsonPrimitive(runId))
-                put("condition_id", JsonPrimitive(conditionId))
-                put(
-                    "server_monotonic_ns",
-                    JsonPrimitive(
-                        condition.runIndex * 1_000_000L +
-                            plannedOffsetMs(conditionId, sequence) * 1_000_000L,
-                    ),
-                )
-                put("clock_source", JsonPrimitive("server.monotonic"))
-                put("clock_unit", JsonPrimitive("ns"))
-                put("clock_epoch", JsonPrimitive("process"))
-                put("source", JsonPrimitive("server"))
-                put("details", buildJsonObject {
-                    put("seq", JsonPrimitive(sequence))
-                    put("planned_offset_ms", JsonPrimitive(plannedOffsetMs(conditionId, sequence)))
-                    put("payload_id", JsonPrimitive("ref-${sequence.toString().padStart(4, '0')}"))
-                    put("profile_manifest_sha256", JsonPrimitive(PROFILE_MANIFEST_SHA256))
-                    put("schedule_hash", JsonPrimitive(condition.scheduleHash))
-                })
-            }
-    }
-
-    private fun doneBlock(campaignId: String, runId: String, conditionId: String): String {
-        val condition = evidenceCondition(conditionId)
-        var fixture = readFixture("prototype_option_a_done_frame.sse")
-            .replace("\"campaign-fixture-01\"", "\"$campaignId\"")
-            .replace("\"run-fixture-01\"", "\"$runId\"")
-        val baselineMember = "\"condition_id\":\"baseline_v0.1\""
-        require(fixture.split(baselineMember).size - 1 == 2)
-        fixture = fixture.replace(baselineMember, "\"condition_id\":\"$conditionId\"")
-        val baselineSchedule = "\"schedule_hash\":\"${evidenceCondition("baseline_v0.1").scheduleHash}\""
-        require(fixture.split(baselineSchedule).size - 1 == 1)
-        fixture = fixture.replace(baselineSchedule, "\"schedule_hash\":\"${condition.scheduleHash}\"")
-        val baselineNominal = "\"nominal_interval_ms\":50"
-        require(fixture.split(baselineNominal).size - 1 == 1)
-        fixture = fixture.replace(baselineNominal, "\"nominal_interval_ms\":${condition.nominalIntervalMs}")
-        val baselineIndex = "\"run_index\":1"
-        require(fixture.split(baselineIndex).size - 1 == 1)
-        fixture = fixture.replace(baselineIndex, "\"run_index\":${condition.runIndex}")
-        return fixture.removeSuffix("\n\n")
-    }
-
-    private data class EvidenceCondition(
-        val id: String,
-        val runIndex: Int,
-        val nominalIntervalMs: Int,
-        val initialDelayMs: Int,
-        val scheduleHash: String,
-    )
-
-    private fun evidenceCondition(conditionId: String): EvidenceCondition = when (conditionId) {
-        "baseline_v0.1" -> EvidenceCondition(
-            id = conditionId,
-            runIndex = 1,
-            nominalIntervalMs = 50,
-            initialDelayMs = 200,
-            scheduleHash = "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
-        )
-        "slow_v0.1" -> EvidenceCondition(
-            id = conditionId,
-            runIndex = 2,
-            nominalIntervalMs = 125,
-            initialDelayMs = 650,
-            scheduleHash = "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
-        )
-        "unstable_v0.1" -> EvidenceCondition(
-            id = conditionId,
-            runIndex = 3,
-            nominalIntervalMs = 65,
-            initialDelayMs = 350,
-            scheduleHash = "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58",
-        )
-        else -> error("unknown test condition: $conditionId")
-    }
-
-    private fun plannedOffsetMs(conditionId: String, sequence: Int): Int {
-        val condition = evidenceCondition(conditionId)
-        val scheduledPauses = if (conditionId == "unstable_v0.1") {
-            (if (sequence > 40) 900 else 0) + (if (sequence > 85) 1_400 else 0)
-        } else {
-            0
-        }
-        return condition.initialDelayMs + (sequence - 1) * condition.nominalIntervalMs + scheduledPauses
-    }
-
     private fun evidenceEvents(run: PrototypeQuickCampaignRunner.RunResult): List<JsonObject> {
         val getter = run.javaClass.methods.singleOrNull { method ->
             method.name == "getEvidenceEvents" && method.parameterCount == 0
@@ -2969,64 +2946,6 @@ class PrototypeQuickCampaignRunnerTest {
             "source",
             "details",
         )
-    }
-
-    private fun rawStream(blocks: List<String>, truncatedTail: Boolean): RawSseStream {
-        val text = blocks.joinToString(separator = "\n\n", postfix = "\n\n")
-        return RawSseStream(
-            events = blocks.mapIndexed { index, block ->
-                RawSseEvent(
-                    bytes = block.toByteArray(Charsets.UTF_8),
-                    arrivalNanos = (index + 1) * 1_000L,
-                    sameReadBatch = false,
-                )
-            },
-            readCount = blocks.size,
-            totalBytes = text.toByteArray(Charsets.UTF_8).size.toLong(),
-            truncatedTail = truncatedTail,
-            eofNanos = (blocks.size + 1) * 1_000L,
-        )
-    }
-
-    private fun readFixture(name: String): String {
-        val candidates = listOf(
-            Path.of("server/testdata/$name"),
-            Path.of("../../server/testdata/$name"),
-        )
-        val path = candidates.firstOrNull(Files::isRegularFile)
-            ?: error("shared fixture not found: ${candidates.joinToString()}")
-        val raw = Files.readAllBytes(path).toString(Charsets.UTF_8)
-        return raw.replace("\r\n", "\n").also { normalized ->
-            require('\r' !in normalized) { "shared fixture contains a bare CR" }
-        }
-    }
-
-    private class QueuedRawPostTransport(
-        private val streams: ArrayDeque<RawSseStream>,
-    ) : PrototypeRawPostTransport {
-        val postedBodies = mutableListOf<String>()
-
-        override suspend fun post(url: String, requestBody: String): RawSseStream {
-            postedBodies += requestBody
-            return streams.removeFirstOrNull()
-                ?: error("not_started Quick slot reached the transport")
-        }
-    }
-
-    private class IncrementingClock : MonotonicNanosClock {
-        private var next = 1_000_000L
-
-        override fun now(): Long = next++
-    }
-
-    private class RecordingSteppedClock : MonotonicNanosClock {
-        private var next = 2_000_000L
-        val samples = mutableListOf<Long>()
-
-        override fun now(): Long = next.also { sample ->
-            samples += sample
-            next += 10L
-        }
     }
 
     private fun assertRunContract(

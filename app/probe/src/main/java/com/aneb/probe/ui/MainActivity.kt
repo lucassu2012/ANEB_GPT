@@ -48,6 +48,7 @@ import com.aneb.probe.apiprobe.toLlmProvider
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.data.Exporter
+import com.aneb.probe.data.PrototypeCampaignRoomRepository
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.engine.AbRunner
@@ -62,10 +63,27 @@ import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
+import com.aneb.probe.prototype.AnebClientPrototypeRawPostTransport
+import com.aneb.probe.prototype.PrototypeCampaignService
+import com.aneb.probe.prototype.PrototypeCampaignSession
+import com.aneb.probe.prototype.PrototypeDeviceFallbackExporter
+import com.aneb.probe.prototype.PrototypeNodeController
+import com.aneb.probe.prototype.PrototypeNodeState
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.radio.RadioCollector
 import com.aneb.probe.ui.components.AnebTabBar
 import com.aneb.probe.ui.components.MainTab
+import com.aneb.probe.ui.prototype.PrototypeCampaignUiActionResult
+import com.aneb.probe.ui.prototype.PrototypeCampaignUiController
+import com.aneb.probe.ui.prototype.PrototypeCampaignUiInput
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultActionCoordinator
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultLoadState
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultNavigator
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultRoute
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultRouteState
+import com.aneb.probe.ui.prototype.PrototypeCampaignResultScreen
+import com.aneb.probe.ui.prototype.PrototypeModeScreen
+import com.aneb.probe.ui.prototype.PrototypeZipShareLauncher
 import com.aneb.probe.ui.theme.AnebTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +92,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 /**
  * 单 Activity 状态切换导航（UI 重设计）：
@@ -93,6 +112,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var radioCollector: RadioCollector
     private lateinit var db: AnebDatabase
     private lateinit var settingsStore: ProbeSettingsStore
+    private lateinit var prototypeNodeController: PrototypeNodeController
 
     private var intentServer: String? = null
     private var intentAutorun: Boolean = false
@@ -174,6 +194,8 @@ class MainActivity : ComponentActivity() {
         data object ReachBoard : Screen
         data object Profiles : Screen
         data object Servers : Screen
+        data object PrototypeMode : Screen
+        data class PrototypeResult(val campaignId: String) : Screen
         data object Report : Screen
         data class Share(val model: ShareCard.Model, val returnTo: Result) : Screen
     }
@@ -188,6 +210,10 @@ class MainActivity : ComponentActivity() {
         radioCollector = RadioCollector(this)
         db = AnebDatabase.get(applicationContext)
         settingsStore = ProbeSettingsStore(applicationContext)
+        prototypeNodeController = PrototypeNodeController(
+            settings = settingsStore,
+            compatibilityChecker = AnebClientPrototypeRawPostTransport(AnebClient()),
+        )
         intentServer = intent?.getStringExtra("server")
         intentAutorun = intent?.getBooleanExtra("autorun", false) == true
         intentModeOverride = when (intent?.getStringExtra("mode")?.lowercase()) {
@@ -253,6 +279,60 @@ class MainActivity : ComponentActivity() {
                     var serverUrl by rememberSaveable {
                         mutableStateOf(launchSettings.serverUrl)
                     }
+                    var prototypeNodeUrl by rememberSaveable {
+                        mutableStateOf(settingsStore.loadNodeUrl())
+                    }
+                    var prototypeNodeState by remember { mutableStateOf<PrototypeNodeState?>(null) }
+                    var prototypeNodeChecking by remember { mutableStateOf(false) }
+                    var prototypeNodeError by rememberSaveable { mutableStateOf<String?>(null) }
+                    var prototypeActionNotice by rememberSaveable { mutableStateOf<String?>(null) }
+                    var prototypeActionRevision by remember { mutableIntStateOf(0) }
+                    val prototypeCampaignController = remember {
+                        PrototypeCampaignUiController(
+                            ticketForStart = prototypeNodeController::ticketForStart,
+                            campaignIdFactory = { UUID.randomUUID().toString() },
+                            startCampaign = { config ->
+                                PrototypeCampaignService.start(applicationContext, config)
+                            },
+                            cancelCampaign = { campaignId ->
+                                PrototypeCampaignService.cancel(applicationContext, campaignId)
+                            },
+                        )
+                    }
+                    val prototypeCampaignResultRepository = remember {
+                        PrototypeCampaignRoomRepository(db)
+                    }
+                    val prototypeDeviceFallbackExporter = remember(prototypeCampaignResultRepository) {
+                        PrototypeDeviceFallbackExporter(
+                            loadSnapshot =
+                                prototypeCampaignResultRepository::loadExportSnapshot,
+                            publish = { fileName, mimeType, writer ->
+                                Exporter.exportToDownloads(applicationContext, fileName, mimeType, writer)
+                            },
+                        )
+                    }
+                    val prototypeCampaignResultActionCoordinator =
+                        remember(prototypeDeviceFallbackExporter) {
+                            PrototypeCampaignResultActionCoordinator(
+                                exportCampaign = prototypeDeviceFallbackExporter::export,
+                                openShare = { publishedUri ->
+                                    PrototypeZipShareLauncher.open(applicationContext, publishedUri)
+                                },
+                                ioDispatcher = Dispatchers.IO,
+                            )
+                        }
+                    val prototypeCampaignResultNavigator = remember {
+                        PrototypeCampaignResultNavigator(prototypeCampaignResultRepository::load)
+                    }
+                    var openPrototypeResultCampaignId by rememberSaveable {
+                        mutableStateOf<String?>(null)
+                    }
+                    var dismissedFinishedCampaignId by rememberSaveable {
+                        mutableStateOf<String?>(null)
+                    }
+                    var prototypeCampaignResultLoadState by remember {
+                        mutableStateOf<PrototypeCampaignResultLoadState?>(null)
+                    }
                     var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
                     var testMode by rememberSaveable { mutableStateOf(launchSettings.testMode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
@@ -262,8 +342,32 @@ class MainActivity : ComponentActivity() {
                     val serviceTelemetry by ProbeRunService.telemetry.collectAsStateWithLifecycle()
                     val basicTelemetry by ProbeRunService.basicTelemetry.collectAsStateWithLifecycle()
                     val specialRunSession by ProbeSpecialRunService.session.collectAsStateWithLifecycle()
+                    val prototypeCampaignSession by
+                        PrototypeCampaignService.session.collectAsStateWithLifecycle()
+                    val prototypeCampaignProgress by
+                        PrototypeCampaignService.progress.collectAsStateWithLifecycle()
                     val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
-                    val running = runSession is ProbeRunSession.Running || auxiliaryRunning
+                    val nonPrototypeRunning = runSession is ProbeRunSession.Running || auxiliaryRunning
+                    val prototypePresentation = remember(
+                        prototypeCampaignSession,
+                        prototypeCampaignProgress,
+                        prototypeNodeState,
+                        prototypeNodeChecking,
+                        nonPrototypeRunning,
+                        prototypeActionRevision,
+                    ) {
+                        prototypeCampaignController.presentation(
+                            PrototypeCampaignUiInput(
+                                nodeUrl = prototypeNodeUrl,
+                                nodeCompatible = prototypeNodeState is PrototypeNodeState.Compatible,
+                                checkingNode = prototypeNodeChecking,
+                                otherRunActive = nonPrototypeRunning,
+                                session = prototypeCampaignSession,
+                                progress = prototypeCampaignProgress,
+                            ),
+                        )
+                    }
+                    val running = nonPrototypeRunning || prototypePresentation.quickRunning
                     var acceptManualSessions by remember { mutableStateOf(!launchRequestedAutorun) }
                     var homeNotice by rememberSaveable { mutableStateOf<String?>(null) }
                     var radioEvidenceLimited by remember { mutableStateOf(false) }
@@ -310,6 +414,95 @@ class MainActivity : ComponentActivity() {
                                 stage = RadioPermissionStage.RATIONALE,
                                 state = state,
                             )
+                        }
+                    }
+
+                    fun checkPrototypeNode() {
+                        if (prototypeNodeChecking) return
+                        prototypeNodeChecking = true
+                        prototypeNodeError = null
+                        lifecycleScope.launch {
+                            try {
+                                val state = prototypeNodeController.configureAndCheck(prototypeNodeUrl)
+                                prototypeNodeState = state
+                                prototypeNodeUrl = when (state) {
+                                    is PrototypeNodeState.Compatible -> state.nodeBaseUrl
+                                    is PrototypeNodeState.ConnectedIncompatible -> state.nodeBaseUrl
+                                }
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: IllegalArgumentException) {
+                                prototypeNodeState = null
+                                prototypeNodeError = error.message ?: "Invalid Prototype node URL."
+                            } catch (_: Exception) {
+                                prototypeNodeState = null
+                                prototypeNodeError = "Unable to reach this Prototype node."
+                            } finally {
+                                prototypeNodeChecking = false
+                            }
+                        }
+                    }
+
+                    fun currentPrototypeUiInput() = PrototypeCampaignUiInput(
+                        nodeUrl = prototypeNodeUrl,
+                        nodeCompatible = prototypeNodeState is PrototypeNodeState.Compatible,
+                        checkingNode = prototypeNodeChecking,
+                        otherRunActive =
+                            ProbeRunService.session.value is ProbeRunSession.Running ||
+                                ProbeSpecialRunService.session.value is SpecialRunSession.Running,
+                        session = PrototypeCampaignService.session.value,
+                    )
+
+                    fun applyPrototypeAction(outcome: PrototypeCampaignUiActionResult) {
+                        prototypeActionNotice = when (outcome) {
+                            PrototypeCampaignUiActionResult.Busy ->
+                                "Another test is already running."
+                            PrototypeCampaignUiActionResult.FreshNodeCheckRequired ->
+                                "Test the connection again before starting Quick."
+                            PrototypeCampaignUiActionResult.RequestNotificationPermission,
+                            is PrototypeCampaignUiActionResult.Started,
+                            -> null
+                            is PrototypeCampaignUiActionResult.LaunchFailed ->
+                                "Unable to start Quick: ${outcome.message}"
+                        }
+                        if (outcome is PrototypeCampaignUiActionResult.Started) {
+                            val route = prototypeCampaignResultNavigator.suppressForAcceptedStart(
+                                PrototypeCampaignResultRouteState(
+                                    openCampaignId = openPrototypeResultCampaignId,
+                                    dismissedFinishedCampaignId = dismissedFinishedCampaignId,
+                                ),
+                                PrototypeCampaignService.session.value,
+                            )
+                            openPrototypeResultCampaignId = route.openCampaignId
+                            dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
+                            prototypeCampaignResultLoadState = null
+                            if (screen is Screen.PrototypeResult) screen = Screen.PrototypeMode
+                        }
+                        prototypeActionRevision += 1
+                    }
+
+                    fun continuePrototypeQuickStart() {
+                        applyPrototypeAction(
+                            prototypeCampaignController.continueStartAfterNotification(
+                                currentPrototypeUiInput(),
+                            ),
+                        )
+                    }
+
+                    fun requestPrototypeQuickStart() {
+                        val outcome = prototypeCampaignController.requestStart(
+                            currentPrototypeUiInput(),
+                        )
+                        applyPrototypeAction(outcome)
+                        if (outcome is PrototypeCampaignUiActionResult.RequestNotificationPermission) {
+                            requestRunNotificationPermission { continuePrototypeQuickStart() }
+                        }
+                    }
+
+                    fun cancelPrototypeQuick() {
+                        if (prototypeCampaignController.requestCancel(PrototypeCampaignService.session.value)) {
+                            prototypeActionNotice = null
+                            prototypeActionRevision += 1
                         }
                     }
 
@@ -367,6 +560,27 @@ class MainActivity : ComponentActivity() {
                             pairs = intentAbPairs,
                             netlog = intentAbNetlog,
                         )
+                    }
+
+                    LaunchedEffect(prototypeCampaignSession) {
+                        prototypeCampaignController.observe(prototypeCampaignSession)
+                        val route = prototypeCampaignResultNavigator.observe(
+                            PrototypeCampaignResultRouteState(
+                                openCampaignId = openPrototypeResultCampaignId,
+                                dismissedFinishedCampaignId = dismissedFinishedCampaignId,
+                            ),
+                            prototypeCampaignSession,
+                        )
+                        openPrototypeResultCampaignId = route.openCampaignId
+                        dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
+                        route.openCampaignId?.let { campaignId ->
+                            screen = Screen.PrototypeResult(campaignId)
+                            prototypeCampaignResultLoadState =
+                                PrototypeCampaignResultLoadState.Loading(campaignId)
+                            prototypeCampaignResultLoadState =
+                                prototypeCampaignResultNavigator.load(campaignId)
+                        }
+                        prototypeActionRevision += 1
                     }
 
                     LaunchedEffect(runSession) {
@@ -455,6 +669,7 @@ class MainActivity : ComponentActivity() {
                                         nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
                                         onStart = ::requestManualRun,
                                         onOpenServer = ::openServerScreen,
+                                        onOpenPrototype = { screen = Screen.PrototypeMode },
                                         onOpenResult = { runId ->
                                             screen = Screen.Result(runId, fromHistory = false)
                                         },
@@ -528,6 +743,65 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 // ---- 下钻屏（隐底栏；各自返回键回当前 tab 根）----
+                                is Screen.PrototypeMode -> PrototypeModeScreen(
+                                    nodeUrl = prototypeNodeUrl,
+                                    nodeState = prototypeNodeState,
+                                    checkingNode = prototypeNodeChecking,
+                                    errorMessage = prototypeNodeError,
+                                    quickRunning = prototypePresentation.quickRunning,
+                                    quickAvailable = prototypePresentation.quickAvailable,
+                                    quickStatusMessage =
+                                        prototypePresentation.statusMessage ?: prototypeActionNotice,
+                                    showQuickCancel = prototypePresentation.showCancel,
+                                    quickCancelEnabled = prototypePresentation.cancelEnabled,
+                                    onNodeUrlChange = { value ->
+                                        prototypeNodeController.invalidateTicket()
+                                        prototypeNodeUrl = value
+                                        prototypeNodeState = null
+                                        prototypeNodeError = null
+                                        prototypeActionNotice = null
+                                    },
+                                    onCheckNode = ::checkPrototypeNode,
+                                    onStartQuick = ::requestPrototypeQuickStart,
+                                    onCancelQuick = ::cancelPrototypeQuick,
+                                    onBack = { screen = Screen.Home },
+                                )
+                                is Screen.PrototypeResult -> PrototypeCampaignResultRoute(
+                                    campaignId = s.campaignId,
+                                    loadState = prototypeCampaignResultLoadState
+                                        ?: PrototypeCampaignResultLoadState.Unavailable(s.campaignId),
+                                    coordinator = prototypeCampaignResultActionCoordinator,
+                                    onBack = {
+                                        val route = prototypeCampaignResultNavigator.dismiss(
+                                            PrototypeCampaignResultRouteState(
+                                                openCampaignId = openPrototypeResultCampaignId,
+                                                dismissedFinishedCampaignId =
+                                                    dismissedFinishedCampaignId,
+                                            ),
+                                            s.campaignId,
+                                        )
+                                        openPrototypeResultCampaignId = route.openCampaignId
+                                        dismissedFinishedCampaignId =
+                                            route.dismissedFinishedCampaignId
+                                        prototypeCampaignResultLoadState = null
+                                        screen = Screen.PrototypeMode
+                                    },
+                                    content = {
+                                            routeLoadState,
+                                            routeOnBack,
+                                            routeActionState,
+                                            onExport,
+                                            onShare,
+                                        ->
+                                        PrototypeCampaignResultScreen(
+                                            loadState = routeLoadState,
+                                            onBack = routeOnBack,
+                                            actionState = routeActionState,
+                                            onExport = onExport,
+                                            onShare = onShare,
+                                        )
+                                    },
+                                )
                                 is Screen.Testing -> {
                                     TestingScreen(
                                         logs = serviceLogs,
@@ -667,6 +941,7 @@ class MainActivity : ComponentActivity() {
         nodeLabel: String,
         onStart: () -> Unit,
         onOpenServer: () -> Unit,
+        onOpenPrototype: () -> Unit,
         onOpenResult: (String) -> Unit,
         onOpenBasicResult: (String) -> Unit,
     ) {
@@ -692,6 +967,7 @@ class MainActivity : ComponentActivity() {
             nodeLabel = nodeLabel,
             onStart = onStart,
             onOpenServer = onOpenServer,
+            onOpenPrototype = onOpenPrototype,
             onOpenLastResult = onOpenResult,
             onOpenLastBasicResult = onOpenBasicResult,
         )
