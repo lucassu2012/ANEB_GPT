@@ -76,6 +76,7 @@ fun HomeScreen(
     nodeLabel: String,
     onStart: () -> Unit,
     onOpenServer: () -> Unit,
+    onOpenPrototype: () -> Unit,
     onOpenLastResult: (String) -> Unit,
     onOpenLastBasicResult: (String) -> Unit,
 ) {
@@ -113,6 +114,21 @@ fun HomeScreen(
             Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp),
+        )
+        Text(
+            "PROTOTYPE",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp,
+            color = colors.brand,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 14.dp, end = 16.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0x1F32D9F5))
+                .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+                .pressable(onClick = onOpenPrototype)
+                .padding(horizontal = 10.dp, vertical = 7.dp),
         )
 
         Column(

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.prototype.PrototypeNodeSettings
 
 /** 可跨进程重启恢复的非敏感测量设置。API key 仍由独立的加密存储负责。 */
 internal data class ProbeSettings(
@@ -77,7 +78,7 @@ internal fun resolveLaunchSettings(
     )
 }
 
-internal class ProbeSettingsStore(context: Context) {
+internal class ProbeSettingsStore(context: Context) : PrototypeNodeSettings {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun load(): ProbeSettings = ProbeSettingsCodec.decode(
@@ -108,6 +109,14 @@ internal class ProbeSettingsStore(context: Context) {
         prefs.edit { putBoolean(KEY_DRIVE_TEST, value) }
     }
 
+    override fun loadNodeUrl(): String = prefs.getString(KEY_PROTOTYPE_NODE_URL, null)
+        ?.trim()
+        .orEmpty()
+
+    override fun saveNodeUrl(nodeBaseUrl: String) {
+        prefs.edit { putString(KEY_PROTOTYPE_NODE_URL, nodeBaseUrl.trim()) }
+    }
+
     private companion object {
         const val PREFS_NAME = "probe_settings_v1"
         const val KEY_SERVER_URL = "server_url"
@@ -115,5 +124,6 @@ internal class ProbeSettingsStore(context: Context) {
         const val KEY_TEST_MODE = "test_mode"
         const val KEY_TRANSPORT = "transport"
         const val KEY_DRIVE_TEST = "drive_test"
+        const val KEY_PROTOTYPE_NODE_URL = "prototype_node_url"
     }
 }

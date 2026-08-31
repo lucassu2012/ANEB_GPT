@@ -2,6 +2,7 @@ package com.aneb.probe.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 
 @Dao
@@ -140,4 +141,31 @@ interface RadioSampleDao {
 
     @Query("SELECT * FROM radio_sample WHERE lat IS NOT NULL AND lon IS NOT NULL ORDER BY tsNanos")
     suspend fun withCoordinates(): List<RadioSampleEntity>
+}
+
+@Dao
+interface PrototypeCampaignDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertCampaign(campaign: PrototypeCampaignEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertRuns(runs: List<PrototypeRunEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertEvidenceEvents(events: List<PrototypeEvidenceEventEntity>)
+
+    @Query("SELECT * FROM prototype_campaign WHERE campaignId = :campaignId")
+    suspend fun campaign(campaignId: String): PrototypeCampaignEntity?
+
+    @Query("SELECT * FROM prototype_run WHERE campaignId = :campaignId ORDER BY runIndex")
+    suspend fun runs(campaignId: String): List<PrototypeRunEntity>
+
+    @Query(
+        "SELECT * FROM prototype_evidence_event " +
+            "WHERE campaignId = :campaignId AND runId = :runId ORDER BY eventOrdinal",
+    )
+    suspend fun evidenceEvents(
+        campaignId: String,
+        runId: String,
+    ): List<PrototypeEvidenceEventEntity>
 }

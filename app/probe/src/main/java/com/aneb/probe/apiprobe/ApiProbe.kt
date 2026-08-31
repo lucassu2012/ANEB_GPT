@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.ApiProbeResultEntity
+import com.aneb.probe.net.EngineeringCleartextPolicy
 import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.SseReader
 import com.aneb.probe.net.TimingEventListener
@@ -68,6 +69,7 @@ class ApiProbe(private val context: Context) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS) // 真实 API 排队+推理可远超仿真节点 30s
         .eventListenerFactory(timingFactory)
+        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate = false))
         .build()
 
     /**

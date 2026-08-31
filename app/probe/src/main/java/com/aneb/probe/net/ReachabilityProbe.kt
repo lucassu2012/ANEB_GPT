@@ -35,6 +35,7 @@ class ReachabilityProbe(bound: BoundNetwork? = null) {
         .retryOnConnectionFailure(false)
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
+        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate = false))
         .proxy(java.net.Proxy.NO_PROXY) // D-16：探测同样直连，禁走系统代理
         .apply {
             if (bound != null) {

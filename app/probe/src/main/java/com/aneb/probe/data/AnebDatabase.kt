@@ -20,6 +20,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ApiProbeResultEntity::class,
         AbResultEntity::class,
         BasicSpeedResultEntity::class,
+        PrototypeCampaignEntity::class,
+        PrototypeRunEntity::class,
+        PrototypeEvidenceEventEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -36,7 +39,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v11：阶段3 真机跨网迁移修复——continuity_result 增 c2CrossNetworkRecoveries 可空列
     //      （真机硬切换拆除原绑定网后迁到新默认网恢复的样本数，两种 C2 语义，D-23，additive）
     // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
-    version = 12,
+    // v13：Prototype 0.1——新增 normalized campaign/run/evidence exact3 表。
+    version = 13,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -51,6 +55,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun apiProbeResultDao(): ApiProbeResultDao
     abstract fun abResultDao(): AbResultDao
     abstract fun basicSpeedResultDao(): BasicSpeedResultDao
+    abstract fun prototypeCampaignDao(): PrototypeCampaignDao
 
     companion object {
         @Volatile
@@ -253,21 +258,83 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        /** v12→v13: add only the normalized Prototype campaign graph and its run coordinate. */
+        internal val MIGRATION_12_13_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `prototype_campaign` (" +
+                "`campaignId` TEXT NOT NULL, " +
+                "`nodeBaseUrl` TEXT NOT NULL, " +
+                "`runUrl` TEXT NOT NULL, " +
+                "`capabilityUrl` TEXT NOT NULL, " +
+                "`rawCapabilityBody` TEXT NOT NULL, " +
+                "`capabilityIdentityJson` TEXT NOT NULL, " +
+                "`summaryJson` TEXT NOT NULL, " +
+                "PRIMARY KEY(`campaignId`))",
+            "CREATE TABLE IF NOT EXISTS `prototype_run` (" +
+                "`campaignId` TEXT NOT NULL, " +
+                "`runId` TEXT NOT NULL, " +
+                "`runIndex` INTEGER NOT NULL, " +
+                "`conditionId` TEXT NOT NULL, " +
+                "`status` TEXT NOT NULL, " +
+                "`taskSuccess` INTEGER NOT NULL, " +
+                "`scoreEligible` INTEGER NOT NULL, " +
+                "`eventsExpected` INTEGER NOT NULL, " +
+                "`eventsReceived` INTEGER NOT NULL, " +
+                "`failureReason` TEXT, " +
+                "`terminalReceiptValid` INTEGER, " +
+                "`metricsJson` TEXT, " +
+                "PRIMARY KEY(`campaignId`, `runId`), " +
+                "FOREIGN KEY(`campaignId`) REFERENCES `prototype_campaign`(`campaignId`) " +
+                "ON UPDATE NO ACTION ON DELETE NO ACTION)",
+            "CREATE TABLE IF NOT EXISTS `prototype_evidence_event` (" +
+                "`campaignId` TEXT NOT NULL, " +
+                "`runId` TEXT NOT NULL, " +
+                "`eventOrdinal` INTEGER NOT NULL, " +
+                "`eventJson` TEXT NOT NULL, " +
+                "PRIMARY KEY(`campaignId`, `runId`, `eventOrdinal`), " +
+                "FOREIGN KEY(`campaignId`, `runId`) " +
+                "REFERENCES `prototype_run`(`campaignId`, `runId`) " +
+                "ON UPDATE NO ACTION ON DELETE NO ACTION)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_prototype_run_campaignId_runIndex` " +
+                "ON `prototype_run` (`campaignId`, `runIndex`)",
+        )
+
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_12_13_SQL.forEach(db::execSQL)
+            }
+        }
+
+        private val PRODUCTION_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12,
+            MIGRATION_12_13,
+        )
+
+        private val LEGACY_DESTRUCTIVE_FROM = intArrayOf(1, 2, 3, 4, 5)
+
+        private fun productionBuilder(
+            context: Context,
+            databaseName: String,
+        ): RoomDatabase.Builder<AnebDatabase> = Room.databaseBuilder(
+            context.applicationContext,
+            AnebDatabase::class.java,
+            databaseName,
+        )
+            .addMigrations(*PRODUCTION_MIGRATIONS)
+            .fallbackToDestructiveMigrationFrom(*LEGACY_DESTRUCTIVE_FROM)
+
+        internal fun openUncached(
+            context: Context,
+            databaseName: String,
+        ): AnebDatabase = productionBuilder(context, databaseName).build()
+
         fun get(context: Context): AnebDatabase =
             instance ?: synchronized(this) {
-                instance ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    AnebDatabase::class.java,
-                    "aneb-probe.db",
-                )
-                    // v6 起 schema 变更必须写显式 Migration（历史数据是取证资产，
-                    // 不可静默丢弃）——v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11 见上方（均 additive）。
-                    .addMigrations(
-                        MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-                        MIGRATION_11_12,
-                    )
-                    // 兜底仅覆盖 <6 的开发期版本（无显式迁移路径时毁库重建）。
-                    .fallbackToDestructiveMigration()
+                instance ?: productionBuilder(context, "aneb-probe.db")
                     .build()
                     .also { instance = it }
             }

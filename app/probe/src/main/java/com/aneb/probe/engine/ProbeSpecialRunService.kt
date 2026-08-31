@@ -36,6 +36,33 @@ internal sealed interface SpecialRunSession {
     data class Cancelled(val kind: SpecialRunKind) : SpecialRunSession
 }
 
+internal class ProbeSpecialRunServiceExecutionHost(
+    beginForeground: (SpecialRunKind) -> Unit,
+    publish: (SpecialRunSession) -> Unit,
+    finishRejected: () -> Unit,
+    executionLease: ProbeExecutionLease = ProbeExecutionLease.process,
+) {
+    private val leaseHost = ProbeExecutionLeaseHost(
+        beginForeground = beginForeground,
+        publishBusy = { kind ->
+            publish(SpecialRunSession.Failed(kind, BUSY_MESSAGE))
+        },
+        finishRejected = finishRejected,
+        executionLease = executionLease,
+    )
+
+    fun start(
+        kind: SpecialRunKind,
+        startOwned: (ProbeExecutionLease.Token) -> Boolean,
+    ): ProbeExecutionStartResult = leaseHost.start(kind, startOwned)
+
+    fun finish(token: ProbeExecutionLease.Token): Boolean = leaseHost.finish(token)
+
+    private companion object {
+        const val BUSY_MESSAGE = "另一项测试仍在结束处理中，请稍后重试。"
+    }
+}
+
 /**
  * Continuity 与 Cronet A/B 专项的前台执行宿主。专项测量算法和日志合同仍由原 Runner 持有；
  * 本服务只把协程所有权从 Activity 迁出，避免配置重建或切后台取消正在进行的取证。
@@ -44,10 +71,29 @@ class ProbeSpecialRunService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
     private var cancelRequested = false
+    private lateinit var executionHost: ProbeSpecialRunServiceExecutionHost
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        executionHost = ProbeSpecialRunServiceExecutionHost(
+            beginForeground = { kind ->
+                val text = when (kind) {
+                    SpecialRunKind.CONTINUITY -> "正在执行连续性测试"
+                    SpecialRunKind.PROTOCOL_AB -> "正在执行协议 A/B 测试"
+                }
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(text),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            },
+            publish = { _session.value = it },
+            finishRejected = {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            },
+        )
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -72,7 +118,7 @@ class ProbeSpecialRunService : Service() {
         val tokens = intent.getIntExtra(EXTRA_TOKENS, ContinuityRunner.DEFAULT_TOKENS).coerceAtLeast(1)
         val idle = intent.getIntArrayExtra(EXTRA_C3_IDLE)?.toList().orEmpty()
             .filter { it > 0 }.ifEmpty { ContinuityRunner.DEFAULT_C3_IDLE_S }
-        startOwnedRun(SpecialRunKind.CONTINUITY, "正在执行连续性测试") {
+        startOwnedRun(SpecialRunKind.CONTINUITY) {
             emitLog(">>> CONTINUITY transport=${transport.name.lowercase()} -> $server")
             ContinuityRunner(applicationContext).run(
                 ContinuityRunner.Config(
@@ -91,7 +137,7 @@ class ProbeSpecialRunService : Service() {
             ?: return failBeforeRun(SpecialRunKind.PROTOCOL_AB, "测试节点地址为空。")
         val pairs = intent.getIntExtra(EXTRA_PAIRS, AbRunner.DEFAULT_PAIRS).coerceAtLeast(1)
         val netlog = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_NETLOG, false)
-        startOwnedRun(SpecialRunKind.PROTOCOL_AB, "正在执行协议 A/B 测试") {
+        startOwnedRun(SpecialRunKind.PROTOCOL_AB) {
             emitLog(">>> AB pairs=$pairs -> $server")
             AbRunner(applicationContext).run(
                 AbRunner.Config(
@@ -103,31 +149,40 @@ class ProbeSpecialRunService : Service() {
         }
     }
 
-    private fun startOwnedRun(kind: SpecialRunKind, notificationText: String, block: suspend () -> Unit) {
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(notificationText),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-        )
-        cancelRequested = false
-        _logs.value = emptyList()
-        _session.value = SpecialRunSession.Running(kind)
-        job = scope.launch {
-            try {
-                block()
-                _session.value = SpecialRunSession.Completed(kind)
-            } catch (e: CancellationException) {
-                if (cancelRequested) _session.value = SpecialRunSession.Cancelled(kind)
-                throw e
-            } catch (e: Exception) {
-                val prefix = if (kind == SpecialRunKind.CONTINUITY) "CONTINUITY_FAILED" else "AB_FAILED"
-                emitLog("$prefix error=${e.javaClass.simpleName}")
-                _session.value = SpecialRunSession.Failed(kind, "专项测试执行失败，请检查日志。")
-            } finally {
-                job = null
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+    private fun startOwnedRun(kind: SpecialRunKind, block: suspend () -> Unit) {
+        executionHost.start(kind) { executionToken ->
+            cancelRequested = false
+            _logs.value = emptyList()
+            _session.value = SpecialRunSession.Running(kind)
+            job = scope.launch {
+                try {
+                    block()
+                    _session.value = SpecialRunSession.Completed(kind)
+                } catch (e: CancellationException) {
+                    if (cancelRequested) _session.value = SpecialRunSession.Cancelled(kind)
+                    throw e
+                } catch (e: Exception) {
+                    val prefix = if (kind == SpecialRunKind.CONTINUITY) {
+                        "CONTINUITY_FAILED"
+                    } else {
+                        "AB_FAILED"
+                    }
+                    emitLog("$prefix error=${e.javaClass.simpleName}")
+                    _session.value = SpecialRunSession.Failed(
+                        kind,
+                        "专项测试执行失败，请检查日志。",
+                    )
+                } finally {
+                    job = null
+                    try {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    } finally {
+                        executionHost.finish(executionToken)
+                    }
+                }
             }
+            true
         }
     }
 

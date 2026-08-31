@@ -9,22 +9,57 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import kotlin.math.floor
 
+internal data class PrototypeCampaignRunRef(
+    val runIndex: Int,
+    val runId: String,
+    val conditionId: String,
+)
+
+internal sealed interface PrototypeCampaignProgress {
+    val campaignId: String
+    val processedRuns: Int
+    val totalRuns: Int
+
+    data class Running(
+        override val campaignId: String,
+        val currentRunRef: PrototypeCampaignRunRef,
+        override val processedRuns: Int,
+        override val totalRuns: Int,
+    ) : PrototypeCampaignProgress
+
+    data class Cooldown(
+        override val campaignId: String,
+        val nextRunRef: PrototypeCampaignRunRef,
+        override val processedRuns: Int,
+        override val totalRuns: Int,
+    ) : PrototypeCampaignProgress
+
+    data class Saving(
+        override val campaignId: String,
+        override val processedRuns: Int,
+        override val totalRuns: Int,
+    ) : PrototypeCampaignProgress
+}
+
 /** Executes the fixed Prototype 0.1 Quick campaign as one ordered product operation. */
 class PrototypeQuickCampaignRunner private constructor(
     private val executeRun: suspend (RunPlan, String) -> RunResult,
     private val runIdFactory: (Int) -> String,
     private val waitBetweenRuns: suspend (Long) -> Unit,
     private val clockDomainIdFactory: (Int) -> String,
+    private val publishProgress: (PrototypeCampaignProgress) -> Unit,
 ) {
     internal constructor(
         executeRun: suspend (RunPlan) -> RunResult,
         runIdFactory: (Int) -> String,
         waitBetweenRuns: suspend (Long) -> Unit,
+        publishProgress: (PrototypeCampaignProgress) -> Unit = {},
     ) : this(
         executeRun = { plan, _ -> executeRun(plan) },
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = { UUID.randomUUID().toString() },
+        publishProgress = publishProgress,
     )
 
     constructor(
@@ -36,6 +71,18 @@ class PrototypeQuickCampaignRunner private constructor(
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = { UUID.randomUUID().toString() },
+        publishProgress = {},
+    )
+
+    internal constructor(
+        streamAdapter: PrototypeRunStreamAdapter,
+        publishProgress: (PrototypeCampaignProgress) -> Unit,
+    ) : this(
+        executeRun = productExecution(streamAdapter),
+        runIdFactory = { UUID.randomUUID().toString() },
+        waitBetweenRuns = { delay(it) },
+        clockDomainIdFactory = { UUID.randomUUID().toString() },
+        publishProgress = publishProgress,
     )
 
     internal constructor(
@@ -43,11 +90,13 @@ class PrototypeQuickCampaignRunner private constructor(
         runIdFactory: (Int) -> String,
         clockDomainIdFactory: (Int) -> String,
         waitBetweenRuns: suspend (Long) -> Unit,
+        publishProgress: (PrototypeCampaignProgress) -> Unit = {},
     ) : this(
         executeRun = productExecution(streamAdapter),
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = clockDomainIdFactory,
+        publishProgress = publishProgress,
     )
 
     data class RunPlan(
@@ -196,6 +245,14 @@ class PrototypeQuickCampaignRunner private constructor(
         }
     }
 
+    internal data class SummaryRun(
+        val conditionId: String,
+        val status: RunStatus,
+        val taskSuccess: Boolean,
+        val scoreEligible: Boolean,
+        val metrics: RunMetrics?,
+    )
+
     enum class CampaignStatus {
         COMPLETE,
         PARTIAL,
@@ -273,6 +330,18 @@ class PrototypeQuickCampaignRunner private constructor(
             require(clockDomainId.isNotBlank()) {
                 "prototype clock-domain identity must be non-empty"
             }
+            publishProgress(
+                PrototypeCampaignProgress.Running(
+                    campaignId = campaignId,
+                    currentRunRef = PrototypeCampaignRunRef(
+                        runIndex = plan.runIndex,
+                        runId = plan.runId,
+                        conditionId = plan.conditionId,
+                    ),
+                    processedRuns = results.size,
+                    totalRuns = plans.size,
+                ),
+            )
             try {
                 results += executeRun(plan, clockDomainId)
             } catch (error: PrototypeRunStreamInterruptedException) {
@@ -291,14 +360,22 @@ class PrototypeQuickCampaignRunner private constructor(
                 return campaignResult(
                     campaignId = campaignId,
                     results = results,
-                    status = if (results.any { it.status == RunStatus.NOT_STARTED }) {
-                        CampaignStatus.PARTIAL
-                    } else {
-                        CampaignStatus.COMPLETE
-                    },
                 )
             }
-            if (plan.runIndex < QUICK_CONDITIONS.size) {
+            val nextPlan = plans.getOrNull(index + 1)
+            if (nextPlan != null) {
+                publishProgress(
+                    PrototypeCampaignProgress.Cooldown(
+                        campaignId = campaignId,
+                        nextRunRef = PrototypeCampaignRunRef(
+                            runIndex = nextPlan.runIndex,
+                            runId = nextPlan.runId,
+                            conditionId = nextPlan.conditionId,
+                        ),
+                        processedRuns = results.size,
+                        totalRuns = plans.size,
+                    ),
+                )
                 waitBetweenRuns(QUICK_COOLDOWN_MS)
             }
         }
@@ -306,24 +383,46 @@ class PrototypeQuickCampaignRunner private constructor(
         return campaignResult(
             campaignId = campaignId,
             results = results,
-            status = CampaignStatus.COMPLETE,
         )
     }
 
     private fun campaignResult(
         campaignId: String,
         results: List<RunResult>,
-        status: CampaignStatus,
-    ): CampaignResult {
-        val attemptedRuns = results.count { it.status != RunStatus.NOT_STARTED }
-        val successfulRuns = results.count { it.taskSuccess }
-        val conditionSummaries = enrichRpi(
-            summaries = conditionSummaries(results),
-            status = status,
-        )
-        return CampaignResult(
-            runs = results,
-            summary = CampaignSummary(
+    ): CampaignResult = CampaignResult(
+        runs = results,
+        summary = canonicalCampaignSummary(
+            campaignId = campaignId,
+            results = results.map { run ->
+                SummaryRun(
+                    conditionId = run.conditionId,
+                    status = run.status,
+                    taskSuccess = run.taskSuccess,
+                    scoreEligible = run.scoreEligible,
+                    metrics = run.metrics,
+                )
+            },
+        ),
+    )
+
+    internal companion object {
+        @JvmSynthetic
+        internal fun canonicalCampaignSummary(
+            campaignId: String,
+            results: List<SummaryRun>,
+        ): CampaignSummary {
+            val attemptedRuns = results.count { it.status != RunStatus.NOT_STARTED }
+            val successfulRuns = results.count { it.taskSuccess }
+            val status = if (results.any { it.status == RunStatus.NOT_STARTED }) {
+                CampaignStatus.PARTIAL
+            } else {
+                CampaignStatus.COMPLETE
+            }
+            val summaries = enrichRpi(
+                summaries = conditionSummaries(results),
+                status = status,
+            )
+            return CampaignSummary(
                 campaignId = campaignId,
                 campaignMode = CAMPAIGN_MODE,
                 plannedRuns = QUICK_CONDITIONS.size,
@@ -333,139 +432,137 @@ class PrototypeQuickCampaignRunner private constructor(
                 notStartedRuns = QUICK_CONDITIONS.size - attemptedRuns,
                 successRate = successfulRuns.toDouble() / QUICK_CONDITIONS.size,
                 status = status,
-                conditionSummaries = conditionSummaries,
-            ),
-        )
-    }
-
-    private fun conditionSummaries(results: List<RunResult>): List<ConditionSummary> =
-        QUICK_CONDITIONS.map { condition ->
-            val plannedRuns = 1
-            val conditionRuns = results.filter { run -> run.conditionId == condition.id }
-            val attemptedRuns = conditionRuns.count { run -> run.status != RunStatus.NOT_STARTED }
-            val successfulRuns = conditionRuns.filter { run -> run.taskSuccess && run.scoreEligible }
-            val metrics = successfulRuns.mapNotNull { run -> run.metrics }.singleOrNull()
-            ConditionSummary(
-                conditionId = condition.id,
-                plannedRuns = plannedRuns,
-                attemptedRuns = attemptedRuns,
-                successfulRuns = successfulRuns.size,
-                failedRuns = attemptedRuns - successfulRuns.size,
-                notStartedRuns = plannedRuns - attemptedRuns,
-                successRate = successfulRuns.size.toDouble() / plannedRuns,
-                confidence = if (successfulRuns.size == 1) Confidence.LOW else Confidence.NONE,
-                medianTtftMs = metrics?.ttftMs,
-                minTtftMs = metrics?.ttftMs,
-                maxTtftMs = metrics?.ttftMs,
-                medianCompletionMs = metrics?.completionMs,
-                minCompletionMs = metrics?.completionMs,
-                maxCompletionMs = metrics?.completionMs,
-                medianStreamEventRateEps = metrics?.streamEventRateEps,
-                medianStallCount = metrics?.stallCount?.toDouble(),
-                medianStallDurationMs = metrics?.stallDurationMs,
-                medianStallFraction = metrics?.stallFraction,
-                rpi = null,
-                rpiPolicyId = RPI_POLICY_ID,
-                primaryNullReason = null,
-                allNullReasons = null,
+                conditionSummaries = summaries,
             )
         }
 
-    private fun enrichRpi(
-        summaries: List<ConditionSummary>,
-        status: CampaignStatus,
-    ): List<ConditionSummary> {
-        val baseline = summaries.first()
-        val baselineHasSuccessfulRun = baseline.successfulRuns > 0
-        val baselineReasons = rpiNullReasons(
-            summary = baseline,
-            status = status,
-            baselineHasSuccessfulRun = baselineHasSuccessfulRun,
-        )
-        return summaries.map { summary ->
-            val rowReasons = rpiNullReasons(
-                summary = summary,
-                status = status,
-                baselineHasSuccessfulRun = baselineHasSuccessfulRun,
-            )
-            val effectiveReasons = rowReasons.ifEmpty { baselineReasons }
-            if (effectiveReasons.isNotEmpty()) {
-                summary.copy(
+        private fun conditionSummaries(results: List<SummaryRun>): List<ConditionSummary> =
+            QUICK_CONDITIONS.map { condition ->
+                val plannedRuns = 1
+                val conditionRuns = results.filter { run -> run.conditionId == condition.id }
+                val attemptedRuns = conditionRuns.count { run -> run.status != RunStatus.NOT_STARTED }
+                val successfulRuns = conditionRuns.filter { run -> run.taskSuccess && run.scoreEligible }
+                val metrics = successfulRuns.mapNotNull { run -> run.metrics }.singleOrNull()
+                ConditionSummary(
+                    conditionId = condition.id,
+                    plannedRuns = plannedRuns,
+                    attemptedRuns = attemptedRuns,
+                    successfulRuns = successfulRuns.size,
+                    failedRuns = attemptedRuns - successfulRuns.size,
+                    notStartedRuns = plannedRuns - attemptedRuns,
+                    successRate = successfulRuns.size.toDouble() / plannedRuns,
+                    confidence = if (successfulRuns.size == 1) Confidence.LOW else Confidence.NONE,
+                    medianTtftMs = metrics?.ttftMs,
+                    minTtftMs = metrics?.ttftMs,
+                    maxTtftMs = metrics?.ttftMs,
+                    medianCompletionMs = metrics?.completionMs,
+                    minCompletionMs = metrics?.completionMs,
+                    maxCompletionMs = metrics?.completionMs,
+                    medianStreamEventRateEps = metrics?.streamEventRateEps,
+                    medianStallCount = metrics?.stallCount?.toDouble(),
+                    medianStallDurationMs = metrics?.stallDurationMs,
+                    medianStallFraction = metrics?.stallFraction,
                     rpi = null,
-                    primaryNullReason = effectiveReasons.first(),
-                    allNullReasons = effectiveReasons,
-                )
-            } else {
-                summary.copy(
-                    rpi = rpiValue(baseline = baseline, current = summary),
+                    rpiPolicyId = RPI_POLICY_ID,
                     primaryNullReason = null,
                     allNullReasons = null,
                 )
             }
-        }
-    }
 
-    private fun rpiNullReasons(
-        summary: ConditionSummary,
-        status: CampaignStatus,
-        baselineHasSuccessfulRun: Boolean,
-    ): List<String> {
-        val reasons = mutableSetOf<String>()
-        if (status != CampaignStatus.COMPLETE) {
-            reasons += NULL_REASON_CAMPAIGN_INCOMPLETE
+        private fun enrichRpi(
+            summaries: List<ConditionSummary>,
+            status: CampaignStatus,
+        ): List<ConditionSummary> {
+            val baseline = summaries.first()
+            val baselineHasSuccessfulRun = baseline.successfulRuns > 0
+            val baselineReasons = rpiNullReasons(
+                summary = baseline,
+                status = status,
+                baselineHasSuccessfulRun = baselineHasSuccessfulRun,
+            )
+            return summaries.map { summary ->
+                val rowReasons = rpiNullReasons(
+                    summary = summary,
+                    status = status,
+                    baselineHasSuccessfulRun = baselineHasSuccessfulRun,
+                )
+                val effectiveReasons = rowReasons.ifEmpty { baselineReasons }
+                if (effectiveReasons.isNotEmpty()) {
+                    summary.copy(
+                        rpi = null,
+                        primaryNullReason = effectiveReasons.first(),
+                        allNullReasons = effectiveReasons,
+                    )
+                } else {
+                    summary.copy(
+                        rpi = rpiValue(baseline = baseline, current = summary),
+                        primaryNullReason = null,
+                        allNullReasons = null,
+                    )
+                }
+            }
         }
-        if (!baselineHasSuccessfulRun) {
-            reasons += NULL_REASON_NO_SUCCESSFUL_BASELINE
-        }
-        if (summary.successfulRuns == 0) {
-            reasons += NULL_REASON_NO_SUCCESSFUL_CONDITION_RUN
-        }
-        val mandatoryMetrics = listOf(
-            summary.medianTtftMs,
-            summary.medianCompletionMs,
-            summary.medianStallFraction,
-        )
-        if (mandatoryMetrics.any { metric -> metric == null }) {
-            reasons += NULL_REASON_MANDATORY_METRIC_MISSING
-        }
-        if (
-            mandatoryMetrics.filterNotNull().any { metric -> !metric.isFinite() } ||
-            !summary.successRate.isFinite() ||
-            summary.successRate !in 0.0..1.0 ||
-            summary.medianStallFraction?.let { fraction -> fraction !in 0.0..1.0 } == true
-        ) {
-            reasons += NULL_REASON_INVALID_EVIDENCE
-        }
-        if (
-            summary.medianTtftMs?.let { ttft -> ttft <= 0.0 } == true ||
-            summary.medianCompletionMs?.let { completion -> completion <= 0.0 } == true
-        ) {
-            reasons += NULL_REASON_NON_POSITIVE_METRIC
-        }
-        return RPI_NULL_REASON_PRECEDENCE.filter(reasons::contains)
-    }
 
-    private fun rpiValue(
-        baseline: ConditionSummary,
-        current: ConditionSummary,
-    ): Int {
-        val ttftQuality = (
-            checkNotNull(baseline.medianTtftMs) / checkNotNull(current.medianTtftMs)
-        ).coerceAtMost(1.0)
-        val completionQuality = (
-            checkNotNull(baseline.medianCompletionMs) /
-                checkNotNull(current.medianCompletionMs)
-        ).coerceAtMost(1.0)
-        val stallQuality = (1.0 - checkNotNull(current.medianStallFraction)).coerceIn(0.0, 1.0)
-        val raw = 100.0 * current.successRate * (
-            0.45 * ttftQuality +
-                0.35 * completionQuality +
-                0.20 * stallQuality
-        )
-        return floor(raw.coerceIn(0.0, 100.0) + 0.5).toInt()
-    }
+        private fun rpiNullReasons(
+            summary: ConditionSummary,
+            status: CampaignStatus,
+            baselineHasSuccessfulRun: Boolean,
+        ): List<String> {
+            val reasons = mutableSetOf<String>()
+            if (status != CampaignStatus.COMPLETE) {
+                reasons += NULL_REASON_CAMPAIGN_INCOMPLETE
+            }
+            if (!baselineHasSuccessfulRun) {
+                reasons += NULL_REASON_NO_SUCCESSFUL_BASELINE
+            }
+            if (summary.successfulRuns == 0) {
+                reasons += NULL_REASON_NO_SUCCESSFUL_CONDITION_RUN
+            }
+            val mandatoryMetrics = listOf(
+                summary.medianTtftMs,
+                summary.medianCompletionMs,
+                summary.medianStallFraction,
+            )
+            if (mandatoryMetrics.any { metric -> metric == null }) {
+                reasons += NULL_REASON_MANDATORY_METRIC_MISSING
+            }
+            if (
+                mandatoryMetrics.filterNotNull().any { metric -> !metric.isFinite() } ||
+                !summary.successRate.isFinite() ||
+                summary.successRate !in 0.0..1.0 ||
+                summary.medianStallFraction?.let { fraction -> fraction !in 0.0..1.0 } == true
+            ) {
+                reasons += NULL_REASON_INVALID_EVIDENCE
+            }
+            if (
+                summary.medianTtftMs?.let { ttft -> ttft <= 0.0 } == true ||
+                summary.medianCompletionMs?.let { completion -> completion <= 0.0 } == true
+            ) {
+                reasons += NULL_REASON_NON_POSITIVE_METRIC
+            }
+            return RPI_NULL_REASON_PRECEDENCE.filter(reasons::contains)
+        }
 
-    private companion object {
+        private fun rpiValue(
+            baseline: ConditionSummary,
+            current: ConditionSummary,
+        ): Int {
+            val ttftQuality = (
+                checkNotNull(baseline.medianTtftMs) / checkNotNull(current.medianTtftMs)
+            ).coerceAtMost(1.0)
+            val completionQuality = (
+                checkNotNull(baseline.medianCompletionMs) /
+                    checkNotNull(current.medianCompletionMs)
+            ).coerceAtMost(1.0)
+            val stallQuality = (1.0 - checkNotNull(current.medianStallFraction)).coerceIn(0.0, 1.0)
+            val raw = 100.0 * current.successRate * (
+                0.45 * ttftQuality +
+                    0.35 * completionQuality +
+                    0.20 * stallQuality
+            )
+            return floor(raw.coerceIn(0.0, 100.0) + 0.5).toInt()
+        }
+
         private const val CAMPAIGN_MODE = "quick"
         private const val EXPECTED_CONTENT_EVENTS = 120
         private const val QUICK_COOLDOWN_MS = 1_000L

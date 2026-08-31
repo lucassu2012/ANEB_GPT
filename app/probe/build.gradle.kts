@@ -32,6 +32,7 @@ android {
         targetSdk = 35
         versionCode = 20
         versionName = "0.2.0"
+        buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "false")
     }
 
     signingConfigs {
@@ -67,6 +68,13 @@ android {
             versionNameSuffix = "-codex"
             // 明文流量仅经 src/debug/res/xml/network_security_config.xml 允许（仿真服务器联调）
             // release 变体不带该配置，targetSdk>=28 默认禁明文
+        }
+        create("prototypeEngineering") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".prototype"
+            versionNameSuffix = "-prototype-engineering"
+            matchingFallbacks += listOf("debug")
+            buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "true")
         }
     }
 
@@ -144,4 +152,5 @@ dependencies {
     ksp(libs.room.compiler)
 
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }

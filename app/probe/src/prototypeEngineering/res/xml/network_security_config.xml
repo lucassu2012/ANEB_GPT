@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ENGINEERING_SMOKE_ONLY: platform cleartext is open only in this isolated build type.
+     EngineeringCleartextPolicy denies every ordinary HTTP request; the Prototype client alone
+     may use exact private-node capability/run paths after PrototypeNodeEndpoint validation. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">120.79.148.0</domain>
+        <trust-anchors>
+            <certificates src="@raw/aneb_ip_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>
