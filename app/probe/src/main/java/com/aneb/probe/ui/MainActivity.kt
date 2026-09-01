@@ -69,6 +69,7 @@ import com.aneb.probe.prototype.PrototypeCampaignSession
 import com.aneb.probe.prototype.PrototypeDeviceFallbackExporter
 import com.aneb.probe.prototype.PrototypeNodeController
 import com.aneb.probe.prototype.PrototypeNodeState
+import com.aneb.probe.prototype.PrototypeQuickCampaignRunner
 import com.aneb.probe.radio.GeoTrack
 import com.aneb.probe.radio.RadioCollector
 import com.aneb.probe.ui.components.AnebTabBar
@@ -481,7 +482,7 @@ class MainActivity : ComponentActivity() {
                         prototypeActionRevision += 1
                     }
 
-                    fun continuePrototypeQuickStart() {
+                    fun continuePrototypeCampaignStart() {
                         applyPrototypeAction(
                             prototypeCampaignController.continueStartAfterNotification(
                                 currentPrototypeUiInput(),
@@ -489,18 +490,26 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    fun requestPrototypeQuickStart() {
+                    fun requestPrototypeCampaignStart(
+                        mode: PrototypeQuickCampaignRunner.CampaignMode,
+                    ) {
                         val outcome = prototypeCampaignController.requestStart(
-                            currentPrototypeUiInput(),
+                            input = currentPrototypeUiInput(),
+                            mode = mode,
                         )
                         applyPrototypeAction(outcome)
                         if (outcome is PrototypeCampaignUiActionResult.RequestNotificationPermission) {
-                            requestRunNotificationPermission { continuePrototypeQuickStart() }
+                            requestRunNotificationPermission { continuePrototypeCampaignStart() }
                         }
                     }
 
                     fun cancelPrototypeQuick() {
-                        if (prototypeCampaignController.requestCancel(PrototypeCampaignService.session.value)) {
+                        if (
+                            prototypeCampaignController.requestCancel(
+                                session = PrototypeCampaignService.session.value,
+                                progress = PrototypeCampaignService.progress.value,
+                            )
+                        ) {
                             prototypeActionNotice = null
                             prototypeActionRevision += 1
                         }
@@ -752,6 +761,7 @@ class MainActivity : ComponentActivity() {
                                     quickAvailable = prototypePresentation.quickAvailable,
                                     quickStatusMessage =
                                         prototypePresentation.statusMessage ?: prototypeActionNotice,
+                                    liveExecution = prototypePresentation.liveExecution,
                                     showQuickCancel = prototypePresentation.showCancel,
                                     quickCancelEnabled = prototypePresentation.cancelEnabled,
                                     onNodeUrlChange = { value ->
@@ -762,7 +772,16 @@ class MainActivity : ComponentActivity() {
                                         prototypeActionNotice = null
                                     },
                                     onCheckNode = ::checkPrototypeNode,
-                                    onStartQuick = ::requestPrototypeQuickStart,
+                                    onStartQuick = {
+                                        requestPrototypeCampaignStart(
+                                            PrototypeQuickCampaignRunner.CampaignMode.QUICK,
+                                        )
+                                    },
+                                    onStartAcceptance = {
+                                        requestPrototypeCampaignStart(
+                                            PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                                        )
+                                    },
                                     onCancelQuick = ::cancelPrototypeQuick,
                                     onBack = { screen = Screen.Home },
                                 )

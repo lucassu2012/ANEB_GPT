@@ -9,6 +9,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,6 +27,88 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 class PrototypeDeviceFallbackBundleWriterTest {
+    @Test
+    fun `cancelled result preserves run cancelled and not started topology in fallback`() =
+        runBlocking {
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                "campaign-cancelled-fallback",
+            )
+            val result = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+            val snapshot = PrototypeDeviceFallbackBundleWriter.Snapshot(
+                summary = result.summary,
+                runs = result.runs.map { run ->
+                    PrototypeDeviceFallbackBundleWriter.Run(
+                        runIndex = run.runIndex,
+                        runId = run.runId,
+                        conditionId = run.conditionId,
+                        status = run.status,
+                        taskSuccess = run.taskSuccess,
+                        scoreEligible = run.scoreEligible,
+                        eventsExpected = run.eventsExpected,
+                        eventsReceived = run.eventsReceived,
+                        failureReason = run.failureReason,
+                        terminalReceiptValid = run.terminalReceiptValid,
+                        metrics = run.metrics,
+                    )
+                },
+                capabilityResponseUtf8 = config.nodeTicket.rawCapabilityBody.toByteArray(Charsets.UTF_8),
+                eventJsonUtf8Records = result.runs.flatMap { run -> run.evidenceEvents }.map { event ->
+                    event.toString().toByteArray(Charsets.UTF_8)
+                },
+            )
+            val output = ByteArrayOutputStream()
+
+            PrototypeDeviceFallbackBundleWriter.write(snapshot, output)
+
+            val entries = readEntries(output.toByteArray()).associateBy(ZipContents::name)
+            val campaign = Json.parseToJsonElement(
+                entries.getValue("campaign-snapshot.json").bytes.toString(Charsets.UTF_8),
+            ).jsonObject
+            assertEquals("CANCELLED", campaign.getValue("campaign_status").jsonPrimitive.content)
+            val runs = campaign.getValue("runs").jsonArray.map { it.jsonObject }
+            assertEquals(
+                listOf("CANCELLED", "NOT_STARTED", "NOT_STARTED"),
+                runs.map { it.getValue("status").jsonPrimitive.content },
+            )
+            assertEquals("cancelled", runs.first().getValue("failure_reason").jsonPrimitive.content)
+            val events = entries.getValue("events.jsonl").bytes.toString(Charsets.UTF_8)
+                .lineSequence().filter(String::isNotBlank).map { line ->
+                    Json.parseToJsonElement(line).jsonObject
+                }.toList()
+            assertEquals(
+                listOf("run_started", "content_event", "run_cancelled"),
+                events.map { it.getValue("event_type").jsonPrimitive.content },
+            )
+        }
+
+    @Test
+    fun `Acceptance snapshot preserves all nine runs and three aggregate summaries`() {
+        val snapshot = acceptanceSnapshot()
+        val output = ByteArrayOutputStream()
+
+        PrototypeDeviceFallbackBundleWriter.write(snapshot, output)
+
+        val entries = readEntries(output.toByteArray()).associateBy(ZipContents::name)
+        val campaign = Json.parseToJsonElement(
+            entries.getValue("campaign-snapshot.json").bytes.toString(Charsets.UTF_8),
+        ).jsonObject
+        assertEquals("acceptance", campaign.getValue("campaign_mode").jsonPrimitive.content)
+        assertEquals(9, campaign.getValue("planned_runs").jsonPrimitive.int)
+        assertEquals(9, campaign.getValue("attempted_runs").jsonPrimitive.int)
+        val runs = campaign.getValue("runs").jsonArray.map { it.jsonObject }
+        assertEquals((1..9).toList(), runs.map { it.getValue("run_index").jsonPrimitive.int })
+        assertEquals(
+            List(3) { listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1") }.flatten(),
+            runs.map { it.getValue("condition_id").jsonPrimitive.content },
+        )
+        val summaries = campaign.getValue("condition_summaries").jsonArray.map { it.jsonObject }
+        assertEquals(3, summaries.size)
+        summaries.forEach { summary ->
+            assertEquals(3, summary.getValue("planned_runs").jsonPrimitive.int)
+            assertEquals("HIGH", summary.getValue("confidence").jsonPrimitive.content)
+        }
+    }
+
     @Test
     fun `complete persisted snapshot writes a deterministic unverified fallback zip`() {
         val capabilityBytes = """{ "server_version" : "节点-v1", "claim_scope" : "application_end_to_end_to_probe_node" }
@@ -305,6 +388,69 @@ class PrototypeDeviceFallbackBundleWriterTest {
         eventJsonUtf8Records = eventRecords,
     )
 
+    private fun acceptanceSnapshot(): PrototypeDeviceFallbackBundleWriter.Snapshot {
+        val conditions = List(3) {
+            listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+        }.flatten()
+        val ttftByCondition = mapOf(
+            "baseline_v0.1" to 120.0,
+            "slow_v0.1" to 420.0,
+            "unstable_v0.1" to 260.0,
+        )
+        val runs = conditions.mapIndexed { index, conditionId ->
+            completeRun(
+                runIndex = index + 1,
+                runId = "run-acceptance-${(index + 1).toString().padStart(2, '0')}",
+                conditionId = conditionId,
+                ttftMs = ttftByCondition.getValue(conditionId),
+            )
+        }
+        val summary = PrototypeQuickCampaignRunner.canonicalCampaignSummary(
+            campaignId = "campaign-acceptance-fallback",
+            mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+            results = runs.map { run ->
+                PrototypeQuickCampaignRunner.SummaryRun(
+                    conditionId = run.conditionId,
+                    status = run.status,
+                    taskSuccess = run.taskSuccess,
+                    scoreEligible = run.scoreEligible,
+                    metrics = run.metrics,
+                )
+            },
+        )
+        return PrototypeDeviceFallbackBundleWriter.Snapshot(
+            summary = summary,
+            runs = runs,
+            capabilityResponseUtf8 = "{}".toByteArray(Charsets.UTF_8),
+            eventJsonUtf8Records = emptyList(),
+        )
+    }
+
+    @Test
+    fun `invalid sequence snapshot preserves failed prefix and not started suffix`() {
+        val snapshot = invalidSequenceSnapshot()
+        val output = ByteArrayOutputStream()
+
+        PrototypeDeviceFallbackBundleWriter.write(snapshot, output)
+
+        val campaign = Json.parseToJsonElement(
+            readEntries(output.toByteArray())
+                .single { it.name == "campaign-snapshot.json" }
+                .bytes
+                .toString(Charsets.UTF_8),
+        ).jsonObject
+        val runs = campaign.getValue("runs").jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+            runs.map { it.getValue("status").jsonPrimitive.content },
+        )
+        assertEquals(1, runs.first().getValue("events_received").jsonPrimitive.int)
+        assertEquals("invalid_sequence", runs.first().getValue("failure_reason").jsonPrimitive.content)
+        assertTrue(runs.first().getValue("terminal_receipt_valid") === JsonNull)
+        assertTrue(runs.first().getValue("metrics") === JsonNull)
+        assertEquals("PARTIAL", campaign.getValue("campaign_status").jsonPrimitive.content)
+    }
+
     private fun partialSnapshot(): PrototypeDeviceFallbackBundleWriter.Snapshot {
         val campaignId = "campaign-partial-01"
         val runs = listOf(
@@ -354,6 +500,72 @@ class PrototypeDeviceFallbackBundleWriterTest {
             capabilityResponseUtf8 = "{}".toByteArray(Charsets.UTF_8),
             eventJsonUtf8Records = listOf(
                 "{\"event_type\":\"run_started\"}".toByteArray(Charsets.UTF_8),
+            ),
+        )
+    }
+
+    private fun invalidSequenceSnapshot(): PrototypeDeviceFallbackBundleWriter.Snapshot {
+        val campaignId = "campaign-invalid-sequence-01"
+        val runs = listOf(
+            PrototypeDeviceFallbackBundleWriter.Run(
+                runIndex = 1,
+                runId = "run-invalid-sequence-01",
+                conditionId = "baseline_v0.1",
+                status = PrototypeQuickCampaignRunner.RunStatus.INVALID_SEQUENCE,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = 120,
+                eventsReceived = 1,
+                failureReason = "invalid_sequence",
+                terminalReceiptValid = null,
+                metrics = null,
+            ),
+            PrototypeDeviceFallbackBundleWriter.Run(
+                runIndex = 2,
+                runId = "run-invalid-sequence-02",
+                conditionId = "slow_v0.1",
+                status = PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = 120,
+                eventsReceived = 0,
+                failureReason = "not_started",
+                terminalReceiptValid = null,
+                metrics = null,
+            ),
+            PrototypeDeviceFallbackBundleWriter.Run(
+                runIndex = 3,
+                runId = "run-invalid-sequence-03",
+                conditionId = "unstable_v0.1",
+                status = PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = 120,
+                eventsReceived = 0,
+                failureReason = "not_started",
+                terminalReceiptValid = null,
+                metrics = null,
+            ),
+        )
+        return PrototypeDeviceFallbackBundleWriter.Snapshot(
+            summary = PrototypeQuickCampaignRunner.canonicalCampaignSummary(
+                campaignId = campaignId,
+                results = runs.map { run ->
+                    PrototypeQuickCampaignRunner.SummaryRun(
+                        conditionId = run.conditionId,
+                        status = run.status,
+                        taskSuccess = run.taskSuccess,
+                        scoreEligible = run.scoreEligible,
+                        metrics = run.metrics,
+                    )
+                },
+            ),
+            runs = runs,
+            capabilityResponseUtf8 = "{}".toByteArray(Charsets.UTF_8),
+            eventJsonUtf8Records = listOf(
+                "{\"event_type\":\"run_started\"}".toByteArray(Charsets.UTF_8),
+                "{\"event_type\":\"content_event\"}".toByteArray(Charsets.UTF_8),
+                "{\"event_type\":\"run_failed\"}".toByteArray(Charsets.UTF_8),
             ),
         )
     }

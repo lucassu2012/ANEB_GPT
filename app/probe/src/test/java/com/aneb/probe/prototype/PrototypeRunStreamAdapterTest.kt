@@ -4,6 +4,7 @@ import com.aneb.probe.net.MonotonicNanosClock
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -26,6 +27,378 @@ private const val CONDITION_IDENTITY_ERROR =
     "prototype SSE condition identity must match the outgoing request"
 
 class PrototypeRunStreamAdapterTest {
+    @Test
+    fun liveSnapshotsArePublishedBeforeObservedTransportReturnsFromValidatedFrames() = runBlocking {
+        val producer = officialProducerCases.first()
+        val stream = rawStreamOf(
+            producerShapedBlocks(
+                readFixture("prototype_option_a_done_frame.sse"),
+                producer,
+            ),
+        )
+        var transportReturned = false
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("live progress requires the observed transport path")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                observer.beforeDispatch()
+                stream.events.forEach(observer.onRawEvent)
+                transportReturned = true
+                return stream
+            }
+        }
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+            transport = transport,
+            clock = IncrementingTestClock(),
+        ).run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            requestBody = officialRunRequestBody(producer),
+            publishLiveSnapshot = { snapshot ->
+                assertTrue("snapshot was replayed after transport returned", !transportReturned)
+                snapshots += snapshot
+            },
+        )
+
+        assertTrue(transportReturned)
+        assertEquals(123, snapshots.size)
+        assertEquals(1L, snapshots.first().t0MonotonicNanos)
+        assertEquals(emptyList<Long>(), snapshots.first().validatedContentTimestampsNanos)
+        assertEquals(false, snapshots.first().runStartedObserved)
+        assertEquals(null, snapshots.first().terminalClientMonotonicNanos)
+        assertEquals(true, snapshots[1].runStartedObserved)
+        assertEquals(emptyList<Long>(), snapshots[1].validatedContentTimestampsNanos)
+        assertEquals(listOf(2L), snapshots[2].validatedContentTimestampsNanos)
+        assertEquals((2L..121L).toList(), snapshots[121].validatedContentTimestampsNanos)
+        assertEquals((2L..121L).toList(), snapshots.last().validatedContentTimestampsNanos)
+        assertEquals(122L, snapshots.last().terminalClientMonotonicNanos)
+    }
+
+    @Test
+    fun malformedObservedContentDoesNotEnterValidatedLiveSnapshots() = runBlocking {
+        val prefix = rawStreamOf(
+            listOf(
+                canonicalBlocks(
+                    readFixture("prototype_option_a_done_frame.sse"),
+                    contentCount = 0,
+                ).first(),
+                serverContentBlock(seq = 2),
+            ),
+        ).events
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = failingObservedTransport(
+                    prefix,
+                    IOException("forced malformed live-prefix interruption"),
+                ),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+                publishLiveSnapshot = snapshots::add,
+            )
+            org.junit.Assert.fail("malformed live content was accepted")
+        } catch (_: PrototypeRunInvalidSequenceException) {
+            // Expected: the malformed raw event never becomes a validated live observation.
+        }
+
+        assertEquals(2, snapshots.size)
+        assertEquals(false, snapshots.first().runStartedObserved)
+        assertEquals(true, snapshots.last().runStartedObserved)
+        assertEquals(emptyList<Long>(), snapshots.last().validatedContentTimestampsNanos)
+        assertEquals(null, snapshots.last().terminalClientMonotonicNanos)
+    }
+
+    @Test
+    fun invalidFinalContentDoesNotPublishFinalizingSnapshot() = runBlocking {
+        val blocks = canonicalBlocks(
+            readFixture("prototype_option_a_done_frame.sse"),
+            contentCount = 120,
+        ).toMutableList()
+        blocks[120] = blocks[120].replace(
+            "\"condition_id\":\"baseline_v0.1\"",
+            "\"condition_id\":\"forged-condition\"",
+        )
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = FakeRawPostTransport(rawStreamOf(blocks)),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+                publishLiveSnapshot = { snapshot -> snapshots += snapshot },
+            )
+            org.junit.Assert.fail("wrong-condition final content was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertTrue(error !is PrototypeRunInvalidSequenceException)
+            assertEquals(CONDITION_IDENTITY_ERROR, error.message)
+        }
+
+        assertEquals(119, snapshots.last().validatedContentTimestampsNanos.size)
+        assertTrue(snapshots.none { snapshot -> snapshot.terminalClientMonotonicNanos != null })
+    }
+
+    @Test
+    fun contentWithoutAValidatedRunStartedFrameNeverPublishesStreamingProgress() = runBlocking {
+        val prefix = rawStreamOf(listOf(serverContentBlock(seq = 1))).events
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = failingObservedTransport(
+                    prefix,
+                    IOException("forced missing-run-started interruption"),
+                ),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+                publishLiveSnapshot = snapshots::add,
+            )
+            org.junit.Assert.fail("content without run_started was accepted")
+        } catch (_: IllegalArgumentException) {
+            // Expected: raw content may be retained, but it is not live validated topology.
+        }
+
+        assertEquals(1, snapshots.size)
+        assertEquals(false, snapshots.single().runStartedObserved)
+        assertEquals(emptyList<Long>(), snapshots.single().validatedContentTimestampsNanos)
+    }
+
+    @Test
+    fun contentBeforeRunStartedBecomesTypedInvalidSequenceWithoutLiveProgress() = runBlocking {
+        val runStarted = canonicalBlocks(
+            readFixture("prototype_option_a_done_frame.sse"),
+            contentCount = 0,
+        ).first()
+        val prefix = rawStreamOf(
+            listOf(
+                serverContentBlock(seq = 1),
+                runStarted,
+                serverContentBlock(seq = 2),
+            ),
+        ).events
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        val failure = try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = failingObservedTransport(
+                    prefix,
+                    IOException("forced out-of-order run_started interruption"),
+                ),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+                publishLiveSnapshot = snapshots::add,
+            )
+            org.junit.Assert.fail("content before run_started was accepted")
+            error("unreachable")
+        } catch (error: PrototypeRunInvalidSequenceException) {
+            error
+        }
+
+        assertEquals(emptyList<Int>(), failure.evidence.validatedContentEvents.map { it.sequence })
+        assertEquals(1, failure.evidence.rawEvents.size)
+        assertEquals(
+            "event: run_started",
+            failure.evidence.rawEvents.single().bytes.toString(Charsets.UTF_8)
+                .lineSequence().first(),
+        )
+        assertEquals(1, snapshots.size)
+        assertEquals(false, snapshots.single().runStartedObserved)
+        assertEquals(emptyList<Long>(), snapshots.single().validatedContentTimestampsNanos)
+    }
+
+    @Test
+    fun duplicateRunStartedCannotBeLaunderedIntoCanonicalCancellationEvidence() = runBlocking {
+        val runStarted = canonicalBlocks(
+            readFixture("prototype_option_a_done_frame.sse"),
+            contentCount = 0,
+        ).first()
+        val prefix = rawStreamOf(
+            listOf(runStarted, runStarted, serverContentBlock(seq = 1)),
+        ).events
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+
+        val failure = try {
+            withContext(authority) {
+                com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                    transport = failingObservedTransport(
+                        prefix,
+                        CancellationException("cancelled after duplicate run_started"),
+                    ),
+                    clock = IncrementingTestClock(),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+            }
+            org.junit.Assert.fail("duplicate run_started was laundered as cancellation")
+            error("unreachable")
+        } catch (error: PrototypeRunInvalidSequenceException) {
+            error
+        }
+
+        assertEquals(emptyList<Int>(), failure.evidence.validatedContentEvents.map { it.sequence })
+        assertEquals(1, failure.evidence.rawEvents.size)
+        assertEquals(
+            "event: run_started",
+            failure.evidence.rawEvents.single().bytes.toString(Charsets.UTF_8).lineSequence().first(),
+        )
+    }
+
+    @Test
+    fun invalidObservedContentCannotBeLaunderedIntoCanonicalCancellationEvidence() = runBlocking {
+        val canonical = canonicalBlocks(
+            readFixture("prototype_option_a_done_frame.sse"),
+            contentCount = 1,
+        ).dropLast(1)
+        val forgedContent = canonical[1].replaceFirst(
+            "\"condition_id\":\"baseline_v0.1\"",
+            "\"condition_id\":\"slow_v0.1\"",
+        )
+        val prefix = rawStreamOf(listOf(canonical[0], forgedContent)).events
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+
+        try {
+            withContext(authority) {
+                com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                    transport = failingObservedTransport(
+                        prefix,
+                        CancellationException("cancelled after invalid content"),
+                    ),
+                    clock = IncrementingTestClock(),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+            }
+            org.junit.Assert.fail("invalid content was laundered as cancellation")
+        } catch (error: IllegalArgumentException) {
+            assertTrue(error !is PrototypeRunCancellationObservation)
+            assertEquals(CONDITION_IDENTITY_ERROR, error.message)
+        }
+    }
+
+    @Test
+    fun observedEarlyDoneRemainsInvalidSequenceAfterCancellationOrIo() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        listOf(0, 1, 119).forEach { contentCount ->
+            val prefix = rawStreamOf(canonicalBlocks(doneFrame, contentCount)).events
+            listOf<Throwable>(
+                CancellationException("cancelled after early done"),
+                IOException("io after early done"),
+            ).forEach { transportFailure ->
+                val authority = PrototypeUserCancellationAuthority().also { it.request() }
+                val failure = try {
+                    withContext(authority) {
+                        com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                            transport = failingObservedTransport(prefix, transportFailure),
+                            clock = IncrementingTestClock(),
+                        ).run(
+                            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                            requestBody = canonicalRequestBody(),
+                        )
+                    }
+                    org.junit.Assert.fail(
+                        "early done after $contentCount events was reclassified by " +
+                            transportFailure::class.simpleName,
+                    )
+                    error("unreachable")
+                } catch (error: PrototypeRunInvalidSequenceException) {
+                    error
+                }
+
+                assertEquals(contentCount, failure.evidence.validatedContentEvents.size)
+                assertTrue(failure.evidence.rawEvents.none { raw ->
+                    raw.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull() == "event: done"
+                })
+            }
+        }
+    }
+
+    @Test
+    fun completeObservedTerminalRemainsCompleteAfterAuthorizedCancellation() = runBlocking {
+        val prefix = rawStreamOf(
+            canonicalBlocks(
+                readFixture("prototype_option_a_done_frame.sse"),
+                contentCount = 120,
+            ),
+        ).events
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+
+        val result = withContext(authority) {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = failingObservedTransport(
+                    prefix,
+                    CancellationException("cancelled after complete terminal"),
+                ),
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+            )
+        }
+
+        assertEquals(122, result.rawEvents.size)
+        assertEquals(120, result.validatedContentEvents.size)
+    }
+
+    @Test
+    fun earlyDoneDoesNotPublishAValidatedTerminalLiveSnapshot() = runBlocking {
+        val stream = rawStreamOf(
+            canonicalBlocks(
+                readFixture("prototype_option_a_done_frame.sse"),
+                contentCount = 1,
+            ),
+        )
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("live progress requires the observed transport path")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                observer.beforeDispatch()
+                stream.events.forEach(observer.onRawEvent)
+                return stream
+            }
+        }
+        val snapshots = mutableListOf<PrototypeRunLiveSnapshot>()
+
+        try {
+            com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                transport = transport,
+                clock = IncrementingTestClock(),
+            ).run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                requestBody = canonicalRequestBody(),
+                publishLiveSnapshot = snapshots::add,
+            )
+            org.junit.Assert.fail("early done was accepted")
+        } catch (_: PrototypeRunInvalidSequenceException) {
+            // Expected: valid terminal fields cannot finalize an incomplete content sequence.
+        }
+
+        assertEquals(3, snapshots.size)
+        assertEquals(emptyList<Long>(), snapshots.first().validatedContentTimestampsNanos)
+        assertEquals(listOf(2L), snapshots.last().validatedContentTimestampsNanos)
+        assertTrue(snapshots.none { snapshot -> snapshot.terminalClientMonotonicNanos != null })
+    }
+
     @Test
     fun runStartedPayloadEventTypeMustMatchSseEvent() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
@@ -2427,22 +2800,29 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
-    fun missingContentTopologyFailsClosedWithStableMessage() = runBlocking {
+    fun earlyDoneAtZeroOneAnd119ContentEventsReturnsTypedInvalidSequenceEvidence() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
-        val rawStream = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 119))
-        val transport = FakeRawPostTransport(rawStream)
+        listOf(0, 1, 119).forEach { contentCount ->
+            val rawStream = rawStreamOf(canonicalBlocks(doneFrame, contentCount = contentCount))
+            val transport = FakeRawPostTransport(rawStream)
 
-        try {
-            PrototypeRunStreamAdapter(transport).run(
-                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                requestBody = canonicalRequestBody(),
-            )
-            org.junit.Assert.fail("119 content events were accepted")
-        } catch (error: IllegalArgumentException) {
-            assertEquals(
-                "prototype SSE stream must contain run_started, 120 content events, and final done",
-                error.message,
-            )
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+                org.junit.Assert.fail("early done after $contentCount content events was accepted")
+            } catch (error: PrototypeRunInvalidSequenceException) {
+                assertEquals(
+                    "prototype SSE content events must have exact seq 1 through 120",
+                    error.message,
+                )
+                assertEquals(contentCount, error.evidence.validatedContentEvents.size)
+                assertEquals(contentCount + 1, error.evidence.rawEvents.size)
+                assertTrue(error.evidence.rawEvents.none { raw ->
+                    raw.bytes.toString(Charsets.UTF_8).lineSequence().firstOrNull() == "event: done"
+                })
+            }
         }
     }
 
@@ -2472,6 +2852,52 @@ class PrototypeRunStreamAdapterTest {
                 "prototype SSE content events must have exact seq 1 through 120",
                 error.message,
             )
+        }
+    }
+
+    @Test
+    fun invalidSequenceFailureRetainsCanonicalPrefixesAtZeroOneAnd119() = runBlocking {
+        listOf(0, 1, 119).forEach { prefixCount ->
+            val blocks = buildList {
+                add(
+                    "event: run_started\ndata: " +
+                        "{\"event_type\":\"run_started\",\"campaign_id\":\"campaign-1\"," +
+                        "\"run_id\":\"run-1\",\"condition_id\":\"baseline_v0.1\"}",
+                )
+                (1..prefixCount).forEach { sequence -> add(serverContentBlock(sequence)) }
+                add(serverContentBlock(prefixCount + 2))
+            }
+            val transport = FakeRawPostTransport(rawStreamOf(blocks))
+
+            try {
+                PrototypeRunStreamAdapter(transport).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+                org.junit.Assert.fail(
+                    "invalid sequence after $prefixCount events was not returned as a typed failure",
+                )
+            } catch (error: PrototypeRunInvalidSequenceException) {
+                assertEquals(
+                    "prototype SSE content events must have exact seq 1 through 120",
+                    error.message,
+                )
+                assertEquals(prefixCount + 1, error.evidence.rawEvents.size)
+                assertEquals(
+                    listOf("event: run_started") + List(prefixCount) { "event: content_event" },
+                    error.evidence.rawEvents.map { raw ->
+                        raw.bytes.toString(Charsets.UTF_8).lineSequence().first()
+                    },
+                )
+                assertEquals(
+                    (1..prefixCount).toList(),
+                    error.evidence.validatedContentEvents.map { it.sequence },
+                )
+                val lastObserved = error.evidence.validatedContentEvents.lastOrNull()
+                    ?.clientMonotonicNanos
+                    ?: error.evidence.t0MonotonicNanos
+                assertTrue(error.evidence.interruptionClientMonotonicNanos > lastObserved)
+            }
         }
     }
 
@@ -3784,6 +4210,48 @@ class PrototypeRunStreamAdapterTest {
     }
 
     @Test
+    fun duplicateDetailsAndSeqMembersReturnTypedInvalidSequenceWithEmptyPrefix() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val literalSeq = canonicalBlocks(doneFrame, contentCount = 120).toMutableList().also {
+            it[1] = it[1].replace(
+                "\"seq\":1,\"planned_offset_ms\"",
+                "\"seq\":999,\"seq\":1,\"planned_offset_ms\"",
+            )
+        }
+        val duplicateDetails = canonicalBlocks(doneFrame, contentCount = 120).toMutableList().also {
+            it[1] = "event: content_event\ndata: " +
+                contentPayloadWithIdentity(
+                    "{\"event_type\":\"content_event\",\"details\":{\"seq\":999}," +
+                        "\"details\":{\"seq\":1}}",
+                )
+        }
+        val escapedSeq = canonicalBlocks(doneFrame, contentCount = 120).toMutableList().also {
+            it[1] = "event: content_event\ndata: " +
+                contentPayloadWithIdentity(
+                    "{\"event_type\":\"content_event\",\"details\":{\"seq\":999," +
+                        "\"\\u0073eq\":1}}",
+                )
+        }
+
+        listOf(literalSeq, duplicateDetails, escapedSeq).forEach { blocks ->
+            try {
+                PrototypeRunStreamAdapter(FakeRawPostTransport(rawStreamOf(blocks))).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+                org.junit.Assert.fail("duplicate sequence authority was not classified")
+            } catch (error: PrototypeRunInvalidSequenceException) {
+                assertEquals(
+                    "prototype SSE content events must have exact seq 1 through 120",
+                    error.message,
+                )
+                assertTrue(error.evidence.validatedContentEvents.isEmpty())
+                assertEquals(1, error.evidence.rawEvents.size)
+            }
+        }
+    }
+
+    @Test
     fun duplicateKeyBoundaryPreservesDistinctAndEscapedKeys() = runBlocking {
         val doneFrame = readFixture("prototype_option_a_done_frame.sse")
         val stableMessage = "prototype SSE content events must have exact seq 1 through 120"
@@ -4231,6 +4699,36 @@ class PrototypeRunStreamAdapterTest {
         } catch (error: CancellationException) {
             assertSame(failure, error)
         }
+    }
+
+    @Test
+    fun userCancellationRetainsOnlyTheValidatedObservedPrefix() = runBlocking {
+        val doneFrame = readFixture("prototype_option_a_done_frame.sse")
+        val prefix = rawStreamOf(canonicalBlocks(doneFrame, contentCount = 1).dropLast(1)).events
+        val cancellation = CancellationException("cancelled by Prototype user")
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+
+        val failure = try {
+            withContext(authority) {
+                com.aneb.probe.prototype.PrototypeRunStreamAdapter(
+                    transport = failingObservedTransport(prefix, cancellation),
+                    clock = IncrementingTestClock(),
+                ).run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    requestBody = canonicalRequestBody(),
+                )
+            }
+            org.junit.Assert.fail("user cancellation observation was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeRunCancellationObservation) {
+            error
+        }
+
+        assertSame(cancellation, failure.cause)
+        val evidence = requireNotNull(failure.evidence)
+        assertEquals(prefix, evidence.rawEvents)
+        assertEquals(listOf(1), evidence.validatedContentEvents.map { it.sequence })
+        assertTrue(evidence.interruptionClientMonotonicNanos > evidence.t0MonotonicNanos)
     }
 
     /** Keeps local JVM tests off the Android SystemClock while exercising production logic. */

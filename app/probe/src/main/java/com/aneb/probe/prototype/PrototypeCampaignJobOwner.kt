@@ -5,10 +5,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 
 data class PrototypeCampaignConfig(
     val nodeTicket: CompatibleNodeTicket,
     val campaignId: String,
+    val campaignMode: PrototypeQuickCampaignRunner.CampaignMode =
+        PrototypeQuickCampaignRunner.CampaignMode.QUICK,
 ) {
     val nodeBaseUrl: String
         get() = nodeTicket.nodeBaseUrl
@@ -18,11 +22,22 @@ fun interface PrototypeCampaignExecutor {
     suspend fun execute(config: PrototypeCampaignConfig): PrototypeQuickCampaignRunner.CampaignResult
 }
 
+/** Atomically orders a completed runner result ahead of a competing user cancellation. */
+internal class PrototypeCampaignResultReadyAuthority(
+    private val capture: (() -> Unit) -> Boolean,
+) : AbstractCoroutineContextElement(Key) {
+    fun claimCompletedOutcome(): Boolean = capture {}
+
+    fun captureCompletedResult(captureResult: () -> Unit): Boolean = capture(captureResult)
+
+    companion object Key : CoroutineContext.Key<PrototypeCampaignResultReadyAuthority>
+}
+
 /**
  * Process-local state for one owned Prototype campaign coroutine.
  *
- * Finished means only that the executor returned a result. Cancelled means only that this owner
- * acknowledged a user cancellation. Neither state claims persistence or canonical partial evidence.
+ * Finished means that the executor returned a persisted result. Cancelled means that a canonical
+ * cancellation result was persisted before this owner published the terminal state.
  */
 sealed interface PrototypeCampaignSession {
     data object Idle : PrototypeCampaignSession
@@ -59,9 +74,12 @@ class PrototypeCampaignJobOwner(
     private class RunToken(
         val config: PrototypeCampaignConfig,
     ) {
+        val cancellationAuthority = PrototypeUserCancellationAuthority()
         lateinit var job: Job
         var cancellationRequested = false
+        var resultReadyToPersist = false
         var result: PrototypeQuickCampaignRunner.CampaignResult? = null
+        var persistedCancellationResult: PrototypeQuickCampaignRunner.CampaignResult? = null
         var failureMessage: String? = null
     }
 
@@ -73,7 +91,21 @@ class PrototypeCampaignJobOwner(
             if (active != null) return false
 
             RunToken(config).also { created ->
-                created.job = scope.launch(start = CoroutineStart.LAZY) {
+                created.job = scope.launch(
+                    context = created.cancellationAuthority +
+                        PrototypeCampaignResultReadyAuthority { captureResult ->
+                            synchronized(lock) {
+                                if (active !== created || created.cancellationRequested) {
+                                    false
+                                } else {
+                                    captureResult()
+                                    created.resultReadyToPersist = true
+                                    true
+                                }
+                            }
+                        },
+                    start = CoroutineStart.LAZY,
+                ) {
                     execute(created)
                 }
                 active = created
@@ -90,7 +122,9 @@ class PrototypeCampaignJobOwner(
         synchronized(lock) {
             val current = active ?: return false
             if (current.cancellationRequested) return false
+            if (current.resultReadyToPersist) return false
             current.cancellationRequested = true
+            check(current.cancellationAuthority.request())
             publish(PrototypeCampaignSession.Cancelling(current.config))
             current.job.cancel(CancellationException(USER_CANCELLED))
         }
@@ -101,6 +135,8 @@ class PrototypeCampaignJobOwner(
         try {
             val result = executor.execute(token.config)
             synchronized(lock) { token.result = result }
+        } catch (persisted: PrototypeCampaignCancellationPersisted) {
+            synchronized(lock) { token.persistedCancellationResult = persisted.result }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -114,10 +150,19 @@ class PrototypeCampaignJobOwner(
         synchronized(lock) {
             if (active !== token) return
             val terminal = when {
-                token.cancellationRequested -> PrototypeCampaignSession.Cancelled(token.config)
                 token.result != null -> PrototypeCampaignSession.Finished(
                     token.config,
                     checkNotNull(token.result),
+                )
+                token.persistedCancellationResult != null ->
+                    PrototypeCampaignSession.Cancelled(token.config)
+                token.failureMessage != null -> PrototypeCampaignSession.Failed(
+                    token.config,
+                    checkNotNull(token.failureMessage),
+                )
+                token.cancellationRequested -> PrototypeCampaignSession.Failed(
+                    token.config,
+                    CANCELLATION_NOT_PERSISTED,
                 )
                 else -> PrototypeCampaignSession.Failed(
                     token.config,
@@ -134,5 +179,7 @@ class PrototypeCampaignJobOwner(
 
     private companion object {
         const val USER_CANCELLED = "prototype campaign cancelled by user"
+        const val CANCELLATION_NOT_PERSISTED =
+            "prototype campaign cancellation evidence was not persisted"
     }
 }

@@ -3,7 +3,9 @@ package com.aneb.probe.prototype
 import com.aneb.probe.net.MonotonicNanosClock
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -16,6 +18,7 @@ import kotlinx.serialization.json.long
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -95,6 +98,166 @@ class PrototypeQuickCampaignRunnerTest {
     }
 
     @Test
+    fun acceptanceCampaignRunsFrozenNinePlanAndReturnsThreeRunConditionSummaries() = runBlocking {
+        val observedRuns = mutableListOf<PrototypeQuickCampaignRunner.RunPlan>()
+        val cooldowns = mutableListOf<Long>()
+        val runner = PrototypeQuickCampaignRunner(
+            runIdFactory = { index -> "run-acceptance-${index.toString().padStart(2, '0')}" },
+            executeRun = { plan ->
+                observedRuns += plan
+                PrototypeQuickCampaignRunner.RunResult.completeForTest(
+                    runIndex = plan.runIndex,
+                    runId = plan.runId,
+                    conditionId = plan.conditionId,
+                    streamResult = testStreamResult(plan.runIndex),
+                )
+            },
+            waitBetweenRuns =(cooldowns::add),
+        )
+
+        val result = runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = "campaign-acceptance-g2c",
+            mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+        )
+
+        assertEquals(
+            listOf(
+                "baseline_v0.1", "slow_v0.1", "unstable_v0.1",
+                "baseline_v0.1", "slow_v0.1", "unstable_v0.1",
+                "baseline_v0.1", "slow_v0.1", "unstable_v0.1",
+            ),
+            observedRuns.map { it.conditionId },
+        )
+        assertEquals((1..9).toList(), observedRuns.map { it.runIndex })
+        assertEquals(List(8) { 1_000L }, cooldowns)
+        observedRuns.forEach { run ->
+            val request = Json.parseToJsonElement(run.requestBody).jsonObject
+            assertEquals("acceptance", request.getValue("campaign_mode").jsonPrimitive.content)
+            assertEquals(run.runIndex, request.getValue("run_index").jsonPrimitive.int)
+            assertEquals(run.conditionId, request.getValue("condition_id").jsonPrimitive.content)
+        }
+
+        assertEquals("acceptance", result.summary.campaignMode)
+        assertEquals(9, result.summary.plannedRuns)
+        assertEquals(9, result.summary.attemptedRuns)
+        assertEquals(9, result.summary.successfulRuns)
+        assertEquals(0, result.summary.failedRuns)
+        assertEquals(0, result.summary.notStartedRuns)
+        assertEquals(1.0, result.summary.successRate, 0.0)
+        assertEquals(PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE, result.summary.status)
+        result.summary.conditionSummaries.forEach { summary ->
+            assertEquals(3, summary.plannedRuns)
+            assertEquals(3, summary.attemptedRuns)
+            assertEquals(3, summary.successfulRuns)
+            assertEquals(PrototypeQuickCampaignRunner.Confidence.HIGH, summary.confidence)
+        }
+    }
+
+    @Test
+    fun acceptanceSummaryUsesSuccessfulRunMediansAndFrozenConfidence() {
+        fun metrics(
+            ttftMs: Double,
+            completionMs: Double,
+            eventRate: Double,
+            stallCount: Int,
+            stallDurationMs: Double,
+            stallFraction: Double,
+        ) = PrototypeQuickCampaignRunner.RunMetrics(
+            ttftMs = ttftMs,
+            completionMs = completionMs,
+            streamSpanMs = completionMs - ttftMs,
+            streamEventRateEps = eventRate,
+            stallThresholdMs = 500.0,
+            stallCount = stallCount,
+            stallDurationMs = stallDurationMs,
+            stallFraction = stallFraction,
+        )
+
+        fun successful(
+            conditionId: String,
+            metrics: PrototypeQuickCampaignRunner.RunMetrics,
+        ) = PrototypeQuickCampaignRunner.SummaryRun(
+            conditionId = conditionId,
+            status = PrototypeQuickCampaignRunner.RunStatus.COMPLETE,
+            taskSuccess = true,
+            scoreEligible = true,
+            metrics = metrics,
+        )
+
+        val runs = listOf(
+            successful("baseline_v0.1", metrics(300.0, 4_000.0, 11.0, 0, 300.0, 0.20)),
+            successful("slow_v0.1", metrics(900.0, 9_000.0, 7.0, 2, 700.0, 0.45)),
+            successful("unstable_v0.1", metrics(550.0, 11_000.0, 7.0, 5, 1_400.0, 0.30)),
+            successful("baseline_v0.1", metrics(100.0, 6_000.0, 10.0, 2, 200.0, 0.30)),
+            successful("slow_v0.1", metrics(500.0, 15_000.0, 8.0, 4, 500.0, 0.35)),
+            successful("unstable_v0.1", metrics(650.0, 7_000.0, 9.0, 3, 1_100.0, 0.50)),
+            successful("baseline_v0.1", metrics(200.0, 5_000.0, 12.0, 1, 100.0, 0.10)),
+            successful("slow_v0.1", metrics(700.0, 12_000.0, 6.0, 3, 900.0, 0.25)),
+            successful("unstable_v0.1", metrics(450.0, 9_000.0, 8.0, 7, 800.0, 0.40)),
+        )
+        val result = PrototypeQuickCampaignRunner.canonicalCampaignSummary(
+            campaignId = "campaign-acceptance-medians",
+            mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+            results = runs,
+        )
+
+        val baseline = result.conditionSummaries.single { it.conditionId == "baseline_v0.1" }
+        assertEquals(PrototypeQuickCampaignRunner.Confidence.HIGH, baseline.confidence)
+        assertEquals(200.0, baseline.medianTtftMs)
+        assertEquals(100.0, baseline.minTtftMs)
+        assertEquals(300.0, baseline.maxTtftMs)
+        assertEquals(5_000.0, baseline.medianCompletionMs)
+        assertEquals(4_000.0, baseline.minCompletionMs)
+        assertEquals(6_000.0, baseline.maxCompletionMs)
+        assertEquals(11.0, baseline.medianStreamEventRateEps)
+        assertEquals(1.0, baseline.medianStallCount)
+        assertEquals(200.0, baseline.medianStallDurationMs)
+        assertEquals(0.20, baseline.medianStallFraction)
+        assertEquals(96, baseline.rpi)
+
+        val slow = result.conditionSummaries.single { it.conditionId == "slow_v0.1" }
+        assertEquals(700.0, slow.medianTtftMs)
+        assertEquals(500.0, slow.minTtftMs)
+        assertEquals(900.0, slow.maxTtftMs)
+        assertEquals(12_000.0, slow.medianCompletionMs)
+        assertEquals(9_000.0, slow.minCompletionMs)
+        assertEquals(15_000.0, slow.maxCompletionMs)
+        assertEquals(7.0, slow.medianStreamEventRateEps)
+        assertEquals(3.0, slow.medianStallCount)
+        assertEquals(700.0, slow.medianStallDurationMs)
+        assertEquals(0.35, slow.medianStallFraction)
+
+        val unstable = result.conditionSummaries.single { it.conditionId == "unstable_v0.1" }
+        assertEquals(550.0, unstable.medianTtftMs)
+        assertEquals(450.0, unstable.minTtftMs)
+        assertEquals(650.0, unstable.maxTtftMs)
+        assertEquals(9_000.0, unstable.medianCompletionMs)
+        assertEquals(7_000.0, unstable.minCompletionMs)
+        assertEquals(11_000.0, unstable.maxCompletionMs)
+        assertEquals(8.0, unstable.medianStreamEventRateEps)
+        assertEquals(5.0, unstable.medianStallCount)
+        assertEquals(1_100.0, unstable.medianStallDurationMs)
+        assertEquals(0.40, unstable.medianStallFraction)
+        result.conditionSummaries.forEach { summary ->
+            assertEquals(3, summary.plannedRuns)
+            assertEquals(PrototypeQuickCampaignRunner.Confidence.HIGH, summary.confidence)
+            assertNotNull(summary.rpi)
+        }
+
+        val quick = PrototypeQuickCampaignRunner.canonicalCampaignSummary(
+            campaignId = "campaign-quick-compat",
+            results = runs.take(3),
+        )
+        assertEquals("quick", quick.campaignMode)
+        assertEquals(3, quick.plannedRuns)
+        quick.conditionSummaries.forEach { summary ->
+            assertEquals(1, summary.plannedRuns)
+            assertEquals(PrototypeQuickCampaignRunner.Confidence.LOW, summary.confidence)
+        }
+    }
+
+    @Test
     fun quickCampaignPublishesRunningAfterClockDomainValidationBeforeEachExecution() = runBlocking {
         val campaignId = "campaign-quick-running-progress"
         val runIds = listOf("run-progress-01", "run-progress-02", "run-progress-03")
@@ -121,7 +284,10 @@ class PrototypeQuickCampaignRunnerTest {
             },
             waitBetweenRuns = { _ -> },
             publishProgress = { progress ->
-                if (progress is PrototypeCampaignProgress.Running) {
+                if (
+                    progress is PrototypeCampaignProgress.Running &&
+                    progress.live.phase == PrototypeRunLivePhase.CONNECTING
+                ) {
                     timeline +=
                         "running:${progress.currentRunRef.runIndex}:" +
                             "${progress.currentRunRef.runId}:" +
@@ -150,6 +316,96 @@ class PrototypeQuickCampaignRunnerTest {
             ),
             timeline,
         )
+    }
+
+    @Test
+    fun quickCampaignMapsValidatedObservedSnapshotsToLiveRunPhasesAndMetrics() = runBlocking {
+        val campaignId = "campaign-quick-live-progress"
+        val runIds = listOf("run-live-01", "run-live-02", "run-live-03")
+        val conditionIds = listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+        val streams = ArrayDeque(
+            conditionIds.mapIndexed { index, conditionId ->
+                completeStream(campaignId, runIds[index], conditionId)
+            },
+        )
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("live progress requires the observed transport path")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                observer.beforeDispatch()
+                return streams.removeFirst().also { stream ->
+                    stream.events.forEach(observer.onRawEvent)
+                }
+            }
+        }
+        val progress = mutableListOf<PrototypeCampaignProgress>()
+
+        PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index -> "live-progress-domain-$index" },
+            waitBetweenRuns = { _ -> },
+            publishProgress = progress::add,
+        ).run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = campaignId,
+        )
+
+        val firstRun = progress.filterIsInstance<PrototypeCampaignProgress.Running>()
+            .filter { running -> running.currentRunRef.runIndex == 1 }
+        assertEquals(123, firstRun.size)
+        assertEquals(PrototypeRunLivePhase.CONNECTING, firstRun[0].live.phase)
+        assertEquals(PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT, firstRun[1].live.phase)
+        assertEquals(0, firstRun[1].live.validatedEventCount)
+        assertNull(firstRun[1].live.ttftMs)
+        assertNull(firstRun[1].live.eventRateEps)
+        assertEquals(PrototypeRunLivePhase.STREAMING, firstRun[2].live.phase)
+        assertEquals(1, firstRun[2].live.validatedEventCount)
+        assertEquals(0.000001, firstRun[2].live.ttftMs)
+        assertNull(firstRun[2].live.eventRateEps)
+        assertEquals(PrototypeRunLivePhase.STREAMING, firstRun[3].live.phase)
+        assertEquals(2, firstRun[3].live.validatedEventCount)
+        assertEquals(1_000_000_000.0, firstRun[3].live.eventRateEps)
+        assertEquals(PrototypeRunLivePhase.FINALIZING, firstRun.last().live.phase)
+        assertEquals(120, firstRun.last().live.validatedEventCount)
+        assertEquals(1_000_000_000.0, firstRun.last().live.eventRateEps)
+        assertFalse(firstRun.last().live.stallObserved)
+    }
+
+    @Test
+    fun liveStallUsesStrictFrozenThresholdForAbsoluteAndNominalBoundaries() {
+        data class Case(
+            val label: String,
+            val nominalIntervalMs: Int,
+            val gapNanos: Long,
+            val expectedStall: Boolean,
+        )
+        val cases = listOf(
+            Case("50ms nominal equality", 50, 500_000_000L, false),
+            Case("50ms nominal plus one", 50, 500_000_001L, true),
+            Case("200ms nominal equality", 200, 800_000_000L, false),
+            Case("200ms nominal plus one", 200, 800_000_001L, true),
+        )
+
+        cases.forEach { case ->
+            val firstContent = 2_000_000L
+            val progress = PrototypeRunLiveSnapshot(
+                t0MonotonicNanos = 1_000_000L,
+                validatedContentTimestampsNanos =
+                    listOf(firstContent, firstContent + case.gapNanos),
+                terminalClientMonotonicNanos = null,
+            ).toPrototypeRunLiveProgress(case.nominalIntervalMs)
+
+            assertEquals(case.label, case.expectedStall, progress.stallObserved)
+            assertEquals(2, progress.validatedEventCount)
+            assertEquals(1.0, progress.ttftMs)
+            assertEquals(1_000_000_000.0 / case.gapNanos.toDouble(), progress.eventRateEps)
+        }
     }
 
     @Test
@@ -1455,6 +1711,10 @@ class PrototypeQuickCampaignRunnerTest {
                 listOf("COMPLETE", "INTERRUPTED", "NOT_STARTED"),
                 result.runs.map { it.status.name },
             )
+            val lifecycleProgress = progress.filter { item ->
+                item !is PrototypeCampaignProgress.Running ||
+                    item.live.phase == PrototypeRunLivePhase.CONNECTING
+            }
             assertEquals(
                 listOf(
                     PrototypeCampaignProgress.Running(
@@ -1476,7 +1736,7 @@ class PrototypeQuickCampaignRunnerTest {
                         3,
                     ),
                 ),
-                progress,
+                lifecycleProgress,
             )
 
             val baselineRun = result.runs[0]
@@ -2625,27 +2885,26 @@ class PrototypeQuickCampaignRunnerTest {
     }
 
     @Test
-    fun outOfOrderInterruptedPrefixPropagatesSequenceErrorInsteadOfReturningPartial() =
+    fun invalidSequenceReturnsCanonicalFailedRunAndNotStartedSuffix() =
         runBlocking {
             val campaignId = "campaign-quick-invalid-prefix"
             val transport = QueuedRawPostTransport(
                 streams = ArrayDeque(
                     listOf(
-                        completeBaselineStream(campaignId, "run-invalid-01"),
                         rawStream(
                             blocks = listOf(
-                                runStartedBlock(campaignId, "run-invalid-02", "slow_v0.1"),
+                                runStartedBlock(campaignId, "run-invalid-01", "baseline_v0.1"),
                                 contentBlock(
                                     campaignId,
-                                    "run-invalid-02",
-                                    "slow_v0.1",
-                                    sequence = 2,
+                                    "run-invalid-01",
+                                    "baseline_v0.1",
+                                    sequence = 1,
                                 ),
                                 contentBlock(
                                     campaignId,
-                                    "run-invalid-02",
-                                    "slow_v0.1",
-                                    sequence = 1,
+                                    "run-invalid-01",
+                                    "baseline_v0.1",
+                                    sequence = 3,
                                 ),
                             ),
                             truncatedTail = false,
@@ -2659,23 +2918,380 @@ class PrototypeQuickCampaignRunnerTest {
                 waitBetweenRuns = { _ -> },
             )
 
-            try {
+            val result = runner.run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                campaignId = campaignId,
+            )
+
+            assertEquals(
+                listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+                result.runs.map { it.status.name },
+            )
+            val failed = result.runs.first()
+            assertRunContract(
+                run = failed,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = 120,
+                eventsReceived = 1,
+                failureReason = "invalid_sequence",
+                terminalReceiptValid = null,
+            )
+            assertNull(failed.metrics)
+            assertEquals(listOf("run_started", "content_event", "run_failed"), evidenceEvents(failed).map(::eventType))
+            assertEquals(
+                buildJsonObject {
+                    put("failure_reason", JsonPrimitive("invalid_sequence"))
+                    put("events_received", JsonPrimitive(1))
+                },
+                evidenceEvents(failed).last().getValue("details"),
+            )
+            assertEquals(2, requireNotNull(failed.partialEvidence).rawEvents.size)
+            assertEquals("PARTIAL", result.summary.status.name)
+            assertEquals(1, result.summary.attemptedRuns)
+            assertEquals(0, result.summary.successfulRuns)
+            assertEquals(1, contractProperty(result.summary, "failedRuns"))
+            assertEquals(2, contractProperty(result.summary, "notStartedRuns"))
+            assertEquals(1, transport.postedBodies.size)
+        }
+
+    @Test
+    fun earlyDoneReturnsCanonicalInvalidSequenceResultInsteadOfDroppingTheCampaign() =
+        runBlocking {
+            val campaignId = "campaign-quick-early-done"
+            val runId = "run-early-done-01"
+            val transport = QueuedRawPostTransport(
+                streams = ArrayDeque(
+                    listOf(
+                        rawStream(
+                            blocks = listOf(
+                                runStartedBlock(campaignId, runId, "baseline_v0.1"),
+                                contentBlock(
+                                    campaignId,
+                                    runId,
+                                    "baseline_v0.1",
+                                    sequence = 1,
+                                ),
+                                doneBlock(
+                                    campaignId,
+                                    runId,
+                                    "baseline_v0.1",
+                                    runIndex = 1,
+                                    campaignMode = PrototypeQuickCampaignRunner.CampaignMode.QUICK,
+                                ),
+                            ),
+                            truncatedTail = false,
+                        ),
+                    ),
+                ),
+            )
+            val runner = PrototypeQuickCampaignRunner(
+                streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+                runIdFactory = { index -> if (index == 1) runId else "run-early-done-0$index" },
+                waitBetweenRuns = { _ -> },
+            )
+
+            val result = runner.run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                campaignId = campaignId,
+            )
+
+            assertEquals(
+                listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+                result.runs.map { it.status.name },
+            )
+            val invalid = result.runs.first()
+            assertEquals(1, invalid.eventsReceived)
+            assertEquals("invalid_sequence", invalid.failureReason)
+            assertNull(invalid.metrics)
+            assertEquals(
+                listOf("run_started", "content_event", "run_failed"),
+                evidenceEvents(invalid).map(::eventType),
+            )
+            assertEquals("PARTIAL", result.summary.status.name)
+        }
+
+    @Test
+    fun userCancellationReturnsCanonicalCancelledRunAndNotStartedSuffix() = runBlocking {
+        val campaignId = "campaign-quick-cancelled-prefix"
+        val runId = "run-cancelled-01"
+        val prefix = rawStream(
+            blocks = listOf(
+                runStartedBlock(campaignId, runId, "baseline_v0.1"),
+                contentBlock(campaignId, runId, "baseline_v0.1", sequence = 1),
+            ),
+            truncatedTail = false,
+        )
+        val cancellation = CancellationException("cancelled by Prototype user")
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        var postCalls = 0
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("observed transport path required")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                postCalls += 1
+                observer.beforeDispatch()
+                prefix.events.forEach(observer.onRawEvent)
+                throw cancellation
+            }
+        }
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+            runIdFactory = { index -> if (index == 1) runId else "run-cancelled-0$index" },
+            waitBetweenRuns = { _ -> },
+        )
+
+        val failure = try {
+            withContext(authority) {
                 runner.run(
                     endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
                     campaignId = campaignId,
                 )
-                org.junit.Assert.fail("out-of-order interrupted prefix returned a partial campaign")
-            } catch (error: IllegalArgumentException) {
-                assertEquals(
-                    "prototype SSE content events must have exact seq 1 through 120",
-                    error.message,
-                )
             }
-            assertEquals(2, transport.postedBodies.size)
+            org.junit.Assert.fail("cancelled campaign result was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeCampaignCancelledWithResult) {
+            error
+        }
+
+        val result = failure.result
+        assertEquals(listOf("CANCELLED", "NOT_STARTED", "NOT_STARTED"), result.runs.map { it.status.name })
+        val cancelled = result.runs.first()
+        assertRunContract(
+            run = cancelled,
+            taskSuccess = false,
+            scoreEligible = false,
+            eventsExpected = 120,
+            eventsReceived = 1,
+            failureReason = "cancelled",
+            terminalReceiptValid = null,
+        )
+        assertEquals(
+            listOf("run_started", "content_event", "run_cancelled"),
+            evidenceEvents(cancelled).map(::eventType),
+        )
+        assertNotNull(cancelled.metrics?.ttftMs)
+        assertNull(cancelled.metrics?.completionMs)
+        assertEquals("CANCELLED", result.summary.status.name)
+        assertEquals(1, result.summary.attemptedRuns)
+        assertEquals(1, result.summary.failedRuns)
+        assertEquals(2, result.summary.notStartedRuns)
+        assertEquals(1, postCalls)
+    }
+
+    @Test
+    fun cancellationWinningBeforeFinalReceiptClaimReturnsCanonicalFullPrefixCancellation() =
+        runBlocking {
+            val campaignId = "campaign-quick-cancelled-at-final-receipt"
+            val runIds = listOf("run-final-cancel-01", "run-final-cancel-02", "run-final-cancel-03")
+            val authority = PrototypeUserCancellationAuthority()
+            var completionClaims = 0
+            val completionAuthority = PrototypeCampaignResultReadyAuthority {
+                completionClaims += 1
+                assertTrue(authority.request())
+                false
+            }
+            val runner = PrototypeQuickCampaignRunner(
+                streamAdapter = PrototypeRunStreamAdapter(
+                    transport = QueuedRawPostTransport(
+                        streams = ArrayDeque(
+                            listOf(
+                                completeStream(campaignId, runIds[0], "baseline_v0.1"),
+                                completeStream(campaignId, runIds[1], "slow_v0.1"),
+                                completeStream(campaignId, runIds[2], "unstable_v0.1"),
+                            ),
+                        ),
+                    ),
+                    clock = IncrementingClock(),
+                ),
+                runIdFactory = { index -> runIds[index - 1] },
+                waitBetweenRuns = { _ -> },
+            )
+
+            val failure = try {
+                withContext(authority + completionAuthority) {
+                    runner.run(
+                        endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                        campaignId = campaignId,
+                    )
+                }
+                org.junit.Assert.fail("final-receipt cancellation result was not emitted")
+                error("unreachable")
+            } catch (error: PrototypeCampaignCancelledWithResult) {
+                error
+            }
+
+            assertEquals(1, completionClaims)
+            assertEquals(
+                listOf("COMPLETE", "COMPLETE", "CANCELLED"),
+                failure.result.runs.map { run -> run.status.name },
+            )
+            val cancelled = failure.result.runs.last()
+            assertEquals(120, cancelled.eventsReceived)
+            assertEquals("cancelled", cancelled.failureReason)
+            assertEquals(
+                listOf("run_started") + List(120) { "content_event" } + "run_cancelled",
+                evidenceEvents(cancelled).map(::eventType),
+            )
+            assertNull(cancelled.metrics?.completionMs)
+            assertEquals("COMPLETE", failure.result.summary.status.name)
         }
 
     @Test
-    fun outOfOrderTruncatedPrefixStillPropagatesSequenceErrorBeforeInterruption() =
+    fun duplicateFinalReceiptFailsBeforeCampaignResultReadyClaim() = runBlocking {
+        val campaignId = "campaign-quick-duplicate-final-receipt"
+        val runIds = listOf("run-duplicate-01", "run-duplicate-02", "run-duplicate-03")
+        val finalStream = completeStream(campaignId, runIds[2], "unstable_v0.1")
+        val duplicateDone = finalStream.events.last()
+        val invalidFinalStream = RawSseStream(
+            events = finalStream.events + duplicateDone,
+            readCount = finalStream.readCount + 1,
+            totalBytes = finalStream.totalBytes + duplicateDone.bytes.size,
+            truncatedTail = finalStream.truncatedTail,
+            eofNanos = finalStream.eofNanos,
+        )
+        var completionClaims = 0
+        val completionAuthority = PrototypeCampaignResultReadyAuthority {
+            completionClaims += 1
+            true
+        }
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(
+                transport = QueuedRawPostTransport(
+                    streams = ArrayDeque(
+                        listOf(
+                            completeStream(campaignId, runIds[0], "baseline_v0.1"),
+                            completeStream(campaignId, runIds[1], "slow_v0.1"),
+                            invalidFinalStream,
+                        ),
+                    ),
+                ),
+                clock = IncrementingClock(),
+            ),
+            runIdFactory = { index -> runIds[index - 1] },
+            waitBetweenRuns = { _ -> },
+        )
+
+        try {
+            withContext(completionAuthority) {
+                runner.run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    campaignId = campaignId,
+                )
+            }
+            org.junit.Assert.fail("duplicate final receipt was accepted")
+        } catch (error: IllegalArgumentException) {
+            assertEquals(
+                "prototype SSE stream must contain exactly one final done event",
+                error.message,
+            )
+        }
+
+        assertEquals(0, completionClaims)
+    }
+
+    @Test
+    fun userCancellationBeforeDispatchReturnsAllNotStartedCanonicalResult() = runBlocking {
+        val campaignId = "campaign-quick-cancelled-before-dispatch"
+        val cancellation = CancellationException("cancelled before Prototype dispatch")
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        var dispatchObserved = false
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("observed transport path required")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                throw cancellation
+            }
+        }
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+            runIdFactory = { index -> "run-cancelled-before-dispatch-0$index" },
+            waitBetweenRuns = { _ -> },
+        )
+
+        val failure = try {
+            withContext(authority) {
+                runner.run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    campaignId = campaignId,
+                )
+            }
+            org.junit.Assert.fail("cancelled campaign result was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeCampaignCancelledWithResult) {
+            error
+        }
+
+        assertFalse(dispatchObserved)
+        val observation = failure.cause as PrototypeRunCancellationObservation
+        assertNull(observation.evidence)
+        assertSame(cancellation, observation.cause)
+        assertEquals(
+            listOf("NOT_STARTED", "NOT_STARTED", "NOT_STARTED"),
+            failure.result.runs.map { it.status.name },
+        )
+        assertEquals("PARTIAL", failure.result.summary.status.name)
+        assertEquals(0, failure.result.summary.attemptedRuns)
+        assertEquals(3, failure.result.summary.notStartedRuns)
+    }
+
+    @Test
+    fun userCancellationDuringCooldownKeepsCompletedPrefixAndNotStartedSuffix() = runBlocking {
+        val campaignId = "campaign-quick-cancelled-during-cooldown"
+        val cancellation = CancellationException("cancelled during Prototype cooldown")
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        val transport = QueuedRawPostTransport(
+            streams = ArrayDeque(
+                listOf(completeBaselineStream(campaignId, "run-cancelled-cooldown-01")),
+            ),
+        )
+        var cooldownCalls = 0
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
+            runIdFactory = { index -> "run-cancelled-cooldown-0$index" },
+            waitBetweenRuns = {
+                cooldownCalls += 1
+                throw cancellation
+            },
+        )
+
+        val failure = try {
+            withContext(authority) {
+                runner.run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    campaignId = campaignId,
+                )
+            }
+            org.junit.Assert.fail("cancelled campaign result was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeCampaignCancelledWithResult) {
+            error
+        }
+
+        assertSame(cancellation, failure.cause)
+        assertEquals(1, cooldownCalls)
+        assertEquals(
+            listOf("COMPLETE", "NOT_STARTED", "NOT_STARTED"),
+            failure.result.runs.map { it.status.name },
+        )
+        assertEquals("PARTIAL", failure.result.summary.status.name)
+        assertEquals(1, failure.result.summary.attemptedRuns)
+        assertEquals(1, failure.result.summary.successfulRuns)
+        assertEquals(2, failure.result.summary.notStartedRuns)
+    }
+
+    @Test
+    fun outOfOrderTruncatedPrefixReturnsInvalidSequenceAfterCompletedRun() =
         runBlocking {
             val campaignId = "campaign-quick-invalid-truncated-prefix"
             val transport = QueuedRawPostTransport(
@@ -2709,20 +3325,71 @@ class PrototypeQuickCampaignRunnerTest {
                 waitBetweenRuns = { _ -> },
             )
 
-            try {
-                runner.run(
-                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
-                    campaignId = campaignId,
-                )
-                org.junit.Assert.fail("out-of-order truncated prefix returned a partial campaign")
-            } catch (error: IllegalArgumentException) {
-                assertEquals(
-                    "prototype SSE content events must have exact seq 1 through 120",
-                    error.message,
-                )
-            }
+            val result = runner.run(
+                endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                campaignId = campaignId,
+            )
+            assertEquals(
+                listOf("COMPLETE", "INVALID_SEQUENCE", "NOT_STARTED"),
+                result.runs.map { it.status.name },
+            )
+            assertEquals("invalid_sequence", result.runs[1].failureReason)
+            assertNull(result.runs[1].metrics)
+            assertEquals(
+                listOf("run_started", "run_failed"),
+                evidenceEvents(result.runs[1]).map(::eventType),
+            )
             assertEquals(2, transport.postedBodies.size)
         }
+
+    @Test
+    fun contentBeforeRunStartedReturnsTypedInvalidSequenceCampaignResult() = runBlocking {
+        val campaignId = "campaign-quick-content-before-run-started"
+        val runId = "run-content-before-start-01"
+        val observedEvents = rawStream(
+            blocks = listOf(
+                contentBlock(campaignId, runId, "baseline_v0.1", sequence = 1),
+                runStartedBlock(campaignId, runId, "baseline_v0.1"),
+                contentBlock(campaignId, runId, "baseline_v0.1", sequence = 2),
+            ),
+            truncatedTail = false,
+        ).events
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("Runner must use the observed Prototype transport path")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                observer.beforeDispatch()
+                observedEvents.forEach(observer.onRawEvent)
+                throw IOException("forced out-of-order transport interruption")
+            }
+        }
+
+        val result = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, RecordingSteppedClock()),
+            runIdFactory = { index -> "run-content-before-start-0$index" },
+            clockDomainIdFactory = { index -> "clock-domain-$index" },
+            waitBetweenRuns = { _ -> },
+        ).run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = campaignId,
+        )
+
+        assertEquals(
+            listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { run -> run.status.name },
+        )
+        assertEquals("invalid_sequence", result.runs.first().failureReason)
+        assertEquals(0, result.runs.first().eventsReceived)
+        assertEquals(
+            listOf("run_started", "run_failed"),
+            evidenceEvents(result.runs.first()).map(::eventType),
+        )
+    }
 
     @Test
     fun thirdQuickRunInterruptionKeepsCampaignCompleteWithoutNotStartedSlots() = runBlocking {

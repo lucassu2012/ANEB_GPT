@@ -2,6 +2,7 @@ package com.aneb.probe.prototype
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -16,12 +17,14 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 
 class PrototypeCampaignJobOwnerTest {
     @Test
     fun notificationRefreshFailureDoesNotPreventStartOrCancellation() = runBlocking {
         val config = PrototypeCampaignPersistenceFixture
             .campaignConfig("campaign-notification-refresh-failure")
+        val cancelledResult = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val runnerEntered = CompletableDeferred<Unit>()
         val cancellationObserved = CompletableDeferred<Unit>()
@@ -51,7 +54,7 @@ class PrototypeCampaignJobOwnerTest {
                     CompletableDeferred<PrototypeQuickCampaignRunner.CampaignResult>().await()
                 } catch (cancelled: CancellationException) {
                     cancellationObserved.complete(Unit)
-                    throw cancelled
+                    throw persistedCancellation(cancelledResult, cancelled)
                 }
             },
             publish = host::onOwnerSession,
@@ -93,7 +96,8 @@ class PrototypeCampaignJobOwnerTest {
                     } catch (_: CancellationException) {
                         firstCancellationObserved.complete(Unit)
                         withContext(NonCancellable) { firstMayExit.await() }
-                        emptyCampaign("campaign-1")
+                        val cancelled = CancellationException("first cancelled")
+                        throw persistedCancellation(emptyCampaign("campaign-1"), cancelled)
                     }
                 } else {
                     secondEntered.complete(Unit)
@@ -288,7 +292,104 @@ class PrototypeCampaignJobOwnerTest {
     }
 
     @Test
-    fun cancellationBeforeResultNeverCallsPersistence(): Unit = runBlocking {
+    fun userCancellationPublishesCancelledOnlyAfterItsCanonicalResultIsSavedOnce(): Unit =
+        runBlocking {
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                PrototypeCampaignPersistenceFixture.CANCELLED_CAMPAIGN_ID,
+            )
+            val cancelledResult = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val states = mutableListOf<PrototypeCampaignSession>()
+            val runnerEntered = CompletableDeferred<Unit>()
+            val saveEntered = CompletableDeferred<Unit>()
+            val allowSave = CompletableDeferred<Unit>()
+            val storeCalls = AtomicInteger()
+            val owner = PrototypeCampaignJobOwner(
+                scope = scope,
+                executor = PersistingPrototypeCampaignExecutor(
+                    delegate = PrototypeCampaignExecutor {
+                        runnerEntered.complete(Unit)
+                        try {
+                            CompletableDeferred<PrototypeQuickCampaignRunner.CampaignResult>().await()
+                        } catch (cancelled: CancellationException) {
+                            throw PrototypeCampaignCancelledWithResult(cancelledResult, cancelled)
+                        }
+                    },
+                    store = PrototypeCampaignResultStore { receivedConfig, receivedResult ->
+                        assertEquals(config, receivedConfig)
+                        assertEquals(cancelledResult, receivedResult)
+                        assertEquals(1, storeCalls.incrementAndGet())
+                        saveEntered.complete(Unit)
+                        allowSave.await()
+                    },
+                    backgroundDispatcher = Dispatchers.Default,
+                ),
+                publish = { state -> synchronized(states) { states += state } },
+            )
+            try {
+                assertTrue(owner.start(config))
+                withTimeout(2_000) { runnerEntered.await() }
+                assertTrue(owner.cancel())
+                withTimeout(2_000) { saveEntered.await() }
+                assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelled } })
+
+                allowSave.complete(Unit)
+                awaitState(states) { it is PrototypeCampaignSession.Cancelled }
+                assertEquals(1, storeCalls.get())
+                assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
+                assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Failed } })
+            } finally {
+                scope.cancel()
+            }
+        }
+
+    @Test
+    fun userCancellationSaveFailurePublishesFailedInsteadOfCancelled(): Unit = runBlocking {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+            "campaign-cancel-save-failure",
+        )
+        val cancelledResult = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val states = mutableListOf<PrototypeCampaignSession>()
+        val runnerEntered = CompletableDeferred<Unit>()
+        val storeCalls = AtomicInteger()
+        val owner = PrototypeCampaignJobOwner(
+            scope = scope,
+            executor = PersistingPrototypeCampaignExecutor(
+                delegate = PrototypeCampaignExecutor {
+                    runnerEntered.complete(Unit)
+                    try {
+                        CompletableDeferred<PrototypeQuickCampaignRunner.CampaignResult>().await()
+                    } catch (cancelled: CancellationException) {
+                        throw PrototypeCampaignCancelledWithResult(cancelledResult, cancelled)
+                    }
+                },
+                store = PrototypeCampaignResultStore { _, result ->
+                    assertEquals(cancelledResult, result)
+                    storeCalls.incrementAndGet()
+                    error("cancelled result save failed")
+                },
+                backgroundDispatcher = Dispatchers.Default,
+            ),
+            publish = { state -> synchronized(states) { states += state } },
+        )
+        try {
+            assertTrue(owner.start(config))
+            withTimeout(2_000) { runnerEntered.await() }
+            assertTrue(owner.cancel())
+            val failed = awaitState(states) { it is PrototypeCampaignSession.Failed }
+                as PrototypeCampaignSession.Failed
+            assertEquals("cancelled result save failed", failed.message)
+            assertEquals(1, storeCalls.get())
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelled } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun cancellationWithoutCanonicalResultNeverCallsPersistenceAndFailsClosed(): Unit = runBlocking {
         val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-cancel-before-result")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val states = mutableListOf<PrototypeCampaignSession>()
@@ -310,23 +411,75 @@ class PrototypeCampaignJobOwnerTest {
             assertTrue(owner.start(config))
             withTimeout(2_000) { runnerEntered.await() }
             assertTrue(owner.cancel())
-            awaitState(states) { it is PrototypeCampaignSession.Cancelled }
+            val failed = awaitState(states) { it is PrototypeCampaignSession.Failed }
+                as PrototypeCampaignSession.Failed
+            assertEquals(
+                "prototype campaign cancellation evidence was not persisted",
+                failed.message,
+            )
             assertEquals(0, storeCalls.get())
             assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelled } })
         } finally {
             scope.cancel()
         }
     }
 
     @Test
-    fun cancellationDuringPersistenceNeverFinishesOrRetriesSave(): Unit = runBlocking {
+    fun cancellationWinningBeforeNonCooperativeCompleteResultNeverSavesMismatchedData(): Unit =
+        runBlocking {
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                "campaign-cancel-before-noncooperative-result",
+            )
+            val completeResult = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val states = mutableListOf<PrototypeCampaignSession>()
+            val runnerEntered = CompletableDeferred<Unit>()
+            val storeCalls = AtomicInteger()
+            val owner = PrototypeCampaignJobOwner(
+                scope = scope,
+                executor = PersistingPrototypeCampaignExecutor(
+                    delegate = PrototypeCampaignExecutor {
+                        runnerEntered.complete(Unit)
+                        try {
+                            CompletableDeferred<Unit>().await()
+                            error("unreachable")
+                        } catch (_: CancellationException) {
+                            completeResult
+                        }
+                    },
+                    store = PrototypeCampaignResultStore { _, _ -> storeCalls.incrementAndGet() },
+                    backgroundDispatcher = Dispatchers.Default,
+                ),
+                publish = { state -> synchronized(states) { states += state } },
+            )
+            try {
+                assertTrue(owner.start(config))
+                withTimeout(2_000) { runnerEntered.await() }
+                assertTrue(owner.cancel())
+                val failed = awaitState(states) { it is PrototypeCampaignSession.Failed }
+                    as PrototypeCampaignSession.Failed
+                assertEquals(
+                    "prototype campaign cancellation evidence was not persisted",
+                    failed.message,
+                )
+                assertEquals(0, storeCalls.get())
+                assertFalse(states.any { it is PrototypeCampaignSession.Finished })
+                assertFalse(states.any { it is PrototypeCampaignSession.Cancelled })
+            } finally {
+                scope.cancel()
+            }
+        }
+
+    @Test
+    fun completedResultPersistenceRejectsLateCancellationAndFinishesOnce(): Unit = runBlocking {
         val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-cancel-during-save")
         val result = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val states = mutableListOf<PrototypeCampaignSession>()
         val saveEntered = CompletableDeferred<Unit>()
-        val saveCancellationObserved = CompletableDeferred<Unit>()
         val saveMayExit = CompletableDeferred<Unit>()
+        val saveCompleted = CompletableDeferred<Unit>()
         val storeCalls = AtomicInteger()
         val owner = PrototypeCampaignJobOwner(
             scope = scope,
@@ -335,13 +488,8 @@ class PrototypeCampaignJobOwnerTest {
                 store = PrototypeCampaignResultStore { _, _ ->
                     storeCalls.incrementAndGet()
                     saveEntered.complete(Unit)
-                    try {
-                        CompletableDeferred<Unit>().await()
-                    } catch (cancelled: CancellationException) {
-                        saveCancellationObserved.complete(Unit)
-                        withContext(NonCancellable) { saveMayExit.await() }
-                        throw cancelled
-                    }
+                    saveMayExit.await()
+                    saveCompleted.complete(Unit)
                 },
                 backgroundDispatcher = Dispatchers.Default,
             ),
@@ -350,17 +498,73 @@ class PrototypeCampaignJobOwnerTest {
         try {
             assertTrue(owner.start(config))
             withTimeout(2_000) { saveEntered.await() }
-            assertTrue(owner.cancel())
-            withTimeout(2_000) { saveCancellationObserved.await() }
+            assertFalse(owner.cancel())
             assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
             saveMayExit.complete(Unit)
-            awaitState(states) { it is PrototypeCampaignSession.Cancelled }
+            withTimeout(2_000) { saveCompleted.await() }
+            val finished = awaitState(states) { it is PrototypeCampaignSession.Finished }
+                as PrototypeCampaignSession.Finished
+            assertEquals(result, finished.result)
             assertEquals(1, storeCalls.get())
-            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelling } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelled } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Failed } })
         } finally {
             scope.cancel()
         }
     }
+
+    @Test
+    fun cancellationAfterRunnerReturnsButBeforePersistenceStartsStillSavesAndFinishes(): Unit =
+        runBlocking {
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                "campaign-cancel-after-runner-return",
+            )
+            val result = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
+            val ownerDispatcher = QueuedDispatcher()
+            val backgroundDispatcher = QueuedDispatcher()
+            val scope = CoroutineScope(SupervisorJob() + ownerDispatcher)
+            val states = mutableListOf<PrototypeCampaignSession>()
+            val progress = mutableListOf<PrototypeCampaignProgress>()
+            val storeCalls = AtomicInteger()
+            val owner = PrototypeCampaignJobOwner(
+                scope = scope,
+                executor = PersistingPrototypeCampaignExecutor(
+                    delegate = PrototypeCampaignExecutor { result },
+                    store = PrototypeCampaignResultStore { receivedConfig, receivedResult ->
+                        assertEquals(config, receivedConfig)
+                        assertEquals(result, receivedResult)
+                        storeCalls.incrementAndGet()
+                    },
+                    backgroundDispatcher = backgroundDispatcher,
+                    publishProgress = { update -> progress += update },
+                ),
+                publish = states::add,
+            )
+
+            try {
+                assertTrue(owner.start(config))
+                assertTrue(ownerDispatcher.runNext())
+                assertTrue(backgroundDispatcher.runNext())
+                assertEquals(0, storeCalls.get())
+
+                assertFalse(owner.cancel())
+                drain(ownerDispatcher, backgroundDispatcher)
+
+                assertEquals(1, storeCalls.get())
+                assertEquals(
+                    listOf(PrototypeCampaignProgress.Saving(config.campaignId, 3, 3)),
+                    progress,
+                )
+                val finished = states.last() as PrototypeCampaignSession.Finished
+                assertEquals(result, finished.result)
+                assertFalse(states.any { it is PrototypeCampaignSession.Cancelling })
+                assertFalse(states.any { it is PrototypeCampaignSession.Cancelled })
+                assertFalse(states.any { it is PrototypeCampaignSession.Failed })
+            } finally {
+                scope.cancel()
+            }
+        }
 
     private suspend fun awaitState(
         states: List<PrototypeCampaignSession>,
@@ -371,6 +575,27 @@ class PrototypeCampaignJobOwnerTest {
             kotlinx.coroutines.yield()
         }
         error("unreachable")
+    }
+
+    private fun drain(vararg dispatchers: QueuedDispatcher) {
+        repeat(20) {
+            if (dispatchers.none(QueuedDispatcher::runNext)) return
+        }
+        error("queued coroutine work did not become idle")
+    }
+
+    private class QueuedDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            tasks.addLast(block)
+        }
+
+        fun runNext(): Boolean {
+            val task = tasks.removeFirstOrNull() ?: return false
+            task.run()
+            return true
+        }
     }
 
     private fun emptyCampaign(campaignId: String) = PrototypeQuickCampaignRunner.CampaignResult(
@@ -387,6 +612,14 @@ class PrototypeCampaignJobOwnerTest {
             status = PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL,
             conditionSummaries = emptyList(),
         ),
+    )
+
+    private fun persistedCancellation(
+        result: PrototypeQuickCampaignRunner.CampaignResult,
+        cancelled: CancellationException,
+    ): PrototypeCampaignCancellationPersisted = PrototypeCampaignCancellationPersisted(
+        result = result,
+        cause = PrototypeCampaignCancelledWithResult(result, cancelled),
     )
 
     private fun ownerTicket(): CompatibleNodeTicket {

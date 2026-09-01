@@ -54,7 +54,39 @@ class PrototypeCampaignResultNavigationTest {
     }
 
     @Test
-    fun `idle active failed and cancelled sessions never route to a result`() {
+    fun `persisted cancelled campaign routes to its partial result`() = runBlocking {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+        try {
+            val repository = PrototypeCampaignRoomRepository(database)
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                PrototypeCampaignPersistenceFixture.CANCELLED_CAMPAIGN_ID,
+            )
+            val result = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+            repository.save(config, result)
+            val navigator = PrototypeCampaignResultNavigator(repository::load)
+
+            val route = navigator.observe(
+                PrototypeCampaignResultRouteState(),
+                PrototypeCampaignSession.Cancelled(config),
+            )
+            val loaded = navigator.load(requireNotNull(route.openCampaignId))
+
+            assertEquals(config.campaignId, route.openCampaignId)
+            assertTrue(loaded is PrototypeCampaignResultLoadState.Ready)
+            loaded as PrototypeCampaignResultLoadState.Ready
+            assertEquals("Cancelled", loaded.presentation.status)
+            assertEquals("1", loaded.presentation.attemptedRuns)
+            assertEquals("1", loaded.presentation.failedRuns)
+            assertEquals("2", loaded.presentation.notStartedRuns)
+            assertEquals("cancelled", loaded.presentation.conditions.first().metricNullReason)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `idle active and failed sessions never route to a result`() {
         val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-result-non-finished")
         val navigator = PrototypeCampaignResultNavigator {
             error("non-Finished sessions must not load a campaign")
@@ -64,7 +96,6 @@ class PrototypeCampaignResultNavigationTest {
             PrototypeCampaignSession.Running(config),
             PrototypeCampaignSession.Cancelling(config),
             PrototypeCampaignSession.Failed(config, "save failed"),
-            PrototypeCampaignSession.Cancelled(config),
         )
 
         sessions.forEach { session ->

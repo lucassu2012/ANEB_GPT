@@ -27,8 +27,11 @@ internal class PrototypeCampaignResultNavigator(
         state: PrototypeCampaignResultRouteState,
         session: PrototypeCampaignSession,
     ): PrototypeCampaignResultRouteState {
-        if (session !is PrototypeCampaignSession.Finished) return state
-        val campaignId = session.config.campaignId
+        val campaignId = when (session) {
+            is PrototypeCampaignSession.Finished -> session.config.campaignId
+            is PrototypeCampaignSession.Cancelled -> session.config.campaignId
+            else -> return state
+        }
         if (state.dismissedFinishedCampaignId == campaignId) return state
         return state.copy(openCampaignId = campaignId)
     }
@@ -48,8 +51,11 @@ internal class PrototypeCampaignResultNavigator(
         state: PrototypeCampaignResultRouteState,
         currentSession: PrototypeCampaignSession,
     ): PrototypeCampaignResultRouteState {
-        val previousFinishedCampaignId =
-            (currentSession as? PrototypeCampaignSession.Finished)?.config?.campaignId
+        val previousFinishedCampaignId = when (currentSession) {
+            is PrototypeCampaignSession.Finished -> currentSession.config.campaignId
+            is PrototypeCampaignSession.Cancelled -> currentSession.config.campaignId
+            else -> null
+        }
         return state.copy(
             openCampaignId = null,
             dismissedFinishedCampaignId =

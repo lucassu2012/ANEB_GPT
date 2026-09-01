@@ -73,6 +73,48 @@ class PrototypeCampaignRoomRepositoryTest {
     }
 
     @Test
+    fun completeAcceptanceRoundTripsNineRunsAndThreeConditionSummariesAcrossReopen(): Unit =
+        runBlocking {
+            val config = roomConfig("campaign-room-v13-acceptance")
+            val result = PrototypeCampaignPersistenceFixture.completeAcceptanceCampaign(config)
+            val expectedConditions = List(3) {
+                listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+            }.flatten()
+            assertEquals("acceptance", result.summary.campaignMode)
+            assertEquals(9, result.summary.plannedRuns)
+            assertEquals((1..9).toList(), result.runs.map { it.runIndex })
+            assertEquals(expectedConditions, result.runs.map { it.conditionId })
+            assertEquals(listOf(122, 122, 122, 122, 122, 122, 122, 122, 122), result.runs.map {
+                it.evidenceEvents.size
+            })
+            assertTrue(result.runs.all { run ->
+                run.evidenceEvents.all { event -> event.string("campaign_mode") == "acceptance" }
+            })
+            result.summary.conditionSummaries.forEach { summary ->
+                assertEquals(3, summary.plannedRuns)
+                assertEquals(3, summary.successfulRuns)
+                assertEquals(PrototypeQuickCampaignRunner.Confidence.HIGH, summary.confidence)
+            }
+
+            val databaseName = uniqueDatabaseName("acceptance")
+            var database = openFreshDatabase(databaseName)
+            var repository = PrototypeCampaignRoomRepository(database)
+            repository.save(config, result)
+            assertTableCounts(database, campaigns = 1L, runs = 9L, events = 1_098L)
+            val firstRead = requireNotNull(repository.load(config.campaignId))
+            assertStoredAuthority(config, result, firstRead)
+            database.close()
+
+            database = openFreshDatabase(databaseName)
+            repository = PrototypeCampaignRoomRepository(database)
+            val reopened = requireNotNull(repository.load(config.campaignId))
+            assertEquals(firstRead, reopened)
+            assertStoredAuthority(config, result, reopened)
+            assertTableCounts(database, campaigns = 1L, runs = 9L, events = 1_098L)
+            database.close()
+        }
+
+    @Test
     fun partialQuickRoundTripsZeroNullAndOrderedNullReasonsWithoutRecomputation(): Unit =
         runBlocking {
             val config = roomConfig(
@@ -122,6 +164,215 @@ class PrototypeCampaignRoomRepositoryTest {
             assertTableCounts(database, campaigns = 1L, runs = 3L, events = 125L)
             database.close()
         }
+
+    @Test
+    fun invalidSequenceRoundTripsCanonicalPrefixAndNullMetricsAcrossReopen(): Unit = runBlocking {
+        val config = roomConfig(PrototypeCampaignPersistenceFixture.INVALID_SEQUENCE_CAMPAIGN_ID)
+        val result = PrototypeCampaignPersistenceFixture.invalidSequenceQuickCampaign(config)
+        assertEquals(
+            listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { it.status.name },
+        )
+        assertEquals(listOf(1, 0, 0), result.runs.map { it.eventsReceived })
+        assertEquals(listOf(3, 0, 0), result.runs.map { it.evidenceEvents.size })
+        assertEquals("invalid_sequence", result.runs.first().failureReason)
+        assertNull(result.runs.first().metrics)
+
+        val databaseName = uniqueDatabaseName("invalid-sequence")
+        var database = openFreshDatabase(databaseName)
+        var repository = PrototypeCampaignRoomRepository(database)
+        repository.save(config, result)
+        assertTableCounts(database, campaigns = 1L, runs = 3L, events = 3L)
+        val firstRead = requireNotNull(repository.load(config.campaignId))
+        assertStoredAuthority(config, result, firstRead)
+        database.close()
+
+        database = openFreshDatabase(databaseName)
+        repository = PrototypeCampaignRoomRepository(database)
+        val reopened = requireNotNull(repository.load(config.campaignId))
+        assertEquals(firstRead, reopened)
+        assertStoredAuthority(config, result, reopened)
+        assertEquals("INVALID_SEQUENCE", reopened.runs.first().status.name)
+        assertNull(reopened.runs.first().metrics)
+        assertTableCounts(database, campaigns = 1L, runs = 3L, events = 3L)
+        database.close()
+    }
+
+    @Test
+    fun cancelledQuickRoundTripsCanonicalPrefixAndNotStartedSuffixAcrossReopen(): Unit =
+        runBlocking {
+            val config = roomConfig(PrototypeCampaignPersistenceFixture.CANCELLED_CAMPAIGN_ID)
+            val result = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+            assertEquals(
+                listOf("CANCELLED", "NOT_STARTED", "NOT_STARTED"),
+                result.runs.map { it.status.name },
+            )
+            assertEquals(listOf(1, 0, 0), result.runs.map { it.eventsReceived })
+            assertEquals(listOf(3, 0, 0), result.runs.map { it.evidenceEvents.size })
+            assertEquals("cancelled", result.runs.first().failureReason)
+            assertNull(result.runs.first().terminalReceiptValid)
+            assertEquals("CANCELLED", result.summary.status.name)
+
+            val databaseName = uniqueDatabaseName("cancelled")
+            var database = openFreshDatabase(databaseName)
+            var repository = PrototypeCampaignRoomRepository(database)
+            repository.save(config, result)
+            assertTableCounts(database, campaigns = 1L, runs = 3L, events = 3L)
+            val firstRead = requireNotNull(repository.load(config.campaignId))
+            assertStoredAuthority(config, result, firstRead)
+            database.close()
+
+            database = openFreshDatabase(databaseName)
+            repository = PrototypeCampaignRoomRepository(database)
+            val reopened = requireNotNull(repository.load(config.campaignId))
+            assertEquals(firstRead, reopened)
+            assertStoredAuthority(config, result, reopened)
+            assertEquals("CANCELLED", reopened.summary.status.name)
+            assertEquals("CANCELLED", reopened.runs.first().status.name)
+            assertTableCounts(database, campaigns = 1L, runs = 3L, events = 3L)
+            database.close()
+        }
+
+    @Test
+    fun cancelledQuickAfterAllContentButBeforeDoneRoundTripsAcrossReopen(): Unit = runBlocking {
+        val config = roomConfig("campaign-room-v13-cancelled-after-content")
+        val result = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(
+            config = config,
+            contentCount = 120,
+        )
+        assertEquals(
+            listOf("CANCELLED", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { run -> run.status.name },
+        )
+        assertEquals(120, result.runs.first().eventsReceived)
+        assertEquals(122, result.runs.first().evidenceEvents.size)
+
+        val databaseName = uniqueDatabaseName("cancelled-after-content")
+        var database = openFreshDatabase(databaseName)
+        PrototypeCampaignRoomRepository(database).save(config, result)
+        assertTableCounts(database, campaigns = 1L, runs = 3L, events = 122L)
+        database.close()
+
+        database = openFreshDatabase(databaseName)
+        val reopened = requireNotNull(
+            PrototypeCampaignRoomRepository(database).load(config.campaignId),
+        )
+        assertStoredAuthority(config, result, reopened)
+        database.close()
+    }
+
+    @Test
+    fun cancelledQuickBeforeFirstFrameRoundTripsNotStartedTopologyAcrossReopen(): Unit =
+        runBlocking {
+            val config = roomConfig("campaign-room-v13-cancelled-before-first-frame")
+            val result = PrototypeCampaignPersistenceFixture
+                .cancelledBeforeFirstFrameQuickCampaign(config)
+            assertEquals(
+                listOf("NOT_STARTED", "NOT_STARTED", "NOT_STARTED"),
+                result.runs.map { run -> run.status.name },
+            )
+            assertEquals("PARTIAL", result.summary.status.name)
+
+            val databaseName = uniqueDatabaseName("cancelled-before-first-frame")
+            var database = openFreshDatabase(databaseName)
+            PrototypeCampaignRoomRepository(database).save(config, result)
+            assertTableCounts(database, campaigns = 1L, runs = 3L, events = 0L)
+            database.close()
+
+            database = openFreshDatabase(databaseName)
+            val reopened = requireNotNull(
+                PrototypeCampaignRoomRepository(database).load(config.campaignId),
+            )
+            assertStoredAuthority(config, result, reopened)
+            database.close()
+        }
+
+    @Test
+    fun cancelledQuickDuringCooldownRoundTripsCompletedPrefixAcrossReopen(): Unit = runBlocking {
+        val config = roomConfig("campaign-room-v13-cancelled-during-cooldown")
+        val result = PrototypeCampaignPersistenceFixture.cancelledDuringCooldownQuickCampaign(config)
+        assertEquals(
+            listOf("COMPLETE", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { run -> run.status.name },
+        )
+        assertEquals("PARTIAL", result.summary.status.name)
+
+        val databaseName = uniqueDatabaseName("cancelled-during-cooldown")
+        var database = openFreshDatabase(databaseName)
+        PrototypeCampaignRoomRepository(database).save(config, result)
+        assertTableCounts(database, campaigns = 1L, runs = 3L, events = 122L)
+        database.close()
+
+        database = openFreshDatabase(databaseName)
+        val reopened = requireNotNull(
+            PrototypeCampaignRoomRepository(database).load(config.campaignId),
+        )
+        assertStoredAuthority(config, result, reopened)
+        database.close()
+    }
+
+    @Test
+    fun campaignTerminalStatusMustBeDerivedFromRunTopologyBeforeAnyRow(): Unit = runBlocking {
+        val cancelledConfig = roomConfig("campaign-room-v13-cancelled-status-forged")
+        val cancelled = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(cancelledConfig)
+        val cancelledAsPartial = cancelled.copy(
+            summary = cancelled.summary.copy(
+                status = PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL,
+            ),
+        )
+        val partialConfig = roomConfig("campaign-room-v13-partial-status-forged")
+        val partial = PrototypeCampaignPersistenceFixture.partialQuickCampaign(partialConfig)
+        val partialAsCancelled = partial.copy(
+            summary = partial.summary.copy(
+                status = PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED,
+            ),
+        )
+        val beforeFirstConfig = roomConfig("campaign-room-v13-before-first-status-forged")
+        val beforeFirst = PrototypeCampaignPersistenceFixture
+            .cancelledBeforeFirstFrameQuickCampaign(beforeFirstConfig)
+            .let { result ->
+                result.copy(
+                    summary = result.summary.copy(
+                        status = PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL,
+                    ),
+                )
+            }
+        val beforeFirstAsCancelled = beforeFirst.copy(
+            summary = beforeFirst.summary.copy(
+                status = PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED,
+            ),
+        )
+        val cooldownConfig = roomConfig("campaign-room-v13-cooldown-status-forged")
+        val cooldown = PrototypeCampaignPersistenceFixture
+            .cancelledDuringCooldownQuickCampaign(cooldownConfig)
+            .let { result ->
+                result.copy(
+                    summary = result.summary.copy(
+                        status = PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL,
+                    ),
+                )
+            }
+        val cooldownAsCancelled = cooldown.copy(
+            summary = cooldown.summary.copy(
+                status = PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED,
+            ),
+        )
+
+        listOf(
+            cancelledConfig to cancelledAsPartial,
+            partialConfig to partialAsCancelled,
+            beforeFirstConfig to beforeFirstAsCancelled,
+            cooldownConfig to cooldownAsCancelled,
+        ).forEachIndexed { index, (config, forged) ->
+            val database = openFreshDatabase(uniqueDatabaseName("terminal-status-$index"))
+            val failure = runCatching {
+                PrototypeCampaignRoomRepository(database).save(config, forged)
+            }.exceptionOrNull()
+            assertEquals(INVALID_GRAPH, failure?.message)
+            assertTableCounts(database, campaigns = 0L, runs = 0L, events = 0L)
+            database.close()
+        }
+    }
 
     @Test
     fun saveRejectsConfigResultCampaignMismatchBeforeAnyRow(): Unit = runBlocking {
