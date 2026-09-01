@@ -20,6 +20,7 @@ type app struct {
 	dataDir                  string
 	prototypeEvidenceRuntime string
 	prototypeResultsRoot     string
+	prototypeOnly            bool
 	prototypeEvidenceMu      sync.Mutex
 	prototypeSleep           prototypeSleepFunc
 	prototypeNow             prototypeNowFunc
@@ -45,7 +46,9 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/v1/download", a.handleDownload)
 	mux.HandleFunc("/api/v1/upload", a.handleUpload)
 	mux.HandleFunc("/api/v1/toolloop", a.handleToolLoop)
-	mux.HandleFunc("/api/v1/results", a.handleResults)
+	if !a.prototypeOnly {
+		mux.HandleFunc("/api/v1/results", a.handleResults)
+	}
 	mux.HandleFunc("/api/v1/serverinfo", a.handleServerInfo)
 	mux.HandleFunc("/api/v1/prototype/capabilities", a.handlePrototypeCapabilities)
 	mux.HandleFunc("/api/v1/prototype/runs", a.handlePrototypeRun)
@@ -133,6 +136,7 @@ func main() {
 		dataDir:                  *dataDir,
 		prototypeEvidenceRuntime: *prototypeEvidenceRuntime,
 		prototypeResultsRoot:     *prototypeResultsRoot,
+		prototypeOnly:            *prototypeOnly,
 		allowInject:              *allowInject,
 		h3Enabled:                *h3Enabled,
 	}

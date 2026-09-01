@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -44,10 +45,11 @@ func TestPrototypeOnlyServerStartsWithoutLegacyProfilesAndServesPrototypeAPI(t *
 	if err != nil {
 		t.Fatalf("create server log: %v", err)
 	}
+	legacyDataDir := filepath.Join(tempDir, "data")
 	cmd := exec.Command(binaryPath,
 		"-prototype-only",
 		"-addr", address,
-		"-data", filepath.Join(tempDir, "data"),
+		"-data", legacyDataDir,
 	)
 	// The working directory deliberately has no ../profiles directory. The
 	// explicit Prototype-only mode must therefore be sufficient by itself.
@@ -107,6 +109,33 @@ func TestPrototypeOnlyServerStartsWithoutLegacyProfilesAndServesPrototypeAPI(t *
 	}
 	if info.Version != serverVersion {
 		t.Fatalf("serverinfo version = %q, want %q", info.Version, serverVersion)
+	}
+
+	legacyResultResponse, err := client.Post(
+		baseURL+"/api/v1/results",
+		"application/json",
+		strings.NewReader(`{"run_id":"prototype-only-must-not-persist",`+contractFields+`}`),
+	)
+	if err != nil {
+		t.Fatalf("post legacy result to prototype-only server: %v", err)
+	}
+	legacyResultBody, err := io.ReadAll(legacyResultResponse.Body)
+	legacyResultResponse.Body.Close()
+	if err != nil {
+		t.Fatalf("read prototype-only legacy result response: %v", err)
+	}
+	if legacyResultResponse.StatusCode != http.StatusNotFound ||
+		legacyResultResponse.Header.Get("X-Aneb-Server") != serverVersion {
+		t.Fatalf(
+			"prototype-only legacy result status/header = %d/%q, want 404/%q (body=%q)",
+			legacyResultResponse.StatusCode,
+			legacyResultResponse.Header.Get("X-Aneb-Server"),
+			serverVersion,
+			legacyResultBody,
+		)
+	}
+	if _, err := os.Stat(filepath.Join(legacyDataDir, "results")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prototype-only legacy result created storage: %v", err)
 	}
 
 	runResponse, err := client.Post(
