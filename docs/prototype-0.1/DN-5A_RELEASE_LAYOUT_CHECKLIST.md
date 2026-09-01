@@ -2,14 +2,23 @@
 
 Status: contract-neutral checklist only. This document does not freeze DN-1 or DN-4 semantics and does not admit a server, APK, or release candidate.
 
-## 1. Allowed machine-contract set
+## 1. Source authority and package machine-contract set
 
-The package may contain these four existing machine-contract files, at these exact relative paths:
+The repository source authority is nested under `contracts/prototype-0.1/`. The package/ZIP layout copies those exact bytes to these four flat paths:
 
-- `contracts/prototype-0.1/capabilities.schema.json`
-- `contracts/prototype-0.1/profile-manifest.json`
-- `contracts/prototype-0.1/run-record.schema.json`
-- `contracts/prototype-0.1/score-policy.json`
+- `contracts/capabilities.schema.json`
+- `contracts/profile-manifest.json`
+- `contracts/run-record.schema.json`
+- `contracts/score-policy.json`
+
+`VERSION.json` names and binds the four package basenames, not the nested source paths. The frozen G0 source-to-package mapping is:
+
+| Source authority | Package/ZIP path |
+| --- | --- |
+| `contracts/prototype-0.1/capabilities.schema.json` | `contracts/capabilities.schema.json` |
+| `contracts/prototype-0.1/profile-manifest.json` | `contracts/profile-manifest.json` |
+| `contracts/prototype-0.1/run-record.schema.json` | `contracts/run-record.schema.json` |
+| `contracts/prototype-0.1/score-policy.json` | `contracts/score-policy.json` |
 
 `contracts/prototype-0.1/README.md` is explanatory documentation, not a fifth machine contract. `evidence-schema.json` is not part of this layout; its presence is a failure, not an invitation to infer a replacement schema.
 
@@ -17,7 +26,7 @@ The package may contain these four existing machine-contract files, at these exa
 
 Run the check against a newly created package directory. Every admitted path must be a regular, non-reparse file below that directory. Paths must be canonical, relative, and free of absolute roots, drive prefixes, UNC prefixes, `..`, empty components, alternate-stream syntax, case-fold collisions, and Unicode-normalized duplicates. The checker must never create a missing package contract or parent directory during verification.
 
-The final candidate must have a deterministic file inventory. The four paths above are the only machine-contract paths admitted by DN-5A; any additional contract-like file is an extra. Other release files remain governed by the separately approved package layout and are not defined here.
+The final candidate must have a deterministic file inventory. The four flat package paths above are the only machine-contract paths admitted by DN-5A; any additional contract-like file is an extra. Other release files remain governed by the separately approved package layout and are not defined here.
 
 ## 3. VERSION and hash binding
 

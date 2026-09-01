@@ -33,11 +33,61 @@ function Assert-AnEbDirectory {
     return Get-Item -LiteralPath $Path -Force -ErrorAction Stop
 }
 
+function Assert-AnEbPathUnderRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $rootFull = (Get-AnEbFullPath -Path $Root).TrimEnd('\')
+    $pathFull = Get-AnEbFullPath -Path $Path
+    if ([string]::Equals($rootFull, $pathFull.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $pathFull
+    }
+    $prefix = $rootFull + '\'
+    if (-not $pathFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "PATH_ESCAPE: $Path"
+    }
+    return $pathFull
+}
+
+function Assert-AnEbTreeNoReparse {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $rootFull = Get-AnEbFullPath -Path $Root
+    Assert-AnEbDirectory -Path $rootFull | Out-Null
+    foreach ($item in @(Get-ChildItem -LiteralPath $rootFull -Recurse -Force -ErrorAction Stop)) {
+        Assert-AnEbPathUnderRoot -Root $rootFull -Path $item.FullName | Out-Null
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "PATH_REPARSE: $($item.FullName)"
+        }
+    }
+}
+
 function Assert-AnEbExistingParents {
     param([Parameter(Mandatory = $true)][string]$Path)
     $parent = Split-Path -Parent (Get-AnEbFullPath -Path $Path)
     while ($parent) {
         Assert-AnEbDirectory -Path $parent | Out-Null
+        $next = Split-Path -Parent $parent
+        if ($next -eq $parent) {
+            break
+        }
+        $parent = $next
+    }
+}
+
+function Assert-AnEbNoReparseAncestors {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $full = Get-AnEbFullPath -Path $Path
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "PATH_REPARSE_ANCESTOR: $full"
+    }
+    $parent = Split-Path -Parent $full
+    while ($parent) {
+        $parentItem = Get-Item -LiteralPath $parent -Force -ErrorAction Stop
+        if (($parentItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "PATH_REPARSE_ANCESTOR: $parent"
+        }
         $next = Split-Path -Parent $parent
         if ($next -eq $parent) {
             break

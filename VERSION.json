@@ -12,10 +12,10 @@
     "score-policy.json"
   ],
   "contract_paths": {
-    "profile-manifest.json": "contracts/prototype-0.1/profile-manifest.json",
-    "capabilities.schema.json": "contracts/prototype-0.1/capabilities.schema.json",
-    "run-record.schema.json": "contracts/prototype-0.1/run-record.schema.json",
-    "score-policy.json": "contracts/prototype-0.1/score-policy.json"
+    "profile-manifest.json": "contracts/profile-manifest.json",
+    "capabilities.schema.json": "contracts/capabilities.schema.json",
+    "run-record.schema.json": "contracts/run-record.schema.json",
+    "score-policy.json": "contracts/score-policy.json"
   },
   "contract_sizes": {
     "profile-manifest.json": 3797,

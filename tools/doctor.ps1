@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
-    [ValidateRange(1, 65535)][int]$Port = 18088
+    [ValidateRange(1, 65535)][int]$Port = 18088,
+    [string]$AdmissionReceiptPath = '',
+    [string]$ExpectedAdmissionReceiptSha256 = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,7 +23,11 @@ try {
     Assert-AnEbDirectory -Path $rootFull | Out-Null
 
     $verify = Join-Path $PSScriptRoot 'verify-package.ps1'
-    $verifyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $verify -Root $rootFull)
+    $verifyArguments = @('-Root', $rootFull)
+    if (-not [string]::IsNullOrWhiteSpace($AdmissionReceiptPath)) {
+        $verifyArguments += @('-AdmissionReceiptPath', $AdmissionReceiptPath, '-ExpectedAdmissionReceiptSha256', $ExpectedAdmissionReceiptSha256)
+    }
+    $verifyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $verify @verifyArguments)
     $verifyCode = $LASTEXITCODE
     $verifyOutput | ForEach-Object { Write-Output $_ }
     if ($verifyCode -ne 0) {

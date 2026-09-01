@@ -12,7 +12,11 @@
 
 ## 当前骨架状态
 
-server/aneb-server.exe 与 android/aneb-prototype-0.1.apk 尚未进入本树。四个 G0 machine contracts 已绑定到 VERSION.json 的 canonical path/size/SHA；`evidence-schema.json` 不是本版本合同文件。不要把源代码、debug APK 或历史目录当作发布输入。启动器、doctor、包校验器和机械七文件 finalizer 已可在 Windows PowerShell 上独立验证；这不代表 G3/G4 通过。
+server/aneb-server.exe 与 android/aneb-prototype-0.1.apk 尚未进入本树。四个 G0 machine contracts 的源权威仍在 `contracts/prototype-0.1/`，但发布包按冻结的 06 版式把相同字节放在扁平的 `contracts/` 下；VERSION.json 绑定扁平路径、大小和 SHA。`evidence-schema.json` 不是本版本合同文件。不要把源代码、debug APK 或历史目录当作发布输入。启动器、doctor、包校验器和机械七文件 finalizer 已可在 Windows PowerShell 上独立验证；这不代表 G3/G4 通过。
+
+严格 `RELEASE_CANDIDATE` 校验还需要包外、不可由调用者自证的 artifact-admission 与执行面信任根，以及由发布流程固定的 server/APK 版本、源码提交、完整 SHA-256 和 APK signer 证书绑定。在 #15/#16 的真实制品、builder-derived signer/provenance 与包外固定收据到位前，校验器对所有 candidate 明确返回 `P007_ARTIFACT_ADMISSION_TRUST_ROOT_REQUIRED`；不会把伪 PE、伪 APK、任意 signer 字符串或调用者自生成的 receipt+pin 当成正式成功。包内 VERSION、manifest、SHA256SUMS 或单独的 receipt 不是独立信任根；若包与 verifier/VERSION 被协同修改，仍必须由包外签名或固定哈希发布收据在更高发布门（如 G3/G6）阻断，当前骨架不宣称能单独完成该认证。
+
+finalizer 在真实 G0 语义校验器和制品 admission 尚未交付前只会生成 `NON_RC_ASSEMBLED_UNVERIFIED`，不会写入或宣传 `publication_status=verified`。
 
 ## 失败处理
 
