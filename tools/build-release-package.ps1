@@ -365,8 +365,19 @@ function Assert-AnEbEvidenceRuntimeCharacterization {
         $buildInfo.source_commit -cne $ExpectedSourceCommit) {
         throw 'EVIDENCE_SOURCE_PROVENANCE_MISMATCH'
     }
-    $invalidOutput = @(& $ExecutablePath verify-bundle --bundle $InvalidBundlePath 2>&1)
-    if ($LASTEXITCODE -eq 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell promotes native stderr to a non-terminating ErrorRecord.
+        # The invalid fixture is expected to write a diagnostic and return non-zero,
+        # so observe that exit code before restoring the script's fail-fast policy.
+        $ErrorActionPreference = 'Continue'
+        $invalidOutput = @(& $ExecutablePath verify-bundle --bundle $InvalidBundlePath 2>&1)
+        $invalidExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($invalidExit -eq 0) {
         throw 'EVIDENCE_RUNTIME_INVALID_BUNDLE_ACCEPTED'
     }
     return [string]$buildInfo.source_commit

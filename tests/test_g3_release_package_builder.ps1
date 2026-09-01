@@ -186,6 +186,7 @@ public static class AnebEvidenceCharacterizationStub {
                 Console.WriteLine("ANEB_EVIDENCE_BUILD_INFO {\"schema_version\":\"aneb-prototype-evidence-build-0.1\",\"source_commit\":\"__SOURCE_COMMIT__\"}");
                 return 0;
             }
+            Console.Error.WriteLine("EXPECTED_INVALID_BUNDLE_REJECTED");
             return 1;
         }
         return 2;
@@ -666,6 +667,61 @@ try {
     )
     Assert-AnEbBuilderTest -Condition ($staleServerResult.ExitCode -ne 0 -and $staleServerResult.Output -match 'SERVER_SOURCE_PROVENANCE_MISMATCH') -Message 'builder rejects a server whose extracted Go source provenance is stale'
     Assert-AnEbBuilderTest -Condition (-not (Test-Path -LiteralPath $staleServerOutput) -and -not (Test-Path -LiteralPath $staleServerAdmission)) -Message 'stale server provenance creates no package or admission receipt'
+
+    $acceptsInvalidEvidenceRoot = Join-Path $tempRoot 'artifacts\evidence-accepts-invalid'
+    New-Item -ItemType Directory -Path (Join-Path $acceptsInvalidEvidenceRoot '_internal\jsonschema.dist-info') -Force | Out-Null
+    $acceptsInvalidEvidenceExecutable = Join-Path $acceptsInvalidEvidenceRoot 'aneb-evidence.exe'
+    $acceptsInvalidEvidenceSource = @'
+using System;
+using System.IO;
+public static class AnebEvidenceAcceptsInvalidStub {
+    public static int Main(string[] args) {
+        if (args.Length == 2 && args[0] == "build-info" && args[1] == "--json") {
+            Console.WriteLine("{\"schema_version\":\"aneb-prototype-evidence-build-0.1\",\"source_commit\":\"__SOURCE_COMMIT__\"}");
+            return 0;
+        }
+        if (args.Length == 3 && args[0] == "verify-bundle" && args[1] == "--bundle") {
+            if (Directory.Exists(args[2]) && File.Exists(Path.Combine(args[2], "valid.marker"))) {
+                Console.WriteLine("G0_VERIFY_OK");
+                Console.WriteLine("ANEB_EVIDENCE_BUILD_INFO {\"schema_version\":\"aneb-prototype-evidence-build-0.1\",\"source_commit\":\"__SOURCE_COMMIT__\"}");
+                return 0;
+            }
+            Console.Error.WriteLine("INVALID_BUNDLE_WAS_ACCEPTED");
+            return 0;
+        }
+        return 2;
+    }
+}
+'@
+    $acceptsInvalidEvidenceSource = $acceptsInvalidEvidenceSource.Replace('__SOURCE_COMMIT__', $sourceCommit)
+    Add-Type -TypeDefinition $acceptsInvalidEvidenceSource -Language CSharp -OutputAssembly $acceptsInvalidEvidenceExecutable -OutputType ConsoleApplication
+    Write-AnEbBuilderUtf8 -Path (Join-Path $acceptsInvalidEvidenceRoot '_internal\runtime.dat') -Text "runtime`n"
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $acceptsInvalidEvidenceRoot '_internal\jsonschema.dist-info\REQUESTED'),
+        [byte[]]::new(0)
+    )
+    $acceptsInvalidBuildReceiptPath = Join-Path $tempRoot 'artifact-build-receipt-evidence-accepts-invalid.json'
+    $acceptsInvalidBuildReceipt = [System.IO.File]::ReadAllText($artifactBuildReceipt) | ConvertFrom-Json
+    $acceptsInvalidBuildReceipt.evidence_runtime_sha256 = (Get-FileHash -LiteralPath $acceptsInvalidEvidenceExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+    $acceptsInvalidBuildReceipt.evidence_runtime_tree_sha256 = Get-AnEbBuilderTreeSha256 -Root $acceptsInvalidEvidenceRoot
+    Write-AnEbBuilderUtf8 -Path $acceptsInvalidBuildReceiptPath -Text (($acceptsInvalidBuildReceipt | ConvertTo-Json -Compress -Depth 8) + "`n")
+    $acceptsInvalidBuildReceiptSha256 = (Get-FileHash -LiteralPath $acceptsInvalidBuildReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $acceptsInvalidOutput = Join-Path $tempRoot 'package-evidence-accepts-invalid'
+    $acceptsInvalidZip = Join-Path $tempRoot 'zips\ANEB-Prototype-0.1-rc.evidence-accepts-invalid-windows-x64.zip'
+    $acceptsInvalidAdmission = Join-Path $tempRoot 'receipts\artifact-admission-evidence-accepts-invalid.json'
+    $acceptsInvalidResult = Invoke-AnEbBuilderTool -Arguments @(
+        '-SourceRoot', $source, '-SourceCommit', $sourceCommit,
+        '-ServerPath', $artifacts.Server, '-AndroidApkPath', $artifacts.Apk,
+        '-EvidenceDirectory', $acceptsInvalidEvidenceRoot, '-ApkSignerPath', $artifacts.ApkSigner,
+        '-ArtifactBuildReceiptPath', $acceptsInvalidBuildReceiptPath,
+        '-ExpectedArtifactBuildReceiptSha256', $acceptsInvalidBuildReceiptSha256,
+        '-OutputDirectory', $acceptsInvalidOutput, '-OutputZipPath', $acceptsInvalidZip,
+        '-AdmissionReceiptPath', $acceptsInvalidAdmission,
+        '-ReleaseCandidate', 'rc.evidence-accepts-invalid', '-BuiltAtUtc', '2026-09-01T00:00:00Z',
+        '-ServerVersion', 'aneb-server/0.1.0', '-AndroidVersionName', '0.2.0', '-AndroidVersionCode', '20'
+    )
+    Assert-AnEbBuilderTest -Condition ($acceptsInvalidResult.ExitCode -ne 0 -and $acceptsInvalidResult.Output -match 'EVIDENCE_RUNTIME_INVALID_BUNDLE_ACCEPTED') -Message 'builder rejects an evidence verifier that writes an invalid diagnostic but exits zero'
+    Assert-AnEbBuilderTest -Condition (-not (Test-Path -LiteralPath $acceptsInvalidOutput) -and -not (Test-Path -LiteralPath $acceptsInvalidZip) -and -not (Test-Path -LiteralPath $acceptsInvalidAdmission)) -Message 'invalid-bundle acceptance creates no package, ZIP, or admission receipt'
 
     $staleEvidenceRoot = Join-Path $tempRoot 'artifacts\evidence-stale-source'
     New-Item -ItemType Directory -Path (Join-Path $staleEvidenceRoot '_internal') -Force | Out-Null
