@@ -4,6 +4,8 @@ import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.MonotonicNanosClock
 import com.aneb.probe.net.RawSseEvent
 import com.aneb.probe.net.RawSseStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -25,13 +27,16 @@ internal fun completeStream(
     campaignId: String,
     runId: String,
     conditionId: String,
+    runIndex: Int = evidenceCondition(conditionId).runIndex,
+    campaignMode: PrototypeQuickCampaignRunner.CampaignMode =
+        PrototypeQuickCampaignRunner.CampaignMode.QUICK,
 ): RawSseStream {
     val blocks = buildList {
         add(runStartedBlock(campaignId, runId, conditionId))
         repeat(120) { index ->
             add(contentBlock(campaignId, runId, conditionId, index + 1))
         }
-        add(doneBlock(campaignId, runId, conditionId))
+        add(doneBlock(campaignId, runId, conditionId, runIndex, campaignMode))
     }
     return rawStream(blocks, truncatedTail = false)
 }
@@ -113,7 +118,14 @@ internal fun contentBlock(
     }
 }
 
-internal fun doneBlock(campaignId: String, runId: String, conditionId: String): String {
+internal fun doneBlock(
+    campaignId: String,
+    runId: String,
+    conditionId: String,
+    runIndex: Int = evidenceCondition(conditionId).runIndex,
+    campaignMode: PrototypeQuickCampaignRunner.CampaignMode =
+        PrototypeQuickCampaignRunner.CampaignMode.QUICK,
+): String {
     val condition = evidenceCondition(conditionId)
     var fixture = readFixture("prototype_option_a_done_frame.sse")
         .replace("\"campaign-fixture-01\"", "\"$campaignId\"")
@@ -130,7 +142,10 @@ internal fun doneBlock(campaignId: String, runId: String, conditionId: String): 
     fixture = fixture.replace(nominalMember, "\"nominal_interval_ms\":${condition.nominalIntervalMs}")
     val indexMember = "\"run_index\":1"
     require(fixture.split(indexMember).size - 1 == 1)
-    fixture = fixture.replace(indexMember, "\"run_index\":${condition.runIndex}")
+    fixture = fixture.replace(indexMember, "\"run_index\":$runIndex")
+    val modeMember = "\"campaign_mode\":\"quick\""
+    require(fixture.split(modeMember).size - 1 == 1)
+    fixture = fixture.replace(modeMember, "\"campaign_mode\":\"${campaignMode.wireValue}\"")
     return fixture.removeSuffix("\n\n")
 }
 
@@ -240,6 +255,8 @@ internal object PrototypeCampaignPersistenceFixture {
     const val RUN_URL = "http://127.0.0.1:18088/api/v1/prototype/runs"
     const val COMPLETE_CAMPAIGN_ID = "campaign-room-v13-complete"
     const val PARTIAL_CAMPAIGN_ID = "campaign-room-v13-partial"
+    const val INVALID_SEQUENCE_CAMPAIGN_ID = "campaign-room-v13-invalid-sequence"
+    const val CANCELLED_CAMPAIGN_ID = "campaign-room-v13-cancelled"
 
     fun campaignConfig(
         campaignId: String,
@@ -275,6 +292,114 @@ internal object PrototypeCampaignPersistenceFixture {
         return result
     }
 
+    suspend fun completeAcceptanceCampaign(
+        config: PrototypeCampaignConfig,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        val conditions = List(3) {
+            listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+        }.flatten()
+        val runIds = runIds(config.campaignId, count = conditions.size)
+        val streams = conditions.mapIndexed { index, conditionId ->
+            val runIndex = index + 1
+            TicketBoundStream(
+                campaignId = config.campaignId,
+                runId = runIds[index],
+                conditionId = conditionId,
+                runIndex = runIndex,
+                campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                stream = completeStream(
+                    campaignId = config.campaignId,
+                    runId = runIds[index],
+                    conditionId = conditionId,
+                    runIndex = runIndex,
+                    campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                ),
+            )
+        }
+        return runner(
+            config = config,
+            streams = streams,
+            runIds = runIds,
+            clockSamples = completeClockSegments(
+                firstT0 = PERSISTENCE_LARGE_MONOTONIC_NS,
+                conditionIds = conditions,
+            ).flatten(),
+        ).run(
+            endpoint = config.nodeTicket.runUrl,
+            campaignId = config.campaignId,
+            mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+        )
+    }
+
+    suspend fun invalidSequenceAcceptanceCampaign(
+        config: PrototypeCampaignConfig,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        val conditions = List(3) {
+            listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
+        }.flatten()
+        val runIds = runIds(config.campaignId, count = conditions.size)
+        val streams = conditions.take(7).mapIndexed { index, conditionId ->
+            val runIndex = index + 1
+            TicketBoundStream(
+                campaignId = config.campaignId,
+                runId = runIds[index],
+                conditionId = conditionId,
+                runIndex = runIndex,
+                campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                stream = completeStream(
+                    campaignId = config.campaignId,
+                    runId = runIds[index],
+                    conditionId = conditionId,
+                    runIndex = runIndex,
+                    campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                ),
+            )
+        } + TicketBoundStream(
+            campaignId = config.campaignId,
+            runId = runIds[7],
+            conditionId = conditions[7],
+            runIndex = 8,
+            campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+            stream = rawStream(
+                blocks = listOf(
+                    runStartedBlock(config.campaignId, runIds[7], conditions[7]),
+                    contentBlock(config.campaignId, runIds[7], conditions[7], sequence = 1),
+                    doneBlock(
+                        config.campaignId,
+                        runIds[7],
+                        conditions[7],
+                        runIndex = 8,
+                        campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+                    ),
+                ),
+                truncatedTail = false,
+            ),
+        )
+        val firstT0 = PERSISTENCE_LARGE_MONOTONIC_NS
+        val run8T0 = firstT0 + 7 * 100_000_000_000L
+        val run8Condition = evidenceCondition(conditions[7])
+        val run8FirstOffsetMs = plannedOffsetMs(conditions[7], 1)
+        val clockSamples = completeClockSegments(
+            firstT0 = firstT0,
+            conditionIds = conditions.take(7),
+        ).flatten() + listOf(
+            run8T0,
+            run8T0 + run8FirstOffsetMs * 1_000_000L,
+            run8T0 + (run8FirstOffsetMs + run8Condition.nominalIntervalMs) * 1_000_000L,
+            run8T0 + (run8FirstOffsetMs + 2 * run8Condition.nominalIntervalMs) * 1_000_000L,
+        )
+        return runner(
+            config = config,
+            streams = streams,
+            runIds = runIds,
+            clockSamples = clockSamples,
+        ).run(
+            endpoint = config.nodeTicket.runUrl,
+            campaignId = config.campaignId,
+            mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+        )
+    }
+
     suspend fun partialQuickCampaign(
         config: PrototypeCampaignConfig,
     ): PrototypeQuickCampaignRunner.CampaignResult {
@@ -307,6 +432,198 @@ internal object PrototypeCampaignPersistenceFixture {
         ).run(config.nodeTicket.runUrl, config.campaignId)
     }
 
+    suspend fun invalidSequenceQuickCampaign(
+        config: PrototypeCampaignConfig,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        val runIds = runIds(config.campaignId)
+        val t0 = PERSISTENCE_LARGE_MONOTONIC_NS
+        return runner(
+            config = config,
+            streams = listOf(
+                TicketBoundStream(
+                    campaignId = config.campaignId,
+                    runId = runIds[0],
+                    conditionId = "baseline_v0.1",
+                    stream = rawStream(
+                        blocks = listOf(
+                            runStartedBlock(config.campaignId, runIds[0], "baseline_v0.1"),
+                            contentBlock(
+                                config.campaignId,
+                                runIds[0],
+                                "baseline_v0.1",
+                                sequence = 1,
+                            ),
+                            doneBlock(
+                                config.campaignId,
+                                runIds[0],
+                                "baseline_v0.1",
+                                runIndex = 1,
+                                campaignMode = PrototypeQuickCampaignRunner.CampaignMode.QUICK,
+                            ),
+                        ),
+                        truncatedTail = false,
+                    ),
+                ),
+            ),
+            runIds = runIds,
+            clockSamples = listOf(
+                t0,
+                t0 + 50_000_000L,
+                t0 + 100_000_000L,
+                t0 + 150_000_000L,
+            ),
+        ).run(config.nodeTicket.runUrl, config.campaignId)
+    }
+
+    suspend fun cancelledQuickCampaign(
+        config: PrototypeCampaignConfig,
+        contentCount: Int = 1,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        require(contentCount in 0..120)
+        val runIds = runIds(config.campaignId)
+        val firstRunId = runIds.first()
+        val prefix = rawStream(
+            blocks = buildList {
+                add(
+                runStartedBlock(config.campaignId, firstRunId, "baseline_v0.1"),
+                )
+                (1..contentCount).forEach { sequence ->
+                    add(
+                        contentBlock(
+                            campaignId = config.campaignId,
+                            runId = firstRunId,
+                            conditionId = "baseline_v0.1",
+                            sequence = sequence,
+                        ),
+                    )
+                }
+            },
+            truncatedTail = false,
+        )
+        val authority = PrototypeUserCancellationAuthority()
+        val requestJson = Json { ignoreUnknownKeys = false }
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("cancelled persistence fixture requires observed transport")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                require(url == config.nodeTicket.runUrl)
+                val request = requestJson.parseToJsonElement(requestBody).jsonObject
+                require(request.getValue("campaign_id").jsonPrimitive.content == config.campaignId)
+                require(request.getValue("run_id").jsonPrimitive.content == firstRunId)
+                require(request.getValue("condition_id").jsonPrimitive.content == "baseline_v0.1")
+                observer.beforeDispatch()
+                prefix.events.forEach(observer.onRawEvent)
+                check(authority.request())
+                throw CancellationException("cancelled persistence fixture")
+            }
+        }
+        val clockSamples = ArrayDeque(
+            List(contentCount + 2) { index ->
+                PERSISTENCE_LARGE_MONOTONIC_NS + index * 50_000_000L
+            },
+        )
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(
+                transport = transport,
+                clock = object : MonotonicNanosClock {
+                    override fun now(): Long = clockSamples.removeFirstOrNull()
+                        ?: error("cancelled persistence fixture clock exhausted")
+                },
+            ),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index -> "room-v13-cancel-clock-domain-$index" },
+            waitBetweenRuns = {},
+        )
+        return try {
+            withContext(authority) {
+                runner.run(config.nodeTicket.runUrl, config.campaignId)
+            }
+            error("cancelled persistence fixture returned without its typed result carrier")
+        } catch (cancelled: PrototypeCampaignCancelledWithResult) {
+            cancelled.result
+        }
+    }
+
+    suspend fun cancelledBeforeFirstFrameQuickCampaign(
+        config: PrototypeCampaignConfig,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        val authority = PrototypeUserCancellationAuthority()
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("pre-frame cancellation fixture requires observed transport")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                require(url == config.nodeTicket.runUrl)
+                observer.beforeDispatch()
+                check(authority.request())
+                throw CancellationException("cancelled before the first Prototype frame")
+            }
+        }
+        val clockSamples = ArrayDeque(listOf(PERSISTENCE_LARGE_MONOTONIC_NS))
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(
+                transport = transport,
+                clock = object : MonotonicNanosClock {
+                    override fun now(): Long = clockSamples.removeFirstOrNull()
+                        ?: error("pre-frame cancellation fixture clock exhausted")
+                },
+            ),
+            runIdFactory = { index -> "${config.campaignId}-run-$index" },
+            clockDomainIdFactory = { index -> "room-v13-pre-frame-clock-domain-$index" },
+            waitBetweenRuns = {},
+        )
+        return try {
+            withContext(authority) {
+                runner.run(config.nodeTicket.runUrl, config.campaignId)
+            }
+            error("pre-frame cancellation fixture returned without its typed result carrier")
+        } catch (cancelled: PrototypeCampaignCancelledWithResult) {
+            cancelled.result
+        }
+    }
+
+    suspend fun cancelledDuringCooldownQuickCampaign(
+        config: PrototypeCampaignConfig,
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        val authority = PrototypeUserCancellationAuthority()
+        val runIds = runIds(config.campaignId)
+        val runner = runner(
+            config = config,
+            streams = listOf(
+                TicketBoundStream(
+                    campaignId = config.campaignId,
+                    runId = runIds[0],
+                    conditionId = "baseline_v0.1",
+                    stream = completeBaselineStream(config.campaignId, runIds[0]),
+                ),
+            ),
+            runIds = runIds,
+            clockSamples = completeClockSegments(PERSISTENCE_LARGE_MONOTONIC_NS).first(),
+            waitBetweenRuns = { delayMs ->
+                require(delayMs == 1_000L)
+                check(authority.request())
+                throw CancellationException("cancelled during Prototype cooldown")
+            },
+        )
+        return try {
+            withContext(authority) {
+                runner.run(config.nodeTicket.runUrl, config.campaignId)
+            }
+            error("cooldown cancellation fixture returned without its typed result carrier")
+        } catch (cancelled: PrototypeCampaignCancelledWithResult) {
+            cancelled.result
+        }
+    }
+
     fun formalCapabilityBody(): String = """
         {
           "terminal_receipt_version" : "prototype-terminal-receipt-0.1",
@@ -335,6 +652,7 @@ internal object PrototypeCampaignPersistenceFixture {
         streams: List<TicketBoundStream>,
         runIds: List<String>,
         clockSamples: List<Long>,
+        waitBetweenRuns: suspend (Long) -> Unit = {},
     ): PrototypeQuickCampaignRunner {
         requireTicketAuthority(config.nodeTicket)
         val queue = ArrayDeque(clockSamples)
@@ -352,12 +670,19 @@ internal object PrototypeCampaignPersistenceFixture {
             ),
             runIdFactory = { index -> runIds[index - 1] },
             clockDomainIdFactory = { index -> "room-v13-clock-domain-$index" },
-            waitBetweenRuns = {},
+            waitBetweenRuns = waitBetweenRuns,
         )
     }
 
-    private fun completeClockSegments(firstT0: Long): List<List<Long>> =
-        listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1").mapIndexed {
+    private fun completeClockSegments(
+        firstT0: Long,
+        conditionIds: List<String> = listOf(
+            "baseline_v0.1",
+            "slow_v0.1",
+            "unstable_v0.1",
+        ),
+    ): List<List<Long>> =
+        conditionIds.mapIndexed {
                 index,
                 conditionId,
             ->
@@ -379,13 +704,16 @@ internal object PrototypeCampaignPersistenceFixture {
             }
         }
 
-    private fun runIds(campaignId: String): List<String> =
-        (1..3).map { index -> "$campaignId-run-${index.toString().padStart(2, '0')}" }
+    private fun runIds(campaignId: String, count: Int = 3): List<String> =
+        (1..count).map { index -> "$campaignId-run-${index.toString().padStart(2, '0')}" }
 
     private data class TicketBoundStream(
         val campaignId: String,
         val runId: String,
         val conditionId: String,
+        val runIndex: Int = evidenceCondition(conditionId).runIndex,
+        val campaignMode: PrototypeQuickCampaignRunner.CampaignMode =
+            PrototypeQuickCampaignRunner.CampaignMode.QUICK,
         val stream: RawSseStream,
     )
 
@@ -410,8 +738,11 @@ internal object PrototypeCampaignPersistenceFixture {
             require(request.getValue("protocol_version").jsonPrimitive.content == ticket.identity.protocolVersion)
             require(request.getValue("campaign_id").jsonPrimitive.content == carrier.campaignId)
             require(request.getValue("run_id").jsonPrimitive.content == carrier.runId)
-            require(request.getValue("campaign_mode").jsonPrimitive.content == "quick")
-            require(request.getValue("run_index").jsonPrimitive.int == evidenceCondition(conditionId).runIndex)
+            require(
+                request.getValue("campaign_mode").jsonPrimitive.content ==
+                    carrier.campaignMode.wireValue,
+            )
+            require(request.getValue("run_index").jsonPrimitive.int == carrier.runIndex)
             require(request.getValue("workload_id").jsonPrimitive.content == ticket.identity.workload.id)
             require(request.getValue("workload_version").jsonPrimitive.content == ticket.identity.workload.version)
             require(request.getValue("profile_id").jsonPrimitive.content == "streaming_text_reference_v0.1")
@@ -486,10 +817,15 @@ internal object PrototypeCampaignPersistenceFixture {
                     }
 
                     "terminal_event" -> {
-                        require(carrier.stream.events.size == 122)
+                        require(carrier.stream.events.size in 2..122)
                         val details = envelope.getValue("details") as JsonObject
                         require(details.getValue("campaign_id").jsonPrimitive.content == carrier.campaignId)
                         require(details.getValue("run_id").jsonPrimitive.content == carrier.runId)
+                        require(
+                            details.getValue("campaign_mode").jsonPrimitive.content ==
+                                carrier.campaignMode.wireValue,
+                        )
+                        require(details.getValue("run_index").jsonPrimitive.int == carrier.runIndex)
                         require(details.getValue("condition_id").jsonPrimitive.content == carrier.conditionId)
                         require(details.getValue("profile_id").jsonPrimitive.content == ticket.identity.workload.id)
                         require(details.getValue("profile_version").jsonPrimitive.content == ticket.identity.workload.version)

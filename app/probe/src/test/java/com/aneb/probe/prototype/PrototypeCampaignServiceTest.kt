@@ -54,7 +54,11 @@ class PrototypeCampaignServiceTest {
 
     @Test
     fun acceptedTicketStartEntersForegroundBeforeOwnerAndDoesNotStopBeforeTerminal() {
-        val config = PrototypeCampaignConfig(serviceTicket(), "campaign-service-1")
+        val config = PrototypeCampaignConfig(
+            nodeTicket = serviceTicket(),
+            campaignId = "campaign-service-1",
+            campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+        )
         val result = emptyCampaign(config.campaignId)
         val effects = mutableListOf<String>()
         val sessions = mutableListOf<PrototypeCampaignSession>()
@@ -94,7 +98,11 @@ class PrototypeCampaignServiceTest {
     fun ticketHandoffIsSingleUseAndRejectsMissingDamagedOrMismatchedIdentity() {
         var token = 0
         val registry = PrototypeCampaignServiceHandoffRegistry { "handoff-${++token}" }
-        val config = PrototypeCampaignConfig(serviceTicket(), "campaign-service-1")
+        val config = PrototypeCampaignConfig(
+            nodeTicket = serviceTicket(),
+            campaignId = "campaign-service-1",
+            campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+        )
 
         val valid = registry.register(config)
         assertSame(config, registry.consume(valid))
@@ -110,6 +118,7 @@ class PrototypeCampaignServiceTest {
                 { it.copy(nodeBaseUrl = "http://10.0.2.3:18088") },
                 { it.copy(runUrl = "http://10.0.2.3:18088/api/v1/prototype/runs") },
                 { it.copy(capabilityUrl = "http://10.0.2.3:18088/api/v1/prototype/capabilities") },
+                { it.copy(campaignMode = PrototypeQuickCampaignRunner.CampaignMode.QUICK) },
             )
         invalidHandoffs.forEach { mutate ->
             val handoff = registry.register(config)
@@ -409,6 +418,7 @@ class PrototypeCampaignServiceTest {
             lease.publishProgress(
                 firstGeneration,
                 PrototypeCampaignProgress.Saving(first.campaignId, 1, 3),
+                onPublished = { error("stale progress notification side effect ran") },
             ),
         )
         lease.release(firstGeneration)
@@ -416,6 +426,53 @@ class PrototypeCampaignServiceTest {
         assertEquals(replacementSession, lease.session.value)
         assertEquals(replacementProgress, lease.progress.value)
         assertTrue(lease.isCurrent(replacementGeneration))
+    }
+
+    @Test
+    fun stateFlowRetainsLatestLivePhaseAcrossCollectorsAndAdvancesToSaving() {
+        val config = PrototypeCampaignConfig(serviceTicket(), "campaign-live-state-flow")
+        val lease = PrototypeCampaignServiceLease()
+        val generation = lease.acquire()
+        val observedFlow = lease.progress
+        assertTrue(lease.publishSession(generation, PrototypeCampaignSession.Running(config)))
+        val base = PrototypeCampaignProgress.Running(
+            campaignId = config.campaignId,
+            currentRunRef = PrototypeCampaignRunRef(1, "run-live-state-01", "baseline_v0.1"),
+            processedRuns = 0,
+            totalRuns = 3,
+        )
+
+        assertTrue(lease.publishProgress(generation, base))
+        assertTrue(
+            lease.publishProgress(
+                generation,
+                base.copy(
+                    live = PrototypeRunLiveProgress(
+                        phase = PrototypeRunLivePhase.STREAMING,
+                        validatedEventCount = 42,
+                        ttftMs = 250.0,
+                        eventRateEps = 20.0,
+                        stallObserved = true,
+                    ),
+                ),
+            ),
+        )
+        val finalizing = base.copy(
+            live = PrototypeRunLiveProgress(
+                phase = PrototypeRunLivePhase.FINALIZING,
+                validatedEventCount = 120,
+                ttftMs = 250.0,
+                eventRateEps = 20.0,
+                stallObserved = true,
+            ),
+        )
+        assertTrue(lease.publishProgress(generation, finalizing))
+
+        assertSame(observedFlow, lease.progress)
+        assertEquals(finalizing, observedFlow.value)
+        val saving = PrototypeCampaignProgress.Saving(config.campaignId, 3, 3)
+        assertTrue(lease.publishProgress(generation, saving))
+        assertEquals(saving, observedFlow.value)
     }
 
     @Test
@@ -736,6 +793,12 @@ class PrototypeCampaignServiceTest {
         assertTrue(
             Regex(
                 "is PrototypeCampaignSession\\.Cancelling\\s*->\\s*" +
+                    "updateNotificationSafely\\(campaignId = null\\)",
+            ).containsMatchIn(source),
+        )
+        assertTrue(
+            Regex(
+                "if \\(progress is PrototypeCampaignProgress\\.Saving\\) \\{\\s*" +
                     "updateNotificationSafely\\(campaignId = null\\)",
             ).containsMatchIn(source),
         )

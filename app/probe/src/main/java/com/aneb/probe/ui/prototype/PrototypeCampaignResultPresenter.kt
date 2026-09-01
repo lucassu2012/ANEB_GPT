@@ -18,6 +18,16 @@ internal data class PrototypeCampaignResultPresentation(
     val rpiLabel: String,
     val disclosure: String,
     val conditions: List<PrototypeConditionResultPresentation>,
+    val blockingError: PrototypeCampaignBlockingErrorPresentation? = null,
+)
+
+internal data class PrototypeCampaignBlockingErrorPresentation(
+    val code: String,
+    val title: String,
+    val cause: String,
+    val action: String,
+    val detail: String,
+    val evidenceRetained: Boolean,
 )
 
 internal data class PrototypeConditionResultPresentation(
@@ -40,16 +50,28 @@ internal object PrototypeCampaignResultPresenter {
         stored: PrototypeCampaignRoomRepository.StoredCampaign,
     ): PrototypeCampaignResultPresentation {
         val summary = stored.summary
+        val mode = PrototypeQuickCampaignRunner.CampaignMode.entries.singleOrNull { candidate ->
+            candidate.wireValue == summary.campaignMode
+        } ?: throw IllegalArgumentException("unsupported Prototype campaign mode")
+        val campaignModeLabel = when (mode) {
+            PrototypeQuickCampaignRunner.CampaignMode.QUICK -> "Quick"
+            PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE -> "Acceptance"
+        }
+        val expectedRunConditions = List(mode.runsPerCondition) { CONDITION_IDS }.flatten()
         require(summary.conditionSummaries.map { it.conditionId } == CONDITION_IDS)
-        require(stored.runs.map { it.conditionId } == CONDITION_IDS)
+        require(stored.runs.map { it.conditionId } == expectedRunConditions)
+        val invalidSequenceRun = stored.runs.firstOrNull { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.INVALID_SEQUENCE
+        }
 
         return PrototypeCampaignResultPresentation(
             campaignId = stored.campaignId,
             status = when (summary.status) {
                 PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE -> "Complete"
                 PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL -> "Partial"
+                PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED -> "Cancelled"
             },
-            campaignMode = "Quick",
+            campaignMode = campaignModeLabel,
             attemptedRuns = summary.attemptedRuns.toString(),
             successfulRuns = summary.successfulRuns.toString(),
             failedRuns = summary.failedRuns.toString(),
@@ -57,13 +79,14 @@ internal object PrototypeCampaignResultPresenter {
             integrity = "Local campaign result saved · evidence bundle unverified",
             evidenceBadge = "Synthetic application-layer condition",
             confidenceExplanation =
-                "Confidence is evidence completeness for this Quick campaign, " +
+                "Confidence is evidence completeness for this $campaignModeLabel campaign, " +
                     "not an industry or network confidence interval.",
             rpiLabel = "Relative Prototype Index (same-campaign synthetic comparison)",
             disclosure = DISCLOSURE,
-            conditions = summary.conditionSummaries.zip(stored.runs).mapIndexed { index, pair ->
-                val condition = pair.first
-                val run = pair.second
+            conditions = summary.conditionSummaries.mapIndexed { index, condition ->
+                val failedRun = stored.runs.firstOrNull { run ->
+                    run.conditionId == condition.conditionId && run.failureReason != null
+                }
                 PrototypeConditionResultPresentation(
                     conditionId = condition.conditionId,
                     title = CONDITION_TITLES[index],
@@ -75,7 +98,7 @@ internal object PrototypeCampaignResultPresenter {
                     successRate = metric(condition.successRate * 100.0, "%"),
                     rpi = condition.rpi?.toString() ?: MISSING_VALUE,
                     confidence = condition.confidence.name,
-                    metricNullReason = run.failureReason.takeIf {
+                    metricNullReason = failedRun?.failureReason.takeIf {
                         condition.medianTtftMs == null ||
                             condition.medianCompletionMs == null ||
                             condition.medianStreamEventRateEps == null ||
@@ -84,6 +107,17 @@ internal object PrototypeCampaignResultPresenter {
                     },
                     rpiNullReasons = condition.allNullReasons
                         ?: listOfNotNull(condition.primaryNullReason),
+                )
+            },
+            blockingError = invalidSequenceRun?.let { run ->
+                PrototypeCampaignBlockingErrorPresentation(
+                    code = "P009_INVALID_SEQUENCE",
+                    title = "Invalid event sequence",
+                    cause = "A content event was missing, duplicated, or out of order.",
+                    action = "Evidence was retained. Report this implementation defect.",
+                    detail = "Run ${run.runIndex} · ${run.conditionId} · ${run.runId} · " +
+                        "${run.eventsReceived}/120 events retained",
+                    evidenceRetained = true,
                 )
             },
         )

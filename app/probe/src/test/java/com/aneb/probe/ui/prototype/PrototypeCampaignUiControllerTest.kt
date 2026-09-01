@@ -8,9 +8,13 @@ import com.aneb.probe.prototype.PrototypeCampaignRunRef
 import com.aneb.probe.prototype.PrototypeCampaignServiceHost
 import com.aneb.probe.prototype.PrototypeCampaignSession
 import com.aneb.probe.prototype.PrototypeCampaignStartResult
+import com.aneb.probe.prototype.PrototypeQuickCampaignRunner
+import com.aneb.probe.prototype.PrototypeRunLivePhase
+import com.aneb.probe.prototype.PrototypeRunLiveProgress
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,6 +23,43 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 class PrototypeCampaignUiControllerTest {
+    @Test
+    fun acceptanceSelectionSurvivesNotificationPermissionAndStartsAcceptanceConfig() {
+        val ticket = PrototypeCampaignPersistenceFixture
+            .campaignConfig("campaign-ui-acceptance")
+            .nodeTicket
+        val launched = mutableListOf<PrototypeCampaignConfig>()
+        val controller = PrototypeCampaignUiController(
+            ticketForStart = { ticket },
+            campaignIdFactory = { "campaign-ui-acceptance-new" },
+            startCampaign = { config -> launched += config },
+        )
+        val input = PrototypeCampaignUiInput(
+            nodeUrl = ticket.nodeBaseUrl,
+            nodeCompatible = true,
+            checkingNode = false,
+            otherRunActive = false,
+            session = PrototypeCampaignSession.Idle,
+        )
+
+        assertSame(
+            PrototypeCampaignUiActionResult.RequestNotificationPermission,
+            controller.requestStart(
+                input = input,
+                mode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+            ),
+        )
+        val outcome = controller.continueStartAfterNotification(input)
+
+        assertTrue(outcome is PrototypeCampaignUiActionResult.Started)
+        val config = (outcome as PrototypeCampaignUiActionResult.Started).config
+        assertEquals(
+            PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE,
+            config.campaignMode,
+        )
+        assertSame(config, launched.single())
+    }
+
     @Test
     fun permissionContinuationRechecksFreshTicketAndForwardsTheExactConfig() {
         val initiallyChecked = PrototypeCampaignPersistenceFixture
@@ -370,6 +411,42 @@ class PrototypeCampaignUiControllerTest {
     }
 
     @Test
+    fun savingACompletedResultDoesNotOfferOrAcceptCancellation() {
+        val config = PrototypeCampaignPersistenceFixture
+            .campaignConfig("campaign-ui-saving-not-cancellable")
+        val running = PrototypeCampaignSession.Running(config)
+        val saving = PrototypeCampaignProgress.Saving(
+            campaignId = config.campaignId,
+            processedRuns = 3,
+            totalRuns = 3,
+        )
+        var cancelCalls = 0
+        val controller = PrototypeCampaignUiController(
+            ticketForStart = { config.nodeTicket },
+            campaignIdFactory = { "unused" },
+            startCampaign = {},
+            cancelCampaign = { _ -> cancelCalls += 1 },
+        )
+
+        val presentation = controller.presentation(
+            PrototypeCampaignUiInput(
+                nodeUrl = config.nodeBaseUrl,
+                nodeCompatible = true,
+                checkingNode = false,
+                otherRunActive = false,
+                session = running,
+                progress = saving,
+            ),
+        )
+
+        assertFalse(presentation.showCancel)
+        assertFalse(presentation.cancelEnabled)
+        assertEquals("Saving local result… · 3/3 processed", presentation.statusMessage)
+        assertFalse(controller.requestCancel(running, saving))
+        assertEquals(0, cancelCalls)
+    }
+
+    @Test
     fun duplicateCancelForTheSameRunningCampaignIsIgnored() {
         val config = PrototypeCampaignPersistenceFixture
             .campaignConfig("campaign-ui-cancel-once")
@@ -539,7 +616,7 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(!quickRunning)
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
-            assertEquals("Quick campaign cancelled.", statusMessage)
+            assertEquals("Quick campaign cancelled · partial evidence saved.", statusMessage)
         }
     }
 
@@ -689,12 +766,164 @@ class PrototypeCampaignUiControllerTest {
             status(PrototypeCampaignSession.Failed(config, "node unavailable"), saving),
         )
         assertEquals(
-            "Quick campaign cancelled.",
+            "Quick campaign cancelled · partial evidence saved.",
             status(PrototypeCampaignSession.Cancelled(config), saving),
         )
         assertTrue(controller.requestCancel(running))
         assertEquals("Cancelling Quick campaign…", status(running, saving))
         }
+
+    @Test
+    fun acceptanceProgressShowsConditionOccurrenceAndSevenOfNine() {
+        val config = PrototypeCampaignPersistenceFixture
+            .campaignConfig("campaign-ui-acceptance-progress")
+            .copy(campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE)
+        val controller = PrototypeCampaignUiController(
+            ticketForStart = { config.nodeTicket },
+            campaignIdFactory = { "unused" },
+            startCampaign = {},
+        )
+        val presentation = controller.presentation(
+            PrototypeCampaignUiInput(
+                nodeUrl = config.nodeBaseUrl,
+                nodeCompatible = true,
+                checkingNode = false,
+                otherRunActive = false,
+                session = PrototypeCampaignSession.Running(config),
+                progress = PrototypeCampaignProgress.Running(
+                    campaignId = config.campaignId,
+                    currentRunRef = PrototypeCampaignRunRef(
+                        runIndex = 8,
+                        runId = "run-ui-acceptance-08",
+                        conditionId = "slow_v0.1",
+                    ),
+                    processedRuns = 7,
+                    totalRuns = 9,
+                ),
+            ),
+        )
+
+        assertEquals(
+            "Running Slow — run 3 of 3 · 7/9 processed",
+            presentation.statusMessage,
+        )
+    }
+
+    @Test
+    fun matchingLiveExecutionPresentsValidatedMetricsAndStallWithoutLeakingCampaigns() {
+        val config = PrototypeCampaignPersistenceFixture
+            .campaignConfig("campaign-ui-live-progress")
+            .copy(campaignMode = PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE)
+        val controller = PrototypeCampaignUiController(
+            ticketForStart = { config.nodeTicket },
+            campaignIdFactory = { "unused" },
+            startCampaign = {},
+        )
+        fun presentation(progress: PrototypeCampaignProgress) = controller.presentation(
+            PrototypeCampaignUiInput(
+                nodeUrl = config.nodeBaseUrl,
+                nodeCompatible = true,
+                checkingNode = false,
+                otherRunActive = false,
+                session = PrototypeCampaignSession.Running(config),
+                progress = progress,
+            ),
+        )
+        val progress = PrototypeCampaignProgress.Running(
+            campaignId = config.campaignId,
+            currentRunRef = PrototypeCampaignRunRef(
+                runIndex = 8,
+                runId = "run-ui-live-08",
+                conditionId = "slow_v0.1",
+            ),
+            processedRuns = 7,
+            totalRuns = 9,
+            live = PrototypeRunLiveProgress(
+                phase = PrototypeRunLivePhase.STREAMING,
+                validatedEventCount = 42,
+                ttftMs = 912.345,
+                eventRateEps = 7.891,
+                stallObserved = true,
+            ),
+        )
+
+        with(checkNotNull(presentation(progress).liveExecution)) {
+            assertEquals("Slow — run 3 of 3", currentRunLabel)
+            assertEquals("7 / 9 completed", completedRunsLabel)
+            assertEquals("Streaming", phaseLabel)
+            assertEquals("912.3 ms", ttftLabel)
+            assertEquals("7.9 events/s", eventRateLabel)
+            assertTrue(stallDetected)
+        }
+        assertNull(
+            presentation(progress.copy(campaignId = "campaign-ui-live-other")).liveExecution,
+        )
+    }
+
+    @Test
+    fun liveExecutionMapsActionablePhasesAndStopsWhenCancellationIsRequested() {
+        val config = PrototypeCampaignPersistenceFixture
+            .campaignConfig("campaign-ui-live-phases")
+        val controller = PrototypeCampaignUiController(
+            ticketForStart = { config.nodeTicket },
+            campaignIdFactory = { "unused" },
+            startCampaign = {},
+            cancelCampaign = {},
+        )
+        val runningSession = PrototypeCampaignSession.Running(config)
+        fun live(progress: PrototypeCampaignProgress) = controller.presentation(
+            PrototypeCampaignUiInput(
+                nodeUrl = config.nodeBaseUrl,
+                nodeCompatible = true,
+                checkingNode = false,
+                otherRunActive = false,
+                session = runningSession,
+                progress = progress,
+            ),
+        ).liveExecution
+        fun running(phase: PrototypeRunLivePhase) = PrototypeCampaignProgress.Running(
+            campaignId = config.campaignId,
+            currentRunRef = PrototypeCampaignRunRef(1, "run-ui-live-01", "baseline_v0.1"),
+            processedRuns = 0,
+            totalRuns = 3,
+            live = PrototypeRunLiveProgress(phase = phase),
+        )
+
+        with(checkNotNull(live(running(PrototypeRunLivePhase.CONNECTING)))) {
+            assertEquals("Baseline — run 1 of 1", currentRunLabel)
+            assertEquals("0 / 3 completed", completedRunsLabel)
+            assertEquals("Connecting", phaseLabel)
+            assertNull(ttftLabel)
+            assertNull(eventRateLabel)
+            assertFalse(stallDetected)
+        }
+        assertEquals(
+            "Waiting for first event",
+            live(running(PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT))?.phaseLabel,
+        )
+        assertEquals(
+            "Finalizing",
+            live(running(PrototypeRunLivePhase.FINALIZING))?.phaseLabel,
+        )
+        assertEquals(
+            "Preparing next run",
+            live(
+                PrototypeCampaignProgress.Cooldown(
+                    campaignId = config.campaignId,
+                    nextRunRef = PrototypeCampaignRunRef(2, "run-ui-live-02", "slow_v0.1"),
+                    processedRuns = 1,
+                    totalRuns = 3,
+                ),
+            )?.phaseLabel,
+        )
+        assertEquals(
+            "Saving",
+            live(PrototypeCampaignProgress.Saving(config.campaignId, 3, 3))?.phaseLabel,
+        )
+
+        assertTrue(controller.requestCancel(runningSession))
+        assertNull(live(running(PrototypeRunLivePhase.STREAMING)))
+    }
 
     @Test
     fun synchronousLaunchFailureIsVisibleAndDoesNotBlockRetry() {
@@ -822,11 +1051,14 @@ class PrototypeCampaignUiControllerTest {
         assertFalse(activity.contains("quickRunning = false"))
         assertFalse(activity.contains("quickAvailable = false"))
         assertFalse(activity.contains("onStartQuick = {}"))
+        assertTrue(activity.contains("onStartAcceptance ="))
 
         assertTrue(screen.contains("quickStatusMessage: String?"))
         assertTrue(screen.contains("showQuickCancel: Boolean"))
         assertTrue(screen.contains("quickCancelEnabled: Boolean"))
         assertTrue(screen.contains("onCancelQuick: () -> Unit"))
+        assertTrue(screen.contains("onStartAcceptance: () -> Unit"))
+        assertFalse(screen.contains("available in G2-C"))
         assertTrue(screen.contains("enabled = quickCancelEnabled"))
     }
 

@@ -21,15 +21,19 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 internal object PrototypeCampaignCancelIntent {
     internal const val ACTION_CANCEL = "com.aneb.probe.action.CANCEL_PROTOTYPE_CAMPAIGN"
@@ -102,6 +106,7 @@ internal fun runPrototypeCampaignNotificationUpdate(update: () -> Unit) {
 internal data class PrototypeCampaignServiceHandoff(
     val token: String,
     val campaignId: String,
+    val campaignMode: PrototypeQuickCampaignRunner.CampaignMode,
     val nodeBaseUrl: String,
     val runUrl: String,
     val capabilityUrl: String,
@@ -122,17 +127,59 @@ internal class PersistingPrototypeCampaignExecutor(
 ) : PrototypeCampaignExecutor {
     override suspend fun execute(
         config: PrototypeCampaignConfig,
-    ): PrototypeQuickCampaignRunner.CampaignResult = withContext(backgroundDispatcher) {
-        val result = delegate.execute(config)
-        publishProgress(
-            PrototypeCampaignProgress.Saving(
-                campaignId = config.campaignId,
-                processedRuns = result.summary.attemptedRuns,
-                totalRuns = result.summary.plannedRuns,
-            ),
-        )
-        store.save(config, result)
-        result
+    ): PrototypeQuickCampaignRunner.CampaignResult {
+        // Preserve a completed value if dispatcher handoff observes a later owner cancellation.
+        val completedResult = AtomicReference<PrototypeQuickCampaignRunner.CampaignResult?>()
+        val completionClaimed = AtomicBoolean(false)
+        val result = try {
+            withContext(backgroundDispatcher) {
+                delegate.execute(config).also { completed ->
+                    val captured = currentCoroutineContext()[PrototypeCampaignResultReadyAuthority]
+                        ?.captureCompletedResult { completedResult.set(completed) }
+                        ?: run {
+                            completedResult.set(completed)
+                            true
+                        }
+                    completionClaimed.set(captured)
+                    if (captured) publishProgress(savingProgress(config, completed))
+                }
+            }
+        } catch (cancelled: PrototypeCampaignCancelledWithResult) {
+            persist(config, cancelled.result, publishSaving = true)
+            throw PrototypeCampaignCancellationPersisted(cancelled.result, cancelled)
+        } catch (cancelled: CancellationException) {
+            val completed = completedResult.get() ?: throw cancelled
+            persist(config, completed, publishSaving = false)
+            if (!completionClaimed.get()) {
+                throw PrototypeCampaignCancellationPersisted(
+                    completed,
+                    PrototypeCampaignCancelledWithResult(completed, cancelled),
+                )
+            }
+            return completed
+        }
+        persist(config, result, publishSaving = false)
+        return result
+    }
+
+    private fun savingProgress(
+        config: PrototypeCampaignConfig,
+        result: PrototypeQuickCampaignRunner.CampaignResult,
+    ): PrototypeCampaignProgress.Saving = PrototypeCampaignProgress.Saving(
+        campaignId = config.campaignId,
+        processedRuns = result.summary.attemptedRuns,
+        totalRuns = result.summary.plannedRuns,
+    )
+
+    private suspend fun persist(
+        config: PrototypeCampaignConfig,
+        result: PrototypeQuickCampaignRunner.CampaignResult,
+        publishSaving: Boolean,
+    ) = withContext(NonCancellable) {
+        withContext(backgroundDispatcher) {
+            if (publishSaving) publishProgress(savingProgress(config, result))
+            store.save(config, result)
+        }
     }
 }
 
@@ -152,6 +199,7 @@ internal class PrototypeCampaignServiceHandoffRegistry(
         return PrototypeCampaignServiceHandoff(
             token = token,
             campaignId = config.campaignId,
+            campaignMode = config.campaignMode,
             nodeBaseUrl = config.nodeTicket.nodeBaseUrl,
             runUrl = config.nodeTicket.runUrl,
             capabilityUrl = config.nodeTicket.capabilityUrl,
@@ -165,6 +213,7 @@ internal class PrototypeCampaignServiceHandoffRegistry(
             ?: return null
         return config.takeIf {
             handoff.campaignId == config.campaignId &&
+                handoff.campaignMode == config.campaignMode &&
                 handoff.nodeBaseUrl == ticket.nodeBaseUrl &&
                 handoff.runUrl == ticket.runUrl &&
                 handoff.capabilityUrl == ticket.capabilityUrl &&
@@ -267,6 +316,7 @@ internal class PrototypeCampaignServiceLease {
     fun publishProgress(
         generation: Long,
         progress: PrototypeCampaignProgress,
+        onPublished: () -> Unit = {},
     ): Boolean {
         var accepted = false
         publishIfCurrent(generation) {
@@ -278,6 +328,7 @@ internal class PrototypeCampaignServiceLease {
             ) {
                 _progress.value = progress
                 accepted = true
+                onPublished()
             }
         }
         return accepted
@@ -531,7 +582,11 @@ class PrototypeCampaignService : Service() {
         generation = serviceLease.acquire()
         createNotificationChannel()
         val publishProgress: (PrototypeCampaignProgress) -> Unit = { progress ->
-            serviceLease.publishProgress(generation, progress)
+            serviceLease.publishProgress(generation, progress) {
+                if (progress is PrototypeCampaignProgress.Saving) {
+                    updateNotificationSafely(campaignId = null)
+                }
+            }
             Unit
         }
         host = PrototypeCampaignServiceHost(
@@ -575,6 +630,7 @@ class PrototypeCampaignService : Service() {
                     ).run(
                         endpoint = config.nodeTicket.runUrl,
                         campaignId = config.campaignId,
+                        mode = config.campaignMode,
                     )
                 },
                 store = PrototypeCampaignResultStore { config, result ->
@@ -664,12 +720,18 @@ class PrototypeCampaignService : Service() {
     private fun Intent.handoffOrNull(): PrototypeCampaignServiceHandoff? {
         val token = getStringExtra(EXTRA_HANDOFF_TOKEN)?.takeIf(String::isNotBlank) ?: return null
         val campaignId = getStringExtra(EXTRA_CAMPAIGN_ID)?.takeIf(String::isNotBlank) ?: return null
+        val campaignMode = getStringExtra(EXTRA_CAMPAIGN_MODE)?.let { rawMode ->
+            PrototypeQuickCampaignRunner.CampaignMode.entries.singleOrNull { mode ->
+                mode.wireValue == rawMode
+            }
+        } ?: return null
         val nodeBaseUrl = getStringExtra(EXTRA_NODE_BASE_URL)?.takeIf(String::isNotBlank) ?: return null
         val runUrl = getStringExtra(EXTRA_RUN_URL)?.takeIf(String::isNotBlank) ?: return null
         val capabilityUrl = getStringExtra(EXTRA_CAPABILITY_URL)?.takeIf(String::isNotBlank) ?: return null
         return PrototypeCampaignServiceHandoff(
             token = token,
             campaignId = campaignId,
+            campaignMode = campaignMode,
             nodeBaseUrl = nodeBaseUrl,
             runUrl = runUrl,
             capabilityUrl = capabilityUrl,
@@ -681,6 +743,7 @@ class PrototypeCampaignService : Service() {
         private const val ACTION_CANCEL = PrototypeCampaignCancelIntent.ACTION_CANCEL
         private const val EXTRA_HANDOFF_TOKEN = "prototype_handoff_token"
         private const val EXTRA_CAMPAIGN_ID = PrototypeCampaignCancelIntent.EXTRA_CAMPAIGN_ID
+        private const val EXTRA_CAMPAIGN_MODE = "prototype_campaign_mode"
         private const val EXTRA_NODE_BASE_URL = "prototype_node_base_url"
         private const val EXTRA_RUN_URL = "prototype_run_url"
         private const val EXTRA_CAPABILITY_URL = "prototype_capability_url"
@@ -699,6 +762,7 @@ class PrototypeCampaignService : Service() {
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_HANDOFF_TOKEN, handoff.token)
                 .putExtra(EXTRA_CAMPAIGN_ID, handoff.campaignId)
+                .putExtra(EXTRA_CAMPAIGN_MODE, handoff.campaignMode.wireValue)
                 .putExtra(EXTRA_NODE_BASE_URL, handoff.nodeBaseUrl)
                 .putExtra(EXTRA_RUN_URL, handoff.runUrl)
                 .putExtra(EXTRA_CAPABILITY_URL, handoff.capabilityUrl)

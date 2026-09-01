@@ -237,12 +237,18 @@ class PrototypeCampaignRoomRepository(
             ) == campaign.capabilityIdentity,
         ) { INVALID_GRAPH }
         require(campaign.summary.campaignId == campaign.campaignId) { INVALID_GRAPH }
-        require(campaign.summary.campaignMode == CAMPAIGN_MODE) { INVALID_GRAPH }
-        require(campaign.summary.plannedRuns == EXPECTED_RUNS) { INVALID_GRAPH }
-        require(campaign.runs.size == EXPECTED_RUNS) { INVALID_GRAPH }
-        require(campaign.runs.map(StoredRun::runIndex) == EXPECTED_RUN_INDICES) { INVALID_GRAPH }
-        require(campaign.runs.map(StoredRun::conditionId) == EXPECTED_CONDITIONS) { INVALID_GRAPH }
-        require(campaign.runs.map(StoredRun::runId).distinct().size == EXPECTED_RUNS) {
+        val mode = PrototypeQuickCampaignRunner.CampaignMode.entries.singleOrNull { candidate ->
+            candidate.wireValue == campaign.summary.campaignMode
+        } ?: throw IllegalArgumentException(INVALID_GRAPH)
+        val expectedConditions = List(mode.runsPerCondition) { EXPECTED_CONDITIONS }.flatten()
+        val expectedRuns = expectedConditions.size
+        require(campaign.summary.plannedRuns == expectedRuns) { INVALID_GRAPH }
+        require(campaign.runs.size == expectedRuns) { INVALID_GRAPH }
+        require(campaign.runs.map(StoredRun::runIndex) == (1..expectedRuns).toList()) {
+            INVALID_GRAPH
+        }
+        require(campaign.runs.map(StoredRun::conditionId) == expectedConditions) { INVALID_GRAPH }
+        require(campaign.runs.map(StoredRun::runId).distinct().size == expectedRuns) {
             INVALID_GRAPH
         }
         require(
@@ -253,16 +259,12 @@ class PrototypeCampaignRoomRepository(
             campaign.capabilityIdentity.conditions.map { condition -> condition.id } ==
                 EXPECTED_CONDITIONS,
         ) { INVALID_GRAPH }
-        val firstIncomplete = campaign.runs.indexOfFirst { run ->
-            run.status != PrototypeQuickCampaignRunner.RunStatus.COMPLETE
+        val firstNotStarted = campaign.runs.indexOfFirst { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED
         }
-        if (firstIncomplete >= 0) {
+        if (firstNotStarted >= 0) {
             require(
-                campaign.runs[firstIncomplete].status ==
-                    PrototypeQuickCampaignRunner.RunStatus.INTERRUPTED,
-            ) { INVALID_GRAPH }
-            require(
-                campaign.runs.drop(firstIncomplete + 1).all { run ->
+                campaign.runs.drop(firstNotStarted).all { run ->
                     run.status == PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED
                 },
             ) { INVALID_GRAPH }
@@ -275,25 +277,34 @@ class PrototypeCampaignRoomRepository(
         require(campaign.summary.attemptedRuns == attempted) { INVALID_GRAPH }
         require(campaign.summary.successfulRuns == successful) { INVALID_GRAPH }
         require(campaign.summary.failedRuns == attempted - successful) { INVALID_GRAPH }
-        require(campaign.summary.notStartedRuns == EXPECTED_RUNS - attempted) { INVALID_GRAPH }
+        require(campaign.summary.notStartedRuns == expectedRuns - attempted) { INVALID_GRAPH }
         require(
-            campaign.summary.successRate == successful.toDouble() / EXPECTED_RUNS,
+            campaign.summary.successRate == successful.toDouble() / expectedRuns,
         ) { INVALID_GRAPH }
-        require(
-            campaign.summary.status == if (campaign.runs.none { run ->
-                    run.status == PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED
-                }
-            ) {
-                PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE
-            } else {
-                PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL
-            },
-        ) { INVALID_GRAPH }
+        val hasNotStartedRuns = campaign.runs.any { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED
+        }
+        val hasCancelledRun = campaign.runs.any { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.CANCELLED
+        }
+        val expectedCampaignStatus = when {
+            !hasNotStartedRuns -> PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE
+            hasCancelledRun -> PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED
+            else -> PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL
+        }
+        require(campaign.summary.status == expectedCampaignStatus) { INVALID_GRAPH }
 
-        campaign.runs.forEach { run -> validateRun(campaign.campaignId, run) }
+        campaign.runs.forEach { run ->
+            validateRun(
+                campaignId = campaign.campaignId,
+                campaignMode = mode.wireValue,
+                run = run,
+            )
+        }
         val canonicalSummary = try {
             PrototypeQuickCampaignRunner.canonicalCampaignSummary(
                 campaignId = campaign.campaignId,
+                mode = mode,
                 results = campaign.runs.map { run ->
                     PrototypeQuickCampaignRunner.SummaryRun(
                         conditionId = run.conditionId,
@@ -310,7 +321,11 @@ class PrototypeCampaignRoomRepository(
         require(campaign.summary == canonicalSummary) { INVALID_GRAPH }
     }
 
-    private fun validateRun(campaignId: String, run: StoredRun) {
+    private fun validateRun(
+        campaignId: String,
+        campaignMode: String,
+        run: StoredRun,
+    ) {
         require(run.runId.isNotBlank()) { INVALID_GRAPH }
         require(run.eventsExpected == EXPECTED_CONTENT_EVENTS) { INVALID_GRAPH }
         when (run.status) {
@@ -332,6 +347,22 @@ class PrototypeCampaignRoomRepository(
                 require(run.evidenceEvents.size == run.eventsReceived + 2) { INVALID_GRAPH }
             }
 
+            PrototypeQuickCampaignRunner.RunStatus.INVALID_SEQUENCE -> {
+                require(!run.taskSuccess && !run.scoreEligible) { INVALID_GRAPH }
+                require(run.eventsReceived in 0 until EXPECTED_CONTENT_EVENTS) { INVALID_GRAPH }
+                require(run.failureReason == INVALID_SEQUENCE_REASON) { INVALID_GRAPH }
+                require(run.terminalReceiptValid == null && run.metrics == null) { INVALID_GRAPH }
+                require(run.evidenceEvents.size == run.eventsReceived + 2) { INVALID_GRAPH }
+            }
+
+            PrototypeQuickCampaignRunner.RunStatus.CANCELLED -> {
+                require(!run.taskSuccess && !run.scoreEligible) { INVALID_GRAPH }
+                require(run.eventsReceived in 0..EXPECTED_CONTENT_EVENTS) { INVALID_GRAPH }
+                require(run.failureReason == CANCELLED_REASON) { INVALID_GRAPH }
+                require(run.terminalReceiptValid == null) { INVALID_GRAPH }
+                require(run.evidenceEvents.size == run.eventsReceived + 2) { INVALID_GRAPH }
+            }
+
             PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED -> {
                 require(!run.taskSuccess && !run.scoreEligible) { INVALID_GRAPH }
                 require(run.eventsReceived == 0 && run.evidenceEvents.isEmpty()) { INVALID_GRAPH }
@@ -344,6 +375,7 @@ class PrototypeCampaignRoomRepository(
             require(event.keys == CANONICAL_STORED_EVENT_KEYS) { INVALID_GRAPH }
             require(event.string("campaign_id") == campaignId) { INVALID_GRAPH }
             require(event.string("run_id") == run.runId) { INVALID_GRAPH }
+            require(event.string("campaign_mode") == campaignMode) { INVALID_GRAPH }
             require(event.string("condition_id") == run.conditionId) { INVALID_GRAPH }
             require(event.exactLong("run_index") == run.runIndex.toLong()) { INVALID_GRAPH }
             val eventType = event.string("event_type")
@@ -353,6 +385,8 @@ class PrototypeCampaignRoomRepository(
                     eventType == when (run.status) {
                         PrototypeQuickCampaignRunner.RunStatus.COMPLETE -> "terminal_event"
                         PrototypeQuickCampaignRunner.RunStatus.INTERRUPTED -> "run_failed"
+                        PrototypeQuickCampaignRunner.RunStatus.INVALID_SEQUENCE -> "run_failed"
+                        PrototypeQuickCampaignRunner.RunStatus.CANCELLED -> "run_cancelled"
                         PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED -> error(INVALID_GRAPH)
                     },
                 ) { INVALID_GRAPH }
@@ -374,6 +408,7 @@ class PrototypeCampaignRoomRepository(
             val terminalDetails = run.evidenceEvents.last()["details"] as? JsonObject
                 ?: throw IllegalArgumentException(INVALID_GRAPH)
             require(terminalDetails.size == TERMINAL_DETAIL_KEY_COUNT) { INVALID_GRAPH }
+            require(terminalDetails.string("campaign_mode") == campaignMode) { INVALID_GRAPH }
         }
     }
 
@@ -390,15 +425,14 @@ class PrototypeCampaignRoomRepository(
     }
 
     private companion object {
-        const val CAMPAIGN_MODE = "quick"
-        const val EXPECTED_RUNS = 3
         const val EXPECTED_CONTENT_EVENTS = 120
         const val COMPLETE_EVIDENCE_EVENTS = 122
         const val TERMINAL_DETAIL_KEY_COUNT = 24
         const val INTERRUPTED_REASON = "stream_interrupted"
+        const val INVALID_SEQUENCE_REASON = "invalid_sequence"
+        const val CANCELLED_REASON = "cancelled"
         const val NOT_STARTED_REASON = "not_started"
         const val INVALID_GRAPH = "prototype campaign persistence graph is inconsistent"
-        val EXPECTED_RUN_INDICES = listOf(1, 2, 3)
         val EXPECTED_CONDITIONS = listOf(
             "baseline_v0.1",
             "slow_v0.1",

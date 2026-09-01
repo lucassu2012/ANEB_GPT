@@ -1,6 +1,8 @@
 package com.aneb.probe.prototype
 
 import com.aneb.probe.net.RawSseEvent
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -15,6 +17,50 @@ internal data class PrototypeCampaignRunRef(
     val conditionId: String,
 )
 
+internal enum class PrototypeRunLivePhase {
+    CONNECTING,
+    WAITING_FOR_FIRST_EVENT,
+    STREAMING,
+    FINALIZING,
+}
+
+internal data class PrototypeRunLiveProgress(
+    val phase: PrototypeRunLivePhase = PrototypeRunLivePhase.CONNECTING,
+    val validatedEventCount: Int = 0,
+    val ttftMs: Double? = null,
+    val eventRateEps: Double? = null,
+    val stallObserved: Boolean = false,
+)
+
+internal fun PrototypeRunLiveSnapshot.toPrototypeRunLiveProgress(
+    nominalIntervalMs: Int,
+): PrototypeRunLiveProgress {
+    require(nominalIntervalMs > 0) { "prototype live nominal interval must be positive" }
+    val timestamps = validatedContentTimestampsNanos
+    val first = timestamps.firstOrNull()
+    val span = if (timestamps.size >= 2) timestamps.last() - timestamps.first() else null
+    val stallThresholdNanos = maxOf(500_000_000L, 4L * nominalIntervalMs * 1_000_000L)
+    return PrototypeRunLiveProgress(
+        phase = when {
+            terminalClientMonotonicNanos != null -> PrototypeRunLivePhase.FINALIZING
+            timestamps.isNotEmpty() -> PrototypeRunLivePhase.STREAMING
+            runStartedObserved -> PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT
+            else -> PrototypeRunLivePhase.CONNECTING
+        },
+        validatedEventCount = timestamps.size,
+        ttftMs = first?.let { timestamp ->
+            (timestamp - t0MonotonicNanos).toDouble() / 1_000_000.0
+        },
+        eventRateEps = span?.let { spanNanos ->
+            require(spanNanos > 0L) { "prototype live stream span must be positive" }
+            (timestamps.size - 1).toDouble() * 1_000_000_000.0 / spanNanos.toDouble()
+        },
+        stallObserved = timestamps.zipWithNext().any { (previous, next) ->
+            next - previous > stallThresholdNanos
+        },
+    )
+}
+
 internal sealed interface PrototypeCampaignProgress {
     val campaignId: String
     val processedRuns: Int
@@ -25,6 +71,7 @@ internal sealed interface PrototypeCampaignProgress {
         val currentRunRef: PrototypeCampaignRunRef,
         override val processedRuns: Int,
         override val totalRuns: Int,
+        val live: PrototypeRunLiveProgress = PrototypeRunLiveProgress(),
     ) : PrototypeCampaignProgress
 
     data class Cooldown(
@@ -43,7 +90,8 @@ internal sealed interface PrototypeCampaignProgress {
 
 /** Executes the fixed Prototype 0.1 Quick campaign as one ordered product operation. */
 class PrototypeQuickCampaignRunner private constructor(
-    private val executeRun: suspend (RunPlan, String) -> RunResult,
+    private val executeRun:
+        suspend (RunPlan, String, (PrototypeRunLiveSnapshot) -> Unit) -> RunResult,
     private val runIdFactory: (Int) -> String,
     private val waitBetweenRuns: suspend (Long) -> Unit,
     private val clockDomainIdFactory: (Int) -> String,
@@ -55,7 +103,7 @@ class PrototypeQuickCampaignRunner private constructor(
         waitBetweenRuns: suspend (Long) -> Unit,
         publishProgress: (PrototypeCampaignProgress) -> Unit = {},
     ) : this(
-        executeRun = { plan, _ -> executeRun(plan) },
+        executeRun = { plan, _, _ -> executeRun(plan) },
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = { UUID.randomUUID().toString() },
@@ -106,6 +154,7 @@ class PrototypeQuickCampaignRunner private constructor(
         val runIndex: Int,
         val conditionId: String,
         val requestBody: String,
+        val campaignMode: CampaignMode = CampaignMode.QUICK,
     ) {
         internal val condition: ConditionMetadata
             get() = conditionMetadata(conditionId)
@@ -121,6 +170,8 @@ class PrototypeQuickCampaignRunner private constructor(
     enum class RunStatus {
         COMPLETE,
         INTERRUPTED,
+        INVALID_SEQUENCE,
+        CANCELLED,
         NOT_STARTED,
     }
 
@@ -226,6 +277,49 @@ class PrototypeQuickCampaignRunner private constructor(
                 metrics = metrics,
             )
 
+            internal fun invalidSequence(
+                plan: RunPlan,
+                evidence: PrototypeInterruptedStreamEvidence,
+                evidenceEvents: List<JsonObject>,
+            ): RunResult = RunResult(
+                runIndex = plan.runIndex,
+                runId = plan.runId,
+                conditionId = plan.conditionId,
+                status = RunStatus.INVALID_SEQUENCE,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = EXPECTED_CONTENT_EVENTS,
+                eventsReceived = evidence.validatedContentEvents.size,
+                failureReason = "invalid_sequence",
+                terminalReceiptValid = null,
+                completedStreamResult = null,
+                partialEvidence = evidence,
+                evidenceEvents = evidenceEvents,
+                metrics = null,
+            )
+
+            internal fun cancelled(
+                plan: RunPlan,
+                evidence: PrototypeInterruptedStreamEvidence,
+                evidenceEvents: List<JsonObject>,
+                metrics: RunMetrics?,
+            ): RunResult = RunResult(
+                runIndex = plan.runIndex,
+                runId = plan.runId,
+                conditionId = plan.conditionId,
+                status = RunStatus.CANCELLED,
+                taskSuccess = false,
+                scoreEligible = false,
+                eventsExpected = EXPECTED_CONTENT_EVENTS,
+                eventsReceived = evidence.validatedContentEvents.size,
+                failureReason = "cancelled",
+                terminalReceiptValid = null,
+                completedStreamResult = null,
+                partialEvidence = evidence,
+                evidenceEvents = evidenceEvents,
+                metrics = metrics,
+            )
+
             internal fun notStarted(plan: RunPlan): RunResult = RunResult(
                 runIndex = plan.runIndex,
                 runId = plan.runId,
@@ -256,11 +350,22 @@ class PrototypeQuickCampaignRunner private constructor(
     enum class CampaignStatus {
         COMPLETE,
         PARTIAL,
+        CANCELLED,
+    }
+
+    enum class CampaignMode(
+        val wireValue: String,
+        internal val runsPerCondition: Int,
+    ) {
+        QUICK(wireValue = "quick", runsPerCondition = 1),
+        ACCEPTANCE(wireValue = "acceptance", runsPerCondition = 3),
     }
 
     enum class Confidence {
         NONE,
         LOW,
+        MEDIUM,
+        HIGH,
     }
 
     data class ConditionSummary(
@@ -306,8 +411,13 @@ class PrototypeQuickCampaignRunner private constructor(
         val summary: CampaignSummary,
     )
 
-    suspend fun run(endpoint: String, campaignId: String): CampaignResult {
-        val plans = QUICK_CONDITIONS.mapIndexed { index, condition ->
+    suspend fun run(
+        endpoint: String,
+        campaignId: String,
+        mode: CampaignMode = CampaignMode.QUICK,
+    ): CampaignResult {
+        val conditions = List(mode.runsPerCondition) { QUICK_CONDITIONS }.flatten()
+        val plans = conditions.mapIndexed { index, condition ->
             val runIndex = index + 1
             val runId = runIdFactory(runIndex)
             RunPlan(
@@ -321,29 +431,118 @@ class PrototypeQuickCampaignRunner private constructor(
                     runId = runId,
                     runIndex = runIndex,
                     conditionId = condition.id,
+                    mode = mode,
                 ),
+                campaignMode = mode,
             )
         }
         val results = ArrayList<RunResult>(plans.size)
+        val cancellationAuthority = currentCoroutineContext()[PrototypeUserCancellationAuthority]
+        val resultReadyAuthority = currentCoroutineContext()[PrototypeCampaignResultReadyAuthority]
+        var completedCampaignResult: CampaignResult? = null
         plans.forEachIndexed { index, plan ->
             val clockDomainId = clockDomainIdFactory(plan.runIndex)
             require(clockDomainId.isNotBlank()) {
                 "prototype clock-domain identity must be non-empty"
             }
-            publishProgress(
-                PrototypeCampaignProgress.Running(
-                    campaignId = campaignId,
-                    currentRunRef = PrototypeCampaignRunRef(
-                        runIndex = plan.runIndex,
-                        runId = plan.runId,
-                        conditionId = plan.conditionId,
-                    ),
-                    processedRuns = results.size,
-                    totalRuns = plans.size,
-                ),
+            val currentRunRef = PrototypeCampaignRunRef(
+                runIndex = plan.runIndex,
+                runId = plan.runId,
+                conditionId = plan.conditionId,
             )
+            fun publishRunning(live: PrototypeRunLiveProgress) {
+                publishProgress(
+                    PrototypeCampaignProgress.Running(
+                        campaignId = campaignId,
+                        currentRunRef = currentRunRef,
+                        processedRuns = results.size,
+                        totalRuns = plans.size,
+                        live = live,
+                    ),
+                )
+            }
+            var lastLiveProgress = PrototypeRunLiveProgress()
+            publishRunning(lastLiveProgress)
             try {
-                results += executeRun(plan, clockDomainId)
+                val runResult = executeRun(plan, clockDomainId) { snapshot ->
+                    val nextLiveProgress =
+                        snapshot.toPrototypeRunLiveProgress(plan.condition.nominalIntervalMs)
+                    if (nextLiveProgress != lastLiveProgress) {
+                        lastLiveProgress = nextLiveProgress
+                        publishRunning(nextLiveProgress)
+                    }
+                }
+                if (index == plans.lastIndex) {
+                    val candidate = campaignResult(
+                        campaignId = campaignId,
+                        mode = mode,
+                        results = results + runResult,
+                    )
+                    if (resultReadyAuthority?.claimCompletedOutcome() == false) {
+                        val streamResult = runResult.completedStreamResult
+                        val cancellation = CancellationException(
+                            "prototype campaign cancelled before validated result completion",
+                        )
+                        if (streamResult == null) throw cancellation
+                        throw PrototypeRunCancellationObservation(
+                            evidence = PrototypeInterruptedStreamEvidence(
+                                rawEvents = streamResult.rawEvents.dropLast(1),
+                                t0MonotonicNanos = streamResult.t0MonotonicNanos,
+                                validatedContentEvents = streamResult.validatedContentEvents,
+                                interruptionClientMonotonicNanos =
+                                    streamResult.terminalClientMonotonicNanos,
+                            ),
+                            cause = cancellation,
+                        )
+                    }
+                    completedCampaignResult = candidate
+                }
+                results += runResult
+            } catch (error: PrototypeRunCancellationObservation) {
+                error.evidence?.let { evidence ->
+                    val evidenceEvents = projectInterruptedEvidence(
+                        plan = plan,
+                        clockDomainId = clockDomainId,
+                        evidence = evidence,
+                        failureReason = "cancelled",
+                        terminalEventType = "run_cancelled",
+                    )
+                    results += RunResult.cancelled(
+                        plan = plan,
+                        evidence = evidence,
+                        evidenceEvents = evidenceEvents,
+                        metrics = interruptedRunMetrics(plan.condition, evidence),
+                    )
+                    results += plans.drop(index + 1).map(RunResult::notStarted)
+                } ?: run {
+                    results += plans.drop(index).map(RunResult::notStarted)
+                }
+                throw PrototypeCampaignCancelledWithResult(
+                    result = campaignResult(
+                        campaignId = campaignId,
+                        mode = mode,
+                        results = results,
+                    ),
+                    cause = error,
+                )
+            } catch (error: PrototypeRunInvalidSequenceException) {
+                val evidenceEvents = projectInterruptedEvidence(
+                    plan = plan,
+                    clockDomainId = clockDomainId,
+                    evidence = error.evidence,
+                    failureReason = "invalid_sequence",
+                )
+                results += RunResult.invalidSequence(
+                    plan = plan,
+                    evidence = error.evidence,
+                    evidenceEvents = evidenceEvents,
+                )
+                results += plans.drop(index + 1).map(RunResult::notStarted)
+                return campaignResult(
+                    campaignId = campaignId,
+                    mode = mode,
+                    results = results,
+                )
             } catch (error: PrototypeRunStreamInterruptedException) {
                 val evidenceEvents = projectInterruptedEvidence(
                     plan = plan,
@@ -359,7 +558,19 @@ class PrototypeQuickCampaignRunner private constructor(
                 results += plans.drop(index + 1).map(RunResult::notStarted)
                 return campaignResult(
                     campaignId = campaignId,
+                    mode = mode,
                     results = results,
+                )
+            } catch (error: CancellationException) {
+                if (cancellationAuthority?.isRequested() != true) throw error
+                results += plans.drop(index).map(RunResult::notStarted)
+                throw PrototypeCampaignCancelledWithResult(
+                    result = campaignResult(
+                        campaignId = campaignId,
+                        mode = mode,
+                        results = results,
+                    ),
+                    cause = error,
                 )
             }
             val nextPlan = plans.getOrNull(index + 1)
@@ -376,23 +587,37 @@ class PrototypeQuickCampaignRunner private constructor(
                         totalRuns = plans.size,
                     ),
                 )
-                waitBetweenRuns(QUICK_COOLDOWN_MS)
+                try {
+                    waitBetweenRuns(QUICK_COOLDOWN_MS)
+                } catch (error: CancellationException) {
+                    if (cancellationAuthority?.isRequested() != true) throw error
+                    results += plans.drop(index + 1).map(RunResult::notStarted)
+                    throw PrototypeCampaignCancelledWithResult(
+                        result = campaignResult(
+                            campaignId = campaignId,
+                            mode = mode,
+                            results = results,
+                        ),
+                        cause = error,
+                    )
+                }
             }
         }
 
-        return campaignResult(
-            campaignId = campaignId,
-            results = results,
-        )
+        return checkNotNull(completedCampaignResult) {
+            "prototype completed campaign result was not finalized"
+        }
     }
 
     private fun campaignResult(
         campaignId: String,
+        mode: CampaignMode,
         results: List<RunResult>,
     ): CampaignResult = CampaignResult(
         runs = results,
         summary = canonicalCampaignSummary(
             campaignId = campaignId,
+            mode = mode,
             results = results.map { run ->
                 SummaryRun(
                     conditionId = run.conditionId,
@@ -410,39 +635,61 @@ class PrototypeQuickCampaignRunner private constructor(
         internal fun canonicalCampaignSummary(
             campaignId: String,
             results: List<SummaryRun>,
+        ): CampaignSummary = canonicalCampaignSummary(
+            campaignId = campaignId,
+            mode = CampaignMode.QUICK,
+            results = results,
+        )
+
+        @JvmSynthetic
+        internal fun canonicalCampaignSummary(
+            campaignId: String,
+            mode: CampaignMode,
+            results: List<SummaryRun>,
         ): CampaignSummary {
             val attemptedRuns = results.count { it.status != RunStatus.NOT_STARTED }
             val successfulRuns = results.count { it.taskSuccess }
-            val status = if (results.any { it.status == RunStatus.NOT_STARTED }) {
-                CampaignStatus.PARTIAL
-            } else {
-                CampaignStatus.COMPLETE
+            val hasNotStartedRuns = results.any { it.status == RunStatus.NOT_STARTED }
+            val hasCancelledRun = results.any { it.status == RunStatus.CANCELLED }
+            val status = when {
+                !hasNotStartedRuns -> CampaignStatus.COMPLETE
+                hasCancelledRun -> CampaignStatus.CANCELLED
+                else -> CampaignStatus.PARTIAL
             }
             val summaries = enrichRpi(
-                summaries = conditionSummaries(results),
+                summaries = conditionSummaries(mode = mode, results = results),
                 status = status,
             )
+            val plannedRuns = QUICK_CONDITIONS.size * mode.runsPerCondition
             return CampaignSummary(
                 campaignId = campaignId,
-                campaignMode = CAMPAIGN_MODE,
-                plannedRuns = QUICK_CONDITIONS.size,
+                campaignMode = mode.wireValue,
+                plannedRuns = plannedRuns,
                 attemptedRuns = attemptedRuns,
                 successfulRuns = successfulRuns,
                 failedRuns = attemptedRuns - successfulRuns,
-                notStartedRuns = QUICK_CONDITIONS.size - attemptedRuns,
-                successRate = successfulRuns.toDouble() / QUICK_CONDITIONS.size,
+                notStartedRuns = plannedRuns - attemptedRuns,
+                successRate = successfulRuns.toDouble() / plannedRuns,
                 status = status,
                 conditionSummaries = summaries,
             )
         }
 
-        private fun conditionSummaries(results: List<SummaryRun>): List<ConditionSummary> =
+        private fun conditionSummaries(
+            mode: CampaignMode,
+            results: List<SummaryRun>,
+        ): List<ConditionSummary> =
             QUICK_CONDITIONS.map { condition ->
-                val plannedRuns = 1
+                val plannedRuns = mode.runsPerCondition
                 val conditionRuns = results.filter { run -> run.conditionId == condition.id }
                 val attemptedRuns = conditionRuns.count { run -> run.status != RunStatus.NOT_STARTED }
                 val successfulRuns = conditionRuns.filter { run -> run.taskSuccess && run.scoreEligible }
-                val metrics = successfulRuns.mapNotNull { run -> run.metrics }.singleOrNull()
+                val ttftValues = successfulRuns.mapNotNull { run -> run.metrics?.ttftMs }
+                val completionValues = successfulRuns.mapNotNull { run -> run.metrics?.completionMs }
+                val eventRateValues = successfulRuns.mapNotNull { run -> run.metrics?.streamEventRateEps }
+                val stallCountValues = successfulRuns.mapNotNull { run -> run.metrics?.stallCount?.toDouble() }
+                val stallDurationValues = successfulRuns.mapNotNull { run -> run.metrics?.stallDurationMs }
+                val stallFractionValues = successfulRuns.mapNotNull { run -> run.metrics?.stallFraction }
                 ConditionSummary(
                     conditionId = condition.id,
                     plannedRuns = plannedRuns,
@@ -451,23 +698,39 @@ class PrototypeQuickCampaignRunner private constructor(
                     failedRuns = attemptedRuns - successfulRuns.size,
                     notStartedRuns = plannedRuns - attemptedRuns,
                     successRate = successfulRuns.size.toDouble() / plannedRuns,
-                    confidence = if (successfulRuns.size == 1) Confidence.LOW else Confidence.NONE,
-                    medianTtftMs = metrics?.ttftMs,
-                    minTtftMs = metrics?.ttftMs,
-                    maxTtftMs = metrics?.ttftMs,
-                    medianCompletionMs = metrics?.completionMs,
-                    minCompletionMs = metrics?.completionMs,
-                    maxCompletionMs = metrics?.completionMs,
-                    medianStreamEventRateEps = metrics?.streamEventRateEps,
-                    medianStallCount = metrics?.stallCount?.toDouble(),
-                    medianStallDurationMs = metrics?.stallDurationMs,
-                    medianStallFraction = metrics?.stallFraction,
+                    confidence = when (successfulRuns.size) {
+                        3 -> Confidence.HIGH
+                        2 -> Confidence.MEDIUM
+                        1 -> Confidence.LOW
+                        else -> Confidence.NONE
+                    },
+                    medianTtftMs = median(ttftValues),
+                    minTtftMs = ttftValues.minOrNull(),
+                    maxTtftMs = ttftValues.maxOrNull(),
+                    medianCompletionMs = median(completionValues),
+                    minCompletionMs = completionValues.minOrNull(),
+                    maxCompletionMs = completionValues.maxOrNull(),
+                    medianStreamEventRateEps = median(eventRateValues),
+                    medianStallCount = median(stallCountValues),
+                    medianStallDurationMs = median(stallDurationValues),
+                    medianStallFraction = median(stallFractionValues),
                     rpi = null,
                     rpiPolicyId = RPI_POLICY_ID,
                     primaryNullReason = null,
                     allNullReasons = null,
                 )
             }
+
+        private fun median(values: List<Double>): Double? {
+            if (values.isEmpty()) return null
+            val sorted = values.sorted()
+            val middle = sorted.size / 2
+            return if (sorted.size % 2 == 1) {
+                sorted[middle]
+            } else {
+                (sorted[middle - 1] + sorted[middle]) / 2.0
+            }
+        }
 
         private fun enrichRpi(
             summaries: List<ConditionSummary>,
@@ -563,7 +826,6 @@ class PrototypeQuickCampaignRunner private constructor(
             return floor(raw.coerceIn(0.0, 100.0) + 0.5).toInt()
         }
 
-        private const val CAMPAIGN_MODE = "quick"
         private const val EXPECTED_CONTENT_EVENTS = 120
         private const val QUICK_COOLDOWN_MS = 1_000L
         private const val EVIDENCE_SCHEMA_VERSION = "aneb-prototype-evidence-0.1"
@@ -641,8 +903,13 @@ class PrototypeQuickCampaignRunner private constructor(
 
         private fun productExecution(
             streamAdapter: PrototypeRunStreamAdapter,
-        ): suspend (RunPlan, String) -> RunResult = { plan, clockDomainId ->
-            val streamResult = streamAdapter.run(plan.endpoint, plan.requestBody)
+        ): suspend (RunPlan, String, (PrototypeRunLiveSnapshot) -> Unit) -> RunResult =
+            { plan, clockDomainId, publishLiveSnapshot ->
+            val streamResult = streamAdapter.run(
+                plan.endpoint,
+                plan.requestBody,
+                publishLiveSnapshot,
+            )
             val evidenceEvents = projectCompleteEvidence(plan, clockDomainId, streamResult)
             val metrics = completeRunMetrics(plan.condition, streamResult)
             RunResult.complete(
@@ -757,7 +1024,7 @@ class PrototypeQuickCampaignRunner private constructor(
 
         private fun conditionMetadata(conditionId: String): ConditionMetadata =
             QUICK_CONDITIONS.singleOrNull { it.id == conditionId }
-                ?: throw IllegalArgumentException("unknown Prototype Quick condition: $conditionId")
+                ?: throw IllegalArgumentException("unknown Prototype campaign condition: $conditionId")
 
         private fun projectCompleteEvidence(
             plan: RunPlan,
@@ -839,6 +1106,8 @@ class PrototypeQuickCampaignRunner private constructor(
             plan: RunPlan,
             clockDomainId: String,
             evidence: PrototypeInterruptedStreamEvidence,
+            failureReason: String = "stream_interrupted",
+            terminalEventType: String = "run_failed",
         ): List<JsonObject> {
             requireInterruptedRunStartedPlanAuthority(plan, evidence)
             val events = ArrayList<JsonObject>(evidence.validatedContentEvents.size + 2)
@@ -880,10 +1149,10 @@ class PrototypeQuickCampaignRunner private constructor(
             events += evidenceEvent(
                 plan = plan,
                 clockDomainId = clockDomainId,
-                eventType = "run_failed",
+                eventType = terminalEventType,
                 clientMonotonicNanos = evidence.interruptionClientMonotonicNanos,
                 details = buildJsonObject {
-                    put("failure_reason", JsonPrimitive("stream_interrupted"))
+                    put("failure_reason", JsonPrimitive(failureReason))
                     put("events_received", JsonPrimitive(evidence.validatedContentEvents.size))
                 },
             )
@@ -941,7 +1210,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 put("schema_version", JsonPrimitive(EVIDENCE_SCHEMA_VERSION))
                 put("campaign_id", JsonPrimitive(plan.campaignId))
                 put("run_id", JsonPrimitive(plan.runId))
-                put("campaign_mode", JsonPrimitive(CAMPAIGN_MODE))
+                put("campaign_mode", JsonPrimitive(plan.campaignMode.wireValue))
                 put("run_index", JsonPrimitive(plan.runIndex))
                 put("condition_id", JsonPrimitive(condition.id))
                 put("condition_version", JsonPrimitive(condition.version))
@@ -1030,7 +1299,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 "protocol_version" to JsonPrimitive(PROTOCOL_VERSION),
                 "campaign_id" to JsonPrimitive(plan.campaignId),
                 "run_id" to JsonPrimitive(plan.runId),
-                "campaign_mode" to JsonPrimitive(CAMPAIGN_MODE),
+                "campaign_mode" to JsonPrimitive(plan.campaignMode.wireValue),
                 "run_index" to JsonPrimitive(plan.runIndex),
                 "condition_id" to JsonPrimitive(condition.id),
                 "condition_version" to JsonPrimitive(condition.version),
@@ -1044,7 +1313,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 "terminal_status" to JsonPrimitive("complete"),
             )
             require(expected.all { (key, value) -> details[key] == value }) {
-                "Prototype terminal receipt does not match the Quick run plan"
+                "Prototype terminal receipt does not match the campaign plan"
             }
         }
 
@@ -1053,11 +1322,12 @@ class PrototypeQuickCampaignRunner private constructor(
             runId: String,
             runIndex: Int,
             conditionId: String,
+            mode: CampaignMode,
         ): String = buildJsonObject {
             put("protocol_version", JsonPrimitive(PROTOCOL_VERSION))
             put("campaign_id", JsonPrimitive(campaignId))
             put("run_id", JsonPrimitive(runId))
-            put("campaign_mode", JsonPrimitive(CAMPAIGN_MODE))
+            put("campaign_mode", JsonPrimitive(mode.wireValue))
             put("run_index", JsonPrimitive(runIndex))
             put("workload_id", JsonPrimitive(WORKLOAD_ID))
             put("workload_version", JsonPrimitive(WORKLOAD_VERSION))

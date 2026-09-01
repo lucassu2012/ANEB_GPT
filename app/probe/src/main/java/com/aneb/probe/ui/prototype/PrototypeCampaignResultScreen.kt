@@ -160,6 +160,34 @@ private fun ReadyResult(
             }
         }
     }
+    presentation.blockingError?.let { error ->
+        Spacer(Modifier.height(12.dp))
+        AnebGradientCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(
+                    error.code,
+                    color = colors.brand,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    error.title,
+                    color = colors.ink,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(error.cause, color = colors.ink, fontSize = 11.sp, lineHeight = 17.sp)
+                Text(error.detail, color = colors.muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text(
+                    error.action,
+                    color = colors.brand,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
     Spacer(Modifier.height(12.dp))
     AnebGradientCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

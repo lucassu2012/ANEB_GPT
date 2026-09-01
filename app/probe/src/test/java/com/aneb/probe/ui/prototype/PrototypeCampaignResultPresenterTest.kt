@@ -8,7 +8,9 @@ import com.aneb.probe.prototype.PrototypeCampaignPersistenceFixture
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -19,6 +21,40 @@ import java.util.Locale
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE)
 class PrototypeCampaignResultPresenterTest {
+    @Test
+    fun `complete Acceptance result presents nine runs as three aggregated conditions`() =
+        runBlocking {
+            val context: Context = RuntimeEnvironment.getApplication()
+            val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+            try {
+                val repository = PrototypeCampaignRoomRepository(database)
+                val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                    "campaign-result-presenter-acceptance",
+                )
+                val result = PrototypeCampaignPersistenceFixture.completeAcceptanceCampaign(config)
+                repository.save(config, result)
+                val stored = requireNotNull(repository.load(config.campaignId))
+
+                val presentation = PrototypeCampaignResultPresenter.present(stored)
+
+                assertEquals("Acceptance", presentation.campaignMode)
+                assertEquals("9", presentation.attemptedRuns)
+                assertEquals("9", presentation.successfulRuns)
+                assertEquals(listOf("Baseline", "Slow", "Unstable"), presentation.conditions.map {
+                    it.title
+                })
+                stored.summary.conditionSummaries.zip(presentation.conditions).forEach {
+                        (summary, condition) ->
+                    assertEquals("HIGH", condition.confidence)
+                    assertEquals(metric(summary.medianTtftMs, " ms"), condition.ttft)
+                    assertEquals(metric(summary.medianCompletionMs, " ms"), condition.completion)
+                    assertNull(condition.metricNullReason)
+                }
+            } finally {
+                database.close()
+            }
+        }
+
     @Test
     fun `complete result is presented only from the validated stored campaign`() = runBlocking {
         val context: Context = RuntimeEnvironment.getApplication()
@@ -121,6 +157,77 @@ class PrototypeCampaignResultPresenterTest {
             database.close()
         }
     }
+
+    @Test
+    fun `invalid sequence result exposes frozen P009 evidence and recovery guidance`() = runBlocking {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+        try {
+            val repository = PrototypeCampaignRoomRepository(database)
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                PrototypeCampaignPersistenceFixture.INVALID_SEQUENCE_CAMPAIGN_ID,
+            )
+            val result = PrototypeCampaignPersistenceFixture.invalidSequenceQuickCampaign(config)
+            repository.save(config, result)
+            val stored = requireNotNull(repository.load(config.campaignId))
+
+            val presentation = PrototypeCampaignResultPresenter.present(stored)
+
+            val error = presentation.blockingError
+            assertNotNull(error)
+            requireNotNull(error)
+            assertEquals("P009_INVALID_SEQUENCE", error.code)
+            assertEquals("Invalid event sequence", error.title)
+            assertEquals(
+                "A content event was missing, duplicated, or out of order.",
+                error.cause,
+            )
+            assertEquals(
+                "Evidence was retained. Report this implementation defect.",
+                error.action,
+            )
+            assertEquals(true, error.evidenceRetained)
+            assertEquals("invalid_sequence", presentation.conditions.first().metricNullReason)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun `Acceptance P009 stays visible when earlier successful runs keep aggregate medians`() =
+        runBlocking {
+            val context: Context = RuntimeEnvironment.getApplication()
+            val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+            try {
+                val repository = PrototypeCampaignRoomRepository(database)
+                val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                    "campaign-result-presenter-acceptance-p009",
+                )
+                val result = PrototypeCampaignPersistenceFixture
+                    .invalidSequenceAcceptanceCampaign(config)
+                assertEquals(
+                    listOf(
+                        "COMPLETE", "COMPLETE", "COMPLETE",
+                        "COMPLETE", "COMPLETE", "COMPLETE",
+                        "COMPLETE", "INVALID_SEQUENCE", "NOT_STARTED",
+                    ),
+                    result.runs.map { it.status.name },
+                )
+                repository.save(config, result)
+                val stored = requireNotNull(repository.load(config.campaignId))
+
+                val presentation = PrototypeCampaignResultPresenter.present(stored)
+
+                val slow = presentation.conditions.single { it.conditionId == "slow_v0.1" }
+                assertFalse(slow.ttft == "—")
+                assertFalse(slow.completion == "—")
+                assertEquals("P009_INVALID_SEQUENCE", presentation.blockingError?.code)
+                assertTrue(presentation.blockingError?.detail?.contains("Run 8") == true)
+                assertTrue(presentation.blockingError?.detail?.contains("slow_v0.1") == true)
+            } finally {
+                database.close()
+            }
+        }
 
     @Test
     fun `condition cards preserve frozen identities and the complete claim boundary`() = runBlocking {
