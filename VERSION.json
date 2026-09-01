@@ -1,0 +1,40 @@
+{
+  "format": "aneb-prototype-0.1-skeleton-release-v1",
+  "release_state": "SKELETON_NOT_RELEASE",
+  "specification_status": "G0_APPROVED",
+  "product_version": "prototype-0.1",
+  "server_artifact": "MISSING",
+  "android_artifact": "MISSING",
+  "contract_files": [
+    "profile-manifest.json",
+    "capabilities.schema.json",
+    "run-record.schema.json",
+    "score-policy.json"
+  ],
+  "contract_paths": {
+    "profile-manifest.json": "contracts/prototype-0.1/profile-manifest.json",
+    "capabilities.schema.json": "contracts/prototype-0.1/capabilities.schema.json",
+    "run-record.schema.json": "contracts/prototype-0.1/run-record.schema.json",
+    "score-policy.json": "contracts/prototype-0.1/score-policy.json"
+  },
+  "contract_sizes": {
+    "profile-manifest.json": 3797,
+    "capabilities.schema.json": 3535,
+    "run-record.schema.json": 21873,
+    "score-policy.json": 3074
+  },
+  "contract_hashes": {
+    "profile-manifest.json": "44393ddd5ed11a5091038a85d08ab65ee91a8566997e837d2c40fd3add57d5dc",
+    "capabilities.schema.json": "f73c974a70b4b3ba457c619bf6f06d56ad2af4af5f91c364612e04cac12ccee6",
+    "run-record.schema.json": "8106dacc0b2600f768bb5e8fd21fb99b5bae5611dc7ea2cbafdb416bedb74c66",
+    "score-policy.json": "0e00a049861e9598c7bc4b76d25713dbfca59c266924ab0d17d4a00078d993cc"
+  },
+  "schedule_hashes": {
+    "baseline_v0.1": "46eced73d2fbc886040a3357f84551d424a95e15d6e9e69c16958f6e52e33d7e",
+    "slow_v0.1": "b51b27fe8332b3fc8a97472a44312b3001ccd54364a61ed8799816c299d27062",
+    "unstable_v0.1": "d11dce2a877d7c3772a4552f2d922d5f96730c9a01bb829f0203c65b110a8c58"
+  },
+  "evidence_schema": "aneb-prototype-evidence-0.1",
+  "score_policy": "rpi-0.1",
+  "artifact_admission": "PENDING_SERVER_AND_APK"
+}
