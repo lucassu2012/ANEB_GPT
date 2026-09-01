@@ -195,6 +195,11 @@ public static class AnebEvidenceCharacterizationStub {
     $evidenceStub = $evidenceStub.Replace('__SOURCE_COMMIT__', $SourceCommit)
     Add-Type -TypeDefinition $evidenceStub -Language CSharp -OutputAssembly $evidenceExecutable -OutputType ConsoleApplication
     Write-AnEbBuilderUtf8 -Path (Join-Path $Path 'evidence\_internal\runtime.dat') -Text "runtime`n"
+    New-Item -ItemType Directory -Path (Join-Path $Path 'evidence\_internal\jsonschema.dist-info') -Force | Out-Null
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $Path 'evidence\_internal\jsonschema.dist-info\REQUESTED'),
+        [byte[]]::new(0)
+    )
     $evidenceFixture = Join-Path $Path 'evidence-characterization-bundle'
     Write-AnEbBuilderUtf8 -Path (Join-Path $evidenceFixture 'valid.marker') -Text "canonical characterization fixture`n"
     $apksigner = Join-Path $Path 'apksigner-test.cmd'
@@ -317,6 +322,11 @@ try {
     )) {
         Assert-AnEbBuilderTest -Condition (Test-Path -LiteralPath (Join-Path $output ($relative -replace '/', '\')) -PathType Leaf) -Message ('package contains ' + $relative)
     }
+    $packagedRequested = Join-Path $output 'bin\evidence\_internal\jsonschema.dist-info\REQUESTED'
+    Assert-AnEbBuilderTest -Condition (
+        (Test-Path -LiteralPath $packagedRequested -PathType Leaf) -and
+        (Get-Item -LiteralPath $packagedRequested -Force).Length -eq 0
+    ) -Message 'package preserves a legitimate zero-byte evidence runtime metadata file'
     Assert-AnEbBuilderTest -Condition (-not (Test-Path -LiteralPath (Join-Path $output 'DO_NOT_COPY.txt'))) -Message 'fixed allowlist excludes unrelated source files and secret sentinel'
     Assert-AnEbBuilderTest -Condition (-not (Test-Path -LiteralPath (Join-Path $output 'contracts\prototype-0.1'))) -Message 'release package flattens only the frozen four contracts'
     $packageText = [string]::Join("`n", @(

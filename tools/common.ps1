@@ -129,7 +129,7 @@ function Get-AnEbSha256File {
 function Read-AnEbBytes {
     param([Parameter(Mandatory = $true)][string]$Path)
     Assert-AnEbRegularFile -Path $Path | Out-Null
-    return [System.IO.File]::ReadAllBytes((Get-AnEbFullPath -Path $Path))
+    return ,([System.IO.File]::ReadAllBytes((Get-AnEbFullPath -Path $Path)))
 }
 
 function ConvertTo-AnEbUtf8NoBomBytes {
@@ -155,7 +155,7 @@ function Read-AnEbUtf8Strict {
 function Write-AnEbCreateNewBytes {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][byte[]]$Bytes
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes
     )
     Assert-AnEbExistingParents -Path $Path
     $full = Get-AnEbFullPath -Path $Path
