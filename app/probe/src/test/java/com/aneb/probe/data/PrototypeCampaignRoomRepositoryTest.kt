@@ -73,6 +73,46 @@ class PrototypeCampaignRoomRepositoryTest {
     }
 
     @Test
+    fun authoritativeSaveRoundTripsExactCaptureAndRunAuthorityAcrossReopen(): Unit = runBlocking {
+        val config = roomConfig("campaign-room-v14-authority")
+        val result = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
+        val captureAuthorityJson =
+            "{ \"schema_version\" : \"capture-authority-test-0.1\", \"marker\" : \"雪\" }\n"
+        val runAuthorityJsonByRunId = result.runs.associate { run ->
+            run.runId to
+                "{ \"run_index\" : ${run.runIndex}, \"run_id\" : \"${run.runId}\" }\n"
+        }
+        assertEquals(result.runs.map { run -> run.runId }.toSet(), runAuthorityJsonByRunId.keys)
+
+        val databaseName = uniqueDatabaseName("authority")
+        var database = openFreshDatabase(databaseName)
+        var repository = PrototypeCampaignRoomRepository(database)
+        repository.saveWithAuthority(
+            config = config,
+            result = result,
+            captureAuthorityJson = captureAuthorityJson,
+            runAuthorityJsonByRunId = runAuthorityJsonByRunId,
+        )
+        database.close()
+
+        database = openFreshDatabase(databaseName)
+        repository = PrototypeCampaignRoomRepository(database)
+        val loaded = requireNotNull(repository.load(config.campaignId))
+        assertEquals(captureAuthorityJson, loaded.captureAuthorityJson)
+        assertEquals(
+            runAuthorityJsonByRunId,
+            loaded.runs.associate { run -> run.runId to run.runAuthorityJson },
+        )
+        val export = requireNotNull(repository.loadExportSnapshot(config.campaignId))
+        assertEquals(captureAuthorityJson, export.campaign.captureAuthorityJson)
+        assertEquals(
+            runAuthorityJsonByRunId,
+            export.campaign.runs.associate { run -> run.runId to run.runAuthorityJson },
+        )
+        database.close()
+    }
+
+    @Test
     fun completeAcceptanceRoundTripsNineRunsAndThreeConditionSummariesAcrossReopen(): Unit =
         runBlocking {
             val config = roomConfig("campaign-room-v13-acceptance")

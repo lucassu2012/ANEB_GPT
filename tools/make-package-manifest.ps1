@@ -15,7 +15,21 @@ try {
     if ($version.release_state -ne 'RELEASE_CANDIDATE') {
         throw 'PACKAGE_NOT_RELEASE_CANDIDATE'
     }
-    foreach ($required in @('bin\aneb-server.exe', 'android\aneb-prototype-0.1.apk')) {
+    $evidenceVerifierProperty = $version.PSObject.Properties['evidence_verifier_artifact']
+    if ($null -eq $evidenceVerifierProperty -or
+        $evidenceVerifierProperty.Value -isnot [string] -or
+        -not [string]::Equals(
+            [string]$evidenceVerifierProperty.Value,
+            'bin/evidence/aneb-evidence.exe',
+            [System.StringComparison]::Ordinal
+        )) {
+        throw 'VERSION_EVIDENCE_VERIFIER_ARTIFACT_INVALID'
+    }
+    foreach ($required in @(
+        'bin\aneb-server.exe',
+        'bin\evidence\aneb-evidence.exe',
+        'android\aneb-prototype-0.1.apk'
+    )) {
         Assert-AnEbRegularFile -Path (Join-Path $rootFull $required) | Out-Null
     }
 

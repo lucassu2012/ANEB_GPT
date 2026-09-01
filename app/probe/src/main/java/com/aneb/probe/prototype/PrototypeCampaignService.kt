@@ -145,11 +145,30 @@ internal class PersistingPrototypeCampaignExecutor(
                 }
             }
         } catch (cancelled: PrototypeCampaignCancelledWithResult) {
-            persist(config, cancelled.result, publishSaving = true)
-            throw PrototypeCampaignCancellationPersisted(cancelled.result, cancelled)
+            try {
+                persist(config, cancelled.result, publishSaving = true)
+                throw PrototypeCampaignCancellationPersisted(cancelled.result, cancelled)
+            } catch (publication: PrototypeCampaignPublicationFailedWithResult) {
+                throw PrototypeCampaignCancellationPersisted(
+                    result = cancelled.result,
+                    cause = cancelled,
+                    publicationWarning = publication.message,
+                )
+            }
         } catch (cancelled: CancellationException) {
             val completed = completedResult.get() ?: throw cancelled
-            persist(config, completed, publishSaving = false)
+            try {
+                persist(config, completed, publishSaving = false)
+            } catch (publication: PrototypeCampaignPublicationFailedWithResult) {
+                if (!completionClaimed.get()) {
+                    throw PrototypeCampaignCancellationPersisted(
+                        result = completed,
+                        cause = PrototypeCampaignCancelledWithResult(completed, cancelled),
+                        publicationWarning = publication.message,
+                    )
+                }
+                throw publication
+            }
             if (!completionClaimed.get()) {
                 throw PrototypeCampaignCancellationPersisted(
                     completed,
@@ -615,8 +634,12 @@ class PrototypeCampaignService : Service() {
             },
             executionLease = executionLease,
         )
-        val ticketTransport = AnebClientPrototypeRawPostTransport(AnebClient())
+        val prototypeClient = AnebClient()
+        val ticketTransport = AnebClientPrototypeRawPostTransport(prototypeClient)
         val repository = PrototypeCampaignRoomRepository(AnebDatabase.get(applicationContext))
+        val authorityProvider = PrototypeCampaignAuthorityProvider(
+            PrototypeAndroidRuntimeCaptureReader.read(applicationContext),
+        )
         owner = PrototypeCampaignJobOwner(
             scope = serviceScope,
             executor = PersistingPrototypeCampaignExecutor(
@@ -633,9 +656,11 @@ class PrototypeCampaignService : Service() {
                         mode = config.campaignMode,
                     )
                 },
-                store = PrototypeCampaignResultStore { config, result ->
-                    repository.save(config, result)
-                },
+                store = PrototypeCampaignProductionResultStore(
+                    repository = repository,
+                    authorityProvider = authorityProvider,
+                    client = prototypeClient,
+                ),
                 backgroundDispatcher = Dispatchers.IO,
                 publishProgress = publishProgress,
             ),

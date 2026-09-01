@@ -9,6 +9,7 @@ raw-evidence chain.  It deliberately stays inside the Prototype 0.1 scope.
 
 from __future__ import annotations
 
+import argparse
 import copy
 import csv
 import hashlib
@@ -16,10 +17,11 @@ import io
 import json
 import math
 import re
+import shutil
 import stat
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape as html_escape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -231,10 +233,21 @@ PROFILE_VERSION = "0.1"
 TERMINAL_RECEIPT_VERSION = "prototype-terminal-receipt-0.1"
 SCORING_EVENT_TYPES = {"run_started", "content_event", "terminal_event"}
 SERIALIZED_NUMBER_TOLERANCE = 0.5e-6 + 1e-12
+FORBIDDEN_EVIDENCE_PATTERNS = (
+    re.compile(
+        r"(?i)(?:^|[^A-Za-z0-9_])(?:api[_-]?key|authorization|password|passwd|secret|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[^\s,;<]+"
+    ),
+    re.compile(
+        r"(?i)(?:^|[^A-Za-z0-9_])(?:imei|device[_-]?serial|android[_-]?id|advertising[_-]?id|phone[_-]?number|account[_-]?id|user[_-]?prompt)\s*[:=]\s*[^\s,;<]+"
+    ),
+)
 
 
 def load_json(name: str) -> dict[str, Any]:
-    return json.loads((ROOT / name).read_text(encoding="utf-8"))
+    return _strict_json_loads(
+        (ROOT / name).read_text(encoding="utf-8"),
+        f"contract {name}",
+    )
 
 
 def canonical_file_bytes(name: str) -> bytes:
@@ -863,6 +876,176 @@ def refresh_bundle_manifest(root: Path) -> None:
     )
 
 
+def build_bundle_manifest(root: Path, campaign_id: str, publication_status: str) -> dict[str, Any]:
+    artifacts = []
+    for name in CANONICAL_BUNDLE_FILES:
+        if name == "manifest.json":
+            continue
+        data = (root / name).read_bytes()
+        artifacts.append(
+            {
+                "path": name,
+                "media_type": CANONICAL_MEDIA_TYPES[name],
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    return {
+        "manifest_version": "aneb-prototype-manifest-0.1",
+        "campaign_id": campaign_id,
+        "publication_status": publication_status,
+        "created_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "artifacts": artifacts,
+    }
+
+
+def finalize_e2e_bundle(input_root: Path, output_root: Path, campaign_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", campaign_id):
+        raise ValueError("campaign id is not safe for publication")
+    input_root = input_root.resolve(strict=True)
+    expected_payloads = {name for name in CANONICAL_BUNDLE_FILES if name != "manifest.json"}
+    actual_payloads = {path.name for path in input_root.iterdir()}
+    if actual_payloads != expected_payloads:
+        raise ValueError("finalizer input is not the frozen six-file set")
+    if any(not is_regular_nonlink_file(input_root / name) for name in expected_payloads):
+        raise ValueError("finalizer inputs must be regular non-symlink files")
+    meta = _strict_json_loads(
+        (input_root / "meta.json").read_text(encoding="utf-8"),
+        "finalizer metadata",
+    )
+    if not isinstance(meta, dict) or meta.get("campaign_id") != campaign_id:
+        raise ValueError("finalizer campaign id does not match metadata")
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    output_root = output_root.resolve(strict=True)
+    final_root = output_root / campaign_id
+    if final_root.exists():
+        raise ValueError("published campaign already exists")
+    partial_root = Path(tempfile.mkdtemp(prefix=f"{campaign_id}.partial-", dir=output_root))
+    manifest_path = partial_root / "manifest.json"
+    try:
+        for name in sorted(expected_payloads):
+            with (input_root / name).open("rb") as source, (partial_root / name).open("xb") as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+        manifest = build_bundle_manifest(partial_root, campaign_id, "verified")
+        with manifest_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
+        verify_e2e_bundle(partial_root, load_json("profile-manifest.json"), EXPECTED_PROFILE_HASH)
+        partial_root.rename(final_root)
+        return final_root
+    except BaseException:
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["publication_status"] = "candidate"
+                manifest_path.write_text(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        raise
+
+
+def _strict_json_loads(text: str, label: str) -> Any:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains a duplicate JSON key")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(text, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} is not valid JSON") from exc
+
+
+def publish_android_upload(input_path: Path, output_root: Path) -> dict[str, Any]:
+    input_path = input_path.resolve(strict=True)
+    if not is_regular_nonlink_file(input_path):
+        raise ValueError("Android handoff must be a regular non-symlink file")
+    payload_text = input_path.read_text(encoding="utf-8")
+    payload = _strict_json_loads(payload_text, "Android handoff")
+    expected_keys = {
+        "schema_version",
+        "campaign_id",
+        "meta_json",
+        "events_jsonl",
+        "runs_csv",
+        "summary_csv",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ValueError("Android handoff shape is not canonical")
+    if payload["schema_version"] != "aneb-prototype-upload-0.1":
+        raise ValueError("Android handoff schema version is not supported")
+    campaign_id = payload["campaign_id"]
+    if not isinstance(campaign_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]+", campaign_id):
+        raise ValueError("Android handoff campaign id is not safe")
+    for field in ["meta_json", "events_jsonl", "runs_csv", "summary_csv"]:
+        value = payload[field]
+        requires_terminal_lf = field != "events_jsonl" or value != ""
+        if (
+            not isinstance(value, str)
+            or value.startswith("\ufeff")
+            or "\r" in value
+            or "\x00" in value
+            or (requires_terminal_lf and not value.endswith("\n"))
+        ):
+            raise ValueError(f"Android handoff {field} is not canonical UTF-8/LF text")
+
+    meta = _strict_json_loads(payload["meta_json"], "Android handoff meta_json")
+    if not isinstance(meta, dict) or meta.get("campaign_id") != campaign_id:
+        raise ValueError("Android handoff campaign id does not match metadata")
+    event_lines = payload["events_jsonl"].splitlines()
+    for index, line in enumerate(event_lines, start=1):
+        event = _strict_json_loads(line, f"Android handoff event line {index}")
+        if not isinstance(event, dict):
+            raise ValueError("Android handoff evidence event is not an object")
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    output_root = output_root.resolve(strict=True)
+    with tempfile.TemporaryDirectory(prefix=f"{campaign_id}.handoff-") as temporary:
+        input_root = Path(temporary)
+        for name, field in [
+            ("meta.json", "meta_json"),
+            ("events.jsonl", "events_jsonl"),
+            ("runs.csv", "runs_csv"),
+            ("summary.csv", "summary_csv"),
+        ]:
+            (input_root / name).write_text(payload[field], encoding="utf-8", newline="\n")
+
+        runs = [csv_row_to_run(row) for row in read_csv(input_root / "runs.csv", RUN_COLUMNS)]
+        expected_summary = compute_summary_rows(
+            runs,
+            load_json("profile-manifest.json"),
+            meta["campaign_mode"],
+            meta["campaign_status"],
+        )
+        (input_root / "report.html").write_text(
+            render_report_html(meta, runs, expected_summary),
+            encoding="utf-8",
+            newline="\n",
+        )
+        received_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        (input_root / "run.log").write_text(
+            f"{received_at} INFO campaign.received campaign_id={campaign_id}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        published = finalize_e2e_bundle(input_root, output_root, campaign_id)
+
+    manifest_path = published / "manifest.json"
+    return {
+        "campaign_id": campaign_id,
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "publication_status": "verified",
+        "schema_version": "aneb-prototype-publication-receipt-0.1",
+    }
+
+
 def refresh_bundle_metadata_for_test(root: Path, profile: dict[str, Any]) -> None:
     """Keep metadata aligned when a regression mutator is intentionally coordinated."""
     meta_path = root / "meta.json"
@@ -1138,7 +1321,7 @@ def validate_null_reason_row(row: dict[str, str]) -> None:
         return
     if primary == "" or all_reasons == "":
         raise ValueError("null RPI needs primary and all reasons")
-    parsed = json.loads(all_reasons)
+    parsed = _strict_json_loads(all_reasons, "summary all_null_reasons")
     if not isinstance(parsed, list) or parsed != ordered_null_reasons(parsed):
         raise ValueError("null reasons are not ordered/deduplicated")
     if parsed[0] != primary:
@@ -1769,9 +1952,19 @@ def verify_e2e_bundle(
         raise ValueError(f"campaign bundle file set is not the frozen seven-file set (extra={extra}, missing={missing})")
     if any(not is_regular_nonlink_file(root / name) for name in expected_files):
         raise ValueError("campaign bundle entries must be regular non-symlink files")
+    for name in expected_files:
+        text = (root / name).read_text(encoding="utf-8")
+        if any(pattern.search(text) for pattern in FORBIDDEN_EVIDENCE_PATTERNS):
+            raise ValueError("campaign evidence contains a forbidden secret or stable identifier")
     try:
-        meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
-        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        meta = _strict_json_loads(
+            (root / "meta.json").read_text(encoding="utf-8"),
+            "campaign metadata",
+        )
+        manifest = _strict_json_loads(
+            (root / "manifest.json").read_text(encoding="utf-8"),
+            "campaign manifest",
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("campaign metadata or manifest is malformed") from exc
     assert_meta_contract(meta, profile, profile_hash)
@@ -1813,10 +2006,11 @@ def verify_e2e_bundle(
         data = (root / path).read_bytes()
         if item.get("size_bytes") != len(data) or item.get("sha256") != hashlib.sha256(data).hexdigest():
             raise ValueError("campaign manifest artifact hash/size mismatch")
+    events_text = (root / "events.jsonl").read_text(encoding="utf-8")
     events: list[dict[str, Any]] = []
-    for line in (root / "events.jsonl").read_text(encoding="utf-8").splitlines():
+    for line_number, line in enumerate(events_text.splitlines(), start=1):
         if line:
-            events.append(json.loads(line))
+            events.append(_strict_json_loads(line, f"campaign event line {line_number}"))
     run_rows = read_csv(root / "runs.csv", RUN_COLUMNS)
     runs = [csv_row_to_run(row) for row in run_rows]
     for run in runs:
@@ -1846,8 +2040,11 @@ def verify_e2e_bundle(
         campaign_status = inferred_campaign_status
     else:
         raise ValueError("campaign status is not backed by run execution or explicit campaign authority")
-    if not events:
-        raise ValueError("raw evidence bundle is empty or malformed")
+    attempted_runs = [run for run in runs if run["run_status"] != "not_started"]
+    if not events and events_text != "":
+        raise ValueError("empty raw evidence must be an exact zero-byte events.jsonl")
+    if not events and attempted_runs:
+        raise ValueError("attempted run is absent from empty events.jsonl")
     for event in events:
         if event.get("schema_version") != EVIDENCE_SCHEMA_VERSION:
             raise ValueError("raw event schema_version is not the published evidence version")
@@ -1869,20 +2066,27 @@ def verify_e2e_bundle(
             raise ValueError("event has no clock-domain identity")
         if type(event.get("client_monotonic_ns")) is not int:
             raise ValueError("event timestamp is not a JSON integer")
-    raw_campaign_ids = {event.get("campaign_id") for event in events}
-    if len(raw_campaign_ids) != 1 or None in raw_campaign_ids:
-        raise ValueError("raw events do not share one campaign identity")
-    raw_campaign_id = next(iter(raw_campaign_ids))
-    if meta.get("campaign_id") != raw_campaign_id:
-        raise ValueError("campaign metadata campaign identity does not match raw authority")
+    run_campaign_ids = {run["campaign_id"] for run in runs}
+    if len(run_campaign_ids) != 1:
+        raise ValueError("runs.csv records do not share one campaign identity")
+    run_campaign_id = next(iter(run_campaign_ids))
+    if meta.get("campaign_id") != run_campaign_id:
+        raise ValueError("campaign metadata campaign identity does not match run authority")
+    if events:
+        raw_campaign_ids = {event.get("campaign_id") for event in events}
+        if len(raw_campaign_ids) != 1 or None in raw_campaign_ids:
+            raise ValueError("raw events do not share one campaign identity")
+        raw_campaign_id = next(iter(raw_campaign_ids))
+        if raw_campaign_id != run_campaign_id:
+            raise ValueError("runs.csv campaign identity does not match raw authority")
+    else:
+        raw_campaign_id = run_campaign_id
     groups: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         groups.setdefault(event["run_id"], []).append(event)
     run_ids = {run["run_id"] for run in runs}
     if not set(groups).issubset(run_ids):
         raise ValueError("raw event/run id sets disagree")
-    if not groups:
-        raise ValueError("raw evidence bundle has no attempted run events")
     end_by_index: dict[int, int] = {}
     for run in runs:
         run_id = run["run_id"]
@@ -2123,6 +2327,8 @@ def verify_e2e_bundle(
         row["condition_id"] for row in actual_summary
     ] != CONDITION_ORDER:
         raise ValueError("summary.csv does not have one row per unique condition in frozen order")
+    if {row["campaign_id"] for row in actual_summary} != {raw_campaign_id}:
+        raise ValueError("summary.csv campaign identity does not match campaign authority")
     for actual, expected in zip(actual_summary, expected_csv):
         if actual["condition_id"] not in CONDITION_ORDER:
             raise ValueError("summary contains an unknown condition")
@@ -3882,6 +4088,83 @@ def main() -> int:
     return 0
 
 
+def run_cli(argv: list[str], include_fixture_commands: bool = True) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "ANEB Prototype 0.1 contract oracle"
+            if include_fixture_commands
+            else "ANEB Prototype 0.1 evidence verifier"
+        )
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    if include_fixture_commands:
+        emit_parser = subparsers.add_parser("emit-bundle", help="emit a canonical test bundle")
+        emit_parser.add_argument(
+            "--scenario",
+            choices=("quick-complete", "quick-interrupted", "acceptance-complete"),
+            required=True,
+        )
+        emit_parser.add_argument("--output", type=Path, required=True)
+        emit_parser.add_argument("--omit-manifest", action="store_true")
+
+    verify_parser = subparsers.add_parser("verify-bundle", help="verify one canonical bundle")
+    verify_parser.add_argument("--bundle", type=Path, required=True)
+
+    finalize_parser = subparsers.add_parser("finalize-bundle", help="verify and atomically publish canonical evidence")
+    finalize_parser.add_argument("--input", type=Path, required=True)
+    finalize_parser.add_argument("--output-root", type=Path, required=True)
+    finalize_parser.add_argument("--campaign-id", required=True)
+
+    publish_parser = subparsers.add_parser(
+        "publish-upload",
+        help="render, verify, and atomically publish an Android evidence handoff",
+    )
+    publish_parser.add_argument("--input", type=Path, required=True)
+    publish_parser.add_argument("--output-root", type=Path, required=True)
+
+    args = parser.parse_args(argv)
+    profile = load_json("profile-manifest.json")
+    profile_hash = hashlib.sha256(canonical_file_bytes("profile-manifest.json")).hexdigest()
+    if profile_hash != EXPECTED_PROFILE_HASH:
+        raise RuntimeError("G0 profile hash is not the frozen authority hash")
+
+    if args.command == "emit-bundle":
+        output = args.output.resolve()
+        output.mkdir(parents=True, exist_ok=False)
+        campaign_mode = "acceptance" if args.scenario == "acceptance-complete" else "quick"
+        statuses = {1: "interrupted"} if args.scenario == "quick-interrupted" else None
+        build_e2e_bundle(output, profile, profile_hash, campaign_mode, statuses)
+        if args.omit_manifest:
+            manifest = output / "manifest.json"
+            if not manifest.is_file():
+                raise RuntimeError("G0 builder did not produce its manifest")
+            manifest.unlink()
+        print(f"G0_BUILD_OK scenario={args.scenario}")
+        return 0
+
+    if args.command == "verify-bundle":
+        verify_e2e_bundle(args.bundle.resolve(), profile, profile_hash)
+        print("G0_VERIFY_OK")
+        return 0
+
+    if args.command == "publish-upload":
+        receipt = publish_android_upload(args.input, args.output_root)
+        receipt_line = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        stdout_buffer = getattr(sys.stdout, "buffer", None)
+        if stdout_buffer is None:
+            sys.stdout.write(receipt_line.decode("utf-8") + "\n")
+            sys.stdout.flush()
+        else:
+            stdout_buffer.write(receipt_line + b"\n")
+            stdout_buffer.flush()
+        return 0
+
+    published = finalize_e2e_bundle(args.input, args.output_root, args.campaign_id)
+    print(f"G4_FINALIZE_OK campaign={args.campaign_id} path={published}")
+    return 0
+
+
 def _mutate_event_field(path: Path, event_type: str, seq: int, field: str, value: Any) -> None:
     lines = (path / "events.jsonl").read_text(encoding="utf-8").splitlines()
     for index, line in enumerate(lines):
@@ -3924,7 +4207,7 @@ def _mutate_event_timestamp_regression(path: Path) -> None:
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
-    except (AssertionError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        raise SystemExit(run_cli(sys.argv[1:]) if len(sys.argv) > 1 else main())
+    except (AssertionError, RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         raise SystemExit(1)

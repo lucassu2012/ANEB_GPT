@@ -4,7 +4,7 @@ import com.aneb.probe.BuildConfig
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 
-/** Keeps the engineering-wide cleartext exception scoped to Prototype private-node traffic. */
+/** Keeps the build-level cleartext exception scoped to Prototype private-node traffic. */
 internal object EngineeringCleartextPolicy {
     fun interceptor(prototypePrivate: Boolean): Interceptor = Interceptor { chain ->
         val request = chain.request()
@@ -15,15 +15,16 @@ internal object EngineeringCleartextPolicy {
     fun requireAllowed(
         url: HttpUrl,
         prototypePrivate: Boolean,
-        engineering: Boolean = BuildConfig.PROTOTYPE_ENGINEERING,
+        prototypeCleartextEnabled: Boolean = BuildConfig.PROTOTYPE_PRIVATE_CLEARTEXT,
     ) {
-        require(isAllowed(url, engineering, prototypePrivate)) {
-            "cleartext network traffic is disabled for this engineering request"
+        require(isAllowed(url, prototypeCleartextEnabled, prototypePrivate)) {
+            "cleartext network traffic is disabled for this request"
         }
     }
 
-    fun isAllowed(url: HttpUrl, engineering: Boolean, prototypePrivate: Boolean): Boolean {
-        if (!engineering || url.isHttps) return true
+    fun isAllowed(url: HttpUrl, prototypeCleartextEnabled: Boolean, prototypePrivate: Boolean): Boolean {
+        if (url.isHttps) return true
+        if (!prototypeCleartextEnabled) return false
         if (!prototypePrivate || url.scheme != "http" || url.query != null || url.fragment != null) return false
         if (url.encodedPath !in PROTOTYPE_PATHS) return false
         return isPrivateOrLoopbackIpv4(url.host)
@@ -41,5 +42,6 @@ internal object EngineeringCleartextPolicy {
     private val PROTOTYPE_PATHS = setOf(
         "/api/v1/prototype/capabilities",
         "/api/v1/prototype/runs",
+        "/api/v1/prototype/campaigns/evidence",
     )
 }

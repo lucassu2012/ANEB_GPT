@@ -40,7 +40,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     //      （真机硬切换拆除原绑定网后迁到新默认网恢复的样本数，两种 C2 语义，D-23，additive）
     // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
     // v13：Prototype 0.1——新增 normalized campaign/run/evidence exact3 表。
-    version = 13,
+    // v14：Prototype G4——campaign/run 各增一个可空 exact authority JSON；历史行保持 null。
+    version = 14,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -304,6 +305,18 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        /** v13→v14: add exact capture authority without inventing provenance for historical rows. */
+        internal val MIGRATION_13_14_SQL: List<String> = listOf(
+            "ALTER TABLE `prototype_campaign` ADD COLUMN `captureAuthorityJson` TEXT",
+            "ALTER TABLE `prototype_run` ADD COLUMN `runAuthorityJson` TEXT",
+        )
+
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_13_14_SQL.forEach(db::execSQL)
+            }
+        }
+
         private val PRODUCTION_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_6_7,
             MIGRATION_7_8,
@@ -312,6 +325,7 @@ abstract class AnebDatabase : RoomDatabase() {
             MIGRATION_10_11,
             MIGRATION_11_12,
             MIGRATION_12_13,
+            MIGRATION_13_14,
         )
 
         private val LEGACY_DESTRUCTIVE_FROM = intArrayOf(1, 2, 3, 4, 5)

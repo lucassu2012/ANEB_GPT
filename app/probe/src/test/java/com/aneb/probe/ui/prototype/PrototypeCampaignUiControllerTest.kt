@@ -606,6 +606,23 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(!showCancel)
             assertEquals("Quick campaign finished.", statusMessage)
         }
+        with(
+            presentation(
+                PrototypeCampaignSession.Finished(
+                    config,
+                    result,
+                    publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+                ),
+            ),
+        ) {
+            assertTrue(!quickRunning)
+            assertTrue(quickAvailable)
+            assertTrue(!showCancel)
+            assertEquals(
+                "Quick campaign saved locally · evidence publication failed (P018).",
+                statusMessage,
+            )
+        }
         with(presentation(PrototypeCampaignSession.Failed(config, "node unavailable"))) {
             assertTrue(!quickRunning)
             assertTrue(quickAvailable)
@@ -617,6 +634,23 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
             assertEquals("Quick campaign cancelled · partial evidence saved.", statusMessage)
+        }
+        with(
+            presentation(
+                PrototypeCampaignSession.Cancelled(
+                    config,
+                    publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+                ),
+            ),
+        ) {
+            assertTrue(!quickRunning)
+            assertTrue(quickAvailable)
+            assertTrue(!showCancel)
+            assertEquals(
+                "Quick campaign cancelled · partial evidence saved locally · " +
+                    "evidence publication failed (P018).",
+                statusMessage,
+            )
         }
     }
 

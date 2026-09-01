@@ -3,8 +3,10 @@ param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
     [ValidateRange(1, 65535)][int]$Port = 18088,
     [ValidateRange(1, 60)][int]$HealthTimeoutSeconds = 10,
+    [switch]$RequireExternalAdmission,
     [string]$AdmissionReceiptPath = '',
     [string]$ExpectedAdmissionReceiptSha256 = '',
+    [string]$PackageZipPath = '',
     [switch]$ExitAfterReady
 )
 
@@ -131,29 +133,57 @@ function Assert-AnEbJsonIntegerEquals {
     }
 }
 
-function Assert-AnEbHealthResponse {
+function Assert-AnEbServerInfoResponse {
     param(
         [Parameter(Mandatory = $true)]$Response,
         [Parameter(Mandatory = $true)]$Version
     )
     if ($null -eq $Response -or [int]$Response.StatusCode -ne 200) {
-        Stop-AnEbLaunch -Code 'P004_SERVER_START_FAILED' -Message 'health endpoint did not return HTTP 200'
+        Stop-AnEbLaunch -Code 'P004_SERVER_START_FAILED' -Message 'serverinfo endpoint did not return HTTP 200'
     }
-    $health = $null
+    $serverInfo = $null
     try {
-        $health = ConvertFrom-Json -InputObject ([string]$Response.Content)
+        $serverInfo = ConvertFrom-Json -InputObject ([string]$Response.Content)
     }
     catch {
-        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'health response is not valid JSON'
+        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'serverinfo response is not valid JSON'
     }
-    Assert-AnEbJsonObjectFields -Value $health -Expected @('status', 'server_version') -Message 'health response fields are not exact'
-    Assert-AnEbJsonStringEquals -Object $health -Name 'status' -Expected 'ok' -Message 'health response status is not ok'
+    Assert-AnEbJsonObjectFields -Value $serverInfo -Expected @(
+        'version',
+        'srv_ts_us',
+        'anchor_wall_unix_ns',
+        'uptime_s',
+        'goos',
+        'goarch',
+        'h3_enabled',
+        'tcp_slow_start_after_idle',
+        'congestion_control'
+    ) -Message 'serverinfo response fields are not exact'
     if ($null -eq $Version.PSObject.Properties['server_version'] -or
         $Version.server_version -isnot [string] -or
         [string]::IsNullOrWhiteSpace([string]$Version.server_version)) {
         Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'VERSION server_version is missing'
     }
-    Assert-AnEbJsonStringEquals -Object $health -Name 'server_version' -Expected ([string]$Version.server_version) -Message 'health response version is not the packaged server version'
+    Assert-AnEbJsonStringEquals -Object $serverInfo -Name 'version' -Expected ([string]$Version.server_version) -Message 'serverinfo response version is not the packaged server version'
+    foreach ($name in @('srv_ts_us', 'anchor_wall_unix_ns', 'uptime_s')) {
+        $property = $serverInfo.PSObject.Properties[$name]
+        $value = if ($null -eq $property) { $null } else { $property.Value }
+        if ($null -eq $property -or $value -is [bool] -or
+            (($value -isnot [int]) -and ($value -isnot [long]) -and ($value -isnot [decimal])) -or
+            [int64]$value -lt 0) {
+            Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message ('serverinfo ' + $name + ' is not a nonnegative integer')
+        }
+    }
+    foreach ($name in @('goos', 'goarch', 'tcp_slow_start_after_idle', 'congestion_control')) {
+        $property = $serverInfo.PSObject.Properties[$name]
+        if ($null -eq $property -or $property.Value -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message ('serverinfo ' + $name + ' is missing')
+        }
+    }
+    $h3Property = $serverInfo.PSObject.Properties['h3_enabled']
+    if ($null -eq $h3Property -or $h3Property.Value -isnot [bool] -or $h3Property.Value) {
+        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'serverinfo h3_enabled is not exact false'
+    }
 }
 
 function Assert-AnEbCapabilityResponse {
@@ -238,14 +268,40 @@ try {
 
     $doctor = Join-Path $PSScriptRoot 'doctor.ps1'
     $doctorArguments = @('-Root', $rootFull, '-Port', $Port)
+    if ($RequireExternalAdmission) {
+        $doctorArguments += '-RequireExternalAdmission'
+    }
     if (-not [string]::IsNullOrWhiteSpace($AdmissionReceiptPath)) {
-        $doctorArguments += @('-AdmissionReceiptPath', $AdmissionReceiptPath, '-ExpectedAdmissionReceiptSha256', $ExpectedAdmissionReceiptSha256)
+        $doctorArguments += @('-AdmissionReceiptPath', $AdmissionReceiptPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedAdmissionReceiptSha256)) {
+        $doctorArguments += @('-ExpectedAdmissionReceiptSha256', $ExpectedAdmissionReceiptSha256)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PackageZipPath)) {
+        $doctorArguments += @('-PackageZipPath', $PackageZipPath)
     }
     $doctorOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $doctor @doctorArguments)
     $doctorCode = $LASTEXITCODE
     $doctorOutput | ForEach-Object { Write-Output $_ }
     if ($doctorCode -ne 0) {
         Stop-AnEbLaunch -Code 'P001_PACKAGE_INTEGRITY' -Message 'doctor did not pass'
+    }
+    $lanAddressLines = @($doctorOutput | ForEach-Object { [string]$_ } | Where-Object { $_ -cmatch '^PASS LAN_ADDRESSES .+$' })
+    if ($lanAddressLines.Count -ne 1) {
+        Stop-AnEbLaunch -Code 'P005_NO_LAN_ADDRESS' -Message 'doctor did not report one usable LAN address set'
+    }
+    $lanAddresses = @($lanAddressLines[0].Substring('PASS LAN_ADDRESSES '.Length).Split(','))
+    if ($lanAddresses.Count -eq 0) {
+        Stop-AnEbLaunch -Code 'P005_NO_LAN_ADDRESS' -Message 'doctor did not report a usable LAN IPv4 address'
+    }
+    foreach ($lanAddress in $lanAddresses) {
+        $parsedLanAddress = $null
+        if (-not [System.Net.IPAddress]::TryParse($lanAddress, [ref]$parsedLanAddress) -or
+            $parsedLanAddress.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or
+            [System.Net.IPAddress]::IsLoopback($parsedLanAddress) -or
+            $parsedLanAddress.ToString() -cne $lanAddress) {
+            Stop-AnEbLaunch -Code 'P005_NO_LAN_ADDRESS' -Message 'doctor reported an invalid LAN IPv4 address'
+        }
     }
 
     $version = $null
@@ -263,7 +319,7 @@ try {
     Assert-AnEbRegularFile -Path $serverPath | Out-Null
     $healthPath = [string]$version.health_endpoint
     $capabilityPath = [string]$version.capability_endpoint
-    $serverArgs = @($version.server_args)
+    [string[]]$serverArgs = @($version.server_args)
     if ([string]::IsNullOrWhiteSpace($healthPath) -or
         [string]::IsNullOrWhiteSpace($capabilityPath) -or
         $serverArgs.Count -eq 0) {
@@ -271,6 +327,26 @@ try {
     }
     if (-not $healthPath.StartsWith('/') -or -not $capabilityPath.StartsWith('/')) {
         Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'server endpoints must be relative paths'
+    }
+    if (-not [string]::Equals($healthPath, '/api/v1/serverinfo', [System.StringComparison]::Ordinal) -or
+        -not [string]::Equals($capabilityPath, '/api/v1/prototype/capabilities', [System.StringComparison]::Ordinal)) {
+        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'server endpoints are not the frozen Prototype routes'
+    }
+    $addrIndexes = @()
+    for ($argumentIndex = 0; $argumentIndex -lt $serverArgs.Count; $argumentIndex++) {
+        if ($serverArgs[$argumentIndex] -ceq '-addr') {
+            $addrIndexes += $argumentIndex
+        }
+    }
+    if ($addrIndexes.Count -ne 1 -or $addrIndexes[0] -ge ($serverArgs.Count - 1)) {
+        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'server_args must contain exactly one addr and value'
+    }
+    $addrValue = $serverArgs[$addrIndexes[0] + 1]
+    if ($addrValue -cne (':' + $Port) -and $addrValue -cne ('0.0.0.0:' + $Port)) {
+        Stop-AnEbLaunch -Code 'P007_CONTRACT_MISMATCH' -Message 'server addr must listen on every interface at the launcher port'
+    }
+    if (-not ($serverArgs -ccontains '-prototype-only')) {
+        $serverArgs = [string[]]($serverArgs + @('-prototype-only'))
     }
 
     $serverProcess = Start-Process -FilePath $serverPath -ArgumentList $serverArgs -WorkingDirectory $rootFull -PassThru -WindowStyle Hidden
@@ -297,7 +373,7 @@ try {
             continue
         }
         if ([int]$health.StatusCode -eq 200) {
-            Assert-AnEbHealthResponse -Response $health -Version $version
+            Assert-AnEbServerInfoResponse -Response $health -Version $version
             break
         }
     }
@@ -325,9 +401,11 @@ try {
     Assert-AnEbCapabilityResponse -Capability $capability -Version $version -ServerPath $serverPath
 
     Write-Output 'ANEB Prototype 0.1 - READY'
-    Write-Output ("Node URL: http://127.0.0.1:" + $Port)
+    foreach ($lanAddress in $lanAddresses) {
+        Write-Output ("Node URL: http://" + $lanAddress + ':' + $Port)
+    }
     Write-Output 'Android: open ANEB Prototype Mode and enter the displayed node URL'
-    Write-Output 'Results: results'
+    Write-Output ('Results: ' + (Join-Path $rootFull 'results'))
     Write-Output 'Scope: deterministic application-layer synthetic conditions'
     Write-Output 'Press Q and Enter to stop ANEB cleanly.'
     if (-not $ExitAfterReady) {

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The signed Prototype RC permits platform cleartext only so the application-layer policy
+     can admit exact Prototype routes on literal private/loopback IPv4 nodes. Every ordinary
+     HTTP request remains denied by EngineeringCleartextPolicy. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="false">120.79.148.0</domain>
+        <trust-anchors>
+            <certificates src="@raw/aneb_ip_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

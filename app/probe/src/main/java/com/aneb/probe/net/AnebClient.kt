@@ -665,6 +665,16 @@ class AnebClient private constructor(
     internal suspend fun fetchPrototypeCapability(url: String): HttpTextResult =
         simpleCall(prototypeClient.newCall(Request.Builder().url(url).get().build()))
 
+    /** POST the already-canonical Prototype evidence carrier without parsing or rewriting it. */
+    internal suspend fun postPrototypeEvidence(url: String, jsonBody: String): HttpTextResult =
+        simpleCall(
+            prototypeClient.newCall(
+                Request.Builder().url(url)
+                    .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                    .build(),
+            ),
+        )
+
     /** POST /api/v1/results（P1 范围 8：400 时 body 含 errors 清单，调用方打日志） */
     suspend fun postResults(url: String, jsonBody: String): HttpTextResult =
         simpleCall(

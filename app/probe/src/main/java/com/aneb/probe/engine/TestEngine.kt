@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import androidx.room.withTransaction
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.EchoSampleEntity
 import com.aneb.probe.data.EnvEvent
@@ -47,6 +48,19 @@ import java.security.SecureRandom
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+
+internal object PrototypeReleaseProbeBoundary {
+    fun <T> ordinaryExternalEntry(
+        source: T?,
+        isPrototypeRelease: Boolean = BuildConfig.PROTOTYPE_RELEASE,
+    ): T? =
+        source.takeUnless { isPrototypeRelease }
+
+    suspend fun <T : Any> publishOrdinaryResult(
+        isPrototypeRelease: Boolean = BuildConfig.PROTOTYPE_RELEASE,
+        publish: suspend () -> T,
+    ): T? = if (isPrototypeRelease) null else publish()
+}
 
 /**
  * 阶段 1 统一接线（P1-C05+C06）：profile 驱动三场景 × 快测/取证双模式 ×
@@ -493,13 +507,20 @@ class TestEngine(private val context: Context) {
             if (bodyBytes > ResultReporter.MAX_REPORT_BYTES) {
                 log("REPORT_SIZE_WARN bytes=$bodyBytes limit=${ResultReporter.MAX_REPORT_BYTES}")
             }
-            val resp = client.postResults("$measureBase/api/v1/results", body)
-            reportStatus = "http=${resp.httpCode ?: "null"}"
-            if (resp.httpCode == 400) {
-                // 合同自检：服务端拒收即本端合同实现有错，errors 全量进日志
-                log("REPORT_CONTRACT_ERRORS body=${resp.body?.replace(' ', '_') ?: "empty"}")
+            val resp = PrototypeReleaseProbeBoundary.publishOrdinaryResult {
+                client.postResults("$measureBase/api/v1/results", body)
             }
-            log("REPORT http=${resp.httpCode ?: "null"} bytes=$bodyBytes error=${resp.error ?: "none"}")
+            if (resp == null) {
+                reportStatus = "disabled:prototype_release"
+                log("REPORT disabled=prototype_release bytes=$bodyBytes")
+            } else {
+                reportStatus = "http=${resp.httpCode ?: "null"}"
+                if (resp.httpCode == 400) {
+                    // 合同自检：服务端拒收即本端合同实现有错，errors 全量进日志
+                    log("REPORT_CONTRACT_ERRORS body=${resp.body?.replace(' ', '_') ?: "empty"}")
+                }
+                log("REPORT http=${resp.httpCode ?: "null"} bytes=$bodyBytes error=${resp.error ?: "none"}")
+            }
 
             persistRun(db, runEntity.copy(reportStatus = reportStatus))
             // C07 导出源：上报体原样存档（与上报严格同构，导出禁止事后重算）

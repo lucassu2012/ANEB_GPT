@@ -97,6 +97,7 @@ internal fun PrototypeCampaignResultScreen(
             )
             is PrototypeCampaignResultLoadState.Ready -> ReadyResult(
                 presentation = loadState.presentation,
+                publicationWarning = loadState.publicationWarning,
                 actionPresentation = requireNotNull(actionPresentation),
                 onExport = onExport,
                 onShare = onShare,
@@ -126,6 +127,7 @@ private fun ResultState(title: String, detail: String) {
 @Composable
 private fun ReadyResult(
     presentation: PrototypeCampaignResultPresentation,
+    publicationWarning: String?,
     actionPresentation: PrototypeCampaignResultActionPresentation,
     onExport: () -> Unit,
     onShare: () -> Unit,
@@ -137,6 +139,20 @@ private fun ReadyResult(
         title = "Campaign result",
         subtitle = "${presentation.status} · ${presentation.campaignMode}",
     )
+    publicationWarning?.let {
+        Spacer(Modifier.height(12.dp))
+        AnebGradientCard(Modifier.fillMaxWidth()) {
+            Text(
+                "P018 · Evidence publication failed. The local campaign result is still saved " +
+                    "and can be exported.",
+                color = colors.brand,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+    }
     Spacer(Modifier.height(18.dp))
     AnebGradientCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {

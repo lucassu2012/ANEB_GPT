@@ -515,6 +515,8 @@ data class PrototypeCampaignEntity(
     val rawCapabilityBody: String,
     val capabilityIdentityJson: String,
     val summaryJson: String,
+    /** Exact Prototype capture provenance; null only for rows created before Room v14. */
+    val captureAuthorityJson: String? = null,
 )
 
 /** One normalized Prototype run. Nullable fields retain the runner's partial/not-started semantics. */
@@ -543,6 +545,8 @@ data class PrototypeRunEntity(
     val failureReason: String?,
     val terminalReceiptValid: Boolean?,
     val metricsJson: String?,
+    /** Exact per-run clock/attempt authority; null only for rows created before Room v14. */
+    val runAuthorityJson: String? = null,
 )
 
 /** Canonical evidence JSON retained lexically and ordered by its normalized stream coordinate. */

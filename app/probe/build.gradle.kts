@@ -1,3 +1,7 @@
+import java.security.KeyStore
+import java.security.MessageDigest
+import java.util.Locale
+
 // ANEB Probe — :probe 模块（阶段 0：跑通一次 S1 并把全部时间戳打到屏幕日志）
 plugins {
     alias(libs.plugins.android.application)
@@ -21,6 +25,15 @@ val releaseSigningReady = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+val approvedReleaseKeyAlias = "aneb-production"
+val approvedReleaseCertificateSha256 = "b33df25ffa3b1bedc7e08af77b442bc205aeab553c07ee72344e19ed0f7b6003"
+val prototypeSourceCommit = providers.gradleProperty("aneb.prototype.sourceCommit")
+    .orElse(providers.environmentVariable("ANEB_PROTOTYPE_SOURCE_COMMIT"))
+    .orNull
+val prototypeSourceCommitPattern = Regex("^[0-9a-f]{40}$")
+val prototypeSourceCommitForBuildConfig = prototypeSourceCommit
+    ?.takeIf(prototypeSourceCommitPattern::matches)
+    .orEmpty()
 
 android {
     namespace = "com.aneb.probe"
@@ -33,6 +46,9 @@ android {
         versionCode = 20
         versionName = "0.2.0"
         buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "false")
+        buildConfigField("boolean", "PROTOTYPE_RELEASE", "false")
+        buildConfigField("boolean", "PROTOTYPE_PRIVATE_CLEARTEXT", "false")
+        buildConfigField("String", "PROTOTYPE_SOURCE_COMMIT", "\"$prototypeSourceCommitForBuildConfig\"")
     }
 
     signingConfigs {
@@ -66,6 +82,7 @@ android {
             // Codex 与 Claude 并行验收：debug 独立安装，release 仍保留正式包名 com.aneb.probe。
             applicationIdSuffix = ".codex"
             versionNameSuffix = "-codex"
+            buildConfigField("boolean", "PROTOTYPE_PRIVATE_CLEARTEXT", "true")
             // 明文流量仅经 src/debug/res/xml/network_security_config.xml 允许（仿真服务器联调）
             // release 变体不带该配置，targetSdk>=28 默认禁明文
         }
@@ -75,6 +92,17 @@ android {
             versionNameSuffix = "-prototype-engineering"
             matchingFallbacks += listOf("debug")
             buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "true")
+            buildConfigField("boolean", "PROTOTYPE_PRIVATE_CLEARTEXT", "true")
+        }
+        create("prototypeRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "false")
+            buildConfigField("boolean", "PROTOTYPE_RELEASE", "true")
+            buildConfigField("boolean", "PROTOTYPE_PRIVATE_CLEARTEXT", "true")
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
@@ -114,12 +142,85 @@ val verifyReleaseSigning by tasks.registering {
             "Release signing is not configured. Set ANEB_RELEASE_STORE_FILE, " +
                 "ANEB_RELEASE_STORE_PASSWORD, ANEB_RELEASE_KEY_ALIAS and ANEB_RELEASE_KEY_PASSWORD."
         }
-        check(file(releaseStorePath!!).isFile) { "Release keystore does not exist: $releaseStorePath" }
+        check(file(releaseStorePath!!).isFile) { "P010_RELEASE_SIGNING_STORE_UNAVAILABLE" }
+        check(releaseKeyAlias == approvedReleaseKeyAlias) {
+            "P011_RELEASE_SIGNER_NOT_APPROVED"
+        }
+
+        val storePasswordChars = releaseStorePassword!!.toCharArray()
+        val keyStore = try {
+            val loadedKeyStore = KeyStore.getInstance("PKCS12")
+            file(releaseStorePath).inputStream().buffered().use { input ->
+                loadedKeyStore.load(input, storePasswordChars)
+            }
+            loadedKeyStore
+        } catch (_: Exception) {
+            throw GradleException("P010_RELEASE_SIGNING_STORE_UNAVAILABLE")
+        } finally {
+            storePasswordChars.fill('\u0000')
+        }
+        check(keyStore.isKeyEntry(releaseKeyAlias)) {
+            "P011_RELEASE_SIGNER_NOT_APPROVED"
+        }
+        val certificate = keyStore.getCertificate(releaseKeyAlias)
+        check(certificate != null) {
+            "P011_RELEASE_SIGNER_NOT_APPROVED"
+        }
+        val certificateSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(certificate.encoded)
+            .joinToString("") { byte ->
+                "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+            }
+        check(certificateSha256 == approvedReleaseCertificateSha256) {
+            "P011_RELEASE_SIGNER_NOT_APPROVED"
+        }
     }
 }
 
-tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" || it.name == "installRelease" }
+val verifyPrototypeSourceCommit by tasks.registering {
+    group = "verification"
+    description = "Fail closed when the Prototype APK source commit is not exact."
+    doLast {
+        check(prototypeSourceCommit?.matches(prototypeSourceCommitPattern) == true) {
+            "P019_PROTOTYPE_SOURCE_COMMIT_NOT_BOUND"
+        }
+    }
+}
+
+val releaseArtifactTaskNames = setOf(
+    "packageRelease",
+    "packagePrototypeRelease",
+    "packageReleaseBundle",
+    "packagePrototypeReleaseBundle",
+    "signReleaseBundle",
+    "signPrototypeReleaseBundle",
+    "packageReleaseUniversalApk",
+    "packagePrototypeReleaseUniversalApk",
+)
+val prototypeReleaseArtifactTaskNames = releaseArtifactTaskNames.filterTo(mutableSetOf()) {
+    it.contains("Prototype", ignoreCase = false)
+}
+
+tasks.matching {
+    it.name in setOf(
+        "assembleRelease",
+        "bundleRelease",
+        "installRelease",
+        "assemblePrototypeRelease",
+        "bundlePrototypeRelease",
+        "installPrototypeRelease",
+    ) || it.name in releaseArtifactTaskNames
+}
     .configureEach { dependsOn(verifyReleaseSigning) }
+
+tasks.matching {
+    it.name in setOf(
+        "assemblePrototypeRelease",
+        "bundlePrototypeRelease",
+        "installPrototypeRelease",
+    ) || it.name in prototypeReleaseArtifactTaskNames
+}
+    .configureEach { dependsOn(verifyPrototypeSourceCommit) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

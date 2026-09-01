@@ -2,8 +2,10 @@
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
     [ValidateRange(1, 65535)][int]$Port = 18088,
+    [switch]$RequireExternalAdmission,
     [string]$AdmissionReceiptPath = '',
-    [string]$ExpectedAdmissionReceiptSha256 = ''
+    [string]$ExpectedAdmissionReceiptSha256 = '',
+    [string]$PackageZipPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,8 +26,24 @@ try {
 
     $verify = Join-Path $PSScriptRoot 'verify-package.ps1'
     $verifyArguments = @('-Root', $rootFull)
-    if (-not [string]::IsNullOrWhiteSpace($AdmissionReceiptPath)) {
-        $verifyArguments += @('-AdmissionReceiptPath', $AdmissionReceiptPath, '-ExpectedAdmissionReceiptSha256', $ExpectedAdmissionReceiptSha256)
+    $hasExternalAdmissionInput = -not [string]::IsNullOrWhiteSpace($AdmissionReceiptPath) -or
+        -not [string]::IsNullOrWhiteSpace($ExpectedAdmissionReceiptSha256) -or
+        -not [string]::IsNullOrWhiteSpace($PackageZipPath)
+    if (-not $RequireExternalAdmission -and $hasExternalAdmissionInput) {
+        Stop-AnEbDoctor -Code 'P007_ARTIFACT_ADMISSION' -Message 'external admission inputs require the formal-gate switch'
+    }
+    if ($RequireExternalAdmission) {
+        if ([string]::IsNullOrWhiteSpace($AdmissionReceiptPath) -or
+            [string]::IsNullOrWhiteSpace($ExpectedAdmissionReceiptSha256) -or
+            [string]::IsNullOrWhiteSpace($PackageZipPath)) {
+            Stop-AnEbDoctor -Code 'P007_ARTIFACT_ADMISSION' -Message 'formal admission requires receipt, receipt SHA-256, and immutable package ZIP'
+        }
+        $verifyArguments += @(
+            '-RequireExternalAdmission',
+            '-AdmissionReceiptPath', $AdmissionReceiptPath,
+            '-ExpectedAdmissionReceiptSha256', $ExpectedAdmissionReceiptSha256,
+            '-PackageZipPath', $PackageZipPath
+        )
     }
     $verifyOutput = @(& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $verify @verifyArguments)
     $verifyCode = $LASTEXITCODE

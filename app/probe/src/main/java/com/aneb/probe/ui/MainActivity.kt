@@ -58,6 +58,7 @@ import com.aneb.probe.engine.ProbeRunService
 import com.aneb.probe.engine.ProbeRunSession
 import com.aneb.probe.engine.ProbeSpecialRunService
 import com.aneb.probe.engine.ProfileRepository
+import com.aneb.probe.engine.PrototypeReleaseProbeBoundary
 import com.aneb.probe.engine.ScenarioProfile
 import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
@@ -215,37 +216,38 @@ class MainActivity : ComponentActivity() {
             settings = settingsStore,
             compatibilityChecker = AnebClientPrototypeRawPostTransport(AnebClient()),
         )
-        intentServer = intent?.getStringExtra("server")
-        intentAutorun = intent?.getBooleanExtra("autorun", false) == true
-        intentModeOverride = when (intent?.getStringExtra("mode")?.lowercase()) {
+        val ordinaryProbeIntent = PrototypeReleaseProbeBoundary.ordinaryExternalEntry(intent)
+        intentServer = ordinaryProbeIntent?.getStringExtra("server")
+        intentAutorun = ordinaryProbeIntent?.getBooleanExtra("autorun", false) == true
+        intentModeOverride = when (ordinaryProbeIntent?.getStringExtra("mode")?.lowercase()) {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
             else -> null
         }
-        intentContinuity = intent?.getStringExtra("mode")?.lowercase() == "continuity"
-        intentCTokens = intent?.getIntExtra("c_tokens", ContinuityRunner.DEFAULT_TOKENS)
+        intentContinuity = ordinaryProbeIntent?.getStringExtra("mode")?.lowercase() == "continuity"
+        intentCTokens = ordinaryProbeIntent?.getIntExtra("c_tokens", ContinuityRunner.DEFAULT_TOKENS)
             ?.takeIf { it > 0 } ?: ContinuityRunner.DEFAULT_TOKENS
-        intentC3IdleS = intent?.getStringExtra("c3_idle")
+        intentC3IdleS = ordinaryProbeIntent?.getStringExtra("c3_idle")
             ?.split(',')?.mapNotNull { it.trim().toIntOrNull()?.takeIf { v -> v > 0 } }
             ?.takeIf { it.isNotEmpty() } ?: ContinuityRunner.DEFAULT_C3_IDLE_S
-        intentAb = intent?.getStringExtra("mode")?.lowercase() == "ab"
-        intentAbPairs = intent?.getIntExtra("ab_pairs", AbRunner.DEFAULT_PAIRS)
+        intentAb = ordinaryProbeIntent?.getStringExtra("mode")?.lowercase() == "ab"
+        intentAbPairs = ordinaryProbeIntent?.getIntExtra("ab_pairs", AbRunner.DEFAULT_PAIRS)
             ?.takeIf { it > 0 } ?: AbRunner.DEFAULT_PAIRS
-        intentAbNetlog = BuildConfig.DEBUG && intent?.getBooleanExtra("ab_netlog", false) == true
-        intentTransportOverride = when (intent?.getStringExtra("transport")?.lowercase()) {
+        intentAbNetlog = BuildConfig.DEBUG && ordinaryProbeIntent?.getBooleanExtra("ab_netlog", false) == true
+        intentTransportOverride = when (ordinaryProbeIntent?.getStringExtra("transport")?.lowercase()) {
             "auto" -> TestEngine.TransportMode.AUTO
             "wifi" -> TestEngine.TransportMode.WIFI
             "cellular" -> TestEngine.TransportMode.CELLULAR
             else -> null
         }
-        intentTestModeOverride = when (intent?.getStringExtra("test_mode")?.lowercase()) {
+        intentTestModeOverride = when (ordinaryProbeIntent?.getStringExtra("test_mode")?.lowercase()) {
             "network_basic", "basic" -> AnebTestMode.NETWORK_BASIC
             "token_experience", "token" -> AnebTestMode.TOKEN_EXPERIENCE
             else -> null
         }
-        intentInject = if (BuildConfig.DEBUG) intent?.getStringExtra("inject") else null
-        intentDriveTestOverride = if (intent?.hasExtra("drive_test") == true) {
-            intent.getBooleanExtra("drive_test", false)
+        intentInject = if (BuildConfig.DEBUG) ordinaryProbeIntent?.getStringExtra("inject") else null
+        intentDriveTestOverride = if (ordinaryProbeIntent?.hasExtra("drive_test") == true) {
+            ordinaryProbeIntent.getBooleanExtra("drive_test", false)
         } else {
             null
         }
@@ -326,6 +328,9 @@ class MainActivity : ComponentActivity() {
                         PrototypeCampaignResultNavigator(prototypeCampaignResultRepository::load)
                     }
                     var openPrototypeResultCampaignId by rememberSaveable {
+                        mutableStateOf<String?>(null)
+                    }
+                    var openPrototypeResultPublicationWarning by rememberSaveable {
                         mutableStateOf<String?>(null)
                     }
                     var dismissedFinishedCampaignId by rememberSaveable {
@@ -470,11 +475,13 @@ class MainActivity : ComponentActivity() {
                             val route = prototypeCampaignResultNavigator.suppressForAcceptedStart(
                                 PrototypeCampaignResultRouteState(
                                     openCampaignId = openPrototypeResultCampaignId,
+                                    publicationWarning = openPrototypeResultPublicationWarning,
                                     dismissedFinishedCampaignId = dismissedFinishedCampaignId,
                                 ),
                                 PrototypeCampaignService.session.value,
                             )
                             openPrototypeResultCampaignId = route.openCampaignId
+                            openPrototypeResultPublicationWarning = route.publicationWarning
                             dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
                             prototypeCampaignResultLoadState = null
                             if (screen is Screen.PrototypeResult) screen = Screen.PrototypeMode
@@ -576,18 +583,23 @@ class MainActivity : ComponentActivity() {
                         val route = prototypeCampaignResultNavigator.observe(
                             PrototypeCampaignResultRouteState(
                                 openCampaignId = openPrototypeResultCampaignId,
+                                publicationWarning = openPrototypeResultPublicationWarning,
                                 dismissedFinishedCampaignId = dismissedFinishedCampaignId,
                             ),
                             prototypeCampaignSession,
                         )
                         openPrototypeResultCampaignId = route.openCampaignId
+                        openPrototypeResultPublicationWarning = route.publicationWarning
                         dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
                         route.openCampaignId?.let { campaignId ->
                             screen = Screen.PrototypeResult(campaignId)
                             prototypeCampaignResultLoadState =
                                 PrototypeCampaignResultLoadState.Loading(campaignId)
                             prototypeCampaignResultLoadState =
-                                prototypeCampaignResultNavigator.load(campaignId)
+                                prototypeCampaignResultNavigator.load(
+                                    campaignId,
+                                    route.publicationWarning,
+                                )
                         }
                         prototypeActionRevision += 1
                     }
@@ -794,12 +806,16 @@ class MainActivity : ComponentActivity() {
                                         val route = prototypeCampaignResultNavigator.dismiss(
                                             PrototypeCampaignResultRouteState(
                                                 openCampaignId = openPrototypeResultCampaignId,
+                                                publicationWarning =
+                                                    openPrototypeResultPublicationWarning,
                                                 dismissedFinishedCampaignId =
                                                     dismissedFinishedCampaignId,
                                             ),
                                             s.campaignId,
                                         )
                                         openPrototypeResultCampaignId = route.openCampaignId
+                                        openPrototypeResultPublicationWarning =
+                                            route.publicationWarning
                                         dismissedFinishedCampaignId =
                                             route.dismissedFinishedCampaignId
                                         prototypeCampaignResultLoadState = null

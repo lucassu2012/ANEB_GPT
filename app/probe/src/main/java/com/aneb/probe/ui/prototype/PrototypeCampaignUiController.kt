@@ -203,13 +203,21 @@ internal class PrototypeCampaignUiController(
             }
             is PrototypeCampaignSession.Cancelling ->
                 "Cancelling ${campaignLabel(session.config.campaignMode)} campaign…"
-            is PrototypeCampaignSession.Finished ->
+            is PrototypeCampaignSession.Finished -> if (session.publicationWarning != null) {
+                "${campaignLabel(session.config.campaignMode)} campaign saved locally · " +
+                    "evidence publication failed (P018)."
+            } else {
                 "${campaignLabel(session.config.campaignMode)} campaign finished."
+            }
             is PrototypeCampaignSession.Failed ->
                 "${campaignLabel(session.config.campaignMode)} campaign failed: ${session.message}"
-            is PrototypeCampaignSession.Cancelled ->
+            is PrototypeCampaignSession.Cancelled -> if (session.publicationWarning != null) {
+                "${campaignLabel(session.config.campaignMode)} campaign cancelled · " +
+                    "partial evidence saved locally · evidence publication failed (P018)."
+            } else {
                 "${campaignLabel(session.config.campaignMode)} campaign cancelled · " +
                     "partial evidence saved."
+            }
         }
         return PrototypeCampaignUiPresentation(
             quickRunning = quickRunning,

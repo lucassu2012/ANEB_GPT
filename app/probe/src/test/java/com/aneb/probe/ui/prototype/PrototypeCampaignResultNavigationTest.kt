@@ -8,6 +8,7 @@ import com.aneb.probe.prototype.PrototypeCampaignPersistenceFixture
 import com.aneb.probe.prototype.PrototypeCampaignSession
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +22,48 @@ import java.nio.file.Path
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], manifest = Config.NONE)
 class PrototypeCampaignResultNavigationTest {
+    @Test
+    fun `publication failure warning follows the auto-opened durable result and clears on dismiss`() =
+        runBlocking {
+            val context: Context = RuntimeEnvironment.getApplication()
+            val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+            try {
+                val repository = PrototypeCampaignRoomRepository(database)
+                val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                    "campaign-result-publication-warning",
+                )
+                val result = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
+                repository.save(config, result)
+                val navigator = PrototypeCampaignResultNavigator(repository::load)
+                val sessions = listOf<PrototypeCampaignSession>(
+                    PrototypeCampaignSession.Finished(
+                        config,
+                        result,
+                        publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+                    ),
+                    PrototypeCampaignSession.Cancelled(
+                        config,
+                        publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+                    ),
+                )
+
+                sessions.forEach { session ->
+                    val route = navigator.observe(PrototypeCampaignResultRouteState(), session)
+                    assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", route.publicationWarning)
+                    val loaded = navigator.load(
+                        requireNotNull(route.openCampaignId),
+                        route.publicationWarning,
+                    ) as PrototypeCampaignResultLoadState.Ready
+                    assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", loaded.publicationWarning)
+
+                    val dismissed = navigator.dismiss(route, config.campaignId)
+                    assertNull(dismissed.publicationWarning)
+                }
+            } finally {
+                database.close()
+            }
+        }
+
     @Test
     fun `finished campaign routes by exact id and loads the validated Room result`() = runBlocking {
         val context: Context = RuntimeEnvironment.getApplication()
@@ -198,10 +241,12 @@ class PrototypeCampaignResultNavigationTest {
         assertTrue(source.contains("PrototypeCampaignRoomRepository(db)"))
         assertTrue(source.contains("PrototypeCampaignResultNavigator"))
         assertTrue(source.contains("var openPrototypeResultCampaignId by rememberSaveable"))
+        assertTrue(source.contains("var openPrototypeResultPublicationWarning by rememberSaveable"))
         assertTrue(source.contains("var dismissedFinishedCampaignId by rememberSaveable"))
         assertTrue(source.contains("prototypeCampaignResultNavigator.observe("))
         assertTrue(source.contains("PrototypeCampaignResultLoadState.Loading(campaignId)"))
-        assertTrue(source.contains("prototypeCampaignResultNavigator.load(campaignId)"))
+        assertTrue(source.contains("prototypeCampaignResultNavigator.load("))
+        assertTrue(source.contains("route.publicationWarning"))
         assertTrue(source.contains("suppressForAcceptedStart("))
         assertTrue(source.contains("is Screen.PrototypeResult"))
         assertTrue(!source.contains("prototypeCampaignSession.result"))
