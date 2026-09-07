@@ -37,4 +37,5 @@ internal class PrototypeCampaignCancelledWithResult(
 internal class PrototypeCampaignCancellationPersisted(
     val result: PrototypeQuickCampaignRunner.CampaignResult,
     cause: PrototypeCampaignCancelledWithResult,
+    val publicationWarning: String? = null,
 ) : RuntimeException(cause.message, cause)

@@ -39,7 +39,36 @@ class PrototypeCampaignRoomRepository(
     suspend fun save(
         config: PrototypeCampaignConfig,
         result: PrototypeQuickCampaignRunner.CampaignResult,
+    ) = saveInternal(
+        config = config,
+        result = result,
+        captureAuthorityJson = null,
+        runAuthorityJsonByRunId = null,
+    )
+
+    suspend fun saveWithAuthority(
+        config: PrototypeCampaignConfig,
+        result: PrototypeQuickCampaignRunner.CampaignResult,
+        captureAuthorityJson: String,
+        runAuthorityJsonByRunId: Map<String, String>,
+    ) = saveInternal(
+        config = config,
+        result = result,
+        captureAuthorityJson = captureAuthorityJson,
+        runAuthorityJsonByRunId = runAuthorityJsonByRunId,
+    )
+
+    private suspend fun saveInternal(
+        config: PrototypeCampaignConfig,
+        result: PrototypeQuickCampaignRunner.CampaignResult,
+        captureAuthorityJson: String?,
+        runAuthorityJsonByRunId: Map<String, String>?,
     ) {
+        if (runAuthorityJsonByRunId != null) {
+            require(
+                runAuthorityJsonByRunId.keys == result.runs.map { run -> run.runId }.toSet(),
+            ) { INVALID_GRAPH }
+        }
         val stored = StoredCampaign(
             campaignId = config.campaignId,
             nodeBaseUrl = config.nodeTicket.nodeBaseUrl,
@@ -48,7 +77,13 @@ class PrototypeCampaignRoomRepository(
             rawCapabilityBody = config.nodeTicket.rawCapabilityBody,
             capabilityIdentity = config.nodeTicket.identity,
             summary = result.summary,
-            runs = result.runs.map(::storedRun),
+            runs = result.runs.map { run ->
+                storedRun(
+                    run = run,
+                    runAuthorityJson = runAuthorityJsonByRunId?.get(run.runId),
+                )
+            },
+            captureAuthorityJson = captureAuthorityJson,
         )
         validate(stored)
 
@@ -62,6 +97,7 @@ class PrototypeCampaignRoomRepository(
                 CapabilityIdentityRecord.from(stored.capabilityIdentity),
             ),
             summaryJson = JSON.encodeToString(CampaignSummaryRecord.from(stored.summary)),
+            captureAuthorityJson = stored.captureAuthorityJson,
         )
         val runs = stored.runs.map { run ->
             PrototypeRunEntity(
@@ -79,6 +115,7 @@ class PrototypeCampaignRoomRepository(
                 metricsJson = run.metrics?.let { metrics ->
                     JSON.encodeToString(RunMetricsRecord.from(metrics))
                 },
+                runAuthorityJson = run.runAuthorityJson,
             )
         }
         val evidence = stored.runs.flatMap { run ->
@@ -145,6 +182,7 @@ class PrototypeCampaignRoomRepository(
                 evidenceEvents = evidenceRows.map { event ->
                     JSON.parseToJsonElement(event.eventJson).jsonObject
                 },
+                runAuthorityJson = run.runAuthorityJson,
             )
         }
         val storedCampaign = StoredCampaign(
@@ -158,6 +196,7 @@ class PrototypeCampaignRoomRepository(
             ).toIdentity(),
             summary = JSON.decodeFromString<CampaignSummaryRecord>(campaign.summaryJson).toSummary(),
             runs = runs,
+            captureAuthorityJson = campaign.captureAuthorityJson,
         ).also(::validate)
         return LoadedGraph(storedCampaign, lexicalEvidence)
     }
@@ -192,6 +231,7 @@ class PrototypeCampaignRoomRepository(
         val capabilityIdentity: PrototypeCapabilityIdentity,
         val summary: PrototypeQuickCampaignRunner.CampaignSummary,
         val runs: List<StoredRun>,
+        val captureAuthorityJson: String? = null,
     )
 
     data class StoredRun(
@@ -207,6 +247,7 @@ class PrototypeCampaignRoomRepository(
         val terminalReceiptValid: Boolean?,
         val metrics: PrototypeQuickCampaignRunner.RunMetrics?,
         val evidenceEvents: List<JsonObject>,
+        val runAuthorityJson: String? = null,
     )
 
     private data class LoadedGraph(
@@ -214,7 +255,10 @@ class PrototypeCampaignRoomRepository(
         val lexicalEvidence: List<LexicalEvidence>,
     )
 
-    private fun storedRun(run: PrototypeQuickCampaignRunner.RunResult): StoredRun = StoredRun(
+    private fun storedRun(
+        run: PrototypeQuickCampaignRunner.RunResult,
+        runAuthorityJson: String?,
+    ): StoredRun = StoredRun(
         runIndex = run.runIndex,
         runId = run.runId,
         conditionId = run.conditionId,
@@ -227,6 +271,7 @@ class PrototypeCampaignRoomRepository(
         terminalReceiptValid = run.terminalReceiptValid,
         metrics = run.metrics,
         evidenceEvents = run.evidenceEvents,
+        runAuthorityJson = runAuthorityJson,
     )
 
     private fun validate(campaign: StoredCampaign) {

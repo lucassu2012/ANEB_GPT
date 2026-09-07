@@ -265,6 +265,45 @@ class PrototypeCampaignJobOwnerTest {
     }
 
     @Test
+    fun publicationFailureAfterLocalSavePublishesFinishedWithAVisibleWarning(): Unit = runBlocking {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+            "campaign-publish-failure-after-save",
+        )
+        val result = PrototypeCampaignPersistenceFixture.completeQuickCampaign(config)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val states = mutableListOf<PrototypeCampaignSession>()
+        val storeCalls = AtomicInteger()
+        val owner = PrototypeCampaignJobOwner(
+            scope = scope,
+            executor = PersistingPrototypeCampaignExecutor(
+                delegate = PrototypeCampaignExecutor { result },
+                store = PrototypeCampaignResultStore { _, savedResult ->
+                    assertEquals(result, savedResult)
+                    storeCalls.incrementAndGet()
+                    throw PrototypeCampaignPublicationFailedWithResult(
+                        result = savedResult,
+                        cause = IllegalStateException("publish failed"),
+                    )
+                },
+                backgroundDispatcher = Dispatchers.Default,
+            ),
+            publish = { state -> synchronized(states) { states += state } },
+        )
+        try {
+            assertTrue(owner.start(config))
+            val finished = awaitState(states) { it is PrototypeCampaignSession.Finished }
+                as PrototypeCampaignSession.Finished
+
+            assertEquals(result, finished.result)
+            assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", finished.publicationWarning)
+            assertEquals(1, storeCalls.get())
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Failed } })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun runnerFailureNeverCallsPersistenceAndPublishesFailed(): Unit = runBlocking {
         val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-runner-failure")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -382,6 +421,51 @@ class PrototypeCampaignJobOwnerTest {
             assertEquals("cancelled result save failed", failed.message)
             assertEquals(1, storeCalls.get())
             assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Cancelled } })
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun cancellationPublicationFailureKeepsThePersistedResultAndWarning(): Unit = runBlocking {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+            "campaign-cancel-publication-failure",
+        )
+        val cancelledResult = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val states = mutableListOf<PrototypeCampaignSession>()
+        val runnerEntered = CompletableDeferred<Unit>()
+        val owner = PrototypeCampaignJobOwner(
+            scope = scope,
+            executor = PersistingPrototypeCampaignExecutor(
+                delegate = PrototypeCampaignExecutor {
+                    runnerEntered.complete(Unit)
+                    try {
+                        CompletableDeferred<PrototypeQuickCampaignRunner.CampaignResult>().await()
+                    } catch (cancelled: CancellationException) {
+                        throw PrototypeCampaignCancelledWithResult(cancelledResult, cancelled)
+                    }
+                },
+                store = PrototypeCampaignResultStore { _, result ->
+                    throw PrototypeCampaignPublicationFailedWithResult(
+                        result,
+                        IllegalStateException("P018_EVIDENCE_PUBLICATION_FAILED"),
+                    )
+                },
+                backgroundDispatcher = Dispatchers.Default,
+            ),
+            publish = { state -> synchronized(states) { states += state } },
+        )
+        try {
+            assertTrue(owner.start(config))
+            withTimeout(2_000) { runnerEntered.await() }
+            assertTrue(owner.cancel())
+            val cancelled = awaitState(states) { it is PrototypeCampaignSession.Cancelled }
+                as PrototypeCampaignSession.Cancelled
+
+            assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", cancelled.publicationWarning)
+            assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Failed } })
             assertFalse(synchronized(states) { states.any { it is PrototypeCampaignSession.Finished } })
         } finally {
             scope.cancel()

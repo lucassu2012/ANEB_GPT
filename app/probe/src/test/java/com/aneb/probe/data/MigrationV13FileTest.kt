@@ -48,7 +48,7 @@ class MigrationV13FileTest {
         sentinels: V12Sentinels,
     ) {
         val writable = database.openHelper.writableDatabase
-        assertEquals(13, writable.version)
+        assertEquals(14, writable.version)
         assertEquals(
             setOf("prototype_campaign", "prototype_run", "prototype_evidence_event"),
             writable.query(
@@ -68,6 +68,18 @@ class MigrationV13FileTest {
             sentinels.reportBody,
             database.reportBodyDao().forRun(sentinels.reportBody.runId),
         )
+        writable.query(
+            "SELECT captureAuthorityJson FROM prototype_campaign LIMIT 0",
+        ).use { cursor ->
+            assertEquals(1, cursor.columnCount)
+            assertEquals("captureAuthorityJson", cursor.getColumnName(0))
+        }
+        writable.query(
+            "SELECT runAuthorityJson FROM prototype_run LIMIT 0",
+        ).use { cursor ->
+            assertEquals(1, cursor.columnCount)
+            assertEquals("runAuthorityJson", cursor.getColumnName(0))
+        }
     }
 
     private fun createRealV12File(databaseName: String): V12Sentinels {

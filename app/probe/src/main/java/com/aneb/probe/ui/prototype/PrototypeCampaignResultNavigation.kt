@@ -6,6 +6,7 @@ import kotlinx.coroutines.CancellationException
 
 internal data class PrototypeCampaignResultRouteState(
     val openCampaignId: String? = null,
+    val publicationWarning: String? = null,
     val dismissedFinishedCampaignId: String? = null,
 )
 
@@ -15,6 +16,7 @@ internal sealed interface PrototypeCampaignResultLoadState {
     data class Ready(
         val campaignId: String,
         val presentation: PrototypeCampaignResultPresentation,
+        val publicationWarning: String? = null,
     ) : PrototypeCampaignResultLoadState
 
     data class Unavailable(val campaignId: String) : PrototypeCampaignResultLoadState
@@ -27,13 +29,18 @@ internal class PrototypeCampaignResultNavigator(
         state: PrototypeCampaignResultRouteState,
         session: PrototypeCampaignSession,
     ): PrototypeCampaignResultRouteState {
-        val campaignId = when (session) {
-            is PrototypeCampaignSession.Finished -> session.config.campaignId
-            is PrototypeCampaignSession.Cancelled -> session.config.campaignId
+        val (campaignId, publicationWarning) = when (session) {
+            is PrototypeCampaignSession.Finished ->
+                session.config.campaignId to session.publicationWarning
+            is PrototypeCampaignSession.Cancelled ->
+                session.config.campaignId to session.publicationWarning
             else -> return state
         }
         if (state.dismissedFinishedCampaignId == campaignId) return state
-        return state.copy(openCampaignId = campaignId)
+        return state.copy(
+            openCampaignId = campaignId,
+            publicationWarning = publicationWarning,
+        )
     }
 
     fun dismiss(
@@ -43,6 +50,7 @@ internal class PrototypeCampaignResultNavigator(
         require(state.openCampaignId == campaignId)
         return state.copy(
             openCampaignId = null,
+            publicationWarning = null,
             dismissedFinishedCampaignId = campaignId,
         )
     }
@@ -58,17 +66,22 @@ internal class PrototypeCampaignResultNavigator(
         }
         return state.copy(
             openCampaignId = null,
+            publicationWarning = null,
             dismissedFinishedCampaignId =
                 previousFinishedCampaignId ?: state.dismissedFinishedCampaignId,
         )
     }
 
-    suspend fun load(campaignId: String): PrototypeCampaignResultLoadState = try {
+    suspend fun load(
+        campaignId: String,
+        publicationWarning: String? = null,
+    ): PrototypeCampaignResultLoadState = try {
         val stored = loadCampaign(campaignId)
             ?: return PrototypeCampaignResultLoadState.Unavailable(campaignId)
         PrototypeCampaignResultLoadState.Ready(
             campaignId = campaignId,
             presentation = PrototypeCampaignResultPresenter.present(stored),
+            publicationWarning = publicationWarning,
         )
     } catch (cancelled: CancellationException) {
         throw cancelled

@@ -116,6 +116,13 @@ class PrototypeCampaignResultScreenTest {
         assertTrue(screen.contains("is PrototypeCampaignResultLoadState.Unavailable"))
         assertTrue(screen.contains("is PrototypeCampaignResultLoadState.Ready"))
         assertTrue(screen.contains("presentation.integrity"))
+        assertTrue(screen.contains("publicationWarning = loadState.publicationWarning"))
+        assertTrue(screen.contains("publicationWarning?.let"))
+        assertTrue(
+            screen.contains(
+                "P018 · Evidence publication failed. The local campaign result is still saved",
+            ),
+        )
         assertTrue(screen.contains("presentation.evidenceBadge"))
         assertTrue(screen.contains("presentation.confidenceExplanation"))
         assertTrue(screen.contains("presentation.disclosure"))

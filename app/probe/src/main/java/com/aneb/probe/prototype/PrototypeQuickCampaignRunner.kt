@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.time.Instant
 import java.util.UUID
 import kotlin.math.floor
 
@@ -95,18 +96,22 @@ class PrototypeQuickCampaignRunner private constructor(
     private val runIdFactory: (Int) -> String,
     private val waitBetweenRuns: suspend (Long) -> Unit,
     private val clockDomainIdFactory: (Int) -> String,
+    private val utcNow: () -> Instant,
     private val publishProgress: (PrototypeCampaignProgress) -> Unit,
 ) {
     internal constructor(
         executeRun: suspend (RunPlan) -> RunResult,
         runIdFactory: (Int) -> String,
         waitBetweenRuns: suspend (Long) -> Unit,
+        clockDomainIdFactory: (Int) -> String = { UUID.randomUUID().toString() },
+        utcNow: () -> Instant = { Instant.now() },
         publishProgress: (PrototypeCampaignProgress) -> Unit = {},
     ) : this(
         executeRun = { plan, _, _ -> executeRun(plan) },
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
-        clockDomainIdFactory = { UUID.randomUUID().toString() },
+        clockDomainIdFactory = clockDomainIdFactory,
+        utcNow = utcNow,
         publishProgress = publishProgress,
     )
 
@@ -119,6 +124,7 @@ class PrototypeQuickCampaignRunner private constructor(
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = { UUID.randomUUID().toString() },
+        utcNow = { Instant.now() },
         publishProgress = {},
     )
 
@@ -130,6 +136,7 @@ class PrototypeQuickCampaignRunner private constructor(
         runIdFactory = { UUID.randomUUID().toString() },
         waitBetweenRuns = { delay(it) },
         clockDomainIdFactory = { UUID.randomUUID().toString() },
+        utcNow = { Instant.now() },
         publishProgress = publishProgress,
     )
 
@@ -138,12 +145,14 @@ class PrototypeQuickCampaignRunner private constructor(
         runIdFactory: (Int) -> String,
         clockDomainIdFactory: (Int) -> String,
         waitBetweenRuns: suspend (Long) -> Unit,
+        utcNow: () -> Instant = { Instant.now() },
         publishProgress: (PrototypeCampaignProgress) -> Unit = {},
     ) : this(
         executeRun = productExecution(streamAdapter),
         runIdFactory = runIdFactory,
         waitBetweenRuns = waitBetweenRuns,
         clockDomainIdFactory = clockDomainIdFactory,
+        utcNow = utcNow,
         publishProgress = publishProgress,
     )
 
@@ -153,6 +162,7 @@ class PrototypeQuickCampaignRunner private constructor(
         val runId: String,
         val runIndex: Int,
         val conditionId: String,
+        val clockDomainId: String,
         val requestBody: String,
         val campaignMode: CampaignMode = CampaignMode.QUICK,
     ) {
@@ -201,12 +211,41 @@ class PrototypeQuickCampaignRunner private constructor(
         val partialEvidence: PrototypeInterruptedStreamEvidence?,
         val evidenceEvents: List<JsonObject>,
         val metrics: RunMetrics?,
+        val t0MonotonicNanos: Long?,
+        val clockDomainId: String? = null,
+        val attemptStartedAtUtc: String? = null,
+        val attemptEndedAtUtc: String? = null,
     ) {
         /** Compatibility accessor for callers that already established a complete run. */
         val streamResult: PrototypeRunStreamResult
             get() = checkNotNull(completedStreamResult) {
                 "prototype run does not have a completed stream result"
             }
+
+        internal fun withAttemptAuthority(
+            clockDomainId: String,
+            attemptStartedAtUtc: Instant,
+            attemptEndedAtUtc: Instant,
+        ): RunResult = RunResult(
+            runIndex = runIndex,
+            runId = runId,
+            conditionId = conditionId,
+            status = status,
+            taskSuccess = taskSuccess,
+            scoreEligible = scoreEligible,
+            eventsExpected = eventsExpected,
+            eventsReceived = eventsReceived,
+            failureReason = failureReason,
+            terminalReceiptValid = terminalReceiptValid,
+            completedStreamResult = completedStreamResult,
+            partialEvidence = partialEvidence,
+            evidenceEvents = evidenceEvents,
+            metrics = metrics,
+            t0MonotonicNanos = t0MonotonicNanos,
+            clockDomainId = clockDomainId,
+            attemptStartedAtUtc = attemptStartedAtUtc.toString(),
+            attemptEndedAtUtc = attemptEndedAtUtc.toString(),
+        )
 
         companion object {
             internal fun completeForTest(
@@ -229,6 +268,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = null,
                 evidenceEvents = emptyList(),
                 metrics = null,
+                t0MonotonicNanos = streamResult.t0MonotonicNanos,
             )
 
             internal fun complete(
@@ -253,6 +293,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = null,
                 evidenceEvents = evidenceEvents,
                 metrics = metrics,
+                t0MonotonicNanos = streamResult.t0MonotonicNanos,
             )
 
             internal fun interrupted(
@@ -275,6 +316,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = evidence,
                 evidenceEvents = evidenceEvents,
                 metrics = metrics,
+                t0MonotonicNanos = evidence.t0MonotonicNanos,
             )
 
             internal fun invalidSequence(
@@ -296,6 +338,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = evidence,
                 evidenceEvents = evidenceEvents,
                 metrics = null,
+                t0MonotonicNanos = evidence.t0MonotonicNanos,
             )
 
             internal fun cancelled(
@@ -318,6 +361,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = evidence,
                 evidenceEvents = evidenceEvents,
                 metrics = metrics,
+                t0MonotonicNanos = evidence.t0MonotonicNanos,
             )
 
             internal fun notStarted(plan: RunPlan): RunResult = RunResult(
@@ -335,6 +379,8 @@ class PrototypeQuickCampaignRunner private constructor(
                 partialEvidence = null,
                 evidenceEvents = emptyList(),
                 metrics = null,
+                t0MonotonicNanos = null,
+                clockDomainId = plan.clockDomainId,
             )
         }
     }
@@ -409,6 +455,8 @@ class PrototypeQuickCampaignRunner private constructor(
     data class CampaignResult(
         val runs: List<RunResult>,
         val summary: CampaignSummary,
+        val campaignStartedAtUtc: String? = null,
+        val campaignEndedAtUtc: String? = null,
     )
 
     suspend fun run(
@@ -416,16 +464,22 @@ class PrototypeQuickCampaignRunner private constructor(
         campaignId: String,
         mode: CampaignMode = CampaignMode.QUICK,
     ): CampaignResult {
+        val campaignStartedAtUtc = utcNow()
         val conditions = List(mode.runsPerCondition) { QUICK_CONDITIONS }.flatten()
         val plans = conditions.mapIndexed { index, condition ->
             val runIndex = index + 1
             val runId = runIdFactory(runIndex)
+            val clockDomainId = clockDomainIdFactory(runIndex)
+            require(clockDomainId.isNotBlank()) {
+                "prototype clock-domain identity must be non-empty"
+            }
             RunPlan(
                 endpoint = endpoint,
                 campaignId = campaignId,
                 runId = runId,
                 runIndex = runIndex,
                 conditionId = condition.id,
+                clockDomainId = clockDomainId,
                 requestBody = requestBody(
                     campaignId = campaignId,
                     runId = runId,
@@ -441,10 +495,7 @@ class PrototypeQuickCampaignRunner private constructor(
         val resultReadyAuthority = currentCoroutineContext()[PrototypeCampaignResultReadyAuthority]
         var completedCampaignResult: CampaignResult? = null
         plans.forEachIndexed { index, plan ->
-            val clockDomainId = clockDomainIdFactory(plan.runIndex)
-            require(clockDomainId.isNotBlank()) {
-                "prototype clock-domain identity must be non-empty"
-            }
+            val clockDomainId = plan.clockDomainId
             val currentRunRef = PrototypeCampaignRunRef(
                 runIndex = plan.runIndex,
                 runId = plan.runId,
@@ -463,6 +514,7 @@ class PrototypeQuickCampaignRunner private constructor(
             }
             var lastLiveProgress = PrototypeRunLiveProgress()
             publishRunning(lastLiveProgress)
+            val attemptStartedAtUtc = utcNow()
             try {
                 val runResult = executeRun(plan, clockDomainId) { snapshot ->
                     val nextLiveProgress =
@@ -471,7 +523,11 @@ class PrototypeQuickCampaignRunner private constructor(
                         lastLiveProgress = nextLiveProgress
                         publishRunning(nextLiveProgress)
                     }
-                }
+                }.withAttemptAuthority(
+                    clockDomainId = clockDomainId,
+                    attemptStartedAtUtc = attemptStartedAtUtc,
+                    attemptEndedAtUtc = utcNow(),
+                )
                 if (index == plans.lastIndex) {
                     val candidate = campaignResult(
                         campaignId = campaignId,
@@ -500,6 +556,7 @@ class PrototypeQuickCampaignRunner private constructor(
                 results += runResult
             } catch (error: PrototypeRunCancellationObservation) {
                 error.evidence?.let { evidence ->
+                    val attemptEndedAtUtc = utcNow()
                     val evidenceEvents = projectInterruptedEvidence(
                         plan = plan,
                         clockDomainId = clockDomainId,
@@ -512,6 +569,10 @@ class PrototypeQuickCampaignRunner private constructor(
                         evidence = evidence,
                         evidenceEvents = evidenceEvents,
                         metrics = interruptedRunMetrics(plan.condition, evidence),
+                    ).withAttemptAuthority(
+                        clockDomainId = clockDomainId,
+                        attemptStartedAtUtc = attemptStartedAtUtc,
+                        attemptEndedAtUtc = attemptEndedAtUtc,
                     )
                     results += plans.drop(index + 1).map(RunResult::notStarted)
                 } ?: run {
@@ -522,10 +583,14 @@ class PrototypeQuickCampaignRunner private constructor(
                         campaignId = campaignId,
                         mode = mode,
                         results = results,
+                    ).withUtcWindow(
+                        campaignStartedAtUtc = campaignStartedAtUtc,
+                        campaignEndedAtUtc = utcNow(),
                     ),
                     cause = error,
                 )
             } catch (error: PrototypeRunInvalidSequenceException) {
+                val attemptEndedAtUtc = utcNow()
                 val evidenceEvents = projectInterruptedEvidence(
                     plan = plan,
                     clockDomainId = clockDomainId,
@@ -536,14 +601,22 @@ class PrototypeQuickCampaignRunner private constructor(
                     plan = plan,
                     evidence = error.evidence,
                     evidenceEvents = evidenceEvents,
+                ).withAttemptAuthority(
+                    clockDomainId = clockDomainId,
+                    attemptStartedAtUtc = attemptStartedAtUtc,
+                    attemptEndedAtUtc = attemptEndedAtUtc,
                 )
                 results += plans.drop(index + 1).map(RunResult::notStarted)
                 return campaignResult(
                     campaignId = campaignId,
                     mode = mode,
                     results = results,
+                ).withUtcWindow(
+                    campaignStartedAtUtc = campaignStartedAtUtc,
+                    campaignEndedAtUtc = utcNow(),
                 )
             } catch (error: PrototypeRunStreamInterruptedException) {
+                val attemptEndedAtUtc = utcNow()
                 val evidenceEvents = projectInterruptedEvidence(
                     plan = plan,
                     clockDomainId = clockDomainId,
@@ -554,12 +627,19 @@ class PrototypeQuickCampaignRunner private constructor(
                     evidence = error.evidence,
                     evidenceEvents = evidenceEvents,
                     metrics = interruptedRunMetrics(plan.condition, error.evidence),
+                ).withAttemptAuthority(
+                    clockDomainId = clockDomainId,
+                    attemptStartedAtUtc = attemptStartedAtUtc,
+                    attemptEndedAtUtc = attemptEndedAtUtc,
                 )
                 results += plans.drop(index + 1).map(RunResult::notStarted)
                 return campaignResult(
                     campaignId = campaignId,
                     mode = mode,
                     results = results,
+                ).withUtcWindow(
+                    campaignStartedAtUtc = campaignStartedAtUtc,
+                    campaignEndedAtUtc = utcNow(),
                 )
             } catch (error: CancellationException) {
                 if (cancellationAuthority?.isRequested() != true) throw error
@@ -597,6 +677,9 @@ class PrototypeQuickCampaignRunner private constructor(
                             campaignId = campaignId,
                             mode = mode,
                             results = results,
+                        ).withUtcWindow(
+                            campaignStartedAtUtc = campaignStartedAtUtc,
+                            campaignEndedAtUtc = utcNow(),
                         ),
                         cause = error,
                     )
@@ -604,10 +687,22 @@ class PrototypeQuickCampaignRunner private constructor(
             }
         }
 
-        return checkNotNull(completedCampaignResult) {
+        val completed = checkNotNull(completedCampaignResult) {
             "prototype completed campaign result was not finalized"
         }
+        return completed.withUtcWindow(
+            campaignStartedAtUtc = campaignStartedAtUtc,
+            campaignEndedAtUtc = utcNow(),
+        )
     }
+
+    private fun CampaignResult.withUtcWindow(
+        campaignStartedAtUtc: Instant,
+        campaignEndedAtUtc: Instant,
+    ): CampaignResult = copy(
+        campaignStartedAtUtc = campaignStartedAtUtc.toString(),
+        campaignEndedAtUtc = campaignEndedAtUtc.toString(),
+    )
 
     private fun campaignResult(
         campaignId: String,

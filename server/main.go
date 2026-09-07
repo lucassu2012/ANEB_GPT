@@ -16,12 +16,16 @@ const serverVersion = "aneb-server/0.1.0"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
-	profiles        map[string]*Profile
-	dataDir         string
-	prototypeSleep  prototypeSleepFunc
-	prototypeNow    prototypeNowFunc
-	prototypeRunsMu sync.Mutex
-	prototypeRuns   map[string]prototypeRunIdentity
+	profiles                 map[string]*Profile
+	dataDir                  string
+	prototypeEvidenceRuntime string
+	prototypeResultsRoot     string
+	prototypeOnly            bool
+	prototypeEvidenceMu      sync.Mutex
+	prototypeSleep           prototypeSleepFunc
+	prototypeNow             prototypeNowFunc
+	prototypeRunsMu          sync.Mutex
+	prototypeRuns            map[string]prototypeRunIdentity
 	// allowInject 放行 /stream 的 &inject= 故障注入钩子（P0-C13 前置：
 	// 客户端 seq join/截断/畸形 event 健壮性验收需要服务端可控注入）。
 	// 默认 false；生产/取证部署绝不开启——注入流不是测量数据。
@@ -42,10 +46,13 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/v1/download", a.handleDownload)
 	mux.HandleFunc("/api/v1/upload", a.handleUpload)
 	mux.HandleFunc("/api/v1/toolloop", a.handleToolLoop)
-	mux.HandleFunc("/api/v1/results", a.handleResults)
+	if !a.prototypeOnly {
+		mux.HandleFunc("/api/v1/results", a.handleResults)
+	}
 	mux.HandleFunc("/api/v1/serverinfo", a.handleServerInfo)
 	mux.HandleFunc("/api/v1/prototype/capabilities", a.handlePrototypeCapabilities)
 	mux.HandleFunc("/api/v1/prototype/runs", a.handlePrototypeRun)
+	mux.HandleFunc("/api/v1/prototype/campaigns/evidence", a.handlePrototypeEvidence)
 	return withServerHeader(mux)
 }
 
@@ -63,6 +70,12 @@ func main() {
 	// 默认路径用正斜杠：Go 在 Windows 同样接受，目标部署环境（Linux VM）
 	// 反斜杠不是路径分隔符，`..\profiles` 会被当成字面文件名导致启动失败。
 	profilesDir := flag.String("profiles", "../profiles", "profiles directory (versioned scenario JSON)")
+	prototypeOnly := flag.Bool("prototype-only", false,
+		"serve the frozen Prototype 0.1 API without loading legacy profiles")
+	prototypeEvidenceRuntime := flag.String("prototype-evidence-runtime", "",
+		"bundled Prototype evidence verifier executable (optional; publication stays unavailable when omitted)")
+	prototypeResultsRoot := flag.String("prototype-results-root", "",
+		"canonical Prototype campaign publication root (requires -prototype-evidence-runtime)")
 	dataDir := flag.String("data", "./data", "data directory (results JSONL)")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file (optional; default/LE cert for named SNI)")
 	tlsKey := flag.String("tls-key", "", "TLS key file (optional)")
@@ -104,15 +117,29 @@ func main() {
 		log.Fatalf("tls: -tls-cert-ip/-tls-key-ip require -tls-cert/-tls-key (SNI selection needs a default cert)")
 	}
 
-	profiles, err := loadProfiles(*profilesDir)
-	if err != nil {
-		log.Fatalf("load profiles: %v", err)
-	}
-	for id, p := range profiles {
-		log.Printf("profile loaded: %s v%s (%d phases)", id, p.Version, len(p.Phases))
+	profiles := make(map[string]*Profile)
+	profilesLabel := "disabled (prototype-only)"
+	if !*prototypeOnly {
+		var err error
+		profiles, err = loadProfiles(*profilesDir)
+		if err != nil {
+			log.Fatalf("load profiles: %v", err)
+		}
+		profilesLabel = *profilesDir
+		for id, p := range profiles {
+			log.Printf("profile loaded: %s v%s (%d phases)", id, p.Version, len(p.Phases))
+		}
 	}
 
-	a := &app{profiles: profiles, dataDir: *dataDir, allowInject: *allowInject, h3Enabled: *h3Enabled}
+	a := &app{
+		profiles:                 profiles,
+		dataDir:                  *dataDir,
+		prototypeEvidenceRuntime: *prototypeEvidenceRuntime,
+		prototypeResultsRoot:     *prototypeResultsRoot,
+		prototypeOnly:            *prototypeOnly,
+		allowInject:              *allowInject,
+		h3Enabled:                *h3Enabled,
+	}
 	if *allowInject {
 		log.Printf("WARNING: -allow-inject enabled — /stream accepts fault injection, runs are NOT evidential")
 	}
@@ -146,7 +173,7 @@ func main() {
 	}
 
 	log.Printf("%s listening on %s (profiles=%s data=%s, mono-anchor wall=%d)",
-		serverVersion, *addr, *profilesDir, *dataDir, anchorWallUnixNs)
+		serverVersion, *addr, profilesLabel, *dataDir, anchorWallUnixNs)
 
 	// -h3：同端口 UDP 上并行起 http3.Server，复用同一路由树与中间件；
 	// TCP 侧照旧（仅多 Alt-Svc/X-Aneb-Proto 头）。任一侧监听失败都整体

@@ -53,6 +53,7 @@ sealed interface PrototypeCampaignSession {
     data class Finished(
         val config: PrototypeCampaignConfig,
         val result: PrototypeQuickCampaignRunner.CampaignResult,
+        val publicationWarning: String? = null,
     ) : PrototypeCampaignSession
 
     data class Failed(
@@ -62,6 +63,7 @@ sealed interface PrototypeCampaignSession {
 
     data class Cancelled(
         val config: PrototypeCampaignConfig,
+        val publicationWarning: String? = null,
     ) : PrototypeCampaignSession
 }
 
@@ -80,6 +82,7 @@ class PrototypeCampaignJobOwner(
         var resultReadyToPersist = false
         var result: PrototypeQuickCampaignRunner.CampaignResult? = null
         var persistedCancellationResult: PrototypeQuickCampaignRunner.CampaignResult? = null
+        var publicationWarning: String? = null
         var failureMessage: String? = null
     }
 
@@ -136,7 +139,15 @@ class PrototypeCampaignJobOwner(
             val result = executor.execute(token.config)
             synchronized(lock) { token.result = result }
         } catch (persisted: PrototypeCampaignCancellationPersisted) {
-            synchronized(lock) { token.persistedCancellationResult = persisted.result }
+            synchronized(lock) {
+                token.persistedCancellationResult = persisted.result
+                token.publicationWarning = persisted.publicationWarning
+            }
+        } catch (publication: PrototypeCampaignPublicationFailedWithResult) {
+            synchronized(lock) {
+                token.result = publication.result
+                token.publicationWarning = publication.message
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -153,9 +164,10 @@ class PrototypeCampaignJobOwner(
                 token.result != null -> PrototypeCampaignSession.Finished(
                     token.config,
                     checkNotNull(token.result),
+                    token.publicationWarning,
                 )
                 token.persistedCancellationResult != null ->
-                    PrototypeCampaignSession.Cancelled(token.config)
+                    PrototypeCampaignSession.Cancelled(token.config, token.publicationWarning)
                 token.failureMessage != null -> PrototypeCampaignSession.Failed(
                     token.config,
                     checkNotNull(token.failureMessage),

@@ -24,8 +24,375 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
+import java.time.Instant
 
 class PrototypeQuickCampaignRunnerTest {
+    @Test
+    fun completedQuickCampaignCarriesUtcWindowsAndPregeneratedClockDomains() = runBlocking {
+        val clockDomainFactoryCalls = mutableListOf<Int>()
+        val utcInstants = listOf(
+            "2026-09-01T01:00:00Z",
+            "2026-09-01T01:00:01Z",
+            "2026-09-01T01:00:02Z",
+            "2026-09-01T01:00:03Z",
+            "2026-09-01T01:00:04Z",
+            "2026-09-01T01:00:05Z",
+            "2026-09-01T01:00:06Z",
+            "2026-09-01T01:00:07Z",
+        ).map(Instant::parse).iterator()
+        val runner = PrototypeQuickCampaignRunner(
+            executeRun = { plan ->
+                assertEquals(listOf(1, 2, 3), clockDomainFactoryCalls)
+                assertEquals("quick-clock-domain-${plan.runIndex}", plan.clockDomainId)
+                PrototypeQuickCampaignRunner.RunResult.completeForTest(
+                    runIndex = plan.runIndex,
+                    runId = plan.runId,
+                    conditionId = plan.conditionId,
+                    streamResult = testStreamResult(plan.runIndex),
+                )
+            },
+            runIdFactory = { index -> "run-quick-authority-$index" },
+            clockDomainIdFactory = { index ->
+                clockDomainFactoryCalls += index
+                "quick-clock-domain-$index"
+            },
+            utcNow = { utcInstants.next() },
+            waitBetweenRuns = {},
+        )
+
+        val result = runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = "campaign-quick-authority",
+        )
+
+        assertEquals("2026-09-01T01:00:00Z", result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T01:00:07Z", result.campaignEndedAtUtc)
+        assertEquals(
+            listOf("quick-clock-domain-1", "quick-clock-domain-2", "quick-clock-domain-3"),
+            result.runs.map { it.clockDomainId },
+        )
+        assertEquals(
+            listOf(
+                "2026-09-01T01:00:01Z" to "2026-09-01T01:00:02Z",
+                "2026-09-01T01:00:03Z" to "2026-09-01T01:00:04Z",
+                "2026-09-01T01:00:05Z" to "2026-09-01T01:00:06Z",
+            ),
+            result.runs.map { it.attemptStartedAtUtc to it.attemptEndedAtUtc },
+        )
+        result.runs.forEach { run ->
+            assertEquals(
+                requireNotNull(run.completedStreamResult).t0MonotonicNanos,
+                run.t0MonotonicNanos,
+            )
+        }
+        assertFalse(utcInstants.hasNext())
+    }
+
+    @Test
+    fun interruptedQuickCampaignCarriesAttemptAndNotStartedAuthority() = runBlocking {
+        val campaignId = "campaign-quick-interrupted-authority"
+        val runIds = listOf(
+            "run-interrupted-authority-1",
+            "run-interrupted-authority-2",
+            "run-interrupted-authority-3",
+        )
+        val utcInstants = listOf(
+            "2026-09-01T02:00:00Z",
+            "2026-09-01T02:00:01Z",
+            "2026-09-01T02:00:02Z",
+            "2026-09-01T02:00:03Z",
+            "2026-09-01T02:00:04Z",
+            "2026-09-01T02:00:05Z",
+        ).map(Instant::parse).iterator()
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(
+                transport = QueuedRawPostTransport(
+                    ArrayDeque(
+                        listOf(
+                            completeBaselineStream(campaignId, runIds[0]),
+                            interruptedSlowStream(campaignId, runIds[1]),
+                        ),
+                    ),
+                ),
+                clock = RecordingSteppedClock(),
+            ),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index -> "interrupted-clock-domain-$index" },
+            utcNow = { utcInstants.next() },
+            waitBetweenRuns = {},
+        )
+
+        val result = runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = campaignId,
+        )
+
+        assertEquals(
+            listOf("COMPLETE", "INTERRUPTED", "NOT_STARTED"),
+            result.runs.map { it.status.name },
+        )
+        assertEquals("2026-09-01T02:00:00Z", result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T02:00:05Z", result.campaignEndedAtUtc)
+        assertEquals(
+            listOf(
+                "interrupted-clock-domain-1",
+                "interrupted-clock-domain-2",
+                "interrupted-clock-domain-3",
+            ),
+            result.runs.map { it.clockDomainId },
+        )
+        assertEquals(
+            "2026-09-01T02:00:01Z" to "2026-09-01T02:00:02Z",
+            result.runs[0].attemptStartedAtUtc to result.runs[0].attemptEndedAtUtc,
+        )
+        assertEquals(
+            "2026-09-01T02:00:03Z" to "2026-09-01T02:00:04Z",
+            result.runs[1].attemptStartedAtUtc to result.runs[1].attemptEndedAtUtc,
+        )
+        assertNull(result.runs[2].attemptStartedAtUtc)
+        assertNull(result.runs[2].attemptEndedAtUtc)
+        assertEquals(
+            requireNotNull(result.runs[0].completedStreamResult).t0MonotonicNanos,
+            result.runs[0].t0MonotonicNanos,
+        )
+        assertEquals(
+            requireNotNull(result.runs[1].partialEvidence).t0MonotonicNanos,
+            result.runs[1].t0MonotonicNanos,
+        )
+        assertNull(result.runs[2].t0MonotonicNanos)
+        assertFalse(utcInstants.hasNext())
+    }
+
+    @Test
+    fun invalidSequenceQuickCampaignCarriesAttemptAndNotStartedAuthority() = runBlocking {
+        val campaignId = "campaign-quick-invalid-authority"
+        val runIds = listOf(
+            "run-invalid-authority-1",
+            "run-invalid-authority-2",
+            "run-invalid-authority-3",
+        )
+        val utcInstants = listOf(
+            "2026-09-01T03:00:00Z",
+            "2026-09-01T03:00:01Z",
+            "2026-09-01T03:00:02Z",
+            "2026-09-01T03:00:03Z",
+        ).map(Instant::parse).iterator()
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(
+                transport = QueuedRawPostTransport(
+                    ArrayDeque(
+                        listOf(
+                            rawStream(
+                                blocks = listOf(
+                                    runStartedBlock(campaignId, runIds[0], "baseline_v0.1"),
+                                    contentBlock(
+                                        campaignId,
+                                        runIds[0],
+                                        "baseline_v0.1",
+                                        sequence = 1,
+                                    ),
+                                    contentBlock(
+                                        campaignId,
+                                        runIds[0],
+                                        "baseline_v0.1",
+                                        sequence = 3,
+                                    ),
+                                ),
+                                truncatedTail = false,
+                            ),
+                        ),
+                    ),
+                ),
+                clock = RecordingSteppedClock(),
+            ),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index -> "invalid-clock-domain-$index" },
+            utcNow = { utcInstants.next() },
+            waitBetweenRuns = {},
+        )
+
+        val result = runner.run(
+            endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+            campaignId = campaignId,
+        )
+
+        assertEquals(
+            listOf("INVALID_SEQUENCE", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { it.status.name },
+        )
+        assertEquals("2026-09-01T03:00:00Z", result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T03:00:03Z", result.campaignEndedAtUtc)
+        assertEquals(
+            listOf(
+                "invalid-clock-domain-1",
+                "invalid-clock-domain-2",
+                "invalid-clock-domain-3",
+            ),
+            result.runs.map { it.clockDomainId },
+        )
+        assertEquals("2026-09-01T03:00:01Z", result.runs[0].attemptStartedAtUtc)
+        assertEquals("2026-09-01T03:00:02Z", result.runs[0].attemptEndedAtUtc)
+        assertEquals(
+            requireNotNull(result.runs[0].partialEvidence).t0MonotonicNanos,
+            result.runs[0].t0MonotonicNanos,
+        )
+        result.runs.drop(1).forEach { run ->
+            assertNull(run.attemptStartedAtUtc)
+            assertNull(run.attemptEndedAtUtc)
+            assertNull(run.t0MonotonicNanos)
+        }
+        assertFalse(utcInstants.hasNext())
+    }
+
+    @Test
+    fun cancelledQuickCampaignCarriesAttemptAndNotStartedAuthority() = runBlocking {
+        val campaignId = "campaign-quick-cancelled-authority"
+        val runIds = listOf(
+            "run-cancelled-authority-1",
+            "run-cancelled-authority-2",
+            "run-cancelled-authority-3",
+        )
+        val prefix = rawStream(
+            blocks = listOf(
+                runStartedBlock(campaignId, runIds[0], "baseline_v0.1"),
+                contentBlock(campaignId, runIds[0], "baseline_v0.1", sequence = 1),
+            ),
+            truncatedTail = false,
+        )
+        val cancellation = CancellationException("cancelled during authority attempt")
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        val utcInstants = listOf(
+            "2026-09-01T04:00:00Z",
+            "2026-09-01T04:00:01Z",
+            "2026-09-01T04:00:02Z",
+            "2026-09-01T04:00:03Z",
+        ).map(Instant::parse).iterator()
+        val transport = object : PrototypeRawPostTransport {
+            override suspend fun post(url: String, requestBody: String): RawSseStream =
+                error("observed transport path required")
+
+            override suspend fun postObserved(
+                url: String,
+                requestBody: String,
+                observer: PrototypeRawPostObserver,
+            ): RawSseStream {
+                observer.beforeDispatch()
+                prefix.events.forEach(observer.onRawEvent)
+                throw cancellation
+            }
+        }
+        val runner = PrototypeQuickCampaignRunner(
+            streamAdapter = PrototypeRunStreamAdapter(transport, RecordingSteppedClock()),
+            runIdFactory = { index -> runIds[index - 1] },
+            clockDomainIdFactory = { index -> "cancelled-clock-domain-$index" },
+            utcNow = { utcInstants.next() },
+            waitBetweenRuns = {},
+        )
+
+        val failure = try {
+            withContext(authority) {
+                runner.run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    campaignId = campaignId,
+                )
+            }
+            org.junit.Assert.fail("cancelled campaign result was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeCampaignCancelledWithResult) {
+            error
+        }
+        val result = failure.result
+
+        assertEquals(
+            listOf("CANCELLED", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { it.status.name },
+        )
+        assertEquals("2026-09-01T04:00:00Z", result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T04:00:03Z", result.campaignEndedAtUtc)
+        assertEquals(
+            listOf(
+                "cancelled-clock-domain-1",
+                "cancelled-clock-domain-2",
+                "cancelled-clock-domain-3",
+            ),
+            result.runs.map { it.clockDomainId },
+        )
+        assertEquals("2026-09-01T04:00:01Z", result.runs[0].attemptStartedAtUtc)
+        assertEquals("2026-09-01T04:00:02Z", result.runs[0].attemptEndedAtUtc)
+        assertEquals(
+            requireNotNull(result.runs[0].partialEvidence).t0MonotonicNanos,
+            result.runs[0].t0MonotonicNanos,
+        )
+        result.runs.drop(1).forEach { run ->
+            assertNull(run.attemptStartedAtUtc)
+            assertNull(run.attemptEndedAtUtc)
+            assertNull(run.t0MonotonicNanos)
+        }
+        assertFalse(utcInstants.hasNext())
+    }
+
+    @Test
+    fun cooldownCancelledQuickCampaignCarriesCampaignAndNotStartedAuthority() = runBlocking {
+        val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        val cancellation = CancellationException("cancelled during authority cooldown")
+        val utcInstants = listOf(
+            "2026-09-01T05:00:00Z",
+            "2026-09-01T05:00:01Z",
+            "2026-09-01T05:00:02Z",
+            "2026-09-01T05:00:03Z",
+        ).map(Instant::parse).iterator()
+        val runner = PrototypeQuickCampaignRunner(
+            executeRun = { plan ->
+                PrototypeQuickCampaignRunner.RunResult.completeForTest(
+                    runIndex = plan.runIndex,
+                    runId = plan.runId,
+                    conditionId = plan.conditionId,
+                    streamResult = testStreamResult(plan.runIndex),
+                )
+            },
+            runIdFactory = { index -> "run-cooldown-authority-$index" },
+            clockDomainIdFactory = { index -> "cooldown-clock-domain-$index" },
+            utcNow = { utcInstants.next() },
+            waitBetweenRuns = { throw cancellation },
+        )
+
+        val failure = try {
+            withContext(authority) {
+                runner.run(
+                    endpoint = "http://127.0.0.1:18088/api/v1/prototype/runs",
+                    campaignId = "campaign-quick-cooldown-authority",
+                )
+            }
+            org.junit.Assert.fail("cooldown-cancelled campaign result was not emitted")
+            error("unreachable")
+        } catch (error: PrototypeCampaignCancelledWithResult) {
+            error
+        }
+        val result = failure.result
+
+        assertEquals(
+            listOf("COMPLETE", "NOT_STARTED", "NOT_STARTED"),
+            result.runs.map { it.status.name },
+        )
+        assertEquals("2026-09-01T05:00:00Z", result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T05:00:03Z", result.campaignEndedAtUtc)
+        assertEquals(
+            listOf(
+                "cooldown-clock-domain-1",
+                "cooldown-clock-domain-2",
+                "cooldown-clock-domain-3",
+            ),
+            result.runs.map { it.clockDomainId },
+        )
+        assertEquals("2026-09-01T05:00:01Z", result.runs[0].attemptStartedAtUtc)
+        assertEquals("2026-09-01T05:00:02Z", result.runs[0].attemptEndedAtUtc)
+        result.runs.drop(1).forEach { run ->
+            assertNull(run.attemptStartedAtUtc)
+            assertNull(run.attemptEndedAtUtc)
+        }
+        assertFalse(utcInstants.hasNext())
+    }
+
     @Test
     fun quickCampaignRunsBaselineSlowUnstableSequentiallyAndReturnsCampaignSummary() = runBlocking {
         val observedRuns = mutableListOf<PrototypeQuickCampaignRunner.RunPlan>()
@@ -258,7 +625,7 @@ class PrototypeQuickCampaignRunnerTest {
     }
 
     @Test
-    fun quickCampaignPublishesRunningAfterClockDomainValidationBeforeEachExecution() = runBlocking {
+    fun quickCampaignFreezesAllClockDomainsBeforePublishingRunningExecution() = runBlocking {
         val campaignId = "campaign-quick-running-progress"
         val runIds = listOf("run-progress-01", "run-progress-02", "run-progress-03")
         val conditions = listOf("baseline_v0.1", "slow_v0.1", "unstable_v0.1")
@@ -305,12 +672,12 @@ class PrototypeQuickCampaignRunnerTest {
         assertEquals(
             listOf(
                 "clock:1",
+                "clock:2",
+                "clock:3",
                 "running:1:run-progress-01:baseline_v0.1:0/3",
                 "execute:baseline_v0.1",
-                "clock:2",
                 "running:2:run-progress-02:slow_v0.1:1/3",
                 "execute:slow_v0.1",
-                "clock:3",
                 "running:3:run-progress-03:unstable_v0.1:2/3",
                 "execute:unstable_v0.1",
             ),
@@ -2520,7 +2887,7 @@ class PrototypeQuickCampaignRunnerTest {
 
         assertEquals(2, postObservedCalls)
         assertEquals(2, postedBodies.size)
-        assertEquals(listOf(1, 2), clockDomainCalls)
+        assertEquals(listOf(1, 2, 3), clockDomainCalls)
         assertEquals(
             listOf("COMPLETE", "INTERRUPTED", "NOT_STARTED"),
             result.runs.map { run -> run.status.name },
@@ -2746,7 +3113,7 @@ class PrototypeQuickCampaignRunnerTest {
             campaignId = campaignId,
         )
 
-        assertEquals(listOf(1, 2), clockDomainCalls)
+        assertEquals(listOf(1, 2, 3), clockDomainCalls)
         val baselineRun = result.runs[0]
         val interruptedRun = result.runs[1]
         val notStartedRun = result.runs[2]
@@ -3200,6 +3567,11 @@ class PrototypeQuickCampaignRunnerTest {
         val campaignId = "campaign-quick-cancelled-before-dispatch"
         val cancellation = CancellationException("cancelled before Prototype dispatch")
         val authority = PrototypeUserCancellationAuthority().also { it.request() }
+        val utcInstants = listOf(
+            "2026-09-01T08:00:00Z",
+            "2026-09-01T08:00:01Z",
+            "2026-09-01T08:00:02Z",
+        ).map(Instant::parse).iterator()
         var dispatchObserved = false
         val transport = object : PrototypeRawPostTransport {
             override suspend fun post(url: String, requestBody: String): RawSseStream =
@@ -3216,6 +3588,8 @@ class PrototypeQuickCampaignRunnerTest {
         val runner = PrototypeQuickCampaignRunner(
             streamAdapter = PrototypeRunStreamAdapter(transport, IncrementingClock()),
             runIdFactory = { index -> "run-cancelled-before-dispatch-0$index" },
+            clockDomainIdFactory = { index -> "pre-dispatch-clock-domain-$index" },
+            utcNow = { utcInstants.next() },
             waitBetweenRuns = { _ -> },
         )
 
@@ -3243,6 +3617,26 @@ class PrototypeQuickCampaignRunnerTest {
         assertEquals("PARTIAL", failure.result.summary.status.name)
         assertEquals(0, failure.result.summary.attemptedRuns)
         assertEquals(3, failure.result.summary.notStartedRuns)
+        assertEquals("2026-09-01T08:00:00Z", failure.result.campaignStartedAtUtc)
+        assertEquals("2026-09-01T08:00:02Z", failure.result.campaignEndedAtUtc)
+    }
+
+    @Test
+    fun userCancellationObservedBeforeFirstFrameStillCarriesCampaignUtcWindow() = runBlocking {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+            "campaign-cancelled-before-first-frame-authority",
+        )
+
+        val result = PrototypeCampaignPersistenceFixture
+            .cancelledBeforeFirstFrameQuickCampaign(config)
+
+        val startedAt = Instant.parse(requireNotNull(result.campaignStartedAtUtc))
+        val endedAt = Instant.parse(requireNotNull(result.campaignEndedAtUtc))
+        assertFalse(endedAt.isBefore(startedAt))
+        assertEquals(0, result.summary.attemptedRuns)
+        assertTrue(result.runs.all { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.NOT_STARTED
+        })
     }
 
     @Test

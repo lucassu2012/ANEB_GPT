@@ -1,6 +1,7 @@
 package com.aneb.probe.prototype
 
 import com.aneb.probe.engine.ProbeExecutionLease
+import kotlinx.coroutines.runBlocking
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 import java.nio.file.Path
@@ -13,6 +14,68 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PrototypeCampaignServiceTest {
+    @Test
+    fun productionAuthorityStorePersistsRuntimeCampaignAndEveryRunAuthority() = runBlocking {
+        val config = PrototypeCampaignConfig(serviceTicket(), "campaign-authority-persistence")
+        val run = PrototypeQuickCampaignRunner.RunResult.notStarted(
+            PrototypeQuickCampaignRunner.RunPlan(
+                endpoint = config.nodeTicket.runUrl,
+                campaignId = config.campaignId,
+                runId = "run-authority-1",
+                runIndex = 1,
+                conditionId = "baseline_v0.1",
+                clockDomainId = "clock-authority-1",
+                requestBody = "{}",
+            ),
+        )
+        val result = emptyCampaign(config.campaignId).copy(
+            runs = listOf(run),
+            campaignStartedAtUtc = "2026-09-01T01:02:03Z",
+            campaignEndedAtUtc = "2026-09-01T01:03:04Z",
+        )
+        val provider = PrototypeCampaignAuthorityProvider(
+            PrototypeAndroidRuntimeCapture(
+                sourceCommit = "0123456789abcdef0123456789abcdef01234567",
+                androidVersionName = "0.2.0",
+                androidVersionCode = 20,
+                apkSha256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                deviceManufacturer = "HUAWEI",
+                deviceModel = "P40 Pro",
+                deviceOsRelease = "12",
+                deviceSdkInt = 31,
+            ),
+        )
+        var persistedCampaignAuthority: String? = null
+        var persistedRunAuthority: Map<String, String>? = null
+        val store = PrototypeCampaignAuthorityResultStore(provider) {
+                savedConfig,
+                savedResult,
+                campaignAuthority,
+                runAuthority,
+            ->
+            assertSame(config, savedConfig)
+            assertSame(result, savedResult)
+            persistedCampaignAuthority = campaignAuthority
+            persistedRunAuthority = runAuthority
+        }
+
+        store.save(config, result)
+
+        assertTrue(checkNotNull(persistedCampaignAuthority).contains(
+            "\"source_commit\":\"0123456789abcdef0123456789abcdef01234567\"",
+        ))
+        assertTrue(checkNotNull(persistedCampaignAuthority).contains(
+            "\"apk_sha256\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"",
+        ))
+        assertTrue(checkNotNull(persistedCampaignAuthority).contains(
+            "\"transport\":{\"kind\":\"lan\",\"acceptance_eligible\":true}",
+        ))
+        assertEquals(setOf("run-authority-1"), checkNotNull(persistedRunAuthority).keys)
+        assertTrue(checkNotNull(persistedRunAuthority)["run-authority-1"]!!.contains(
+            "\"clock_domain_id\":\"clock-authority-1\"",
+        ))
+    }
+
     @Test
     fun processWideMainOrSpecialOwnerBlocksPrototypeBeforeItsExecutorStarts() {
         val currentOwner = checkNotNull(ProbeExecutionLease.process.tryAcquire())
@@ -749,7 +812,8 @@ class PrototypeCampaignServiceTest {
         assertTrue(source.contains("class PrototypeCampaignService : Service()"))
         assertTrue(source.contains("private val serviceScope = CoroutineScope("))
         assertEquals(1, Regex("PrototypeCampaignJobOwner\\(").findAll(source).count())
-        assertTrue(source.contains("AnebClientPrototypeRawPostTransport(AnebClient())"))
+        assertTrue(source.contains("val prototypeClient = AnebClient()"))
+        assertTrue(source.contains("AnebClientPrototypeRawPostTransport(prototypeClient)"))
         assertTrue(source.contains("ticketTransport.forTicket(config.nodeTicket)"))
         assertTrue(source.contains("PrototypeRunStreamAdapter("))
         assertTrue(source.contains("PrototypeQuickCampaignRunner("))
@@ -757,12 +821,13 @@ class PrototypeCampaignServiceTest {
         assertTrue(source.contains("AnebDatabase.get(applicationContext)"))
         assertTrue(source.contains("PrototypeCampaignRoomRepository("))
         assertTrue(source.contains("PersistingPrototypeCampaignExecutor("))
-        assertTrue(source.contains("PrototypeCampaignResultStore { config, result ->"))
-        assertTrue(source.contains("repository.save(config, result)"))
+        assertTrue(source.contains("PrototypeAndroidRuntimeCaptureReader.read(applicationContext)"))
+        assertTrue(source.contains("PrototypeCampaignProductionResultStore("))
+        assertTrue(source.contains("client = prototypeClient"))
         assertTrue(source.contains("backgroundDispatcher = Dispatchers.IO"))
         assertTrue(
             source.indexOf("PrototypeQuickCampaignRunner(") <
-                source.indexOf("repository.save(config, result)"),
+                source.indexOf("PrototypeCampaignProductionResultStore("),
         )
         assertTrue(source.indexOf("startForeground(") < source.indexOf("PrototypeCampaignJobOwner("))
         assertTrue(source.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC"))
