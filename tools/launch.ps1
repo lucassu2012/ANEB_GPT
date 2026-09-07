@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Root = (Split-Path -Parent $PSScriptRoot),
+    [string]$Root,
     [ValidateRange(1, 65535)][int]$Port = 18088,
     [ValidateRange(1, 60)][int]$HealthTimeoutSeconds = 10,
     [switch]$RequireExternalAdmission,
@@ -263,6 +263,10 @@ $exitCode = 1
 $failureMessage = $null
 $cleanupFailed = $false
 try {
+    # Windows PowerShell initializes the script directory after parameter defaults.
+    if (-not $PSBoundParameters.ContainsKey('Root')) {
+        $Root = Split-Path -Parent $PSScriptRoot
+    }
     $rootFull = Get-AnEbFullPath -Path $Root
     Assert-AnEbDirectory -Path $rootFull | Out-Null
 

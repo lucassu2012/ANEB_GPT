@@ -3,7 +3,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ANEB G3 launcher 测试 ' + [Guid]::NewGuid().ToString('N'))
+$unicodePathLabel = [string][char]0x4E2D + [char]0x6587
+$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ANEB G3 launcher ' + $unicodePathLabel + ' ' + [Guid]::NewGuid().ToString('N'))
 $passed = 0
 
 function Assert-AnEbG3Test {
@@ -65,6 +66,7 @@ function New-AnEbG3LaunchFixture {
     New-Item -ItemType Directory -Path (Join-Path $FixturePath 'tools') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $FixturePath 'bin') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $FixturePath 'results') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'START_ANEB.bat') -Destination (Join-Path $FixturePath 'START_ANEB.bat')
     Copy-Item -LiteralPath (Join-Path $repo 'tools\launch.ps1') -Destination (Join-Path $FixturePath 'tools\launch.ps1')
     Copy-Item -LiteralPath (Join-Path $repo 'tools\common.ps1') -Destination (Join-Path $FixturePath 'tools\common.ps1')
     Copy-Item -LiteralPath $ServerBinary -Destination (Join-Path $FixturePath 'bin\aneb-server.exe')
@@ -165,8 +167,44 @@ try {
     Assert-AnEbG3Test -Condition ($buildExitCode -eq 0 -and (Test-Path -LiteralPath $serverBinary -PathType Leaf)) -Message ('actual Prototype server builds for launcher test output=' + [string]::Join([char]10, $buildOutput))
 
     $port = Get-AnEbG3FreePort
-    $fixture = Join-Path $tempRoot 'fresh 中文 package'
+    $fixture = Join-Path $tempRoot ('fresh ' + $unicodePathLabel + ' package')
     New-AnEbG3LaunchFixture -FixturePath $fixture -ServerBinary $serverBinary -Port $port
+    # Exercise the shipped entrypoint without -Root, from outside the package.
+    $entryCommand = '""' + (Join-Path $fixture 'START_ANEB.bat') + '" -Port ' + $port + ' -HealthTimeoutSeconds 5 -ExitAfterReady"'
+    $entryProcess = New-Object System.Diagnostics.Process
+    $entryProcess.StartInfo.FileName = 'cmd.exe'
+    $entryProcess.StartInfo.Arguments = '/d /s /c ' + $entryCommand
+    $entryProcess.StartInfo.WorkingDirectory = $repo
+    $entryProcess.StartInfo.UseShellExecute = $false
+    $entryProcess.StartInfo.CreateNoWindow = $true
+    $entryProcess.StartInfo.RedirectStandardOutput = $true
+    $entryProcess.StartInfo.RedirectStandardError = $true
+    $entryProcess.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::Default
+    $entryProcess.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::Default
+    try {
+        $null = $entryProcess.Start()
+        $entryStdout = $entryProcess.StandardOutput.ReadToEndAsync()
+        $entryStderr = $entryProcess.StandardError.ReadToEndAsync()
+        if (-not $entryProcess.WaitForExit(20000)) {
+            # This PID is the cmd process created above, never an unrelated server.
+            $null = & taskkill.exe /PID ([string]$entryProcess.Id) /T /F 2>&1
+            $null = $entryProcess.WaitForExit(5000)
+            throw 'default BAT launcher exceeded the 20-second test deadline'
+        }
+        if (-not $entryStdout.Wait(5000) -or -not $entryStderr.Wait(5000)) {
+            throw 'default BAT launcher output did not close after exit'
+        }
+        $entryText = $entryStdout.Result + $entryStderr.Result
+        $entryText = $entryText.Replace("`r`n", "`n")
+        $entryExitCode = $entryProcess.ExitCode
+    }
+    finally {
+        $entryProcess.Dispose()
+    }
+    Assert-AnEbG3Test -Condition ($entryExitCode -eq 0 -and $entryText -match 'ANEB Prototype 0\.1 - READY') -Message ('shipped BAT resolves its default package root in Windows PowerShell output=' + $entryText)
+    Assert-AnEbG3Test -Condition ($entryText -match ('(?m)^Results: ' + [regex]::Escape((Join-Path ([System.IO.Path]::GetFullPath($fixture)) 'results')) + '$')) -Message 'default BAT root is the package directory, not the caller working directory'
+    $entryPidMatch = [regex]::Match($entryText, '(?m)^OWNED_SERVER_PID ([0-9]+)')
+    Assert-AnEbG3Test -Condition ($entryPidMatch.Success -and -not (Get-Process -Id ([int]$entryPidMatch.Groups[1].Value) -ErrorAction SilentlyContinue)) -Message 'default BAT launch cleans up its owned server'
     $result = Invoke-AnEbG3Tool -ScriptPath (Join-Path $fixture 'tools\launch.ps1') -Arguments @(
         '-Root', $fixture,
         '-Port', [string]$port,
