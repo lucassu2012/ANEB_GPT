@@ -22,6 +22,18 @@ internal sealed interface PrototypeCampaignResultLoadState {
     data class Unavailable(val campaignId: String) : PrototypeCampaignResultLoadState
 }
 
+internal fun PrototypeCampaignResultLoadState.withConfirmedPublication(): PrototypeCampaignResultLoadState =
+    if (this is PrototypeCampaignResultLoadState.Ready) {
+        copy(
+            publicationWarning = null,
+            presentation = presentation.copy(
+                integrity = "Original node confirmed publication · device ZIP remains unverified",
+            ),
+        )
+    } else {
+        this
+    }
+
 internal class PrototypeCampaignResultNavigator(
     private val loadCampaign: suspend (String) -> PrototypeCampaignRoomRepository.StoredCampaign?,
 ) {

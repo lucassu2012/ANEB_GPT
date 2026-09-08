@@ -9,11 +9,46 @@ import java.nio.file.Path
 
 class PrototypeCampaignResultScreenTest {
     @Test
+    fun `publication acknowledgement removes only the warning and keeps interrupted measurements`() {
+        val interruption = PrototypeCampaignBlockingErrorPresentation(
+            code = "P008_STREAM_INTERRUPTED",
+            title = "Stream interrupted",
+            cause = "No terminal receipt",
+            action = "Keep partial evidence",
+            detail = "40/120 events retained",
+            evidenceRetained = true,
+        )
+        val original = PrototypeCampaignResultLoadState.Ready(
+            campaignId = "saved-interrupted",
+            presentation = resultPresentation("Partial").copy(blockingError = interruption),
+            publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+        )
+
+        val acknowledged = original.withConfirmedPublication() as PrototypeCampaignResultLoadState.Ready
+
+        assertEquals(null, acknowledged.publicationWarning)
+        assertTrue(acknowledged.presentation.integrity.contains("Original node confirmed publication"))
+        assertTrue(acknowledged.presentation.integrity.contains("device ZIP remains unverified"))
+        assertEquals(
+            original.presentation,
+            acknowledged.presentation.copy(integrity = original.presentation.integrity),
+        )
+        assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", original.publicationWarning)
+    }
+
+    @Test
     fun `action state projection controls both actions and exact status message`() {
         val expected = listOf(
             Triple(PrototypeCampaignResultActionState.Idle, true, null),
             Triple(PrototypeCampaignResultActionState.Exporting, false, "Exporting…"),
             Triple(PrototypeCampaignResultActionState.PreparingShare, false, "Preparing share…"),
+            Triple(PrototypeCampaignResultActionState.Publishing, false, "Retrying evidence publication…"),
+            Triple(PrototypeCampaignResultActionState.Published, true, "Original node confirmed evidence publication."),
+            Triple(
+                PrototypeCampaignResultActionState.PublicationFailed,
+                true,
+                "P018 · Publication failed. Local evidence is retained. Restore the original node, then retry.",
+            ),
             Triple(PrototypeCampaignResultActionState.Saved, true, "Saved to Downloads/ANEB"),
             Triple(PrototypeCampaignResultActionState.ShareOpened, true, "Share sheet opened"),
             Triple(
@@ -48,7 +83,7 @@ class PrototypeCampaignResultScreenTest {
         )
         assertTrue(screen.contains("actionPresentation = requireNotNull(actionPresentation)"))
         assertEquals(
-            2,
+            3,
             Regex("enabled = actionPresentation\\.actionsEnabled")
                 .findAll(screen)
                 .count(),
@@ -144,6 +179,8 @@ class PrototypeCampaignResultScreenTest {
         assertTrue(screen.contains("Text(\"Back\""))
         assertTrue(screen.contains("onClick = onExport"))
         assertTrue(screen.contains("onClick = onShare"))
+        assertTrue(screen.contains("onClick = onRetryPublication"))
+        assertTrue(screen.contains("Text(\"Retry evidence publication\""))
 
         assertTrue(activity.contains("PrototypeCampaignResultScreen("))
         assertTrue(activity.contains("prototypeCampaignResultNavigator.dismiss("))

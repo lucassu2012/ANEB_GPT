@@ -19,6 +19,7 @@ internal data class PrototypeCampaignResultPresentation(
     val disclosure: String,
     val conditions: List<PrototypeConditionResultPresentation>,
     val blockingError: PrototypeCampaignBlockingErrorPresentation? = null,
+    val publicationNodeUrl: String = "",
 )
 
 internal data class PrototypeCampaignBlockingErrorPresentation(
@@ -69,6 +70,7 @@ internal object PrototypeCampaignResultPresenter {
 
         return PrototypeCampaignResultPresentation(
             campaignId = stored.campaignId,
+            publicationNodeUrl = stored.nodeBaseUrl,
             status = when (summary.status) {
                 PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE -> "Complete"
                 PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL -> "Partial"
