@@ -96,7 +96,14 @@ func (a *app) handlePrototypeEvidence(w http.ResponseWriter, r *http.Request) {
 	defer a.prototypeEvidenceMu.Unlock()
 
 	campaignRoot := filepath.Join(a.prototypeResultsRoot, uploadIdentity.CampaignID)
-	if _, err := os.Lstat(campaignRoot); err == nil || !os.IsNotExist(err) {
+	if info, err := os.Lstat(campaignRoot); err == nil {
+		// The runtime verifies the complete immutable bundle before accepting a retry.
+		// Never hand a link, incomplete publication or unexpected entry to it as a retry.
+		if !info.IsDir() || !prototypePublishedFileSet(campaignRoot) {
+			writePrototypeEvidenceFailure(w, http.StatusInternalServerError)
+			return
+		}
+	} else if !os.IsNotExist(err) {
 		writePrototypeEvidenceFailure(w, http.StatusInternalServerError)
 		return
 	}
@@ -169,6 +176,24 @@ func (a *app) handlePrototypeEvidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(response)
+}
+
+func prototypePublishedFileSet(root string) bool {
+	expected := map[string]bool{
+		"meta.json": true, "events.jsonl": true, "runs.csv": true, "summary.csv": true,
+		"report.html": true, "run.log": true, "manifest.json": true,
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(expected) {
+		return false
+	}
+	for _, entry := range entries {
+		info, err := os.Lstat(filepath.Join(root, entry.Name()))
+		if !expected[entry.Name()] || err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
 }
 
 func writePrototypeEvidenceFailure(w http.ResponseWriter, status int) {

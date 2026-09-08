@@ -963,6 +963,57 @@ def _strict_json_loads(text: str, label: str) -> Any:
         raise ValueError(f"{label} is not valid JSON") from exc
 
 
+def _retain_publication_conflict(output_root: Path, campaign_id: str, published: Path, payload: dict[str, Any]) -> None:
+    """Retain one bounded, digest-only diagnostic per immutable campaign."""
+    payload_files = [
+        ("meta.json", "meta_json"),
+        ("events.jsonl", "events_jsonl"),
+        ("runs.csv", "runs_csv"),
+        ("summary.csv", "summary_csv"),
+    ]
+    published_hashes = {name: hashlib.sha256((published / name).read_bytes()).hexdigest() for name, _ in payload_files}
+    incoming_hashes = {name: hashlib.sha256(payload[field].encode("utf-8")).hexdigest() for name, field in payload_files}
+    campaign_hash = hashlib.sha256(campaign_id.encode("utf-8")).hexdigest()
+    diagnostic = {
+        "schema_version": "aneb-prototype-publication-diagnostic-0.1",
+        "recorded_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "reason": "immutable_campaign_conflict",
+        "campaign_id_sha256": campaign_hash,
+        "published_manifest_sha256": hashlib.sha256((published / "manifest.json").read_bytes()).hexdigest(),
+        "published_payload_sha256": published_hashes,
+        "incoming_payload_sha256": incoming_hashes,
+        "changed_files": [name for name, _ in payload_files if published_hashes[name] != incoming_hashes[name]],
+    }
+    text = json.dumps(diagnostic, sort_keys=True, separators=(",", ":")) + "\n"
+    if len(text.encode("utf-8")) > 2048:
+        raise ValueError("publication diagnostic exceeds its size limit")
+    # The space makes this namespace disjoint from every valid campaign ID.
+    diagnostic_root = output_root / ".publication diagnostics"
+    diagnostic_root.mkdir(exist_ok=True)
+    metadata = diagnostic_root.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or diagnostic_root.is_symlink()
+        or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    ):
+        raise ValueError("publication diagnostic directory must not be a link")
+    destination = diagnostic_root / f"{campaign_hash}.json"
+    try:
+        with destination.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+    except FileExistsError:
+        if not is_regular_nonlink_file(destination) or destination.stat().st_size > 2048:
+            raise ValueError("retained publication diagnostic is not a bounded regular file")
+        previous = _strict_json_loads(destination.read_text(encoding="utf-8"), "publication diagnostic")
+        if (
+            not isinstance(previous, dict)
+            or previous.get("schema_version") != diagnostic["schema_version"]
+            or previous.get("reason") != diagnostic["reason"]
+            or previous.get("campaign_id_sha256") != campaign_hash
+        ):
+            raise ValueError("retained publication diagnostic identity is invalid")
+
+
 def publish_android_upload(input_path: Path, output_root: Path) -> dict[str, Any]:
     input_path = input_path.resolve(strict=True)
     if not is_regular_nonlink_file(input_path):
@@ -1007,6 +1058,35 @@ def publish_android_upload(input_path: Path, output_root: Path) -> dict[str, Any
 
     output_root.mkdir(parents=True, exist_ok=True)
     output_root = output_root.resolve(strict=True)
+    published = output_root / campaign_id
+    try:
+        existing = published.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if (
+            campaign_id in {".", ".."}
+            or not stat.S_ISDIR(existing.st_mode)
+            or published.is_symlink()
+            or getattr(existing, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise ValueError("published campaign must be a regular non-link directory")
+        verify_e2e_bundle(published, load_json("profile-manifest.json"), EXPECTED_PROFILE_HASH)
+        for name, field in [
+            ("meta.json", "meta_json"),
+            ("events.jsonl", "events_jsonl"),
+            ("runs.csv", "runs_csv"),
+            ("summary.csv", "summary_csv"),
+        ]:
+            if (published / name).read_bytes() != payload[field].encode("utf-8"):
+                _retain_publication_conflict(output_root, campaign_id, published, payload)
+                raise ValueError("published campaign conflicts with Android handoff")
+        return {
+            "campaign_id": campaign_id,
+            "manifest_sha256": hashlib.sha256((published / "manifest.json").read_bytes()).hexdigest(),
+            "publication_status": "verified",
+            "schema_version": "aneb-prototype-publication-receipt-0.1",
+        }
     with tempfile.TemporaryDirectory(prefix=f"{campaign_id}.handoff-") as temporary:
         input_root = Path(temporary)
         for name, field in [

@@ -530,6 +530,69 @@ func TestPrototypeEvidenceBundledRuntimeSmoke(t *testing.T) {
 		receipt.SchemaVersion != "aneb-prototype-publication-receipt-0.1" {
 		t.Fatalf("bundled runtime receipt is not manifest-bound: %+v", receipt)
 	}
+	publishedRoot := filepath.Join(resultsRoot, meta.CampaignID)
+	originalFiles := map[string][32]byte{}
+	entries, err := os.ReadDir(publishedRoot)
+	if err != nil || len(entries) != 7 {
+		t.Fatalf("expected seven published files: %v", err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(publishedRoot, entry.Name()))
+		if err != nil {
+			t.Fatalf("read original published file: %v", err)
+		}
+		originalFiles[entry.Name()] = sha256.Sum256(data)
+	}
+
+	retry := httptest.NewRequest(http.MethodPost, "/api/v1/prototype/campaigns/evidence", bytes.NewReader(uploadBytes))
+	retry.Header.Set("Content-Type", "application/json")
+	retried := httptest.NewRecorder()
+	a.routes().ServeHTTP(retried, retry)
+	if retried.Code != http.StatusOK || retried.Body.String() != recorder.Body.String() {
+		t.Fatalf("identical upload must return its original receipt: status=%d body=%s", retried.Code, retried.Body.String())
+	}
+	afterRetry, err := os.ReadFile(filepath.Join(resultsRoot, meta.CampaignID, "manifest.json"))
+	if err != nil || !bytes.Equal(manifestBytes, afterRetry) {
+		t.Fatalf("identical upload changed the published manifest: %v", err)
+	}
+
+	var conflictingPayload map[string]string
+	if err := json.Unmarshal(uploadBytes, &conflictingPayload); err != nil {
+		t.Fatalf("decode conflict request: %v", err)
+	}
+	// Valid JSON with different immutable payload bytes must not overwrite the publication.
+	conflictingPayload["meta_json"] = " " + conflictingPayload["meta_json"]
+	conflictBytes, err := json.Marshal(conflictingPayload)
+	if err != nil {
+		t.Fatalf("encode conflict request: %v", err)
+	}
+	conflict := httptest.NewRequest(http.MethodPost, "/api/v1/prototype/campaigns/evidence", bytes.NewReader(conflictBytes))
+	conflict.Header.Set("Content-Type", "application/json")
+	rejected := httptest.NewRecorder()
+	a.routes().ServeHTTP(rejected, conflict)
+	if rejected.Code != http.StatusInternalServerError || rejected.Body.String() != `{"code":"P018_EVIDENCE_PUBLICATION_FAILED","ok":false}`+"\n" {
+		t.Fatalf("conflicting upload was not rejected: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	campaignHash := sha256.Sum256([]byte(meta.CampaignID))
+	diagnosticPath := filepath.Join(resultsRoot, ".publication diagnostics", hex.EncodeToString(campaignHash[:])+".json")
+	diagnosticBytes, err := os.ReadFile(diagnosticPath)
+	if err != nil || len(diagnosticBytes) > 2048 || !bytes.Contains(diagnosticBytes, []byte(`"reason":"immutable_campaign_conflict"`)) {
+		t.Fatalf("conflict diagnostic was not retained: %v", err)
+	}
+	if bytes.Contains(diagnosticBytes, []byte(meta.CampaignID)) {
+		t.Fatal("diagnostic leaked the un-hashed campaign identifier")
+	}
+	afterEntries, err := os.ReadDir(publishedRoot)
+	if err != nil || len(afterEntries) != len(originalFiles) {
+		t.Fatalf("publication file set changed: %v", err)
+	}
+	for _, entry := range afterEntries {
+		data, err := os.ReadFile(filepath.Join(publishedRoot, entry.Name()))
+		original, found := originalFiles[entry.Name()]
+		if err != nil || !found || original != sha256.Sum256(data) {
+			t.Fatalf("publication changed after retry/conflict: file=%s error=%v", entry.Name(), err)
+		}
+	}
 }
 
 func buildPrototypeEvidenceRuntime(t *testing.T) string {

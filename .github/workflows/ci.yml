@@ -39,6 +39,13 @@ jobs:
       - name: Test ANEB node
         working-directory: server
         run: go test ./...
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test immutable evidence publication
+        run: |
+          python -m pip install jsonschema==4.26.0
+          python -m unittest tests.test_g4_all_not_started_publication tests.test_g4_publication_retry -v
 
   behavior-model:
     name: AI behavior model tests
