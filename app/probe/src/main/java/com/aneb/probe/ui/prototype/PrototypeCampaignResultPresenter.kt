@@ -63,6 +63,9 @@ internal object PrototypeCampaignResultPresenter {
         val invalidSequenceRun = stored.runs.firstOrNull { run ->
             run.status == PrototypeQuickCampaignRunner.RunStatus.INVALID_SEQUENCE
         }
+        val interruptedRun = stored.runs.firstOrNull { run ->
+            run.status == PrototypeQuickCampaignRunner.RunStatus.INTERRUPTED
+        }
 
         return PrototypeCampaignResultPresentation(
             campaignId = stored.campaignId,
@@ -115,6 +118,16 @@ internal object PrototypeCampaignResultPresenter {
                     title = "Invalid event sequence",
                     cause = "A content event was missing, duplicated, or out of order.",
                     action = "Evidence was retained. Report this implementation defect.",
+                    detail = "Run ${run.runIndex} · ${run.conditionId} · ${run.runId} · " +
+                        "${run.eventsReceived}/120 events retained",
+                    evidenceRetained = true,
+                )
+            } ?: interruptedRun?.let { run ->
+                PrototypeCampaignBlockingErrorPresentation(
+                    code = "P008_STREAM_INTERRUPTED",
+                    title = "Stream interrupted",
+                    cause = "The stream ended before a valid terminal receipt arrived.",
+                    action = "Partial evidence was retained. Check the node connection, then start a new campaign.",
                     detail = "Run ${run.runIndex} · ${run.conditionId} · ${run.runId} · " +
                         "${run.eventsReceived}/120 events retained",
                     evidenceRetained = true,
