@@ -1,6 +1,6 @@
 # 06 — Release and Acceptance Specification
 
-Status: **G0 rework — reviewable exact head**
+Status: **Frozen specification; PO-approved release filename exception recorded 2026-09-09**
 Primary issues: #17 and #18
 
 ## 1. Release unit
@@ -13,11 +13,20 @@ Recommended candidate naming:
 ANEB-Prototype-0.1-rc.<n>-windows-x64.zip
 ```
 
-Final naming:
+Final display title: **ANEB Prototype 0.1**.
+
+PO release decision (2026-09-09): retain the complete already-verified candidate
+ZIP filename and all hashes for the accepted release. Do not rename or repack
+solely to remove the candidate suffix. The accepted filename is:
 
 ```text
-ANEB-Prototype-0.1-windows-x64.zip
+ANEB-Prototype-0.1-rc-20260909-03675a9-windows-x64.zip
 ```
+
+This supersedes only the former short-name convention. Workload, RPI-0.1,
+evidence schema, claim boundary and every G2–G5 acceptance criterion below are
+unchanged. The immutable artifact source remains 03675a9; a later handoff
+documentation commit does not relabel the binaries.
 
 Every candidate is bound to exact app, server, profile, condition, evidence-schema
 and score-policy versions. The contract package contains exactly the four
