@@ -53,6 +53,7 @@ Android 正式包身份为 `com.aneb.probe`，版本 `0.2.0`（versionCode 20）
 - ZIP 初始只包含空的 `results\`。正式 campaign 写入 `results\<campaign_id>\`；Server 的兼容运行数据写入 `results\legacy\`。不要把一个 campaign 的文件搬到另一个目录。
 - 同一 campaign 的四份原始上传文本完全相同时，重复提交返回原发布回执，七份证据文件不重写。内容不同时会拒绝，不能用重传覆盖已发布证据；应保留原报告并使用新的 campaign。
 - 发布失败后，恢复结果页显示的原运行节点，再点 `Retry evidence publication`。此操作只重发已保存的同一 campaign 和原始采集信息，不启动新测量、不改写手机结果，也不改用当前输入的其他节点。缺少原始保存信息时停止恢复，不拼造证据。
+- 如果已经离开结果页或重启应用，进入 `Prototype Mode` → `Saved campaigns`，按原 campaign ID 和原节点选择结果，再查看、导出或重试发布。打开本地结果不要求节点在线，也不会自动重测或发布；重新打开不代表节点已确认发布。
 - 冲突诊断位于 `results\.publication diagnostics\`（目录名含空格），不属于七份证据。每个已发布 campaign 最多保留第一份冲突摘要，单文件不超过 2 KiB；只含固定原因、时间及内容摘要，不含请求原文。它不是完整重试历史，也不是新的测试结果。维护者排查 P018 时可查看；不得把它移进 campaign 目录。
 - 不要编辑 `VERSION.json`、`SHA256SUMS.txt`、contracts 或结果 manifest。任何编辑都会使完整性或 evidence 校验失败。
 - `complete`、`partial`、`cancelled`、`failed` 或 `invalid` campaign 都可能发布 Windows 可验证报告；`verified` 只表示证据字节、结构和跨文件关系已通过验证，不表示 campaign 或任一 run 成功（`verified` means evidence integrity only; it does not mean campaign or run success）。必须同时查看 `campaign_status`、`run_status`、`success_rate` 以及 RPI/null reason；手机仍保留本地结果。

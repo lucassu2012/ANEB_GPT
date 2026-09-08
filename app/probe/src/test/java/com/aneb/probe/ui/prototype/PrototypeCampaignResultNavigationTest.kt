@@ -23,6 +23,71 @@ import java.nio.file.Path
 @Config(sdk = [35], manifest = Config.NONE)
 class PrototypeCampaignResultNavigationTest {
     @Test
+    fun `browsing and dismissing an older saved record consumes the residual terminal session`() = runBlocking {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-last-session")
+        val navigator = PrototypeCampaignResultNavigator { error("selection does not load") }
+        val terminalSessions = listOf(
+            PrototypeCampaignSession.Finished(
+                config, PrototypeCampaignPersistenceFixture.completeQuickCampaign(config), "P018",
+            ),
+            PrototypeCampaignSession.Cancelled(config, "P018"),
+        )
+        terminalSessions.forEach { session ->
+            val chosen = navigator.openSaved(PrototypeCampaignResultRouteState(), session, "older-saved")
+            assertEquals("older-saved", chosen.openCampaignId)
+            assertNull(chosen.publicationWarning)
+            assertEquals(chosen, navigator.observe(chosen.copy(), session))
+
+            val dismissed = navigator.dismiss(chosen, "older-saved", session)
+            assertNull(navigator.observe(dismissed.copy(), session).openCampaignId)
+            val reopened = navigator.openSaved(dismissed, session, "older-saved")
+            assertEquals("older-saved", navigator.observe(reopened, session).openCampaignId)
+        }
+        val failed = PrototypeCampaignSession.Failed(config, "save failed")
+        assertEquals("older-saved", navigator.openSaved(PrototypeCampaignResultRouteState(), failed, "older-saved").openCampaignId)
+    }
+
+    @Test
+    fun `saved selection cannot replace a running or cancelling campaign`() {
+        val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-active-selection")
+        val navigator = PrototypeCampaignResultNavigator { error("selection does not load") }
+        val state = PrototypeCampaignResultRouteState()
+
+        listOf(PrototypeCampaignSession.Running(config), PrototypeCampaignSession.Cancelling(config))
+            .forEach { session ->
+                assertEquals(state, navigator.openSaved(state, session, "saved-campaign"))
+            }
+    }
+
+    @Test
+    fun `explicit saved selection opens the original cancelled record from idle`() = runBlocking {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+        try {
+            val repository = PrototypeCampaignRoomRepository(database)
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig("campaign-saved-selection")
+            repository.save(config, PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config))
+            val navigator = PrototypeCampaignResultNavigator(repository::load)
+
+            val route = navigator.openSaved(
+                PrototypeCampaignResultRouteState(),
+                PrototypeCampaignSession.Idle,
+                repository.savedCampaigns().single().campaignId,
+            )
+
+            assertEquals(config.campaignId, route.openCampaignId)
+            val loaded = navigator.load(requireNotNull(route.openCampaignId))
+                as PrototypeCampaignResultLoadState.Ready
+            assertEquals(config.campaignId, loaded.presentation.campaignId)
+            assertEquals("Cancelled", loaded.presentation.status)
+            assertTrue(loaded.presentation.conditions.all { it.rpi == "—" })
+            assertNull(loaded.publicationWarning)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `interrupted campaign keeps P008 guidance alongside publication failure`() = runBlocking {
         val context: Context = RuntimeEnvironment.getApplication()
         val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()

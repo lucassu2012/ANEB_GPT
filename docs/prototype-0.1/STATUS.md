@@ -1,9 +1,11 @@
 # ANEB Prototype 0.1 — Program Status
 
-Last PMO update: **2026-09-08**
+Last PMO update: **2026-09-09 (Asia/Shanghai)**
 Program issue: **#13**. Product Owner: **Lucas**.
 Primary deliverable: **one fixed Windows package producing a verifiable report from a real Android campaign**.
-Active WIP: **one Android saved-evidence publication recovery action and replacement RC**. PR #57 fixed server identical-retry/conflict handling. The unchanged signed `4a30461` candidate then completed USB Quick, Acceptance9 and cancellation engineering checks. An actual stream interruption preserved P008 evidence but exposed that phone Export only creates an unverified backup; it cannot retry canonical publication. PMO owns this existing-contract recovery gap. The phone and runtime host are clean/standby; no repeated fault campaign or network-security workaround is active. The 24-hour autonomous window does not waive G6 PO review.
+Active WIP: **one Android saved-result navigation repair and replacement RC**. PR #58 added the saved-evidence publication action. Candidate `799661d` completed normal-LAN Quick/Acceptance, but a real cancelled campaign retained P018 and could not be reopened through normal UI after leaving its result. The bounded repair adds an ID/original-node chooser and reuses the validated result/Retry path; it does not change workload, metrics, evidence, scoring or publication rules. The phone and runtime host are clean/standby. PO acceptance and the decision to retain the verified full ZIP filename are recorded; technical release gates are not waived.
+
+The navigation failure is recorded in [#18](https://github.com/lucassu2012/ANEB_GPT/issues/18#issuecomment-5587660300): Retry0, newcampaign0, original seven staging hashes unchanged. Original publication cause remains unknown. Repository, navigation and recovery focused tests now pass46/46; independent source review closed stale-load, same-ID reopen and active-session boundaries. The original complete quality gate passed: Android791 tests/0 failures/0 errors/2 existing ignored, lint and assemble; the final uninstrumented gate reused those unchanged Android outputs and passed fresh Go23.745s/RC0. Its earlier single synthetic Go publication500 failure is retained with unknown cause; no server change or acceptance waiver. CI and a new signed candidate remain required. No old binary is patched or relabeled, and no old candidate's device PASS is inherited.
 
 ## Gate board
 
@@ -14,26 +16,26 @@ G0 and G1 remain complete. G2-A/B/C are merged; do not reopen them as implementa
 | G0 — specification | PASS | #14 closed; PR #23/#26 merged; frozen contracts unchanged |
 | G1 — deterministic Core | PASS | #15 closed; PR #27 merged |
 | G2 — Android | PASS, implementation | PR #51 `3700caafc2211167061f653c3c5977df6d7f3294`; #52 `4756c1a3d412f6fc6c7fcc5e6494e20a7beb546e`; #53 `44b0e57ce509f80218ac2899e6f765beb41c35cd`; post-merge CI `33456258350` success. #16 administrative closure follows reconciliation. |
-| G3 — fixed Windows runtime | `4a30461` ordinary-entry PASS; recovery replacement pending | Original BAT/no arguments, ordinary-user Chinese/space path, READY then normal Q/RC0, admission/signature and first/retry/conflict HTTP checks passed. A source repair requires new bound artifacts; no result inheritance. |
-| G4 — evidence/report | HOLD, recovery and actual symlink case | Original packaged offline vectors9/9 passed. USB Quick/Acceptance/cancellation produced canonical seven-file reports. Actual P008 retained only the five-file unverified device fallback after node recovery; new app publication action is not yet a device receipt. Symlink creation was denied before verification: UNEXECUTED, not PASS. |
-| G5 — P40 acceptance | HOLD, normal LAN and remaining same-candidate checks | `4a30461` USB engineering Quick3/Acceptance9/cancel passed; P008 actually hit, publication recovery HOLD. Native `adb_reverse` / `acceptance_path=false` cannot satisfy normal-LAN G5. Public-network trust/firewall unchanged; no current prompt proves the historical cause. Phone and owned host resources are clean. |
-| G6 — PO acceptance | PENDING | PO must accept the fixed candidate, real report, instructions and G5 evidence. No final release/tag from build or engineering smoke alone. |
+| G3 — fixed Windows runtime | `799661d` ordinary-entry PASS; navigation replacement pending | Original BAT/no arguments, ordinary-user Chinese/space path, READY then normal Q/RC0; same-candidate host P001/P002/retry/conflict checks passed. New Android source requires a newly bound package. |
+| G4 — evidence/report | `799661d` offline checks complete; replacement pending | Original vectors9/9 and [actual symlink rejection](https://github.com/lucassu2012/ANEB_GPT/issues/17#issuecomment-5587319354) passed. UAC was used only to prepare one isolated symlink fixture; original verifier ran unprivileged. No new candidate receipt yet. |
+| G5 — P40 acceptance | HOLD, saved-result navigation and remaining same-candidate checks | [Actual normal-LAN Quick3/Acceptance9](https://github.com/lucassu2012/ANEB_GPT/issues/18#issuecomment-5586834082), native lan/true and original verifier RC0, completed on799. First-slot cancellation preserved59 events/not_started tail/null RPI but publication failed. P008 normal-LAN case remains unexercised. Phone and owned host resources are clean; no security workaround. |
+| G6 — PO acceptance | PO acceptance recorded; technical closure pending | PO explicitly accepted publication and the verified full filename. No final release/tag until the open P0 and replacement-candidate gates close. |
 
 ## Fixed artifact handoff
 
-Last tested candidate: **rc-20260908-4a30461**.
-Disposition: **retained unchanged; G4/G5 HOLD and no automatic device retry**. PR #57 merged at `243965774e55f7859173c3bc0d10d8571d57166d`, with the same tree as the artifact source. Full Android/Go gate and review/post-merge CI passed. The recovery branch `codex/prototype-publication-recovery-0908` is not a fixed candidate; it requires its own complete gate, product PR and new source-bound artifacts. No hand-edited ZIP, mixed-source receipt or status-only PR.
-Artifact source: **4a30461abf968affb2100d7a246b6ea94b98e895**.
-Artifact source tree: **7cab18c79b355e81ceb36903c4fa7260f638eef8**.
+Last tested candidate: **rc-20260908-799661d**.
+Disposition: **retained unchanged; G5 HOLD and no automatic device retry**. PR #58 merged at `216ecc7fc4576bf894ca0c59dfda877e31d543eb`, with the same tree as the artifact source. Full Android/Go gate and review/post-merge CI passed for that source. The navigation repair branch `codex/prototype-saved-results-0908` requires its own complete gate, product PR and new source-bound artifacts. No hand-edited ZIP, mixed-source receipt or status-only PR.
+Artifact source: **799661d808d8b842effae1aabb07c70af0b22197**.
+Artifact source tree: **9c708e4dc2b09e8387c7909d8c57df5cbac3fdf8**.
 A later PMO documentation commit is not the source identity of these binaries.
 
 | Artifact | SHA-256 |
 |---|---|
-| ANEB-Prototype-0.1-rc-20260908-4a30461-windows-x64.zip | `553a3a6dc15446bf59c2eedc53a1dd07329e429614f169fe3a978866fca3bb5a` |
-| android/aneb-prototype-0.1.apk | `4c3967856683ed4d3e43ffbca167c3ac4594e085228194cdd6f7d3ae38b75d4b` |
-| bin/aneb-server.exe | `06f5f7309434a9f4962c05f31e70cabfaa7a6fa0d49f96aa85f2034ffda77ee3` |
-| bin/evidence/aneb-evidence.exe | `b2212959e070b3abdcc121b7ddb6e1460b340734cc721eb0239bae7d54e3edfa` |
-| External admission receipt | `be53bba959d992a605b61088742af6e24e704ed190c7098a9b77cc0bdbabd30b` |
+| ANEB-Prototype-0.1-rc-20260908-799661d-windows-x64.zip | `ca5207b596319bc96e3ecaacb37a71c203e613dcc821bd2a461860677f6f975a` |
+| android/aneb-prototype-0.1.apk | `8b4b3a669a536759dae79c87bf371968fdd3686276e9750a8d94979cd2797092` |
+| bin/aneb-server.exe | `f5ccc22c5acb4a923102eb3c6b4f1ca351058717bcbf44c1ce00de7e58414b54` |
+| bin/evidence/aneb-evidence.exe | `43c17a0ef807c03977db0c28cbda0f9ad545845f7856f3811700bc89d0a41d7f` |
+| External admission receipt | `84104206de7ffebc435a4dcb9c2bb0ba0e67955c09999cc7dff36fbc79755196` |
 
 The local RC location is in #13/#17 handoffs, not embedded as a runtime path. APK identity: `com.aneb.probe`, version `0.2.0`, code `20`; approved signer certificate SHA-256 `b33df25ffa3b1bedc7e08af77b442bc205aeab553c07ee72344e19ed0f7b6003`. Keys remain outside Git and release artifacts.
 APK/server/verifier/ZIP/receipt hashes were independently recomputed on 2026-09-08 and match. Historical same-source Android, Go, signing and admission receipts remain build evidence, not substitutes for replacement G3/G5 observations. Development-only runtimes used for HTTP regression are not RC artifacts.
@@ -75,5 +77,5 @@ ANEB_CC has separately recorded research activity. Its natural observations, sha
 
 ## Next checkpoint
 
-Finish this single saved-evidence recovery action, boundary regressions, full quality gate and product PR. Rebuild APK/server/verifier from one clean fix commit, issue new ZIP/admission hashes, then reassign only original same-candidate acceptance and recovery checks. Remote LAN and actual symlink capability remain unresolved; do not disable protections or change a public network's trust label to manufacture PASS. Preserve `8fe6cc4`, `27ced1c` and `4a30461` reports/receipts unchanged. Re-publishing saved old-candidate evidence is not a new-candidate G5 measurement. No measurement, null-reason or P018 error shape is changed. Never combine versions into PASS. G6 remains a PO decision.
+Close this single saved-result navigation repair as one product PR after the completed local quality gate, then obtain CI and rebuild APK/server/verifier from one clean fix commit. Issue new ZIP/admission hashes and reassign only original same-candidate acceptance and recovery checks. Normal LAN and actual symlink rejection were observed on799, not on the replacement candidate; do not disable protections or change network trust labels to manufacture PASS. Preserve every prior candidate/report/receipt unchanged. Re-publishing saved old-candidate evidence is not a new-candidate G5 measurement. No measurement, null-reason or P018 error shape is changed. Never combine versions into PASS. Actual PO release acceptance is recorded; the replacement technical gates remain open.
 No workload, scoring, evidence schema, claim or G2–G5 criterion changes. No new defensive audit program, LifecycleOnly retry or separate status PR. Historical details remain in Git and linked issue evidence.
