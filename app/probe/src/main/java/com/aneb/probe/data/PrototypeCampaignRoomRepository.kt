@@ -23,6 +23,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 
+/** Navigation only: opening a result still validates its complete saved graph. */
+data class PrototypeSavedCampaignReference(val campaignId: String, val nodeBaseUrl: String)
+
 /**
  * Persists one validated Prototype campaign as a normalized, transactionally consistent graph.
  *
@@ -139,6 +142,8 @@ class PrototypeCampaignRoomRepository(
     suspend fun load(campaignId: String): StoredCampaign? = database.withTransaction {
         readValidatedGraph(campaignId)?.campaign
     }
+
+    suspend fun savedCampaigns(): List<PrototypeSavedCampaignReference> = dao.savedCampaigns()
 
     suspend fun loadExportSnapshot(campaignId: String): ExportSnapshot? =
         database.withTransaction {

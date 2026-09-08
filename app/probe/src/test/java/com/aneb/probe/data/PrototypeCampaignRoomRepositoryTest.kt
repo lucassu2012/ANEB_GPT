@@ -40,6 +40,54 @@ class PrototypeCampaignRoomRepositoryTest {
     }
 
     @Test
+    fun savedCampaignSelectionIncludesOlderRecordsAndStartsEmpty(): Unit = runBlocking {
+        val database = openFreshDatabase(uniqueDatabaseName("saved-selection"))
+        try {
+            val repository = PrototypeCampaignRoomRepository(database)
+            assertTrue(repository.savedCampaigns().isEmpty())
+            val first = roomConfig("campaign-first-saved")
+            val second = roomConfig("campaign-second-saved")
+            repository.save(first, PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(first))
+            repository.save(second, PrototypeCampaignPersistenceFixture.completeQuickCampaign(second))
+            assertEquals(
+                setOf(
+                    PrototypeSavedCampaignReference(first.campaignId, first.nodeTicket.nodeBaseUrl),
+                    PrototypeSavedCampaignReference(second.campaignId, second.nodeTicket.nodeBaseUrl),
+                ),
+                repository.savedCampaigns().toSet(),
+            )
+            assertEquals(first.campaignId, repository.load(first.campaignId)?.campaignId)
+            assertEquals(second.campaignId, repository.load(second.campaignId)?.campaignId)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun savedCampaignsRemainDiscoverableAcrossDatabaseReopenWithoutChangingEvidence(): Unit = runBlocking {
+        val config = roomConfig("campaign-saved-cancelled")
+        val result = PrototypeCampaignPersistenceFixture.cancelledQuickCampaign(config)
+        val databaseName = uniqueDatabaseName("saved-reopen")
+        var database = openFreshDatabase(databaseName)
+        var repository = PrototypeCampaignRoomRepository(database)
+        repository.save(config, result)
+        val original = requireNotNull(repository.loadExportSnapshot(config.campaignId))
+        database.close()
+
+        database = openFreshDatabase(databaseName)
+        try {
+            repository = PrototypeCampaignRoomRepository(database)
+            assertEquals(
+                listOf(PrototypeSavedCampaignReference(config.campaignId, config.nodeTicket.nodeBaseUrl)),
+                repository.savedCampaigns(),
+            )
+            assertEquals(original, repository.loadExportSnapshot(config.campaignId))
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun completeQuickRoundTripsFormalAuthorityAndOrderedChildrenAcrossReopen(): Unit = runBlocking {
         val config = roomConfig(
             PrototypeCampaignPersistenceFixture.COMPLETE_CAMPAIGN_ID,

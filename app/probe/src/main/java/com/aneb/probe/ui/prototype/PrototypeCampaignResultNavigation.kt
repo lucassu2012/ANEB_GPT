@@ -37,6 +37,26 @@ internal fun PrototypeCampaignResultLoadState.withConfirmedPublication(): Protot
 internal class PrototypeCampaignResultNavigator(
     private val loadCampaign: suspend (String) -> PrototypeCampaignRoomRepository.StoredCampaign?,
 ) {
+    fun openSaved(
+        state: PrototypeCampaignResultRouteState,
+        session: PrototypeCampaignSession,
+        campaignId: String,
+    ): PrototypeCampaignResultRouteState {
+        if (session is PrototypeCampaignSession.Running || session is PrototypeCampaignSession.Cancelling) {
+            return state
+        }
+        val currentTerminalId = when (session) {
+            is PrototypeCampaignSession.Finished -> session.config.campaignId
+            is PrototypeCampaignSession.Cancelled -> session.config.campaignId
+            else -> null
+        }
+        return state.copy(
+            openCampaignId = campaignId,
+            publicationWarning = null,
+            dismissedFinishedCampaignId = currentTerminalId ?: state.dismissedFinishedCampaignId,
+        )
+    }
+
     fun observe(
         state: PrototypeCampaignResultRouteState,
         session: PrototypeCampaignSession,
@@ -58,12 +78,18 @@ internal class PrototypeCampaignResultNavigator(
     fun dismiss(
         state: PrototypeCampaignResultRouteState,
         campaignId: String,
+        currentSession: PrototypeCampaignSession = PrototypeCampaignSession.Idle,
     ): PrototypeCampaignResultRouteState {
         require(state.openCampaignId == campaignId)
+        val currentTerminalId = when (currentSession) {
+            is PrototypeCampaignSession.Finished -> currentSession.config.campaignId
+            is PrototypeCampaignSession.Cancelled -> currentSession.config.campaignId
+            else -> null
+        }
         return state.copy(
             openCampaignId = null,
             publicationWarning = null,
-            dismissedFinishedCampaignId = campaignId,
+            dismissedFinishedCampaignId = currentTerminalId ?: campaignId,
         )
     }
 

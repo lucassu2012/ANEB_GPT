@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,7 +25,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,12 +36,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.data.PrototypeSavedCampaignReference
 import com.aneb.probe.prototype.PrototypeNodeState
 import com.aneb.probe.ui.components.AnebGradientCard
 import com.aneb.probe.ui.components.AnebPageIntro
 import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.theme.AnebPalette
 import com.aneb.probe.ui.theme.AnebTheme
+import kotlinx.coroutines.CancellationException
 
 internal data class PrototypeNodeErrorPresentation(val title: String, val detail: String)
 
@@ -78,10 +85,17 @@ fun PrototypeModeScreen(
     onStartQuick: () -> Unit,
     onStartAcceptance: () -> Unit,
     onCancelQuick: () -> Unit,
+    canOpenSavedCampaigns: Boolean,
+    loadSavedCampaigns: suspend () -> List<PrototypeSavedCampaignReference>,
+    onOpenSavedCampaign: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     val colors = AnebTheme.colors
     var launchState by remember { mutableStateOf(PrototypeCampaignLaunchState()) }
+    var showSavedCampaigns by remember { mutableStateOf(false) }
+    LaunchedEffect(canOpenSavedCampaigns) {
+        if (!canOpenSavedCampaigns) showSavedCampaigns = false
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -107,6 +121,20 @@ fun PrototypeModeScreen(
                 )
             }
         }
+        Spacer(Modifier.height(14.dp))
+        OutlinedButton(
+            onClick = { showSavedCampaigns = true },
+            enabled = canOpenSavedCampaigns,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Saved campaigns")
+        }
+        Text(
+            "Open a local result to export it or retry evidence publication. No new test is started.",
+            fontSize = 11.sp,
+            lineHeight = 17.sp,
+            color = colors.muted,
+        )
         Spacer(Modifier.height(14.dp))
         Text("NODE", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
         Spacer(Modifier.height(7.dp))
@@ -188,6 +216,16 @@ fun PrototypeModeScreen(
         }
         Spacer(Modifier.height(28.dp))
     }
+    if (showSavedCampaigns && canOpenSavedCampaigns) {
+        SavedPrototypeCampaignsDialog(
+            loadCampaigns = loadSavedCampaigns,
+            onSelect = { campaignId ->
+                showSavedCampaigns = false
+                onOpenSavedCampaign(campaignId)
+            },
+            onDismiss = { showSavedCampaigns = false },
+        )
+    }
     launchState.pending?.let { confirmation ->
         PrototypeCampaignLaunchConfirmationDialog(
             confirmation = confirmation,
@@ -200,6 +238,61 @@ fun PrototypeModeScreen(
             },
         )
     }
+}
+
+@Composable
+private fun SavedPrototypeCampaignsDialog(
+    loadCampaigns: suspend () -> List<PrototypeSavedCampaignReference>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    var campaigns by remember { mutableStateOf<List<PrototypeSavedCampaignReference>?>(null) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reload) {
+        campaigns = null
+        loadFailed = false
+        try {
+            campaigns = loadCampaigns()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            loadFailed = true
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF121728),
+        title = { Text("Saved campaigns", color = colors.ink) },
+        text = {
+            when {
+                loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Unable to read saved results. Nothing has been changed.", color = colors.muted)
+                    TextButton(onClick = { reload += 1 }) { Text("Try again") }
+                }
+                campaigns == null -> Text("Loading saved results…", color = colors.muted)
+                campaigns.orEmpty().isEmpty() -> Text("No saved campaigns on this device yet.", color = colors.muted)
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(campaigns.orEmpty(), key = { it.campaignId }) { campaign ->
+                        OutlinedButton(
+                            onClick = { onSelect(campaign.campaignId) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(campaign.campaignId, fontSize = 12.sp, color = colors.ink)
+                                Text("Original node: ${campaign.nodeBaseUrl}", fontSize = 11.sp, color = colors.muted)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable

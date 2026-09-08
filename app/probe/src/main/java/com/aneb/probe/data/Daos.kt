@@ -145,6 +145,9 @@ interface RadioSampleDao {
 
 @Dao
 interface PrototypeCampaignDao {
+    @Query("SELECT campaignId, nodeBaseUrl FROM prototype_campaign ORDER BY campaignId")
+    suspend fun savedCampaigns(): List<PrototypeSavedCampaignReference>
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertCampaign(campaign: PrototypeCampaignEntity)
 

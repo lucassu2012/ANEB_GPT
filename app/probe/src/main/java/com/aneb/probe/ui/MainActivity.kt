@@ -346,6 +346,7 @@ class MainActivity : ComponentActivity() {
                     var prototypeCampaignResultLoadState by remember {
                         mutableStateOf<PrototypeCampaignResultLoadState?>(null)
                     }
+                    var prototypeResultLoadRevision by remember { mutableIntStateOf(0) }
                     var mode by rememberSaveable { mutableStateOf(launchSettings.mode) }
                     var testMode by rememberSaveable { mutableStateOf(launchSettings.testMode) }
                     var transport by rememberSaveable { mutableStateOf(launchSettings.transport) }
@@ -598,17 +599,31 @@ class MainActivity : ComponentActivity() {
                         openPrototypeResultCampaignId = route.openCampaignId
                         openPrototypeResultPublicationWarning = route.publicationWarning
                         dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
-                        route.openCampaignId?.let { campaignId ->
+                        prototypeActionRevision += 1
+                    }
+
+                    LaunchedEffect(
+                        openPrototypeResultCampaignId,
+                        openPrototypeResultPublicationWarning,
+                        prototypeResultLoadRevision,
+                    ) {
+                        openPrototypeResultCampaignId?.let { campaignId ->
+                            val revision = prototypeResultLoadRevision
+                            val publicationWarning = openPrototypeResultPublicationWarning
                             screen = Screen.PrototypeResult(campaignId)
                             prototypeCampaignResultLoadState =
                                 PrototypeCampaignResultLoadState.Loading(campaignId)
-                            prototypeCampaignResultLoadState =
-                                prototypeCampaignResultNavigator.load(
-                                    campaignId,
-                                    route.publicationWarning,
-                                )
+                            val loaded = prototypeCampaignResultNavigator.load(
+                                campaignId,
+                                publicationWarning,
+                            )
+                            if (openPrototypeResultCampaignId == campaignId &&
+                                prototypeResultLoadRevision == revision &&
+                                openPrototypeResultPublicationWarning == publicationWarning
+                            ) {
+                                prototypeCampaignResultLoadState = loaded
+                            }
                         }
-                        prototypeActionRevision += 1
                     }
 
                     LaunchedEffect(runSession) {
@@ -802,6 +817,33 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     onCancelQuick = ::cancelPrototypeQuick,
+                                    canOpenSavedCampaigns = !running,
+                                    loadSavedCampaigns = prototypeCampaignResultRepository::savedCampaigns,
+                                    onOpenSavedCampaign = { campaignId ->
+                                        val currentInput = currentPrototypeUiInput()
+                                        val state = PrototypeCampaignResultRouteState(
+                                            openPrototypeResultCampaignId,
+                                            openPrototypeResultPublicationWarning,
+                                            dismissedFinishedCampaignId,
+                                        )
+                                        val route = prototypeCampaignResultNavigator.openSaved(
+                                            state, currentInput.session, campaignId,
+                                        )
+                                        if (route.openCampaignId == campaignId &&
+                                            !currentInput.otherRunActive &&
+                                            currentInput.session !is PrototypeCampaignSession.Running &&
+                                            currentInput.session !is PrototypeCampaignSession.Cancelling
+                                        ) {
+                                            openPrototypeResultCampaignId = route.openCampaignId
+                                            openPrototypeResultPublicationWarning = route.publicationWarning
+                                            dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
+                                            prototypeCampaignResultLoadState =
+                                                PrototypeCampaignResultLoadState.Loading(campaignId)
+                                            // Explicitly reopening the same ID must start a fresh read too.
+                                            prototypeResultLoadRevision += 1
+                                            screen = Screen.PrototypeResult(campaignId)
+                                        }
+                                    },
                                     onBack = { screen = Screen.Home },
                                 )
                                 is Screen.PrototypeResult -> PrototypeCampaignResultRoute(
@@ -819,6 +861,7 @@ class MainActivity : ComponentActivity() {
                                                     dismissedFinishedCampaignId,
                                             ),
                                             s.campaignId,
+                                            PrototypeCampaignService.session.value,
                                         )
                                         openPrototypeResultCampaignId = route.openCampaignId
                                         openPrototypeResultPublicationWarning =
