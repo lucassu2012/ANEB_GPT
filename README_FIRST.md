@@ -51,6 +51,8 @@ Android 正式包身份为 `com.aneb.probe`，版本 `0.2.0`（versionCode 20）
 - 每个候选使用独立解压目录；每次正式验收使用新的 campaign ID 和新的结果目录。
 - 正常停止必须在启动器窗口输入 `Q` 后按 Enter；启动器随后只清理它自己启动并记录 PID 的 Server。不要把“直接关闭窗口”当作清理动作。若窗口被意外关闭，先在任务管理器确认没有遗留的 `aneb-server.exe`，再重启。
 - ZIP 初始只包含空的 `results\`。正式 campaign 写入 `results\<campaign_id>\`；Server 的兼容运行数据写入 `results\legacy\`。不要把一个 campaign 的文件搬到另一个目录。
+- 同一 campaign 的四份原始上传文本完全相同时，重复提交返回原发布回执，七份证据文件不重写。内容不同时会拒绝，不能用重传覆盖已发布证据；应保留原报告并使用新的 campaign。
+- 冲突诊断位于 `results\.publication diagnostics\`（目录名含空格），不属于七份证据。每个已发布 campaign 最多保留第一份冲突摘要，单文件不超过 2 KiB；只含固定原因、时间及内容摘要，不含请求原文。它不是完整重试历史，也不是新的测试结果。维护者排查 P018 时可查看；不得把它移进 campaign 目录。
 - 不要编辑 `VERSION.json`、`SHA256SUMS.txt`、contracts 或结果 manifest。任何编辑都会使完整性或 evidence 校验失败。
 - `complete`、`partial`、`cancelled`、`failed` 或 `invalid` campaign 都可能发布 Windows 可验证报告；`verified` 只表示证据字节、结构和跨文件关系已通过验证，不表示 campaign 或任一 run 成功（`verified` means evidence integrity only; it does not mean campaign or run success）。必须同时查看 `campaign_status`、`run_status`、`success_rate` 以及 RPI/null reason；手机仍保留本地结果。
 - 维护者构建、签名和独立验签步骤见 `docs/RELEASE_BUILD.md`（源码仓库文件，不在普通运行路径中）。
@@ -74,14 +76,14 @@ P002_OUTPUT_NOT_WRITABLE：选择可写的结果目录后重试。
 P003_PORT_IN_USE：停止已知冲突或使用已批准的端口配置。
 P004_SERVER_START_FAILED：停止，不继续运行；查看脱敏诊断日志。
 P005_NO_LAN_ADDRESS：让 PC 与手机连接同一局域网；ADB 仅作开发诊断，不是正式验收路径。
-P006_NODE_UNREACHABLE：检查显示的节点地址、防火墙和局域网。
+P006_NODE_UNREACHABLE：检查显示的节点地址、防火墙和局域网。同一 Wi-Fi 不保证手机能访问电脑；公共网络可能隔离客户端或阻止入站连接。不要关闭防火墙或把公共 Wi-Fi 改成受信任网络；改用你控制的私有局域网，或由网络管理员完成受限配置后再试。
 P007_CONTRACT_MISMATCH：使用同一发布包中的 APK、server 和 contracts。
 P008_STREAM_INTERRUPTED：保留 partial 证据，重试未完成 campaign。
 P009_INVALID_SEQUENCE：保留证据并停止把该 campaign 当作成功。
 P010_CAMPAIGN_CANCELLED：查看 partial 证据或开始新的 campaign。
 P011_RELEASE_SIGNER_NOT_APPROVED：停止安装或发布，使用批准签名生成的新候选。
 P012_FINALIZE_FAILED：不要覆盖 partial 目录，保留诊断后重新处理。
-P018_EVIDENCE_PUBLICATION_FAILED：手机本地结果已优先保留；保持 Server 运行，检查结果目录权限和 verifier 后重试新 campaign。
+P018_EVIDENCE_PUBLICATION_FAILED：手机本地结果已优先保留；检查结果目录权限和 verifier。已发布内容冲突时查看上述诊断，不要删除或覆盖原证据；排除问题后运行新的 campaign。诊断目录本身不可写时仍会拒绝，不能据此宣称诊断已保存。
 P019_PROTOTYPE_SOURCE_COMMIT_NOT_BOUND：该 APK 缺少精确源码提交绑定，不得作为 RC。
 
 Prototype 0.1 只比较确定性应用层合成条件；不表示 IP 丢包、无线/RAN 状态、运营商 SLA、第三方 App 或模型推理性能。
