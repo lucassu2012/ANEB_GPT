@@ -69,6 +69,7 @@ class PrototypeCampaignResultPresenterTest {
             val presentation = PrototypeCampaignResultPresenter.present(stored)
 
             assertEquals(CAMPAIGN_ID, presentation.campaignId)
+            assertEquals(stored.nodeBaseUrl, presentation.publicationNodeUrl)
             assertEquals("Complete", presentation.status)
             assertEquals("Quick", presentation.campaignMode)
             assertEquals("3", presentation.attemptedRuns)

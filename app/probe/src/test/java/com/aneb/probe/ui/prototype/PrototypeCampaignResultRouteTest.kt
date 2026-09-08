@@ -14,6 +14,7 @@ class PrototypeCampaignResultRouteTest {
         val workingStates = setOf(
             PrototypeCampaignResultActionState.Exporting,
             PrototypeCampaignResultActionState.PreparingShare,
+            PrototypeCampaignResultActionState.Publishing,
         )
 
         PrototypeCampaignResultActionState.entries.forEach { state ->
@@ -62,7 +63,7 @@ class PrototypeCampaignResultRouteTest {
                     "actionState = coordinator.share(campaignId) } }",
             ),
         )
-        assertTrue(route.contains("content(loadState, onBack, actionState, onExport, onShare)"))
+        assertTrue(route.contains("content(displayedLoadState, onBack, actionState, onExport, onShare, onRetryPublication)"))
         assertFalse(route.contains("catch"))
         assertFalse(route.contains("lifecycleScope"))
         assertFalse(route.contains("PrototypeCampaignResultActionState.Failed"))
@@ -96,6 +97,7 @@ class PrototypeCampaignResultRouteTest {
         assertTrue(activity.contains("actionState = routeActionState"))
         assertTrue(activity.contains("onExport = onExport"))
         assertTrue(activity.contains("onShare = onShare"))
+        assertTrue(activity.contains("onRetryPublication = onRetryPublication"))
     }
 
     private fun normalizedSource(vararg candidates: String): String {

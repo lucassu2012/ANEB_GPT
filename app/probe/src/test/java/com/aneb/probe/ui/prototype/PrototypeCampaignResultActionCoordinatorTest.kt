@@ -16,6 +16,53 @@ import java.util.concurrent.Executors
 
 class PrototypeCampaignResultActionCoordinatorTest {
     @Test
+    fun `publication can recover after failure without replacing the local fallback`() = runBlocking {
+        var nodeAvailable = false
+        val published = mutableListOf<String>()
+        val coordinator = PrototypeCampaignResultActionCoordinator(
+            exportCampaign = {
+                PrototypeDeviceFallbackExporter.Outcome.Success("content://downloads/local-backup", 123)
+            },
+            openShare = { true },
+            ioDispatcher = Dispatchers.Unconfined,
+            publishCampaign = { campaignId ->
+                if (!nodeAvailable) throw IOException("node is offline")
+                published += campaignId
+            },
+        )
+
+        assertSame(
+            PrototypeCampaignResultActionState.PublicationFailed,
+            coordinator.retryPublication("saved-interrupted-campaign"),
+        )
+        assertSame(PrototypeCampaignResultActionState.Saved, coordinator.export("saved-interrupted-campaign"))
+        nodeAvailable = true
+        assertSame(
+            PrototypeCampaignResultActionState.Published,
+            coordinator.retryPublication("saved-interrupted-campaign"),
+        )
+        assertEquals(listOf("saved-interrupted-campaign"), published)
+        assertSame(PrototypeCampaignResultActionState.Saved, coordinator.export("saved-interrupted-campaign"))
+    }
+
+    @Test
+    fun `publication cancellation is not presented as success or retry failure`() = runBlocking {
+        val cancelled = CancellationException("result route left composition")
+        val coordinator = PrototypeCampaignResultActionCoordinator(
+            exportCampaign = { error("publication does not export a backup") },
+            openShare = { error("publication does not open sharing") },
+            ioDispatcher = Dispatchers.Unconfined,
+            publishCampaign = { throw cancelled },
+        )
+
+        assertSame(
+            cancelled,
+            runCatching { coordinator.retryPublication("saved-campaign") }.exceptionOrNull(),
+        )
+        assertTrue(requireNotNull(currentCoroutineContext()[Job]).isActive)
+    }
+
+    @Test
     fun `export runs on io and success becomes saved`() {
         val ioDispatcher = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "prototype-result-export-io")

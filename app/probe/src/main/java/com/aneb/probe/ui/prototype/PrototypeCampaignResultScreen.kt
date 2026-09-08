@@ -34,6 +34,9 @@ internal enum class PrototypeCampaignResultActionState {
     ShareOpened,
     ShareUnavailable,
     Failed,
+    Publishing,
+    Published,
+    PublicationFailed,
 }
 
 internal data class PrototypeCampaignResultActionPresentation(
@@ -45,7 +48,8 @@ internal fun prototypeCampaignResultActionPresentation(
     state: PrototypeCampaignResultActionState,
 ): PrototypeCampaignResultActionPresentation = PrototypeCampaignResultActionPresentation(
     actionsEnabled = state != PrototypeCampaignResultActionState.Exporting &&
-        state != PrototypeCampaignResultActionState.PreparingShare,
+        state != PrototypeCampaignResultActionState.PreparingShare &&
+        state != PrototypeCampaignResultActionState.Publishing,
     message = when (state) {
         PrototypeCampaignResultActionState.Idle -> null
         PrototypeCampaignResultActionState.Exporting -> "Exporting…"
@@ -54,6 +58,10 @@ internal fun prototypeCampaignResultActionPresentation(
         PrototypeCampaignResultActionState.ShareOpened -> "Share sheet opened"
         PrototypeCampaignResultActionState.ShareUnavailable -> "Saved, but share is unavailable"
         PrototypeCampaignResultActionState.Failed -> "Export failed"
+        PrototypeCampaignResultActionState.Publishing -> "Retrying evidence publication…"
+        PrototypeCampaignResultActionState.Published -> "Original node confirmed evidence publication."
+        PrototypeCampaignResultActionState.PublicationFailed ->
+            "P018 · Publication failed. Local evidence is retained. Restore the original node, then retry."
     },
 )
 
@@ -75,6 +83,7 @@ internal fun PrototypeCampaignResultScreen(
     actionState: PrototypeCampaignResultActionState = PrototypeCampaignResultActionState.Idle,
     onExport: () -> Unit = {},
     onShare: () -> Unit = {},
+    onRetryPublication: () -> Unit = {},
 ) {
     val actionPresentation = prototypeCampaignResultActions(loadState, actionState)
     BackHandler(onBack = onBack)
@@ -101,6 +110,7 @@ internal fun PrototypeCampaignResultScreen(
                 actionPresentation = requireNotNull(actionPresentation),
                 onExport = onExport,
                 onShare = onShare,
+                onRetryPublication = onRetryPublication,
                 onBack = onBack,
             )
         }
@@ -131,6 +141,7 @@ private fun ReadyResult(
     actionPresentation: PrototypeCampaignResultActionPresentation,
     onExport: () -> Unit,
     onShare: () -> Unit,
+    onRetryPublication: () -> Unit,
     onBack: () -> Unit,
 ) {
     val colors = AnebTheme.colors
@@ -238,6 +249,23 @@ private fun ReadyResult(
         )
         Spacer(Modifier.height(10.dp))
     }
+    Text(
+        "Restore this campaign's original node: ${presentation.publicationNodeUrl}\n" +
+            "Retry publishes the saved evidence only; it does not run a new campaign. " +
+            "Export and Share save an unverified device backup, not the node's canonical report.",
+        color = colors.muted,
+        fontSize = 11.sp,
+        lineHeight = 17.sp,
+    )
+    Spacer(Modifier.height(10.dp))
+    Button(
+        onClick = onRetryPublication,
+        enabled = actionPresentation.actionsEnabled,
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+    ) {
+        Text("Retry evidence publication", fontWeight = FontWeight.Bold)
+    }
+    Spacer(Modifier.height(8.dp))
     Button(
         onClick = onExport,
         enabled = actionPresentation.actionsEnabled,

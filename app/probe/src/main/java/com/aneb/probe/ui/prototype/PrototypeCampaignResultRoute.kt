@@ -10,8 +10,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 
 internal fun PrototypeCampaignResultActionState.canStartResultAction(): Boolean =
-    this != PrototypeCampaignResultActionState.Exporting &&
-        this != PrototypeCampaignResultActionState.PreparingShare
+    prototypeCampaignResultActionPresentation(this).actionsEnabled
 
 @Composable
 internal fun PrototypeCampaignResultRoute(
@@ -25,12 +24,16 @@ internal fun PrototypeCampaignResultRoute(
         PrototypeCampaignResultActionState,
         () -> Unit,
         () -> Unit,
+        () -> Unit,
     ) -> Unit,
 ) {
     key(campaignId) {
         var actionState by remember(campaignId) {
             mutableStateOf(PrototypeCampaignResultActionState.Idle)
         }
+        // Acknowledgement belongs to this result view, not to the mutable export action state.
+        // Reopening a result reverts to unverified until the original node confirms again.
+        var publicationConfirmed by remember(campaignId) { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val onExport: () -> Unit = {
             if (actionState.canStartResultAction()) {
@@ -48,6 +51,17 @@ internal fun PrototypeCampaignResultRoute(
                 }
             }
         }
-        content(loadState, onBack, actionState, onExport, onShare)
+        val onRetryPublication: () -> Unit = {
+            if (actionState.canStartResultAction()) {
+                publicationConfirmed = false
+                actionState = PrototypeCampaignResultActionState.Publishing
+                scope.launch {
+                    actionState = coordinator.retryPublication(campaignId)
+                    publicationConfirmed = actionState == PrototypeCampaignResultActionState.Published
+                }
+            }
+        }
+        val displayedLoadState = if (publicationConfirmed) loadState.withConfirmedPublication() else loadState
+        content(displayedLoadState, onBack, actionState, onExport, onShare, onRetryPublication)
     }
 }

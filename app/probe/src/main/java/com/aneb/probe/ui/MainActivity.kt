@@ -65,6 +65,8 @@ import com.aneb.probe.engine.TestEngine
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.prototype.AnebClientPrototypeRawPostTransport
+import com.aneb.probe.prototype.PrototypeCampaignEvidenceRecovery
+import com.aneb.probe.prototype.PrototypeEvidenceTransport
 import com.aneb.probe.prototype.PrototypeCampaignService
 import com.aneb.probe.prototype.PrototypeCampaignSession
 import com.aneb.probe.prototype.PrototypeDeviceFallbackExporter
@@ -316,12 +318,17 @@ class MainActivity : ComponentActivity() {
                     }
                     val prototypeCampaignResultActionCoordinator =
                         remember(prototypeDeviceFallbackExporter) {
+                            val recovery = PrototypeCampaignEvidenceRecovery(
+                                prototypeCampaignResultRepository,
+                                PrototypeEvidenceTransport(AnebClient()::postPrototypeEvidence),
+                            )
                             PrototypeCampaignResultActionCoordinator(
                                 exportCampaign = prototypeDeviceFallbackExporter::export,
                                 openShare = { publishedUri ->
                                     PrototypeZipShareLauncher.open(applicationContext, publishedUri)
                                 },
                                 ioDispatcher = Dispatchers.IO,
+                                publishCampaign = { campaignId -> recovery.retry(campaignId) },
                             )
                         }
                     val prototypeCampaignResultNavigator = remember {
@@ -827,6 +834,7 @@ class MainActivity : ComponentActivity() {
                                             routeActionState,
                                             onExport,
                                             onShare,
+                                            onRetryPublication,
                                         ->
                                         PrototypeCampaignResultScreen(
                                             loadState = routeLoadState,
@@ -834,6 +842,7 @@ class MainActivity : ComponentActivity() {
                                             actionState = routeActionState,
                                             onExport = onExport,
                                             onShare = onShare,
+                                            onRetryPublication = onRetryPublication,
                                         )
                                     },
                                 )
