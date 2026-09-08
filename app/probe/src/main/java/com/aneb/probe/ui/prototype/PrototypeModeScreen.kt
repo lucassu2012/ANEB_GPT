@@ -38,6 +38,29 @@ import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.theme.AnebPalette
 import com.aneb.probe.ui.theme.AnebTheme
 
+internal data class PrototypeNodeErrorPresentation(val title: String, val detail: String)
+
+internal fun prototypeNodeErrorPresentation(
+    nodeState: PrototypeNodeState?,
+    errorMessage: String?,
+): PrototypeNodeErrorPresentation? = when (nodeState) {
+    is PrototypeNodeState.Compatible -> null
+    is PrototypeNodeState.ConnectedIncompatible -> PrototypeNodeErrorPresentation(
+        title = "P007_CONTRACT_MISMATCH · Connected, incompatible",
+        detail = nodeState.message + "\n\n" +
+            "Use the APK and server from the same release package, then test the connection again. " +
+            "No campaign was started. Saved results are unchanged.",
+    )
+    null -> errorMessage?.let { detail ->
+        PrototypeNodeErrorPresentation(
+            title = "P006_NODE_UNREACHABLE · Node unavailable",
+            detail = detail + "\n\n" +
+                "Check the node URL, the shared LAN and the launcher firewall guidance. " +
+                "Then test the connection again. No campaign was started. Saved results are unchanged.",
+        )
+    }
+}
+
 @Composable
 fun PrototypeModeScreen(
     nodeUrl: String,
@@ -116,13 +139,8 @@ fun PrototypeModeScreen(
         Spacer(Modifier.height(12.dp))
         when (nodeState) {
             is PrototypeNodeState.Compatible -> CompatibleNodeCard(nodeState)
-            is PrototypeNodeState.ConnectedIncompatible -> StatusCard(
-                title = "Connected, incompatible",
-                detail = nodeState.message,
-                accent = colors.poor,
-            )
-            null -> errorMessage?.let { detail ->
-                StatusCard(title = "Node unavailable", detail = detail, accent = colors.poor)
+            else -> prototypeNodeErrorPresentation(nodeState, errorMessage)?.let { error ->
+                StatusCard(title = error.title, detail = error.detail, accent = colors.poor)
             }
         }
         Spacer(Modifier.height(18.dp))

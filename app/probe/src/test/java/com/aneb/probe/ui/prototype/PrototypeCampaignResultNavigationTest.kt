@@ -23,6 +23,40 @@ import java.nio.file.Path
 @Config(sdk = [35], manifest = Config.NONE)
 class PrototypeCampaignResultNavigationTest {
     @Test
+    fun `interrupted campaign keeps P008 guidance alongside publication failure`() = runBlocking {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val database = Room.inMemoryDatabaseBuilder(context, AnebDatabase::class.java).build()
+        try {
+            val repository = PrototypeCampaignRoomRepository(database)
+            val config = PrototypeCampaignPersistenceFixture.campaignConfig(
+                "campaign-interrupted-publication-warning",
+            )
+            val result = PrototypeCampaignPersistenceFixture.partialQuickCampaign(config)
+            repository.save(config, result)
+            val navigator = PrototypeCampaignResultNavigator(repository::load)
+            val route = navigator.observe(
+                PrototypeCampaignResultRouteState(),
+                PrototypeCampaignSession.Finished(
+                    config, result, publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
+                ),
+            )
+            val loaded = navigator.load(
+                requireNotNull(route.openCampaignId), route.publicationWarning,
+            ) as PrototypeCampaignResultLoadState.Ready
+
+            assertEquals("P008_STREAM_INTERRUPTED", loaded.presentation.blockingError?.code)
+            assertEquals(true, loaded.presentation.blockingError?.evidenceRetained)
+            assertTrue(loaded.presentation.blockingError?.action?.contains("new campaign") == true)
+            assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", loaded.publicationWarning)
+            assertEquals("Partial", loaded.presentation.status)
+            assertEquals("stream_interrupted", loaded.presentation.conditions[1].metricNullReason)
+            assertTrue(loaded.presentation.conditions.all { it.rpi == "—" })
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `publication failure warning follows the auto-opened durable result and clears on dismiss`() =
         runBlocking {
             val context: Context = RuntimeEnvironment.getApplication()
@@ -119,6 +153,7 @@ class PrototypeCampaignResultNavigationTest {
             assertTrue(loaded is PrototypeCampaignResultLoadState.Ready)
             loaded as PrototypeCampaignResultLoadState.Ready
             assertEquals("Cancelled", loaded.presentation.status)
+            assertNull(loaded.presentation.blockingError)
             assertEquals("1", loaded.presentation.attemptedRuns)
             assertEquals("1", loaded.presentation.failedRuns)
             assertEquals("2", loaded.presentation.notStartedRuns)
