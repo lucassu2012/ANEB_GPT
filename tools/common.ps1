@@ -1,4 +1,104 @@
-Set-StrictMode -Version 2.0
+﻿Set-StrictMode -Version 2.0
+
+# Presentation only: no route, firewall, adapter or network-profile changes.
+function Get-AnEbLanCandidates {
+    param([AllowEmptyCollection()][object[]]$Interfaces)
+    if (-not $PSBoundParameters.ContainsKey('Interfaces')) {
+        $hardware = @{}
+        # Best effort read-only metadata. Standard-user and older Windows fallback
+        # still work; an unclassified interface is never advertised as physical.
+        try {
+            foreach ($adapter in @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)) {
+                $hardware[([string]$adapter.InterfaceGuid).Trim('{}')] = [bool]$adapter.HardwareInterface
+            }
+        }
+        catch { }
+        $Interfaces = @(foreach ($nic in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($nic.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+            $id = ([string]$nic.Id).Trim('{}')
+            foreach ($unicast in $nic.GetIPProperties().UnicastAddresses) {
+                [pscustomobject]@{
+                    Address = $unicast.Address.ToString()
+                    InterfaceType = [string]$nic.NetworkInterfaceType
+                    Name = $nic.Name
+                    Description = $nic.Description
+                    Hardware = if ($hardware.ContainsKey($id)) { $hardware[$id] } else { $null }
+                    Up = $true
+                }
+            }
+        })
+    }
+    $ranked = @(foreach ($nic in $Interfaces) {
+        if (-not $nic.Up) { continue }
+        $ip = $null
+        if (-not [System.Net.IPAddress]::TryParse([string]$nic.Address, [ref]$ip) -or
+            $ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork -or
+            [System.Net.IPAddress]::IsLoopback($ip)) { continue }
+        $bytes = $ip.GetAddressBytes()
+        if ($bytes[0] -eq 0 -or $bytes[0] -ge 224 -or ($bytes[0] -eq 169 -and $bytes[1] -eq 254)) { continue }
+        $virtual = ($nic.Hardware -eq $false -and $null -ne $nic.Hardware) -or
+            (([string]$nic.Name + ' ' + [string]$nic.Description) -match '(?i)virtual|vEthernet|Hyper-V|VMware|VirtualBox|WSL|VPN|TAP|TUN|WireGuard|Tailscale|ZeroTier')
+        $kind = 'advanced'
+        $rank = 2
+        if (-not $virtual -and $nic.InterfaceType -eq 'Wireless80211') {
+            $kind = 'wifi'; $rank = 0
+        }
+        elseif (-not $virtual -and $nic.InterfaceType -eq 'Ethernet' -and $nic.Hardware -eq $true) {
+            $kind = 'ethernet'; $rank = 1
+        }
+        [pscustomobject]@{ Address = $ip.ToString(); Kind = $kind; Rank = $rank }
+    })
+    $seen = @{}
+    foreach ($candidate in @($ranked | Sort-Object Rank, Address)) {
+        if (-not $seen.ContainsKey($candidate.Address)) {
+            $seen[$candidate.Address] = $true
+            [pscustomobject]@{ Address = $candidate.Address; Kind = $candidate.Kind }
+        }
+    }
+}
+
+function Get-AnEbReadyGuide {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Candidates,
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $true)][string]$ResultsDirectory
+    )
+    ''
+    '============================================================'
+    '                 ANEB 已就绪 READY'
+    'ANEB Prototype 0.1 - READY'
+    '电脑节点检查通过；不代表手机已经连通。'
+    '============================================================'
+    $preferred = @($Candidates | Where-Object { $_.Kind -in @('wifi', 'ethernet') })
+    if ($preferred.Count -gt 0) {
+        $label = if ($preferred[0].Kind -eq 'wifi') { 'Wi-Fi' } else { '有线' }
+        '推荐先试（' + $label + '）：http://' + $preferred[0].Address + ':' + $Port
+        foreach ($candidate in @($preferred | Select-Object -Skip 1)) {
+            '其他局域网备选：http://' + $candidate.Address + ':' + $Port
+        }
+    }
+    else {
+        '未找到可优先推荐的 Wi-Fi / 有线地址。请先检查电脑的局域网连接。'
+    }
+    $advanced = @($Candidates | Where-Object { $_.Kind -notin @('wifi', 'ethernet') })
+    if ($advanced.Count -gt 0) {
+        ''
+        '高级备选（虚拟 / 隧道 / 未识别网卡，手机可达性未验证；不建议首先选择）：'
+        foreach ($candidate in $advanced) { '  http://' + $candidate.Address + ':' + $Port }
+    }
+    ''
+    '1. 手机与电脑连接同一个可互访的私人局域网。'
+    '2. 手机打开 ANEB Prototype，输入上方地址，点“检查节点 / Test connection”。'
+    '   看到“兼容 / Compatible”才开始；失败时核对地址并检查局域网隔离。'
+    '   不要关闭防火墙；不要把公共网络改成受信任网络。'
+    '3. 先运行 Quick（3 次），需要重复验证再运行 Acceptance（9 次）。'
+    '在测什么：手机到此节点的合成流式响应，比较基线、变慢与不稳定三种条件。'
+    '边界：不是运营商评级、SLA 或真实 AI 模型性能；RPI 仅用于同一次测试内比较。'
+    '结果目录 / Results: ' + $ResultsDirectory
+    'Results: ' + $ResultsDirectory
+    '停止：输入 Q 后按 Enter；只关闭本启动器的节点，保留已保存结果。'
+    '============================================================'
+}
 
 function Get-AnEbFullPath {
     param([Parameter(Mandatory = $true)][string]$Path)

@@ -7,10 +7,16 @@
 ## 五步快速开始
 
 1. 把完整 ZIP 解压到新的本地目录；不要直接在 ZIP 内运行，也不要覆盖旧候选目录。
-2. 双击 `START_ANEB.bat`。首次运行若 Windows 防火墙询问，只允许“专用网络”。窗口会显示可用 LAN 地址、端口和结果目录。
+2. 双击 `START_ANEB.bat`。首次运行若 Windows 防火墙询问，只允许你信任的“专用网络”。校验通过后窗口会显示醒目的“ANEB 已就绪 READY”、地址与结果目录。READY 只表示电脑节点已启动，不表示手机已连通。
 3. 将 `android\aneb-prototype-0.1.apk` 复制到手机并手动安装，然后打开 ANEB Prototype。若 Android 报签名不一致，先停止，不要绕过；参见下方“安装与回滚”。
-4. 在 Prototype Mode 输入启动器显示的同一 LAN 地址，先确认节点兼容，再运行 Quick。一次 Quick 固定按 Baseline → Slow → Unstable 执行。
+4. 在 Prototype Mode 输入窗口“推荐先试”的地址（Wi-Fi 优先，其次有线），点“检查节点”，看到“兼容 / Compatible”后再运行 Quick。其他局域网地址是备选；“高级备选”中的虚拟/隧道/未识别地址不是首选。地址推荐只是本机网卡提示，不能保证手机可达；失败时先核对同一私人局域网，不要关闭防火墙。一次 Quick 固定按 Baseline → Slow → Unstable 执行。
 5. 完成后在启动器显示的 `results\<campaign_id>\` 中打开 `report.html`；`manifest.json`、CSV 和 JSONL 是同一份可验证证据，不要单独改写。
+
+### 我在测试什么？
+
+手机接收电脑节点生成的合成流式响应，对比基线（Baseline）、变慢（Slow）和不稳定（Unstable）三种固定应用层条件。Quick 每种运行一次，共 3 次；Acceptance 每种运行三次，共 9 次。TTFT 看首事件等待，Completion 看完成耗时，Stall 看停顿，Success Rate 看成功比例。RPI 只在同一个 campaign 内对比，不能拿它给运营商排名，也不是无线故障诊断、SLA 或真实 AI 模型跑分。
+
+完成后可在手机“已保存的测试 / Saved campaigns”重新打开同一 campaign。手机导出/分享的五文件 ZIP 是未验证备份；原节点的七文件目录及其离线验证才是正式报告路径。能导出或验证通过，都不能代替查看本次是否运行成功。
 
 ## 包完整性与发布身份
 

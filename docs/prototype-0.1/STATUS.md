@@ -1,5 +1,7 @@
 # ANEB Prototype 0.1 — Program Status
 
+> Post-release update, 2026-09-11: the unchanged Prototype 0.1 is published and P01 has completed an actual Quick3/Acceptance9 trial. N3 is the bounded Chinese-flow/Windows-guidance follow-up under [#61](https://github.com/lucassu2012/ANEB_GPT/issues/61), with a [separate acceptance checklist](../pilot-readiness/N3_ACCEPTANCE.md). It has **no new signed release or device PASS yet**. The release identity and G0–G6 receipts below remain historical facts for 03675a9, not evidence for a new N3 binary. This update ships with the product change, not a standalone per-merge status PR.
+
 Last PMO update: **2026-09-09 (Asia/Shanghai)**. Program issue: **#13**. Product Owner: **Lucas**.
 
 **Release-ready: G0–G5 complete on the fixed 03675a9 candidate; PO release acceptance recorded.** Remaining PMO action is publication of the unchanged verified ZIP and its two external receipts, followed by safe closure. No implementation or device test is active. This is the single final release handoff, not a per-merge status PR.

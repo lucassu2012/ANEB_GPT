@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  windows-guidance:
+    name: Windows launcher guidance
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Test ordinary-user guidance and packaged launcher
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher_guidance.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_g3_launcher_package.ps1
+          exit $LASTEXITCODE
+
   android:
     name: Android unit tests
     runs-on: ubuntu-latest
