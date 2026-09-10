@@ -93,27 +93,13 @@ try {
     }
     Write-Output ("PASS P003_PORT_AVAILABLE " + $Port)
 
-    $addresses = @()
-    foreach ($interface in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
-        if ($interface.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) {
-            continue
-        }
-        foreach ($address in $interface.GetIPProperties().UnicastAddresses) {
-            if ($address.Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
-                continue
-            }
-            if ($address.Address.Equals([System.Net.IPAddress]::Loopback) -or
-                $address.Address.ToString().StartsWith('169.254.')) {
-                continue
-            }
-            $addresses += $address.Address.ToString()
-        }
-    }
-    $addresses = @($addresses | Sort-Object -Unique)
+    $candidates = @(Get-AnEbLanCandidates)
+    $addresses = @($candidates | ForEach-Object { $_.Address })
     if ($addresses.Count -eq 0) {
         Stop-AnEbDoctor -Code 'P005_NO_LAN_ADDRESS' -Message 'no usable LAN IPv4 address was found'
     }
     Write-Output ("PASS LAN_ADDRESSES " + ($addresses -join ','))
+    Write-Output ('INFO LAN_CANDIDATES ' + (ConvertTo-Json -InputObject $candidates -Compress))
     Write-Output 'PASS DOCTOR package, output, port and LAN preflight'
     exit 0
 }

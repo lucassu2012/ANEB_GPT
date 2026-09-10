@@ -27,7 +27,7 @@ internal fun PrototypeCampaignResultLoadState.withConfirmedPublication(): Protot
         copy(
             publicationWarning = null,
             presentation = presentation.copy(
-                integrity = "Original node confirmed publication · device ZIP remains unverified",
+                integrity = "原节点已确认发布 · 设备 ZIP 仍未验证",
             ),
         )
     } else {

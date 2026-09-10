@@ -60,6 +60,7 @@ function New-AnEbG3LaunchFixture {
         [string]$CapabilityEndpoint = '/api/v1/prototype/capabilities',
         [bool]$IncludePrototypeOnly = $true,
         [string[]]$LanAddresses = @('192.0.2.10', '198.51.100.20'),
+        [string]$LanMetadata = '',
         [string[]]$ServerArguments
     )
     New-Item -ItemType Directory -Path $FixturePath | Out-Null
@@ -93,8 +94,9 @@ $invocation = [ordered]@{
 )
 Write-Output 'PASS TEST_ONLY_DOCTOR_STUB'
 Write-Output 'PASS LAN_ADDRESSES __LAN_ADDRESSES__'
+if ('__LAN_METADATA__') { Write-Output 'INFO LAN_CANDIDATES __LAN_METADATA__' }
 exit 0
-'@).Replace('__LAN_ADDRESSES__', $lanAddressText)
+'@).Replace('__LAN_ADDRESSES__', $lanAddressText).Replace('__LAN_METADATA__', $LanMetadata)
     $serverArguments = if ($PSBoundParameters.ContainsKey('ServerArguments')) {
         @($ServerArguments)
     }
@@ -158,10 +160,15 @@ try {
     $serverBinary = Join-Path $tempRoot 'aneb-server.exe'
     Push-Location (Join-Path $repo 'server')
     try {
+        # Go writes normal cold-cache download progress to stderr. Windows
+        # PowerShell 5.1 must judge the native exit code, not terminate on it.
+        $buildErrorPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $buildOutput = @(& go build -buildvcs=false -trimpath -o $serverBinary . 2>&1)
         $buildExitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $buildErrorPreference
         Pop-Location
     }
     Assert-AnEbG3Test -Condition ($buildExitCode -eq 0 -and (Test-Path -LiteralPath $serverBinary -PathType Leaf)) -Message ('actual Prototype server builds for launcher test output=' + [string]::Join([char]10, $buildOutput))
@@ -179,8 +186,8 @@ try {
     $entryProcess.StartInfo.CreateNoWindow = $true
     $entryProcess.StartInfo.RedirectStandardOutput = $true
     $entryProcess.StartInfo.RedirectStandardError = $true
-    $entryProcess.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::Default
-    $entryProcess.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::Default
+    $entryProcess.StartInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $entryProcess.StartInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     try {
         $null = $entryProcess.Start()
         $entryStdout = $entryProcess.StandardOutput.ReadToEndAsync()
@@ -212,13 +219,22 @@ try {
         '-ExitAfterReady'
     )
     Assert-AnEbG3Test -Condition ($result.ExitCode -eq 0 -and $result.Output -match 'ANEB Prototype 0\.1 - READY') -Message ('launcher reaches READY through canonical serverinfo and prototype capabilities routes output=' + $result.Output)
-    $nodeUrls = @($result.Output -split "`n" | Where-Object { $_ -like 'Node URL: *' })
+    $nodeUrls = @([regex]::Matches($result.Output, 'http://(?:[0-9]+\.){3}[0-9]+:[0-9]+') | ForEach-Object { $_.Value })
     Assert-AnEbG3Test -Condition ($nodeUrls.Count -eq 2 -and
-        $nodeUrls -ccontains ('Node URL: http://192.0.2.10:' + $port) -and
-        $nodeUrls -ccontains ('Node URL: http://198.51.100.20:' + $port) -and
-        $nodeUrls -notcontains ('Node URL: http://127.0.0.1:' + $port)) -Message ('launcher displays every doctor-admitted LAN URL and never presents loopback to the phone output=' + $result.Output)
+        $nodeUrls -ccontains ('http://192.0.2.10:' + $port) -and
+        $nodeUrls -ccontains ('http://198.51.100.20:' + $port) -and
+        $nodeUrls -notcontains ('http://127.0.0.1:' + $port)) -Message ('launcher preserves doctor-admitted LAN URLs and never presents loopback to the phone output=' + $result.Output)
+    $readyChinese = [string][char]0x5DF2 + [char]0x5C31 + [char]0x7EEA
+    Assert-AnEbG3Test -Condition ($entryText.Contains($readyChinese) -and $result.Output.Contains($readyChinese)) -Message 'Chinese Ready survives shipped BAT and Windows PowerShell UTF-8 output'
     Assert-AnEbG3Test -Condition ($result.Output -match ('(?m)^Results: ' + [regex]::Escape((Join-Path ([System.IO.Path]::GetFullPath($fixture)) 'results')) + '$') -and
         $result.Output -notmatch '(?m)^Results: results$') -Message ('launcher prints the exact absolute result root output=' + $result.Output)
+
+    $hintPort = Get-AnEbG3FreePort
+    $hintFixture = Join-Path $tempRoot 'wifi-priority-launch-package'
+    New-AnEbG3LaunchFixture -FixturePath $hintFixture -ServerBinary $serverBinary -Port $hintPort -LanAddresses @('192.0.2.1', '192.0.2.20', '192.0.2.30') -LanMetadata '[{"Address":"192.0.2.1","Kind":"advanced"},{"Address":"192.0.2.20","Kind":"ethernet"},{"Address":"192.0.2.30","Kind":"wifi"},{"Address":"198.51.100.99","Kind":"wifi"}]'
+    $hintResult = Invoke-AnEbG3Tool -ScriptPath (Join-Path $hintFixture 'tools\launch.ps1') -Arguments @('-Root', $hintFixture, '-Port', [string]$hintPort, '-ExitAfterReady')
+    $hintUrls = @([regex]::Matches($hintResult.Output, 'http://(?:[0-9]+\.){3}[0-9]+:[0-9]+') | ForEach-Object { $_.Value })
+    Assert-AnEbG3Test -Condition ($hintResult.ExitCode -eq 0 -and $hintUrls.Count -eq 3 -and $hintUrls[0] -ceq ('http://192.0.2.30:' + $hintPort) -and $hintUrls[2] -ceq ('http://192.0.2.1:' + $hintPort)) -Message ('real launcher presents Wi-Fi first, virtual last, and ignores unadmitted hint addresses output=' + $hintResult.Output)
 
     $strictPort = Get-AnEbG3FreePort
     $strictFixture = Join-Path $tempRoot 'strict-admission-launch-package'

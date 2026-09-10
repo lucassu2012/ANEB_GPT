@@ -441,7 +441,7 @@ class PrototypeCampaignUiControllerTest {
 
         assertFalse(presentation.showCancel)
         assertFalse(presentation.cancelEnabled)
-        assertEquals("Saving local result… · 3/3 processed", presentation.statusMessage)
+        assertEquals("正在保存本地结果… · 已处理 3/3", presentation.statusMessage)
         assertFalse(controller.requestCancel(running, saving))
         assertEquals(0, cancelCalls)
     }
@@ -470,7 +470,7 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertTrue(!cancellingPresentation.cancelEnabled)
-        assertEquals("Cancelling Quick campaign…", cancellingPresentation.statusMessage)
+        assertEquals("正在取消 Quick 测试…", cancellingPresentation.statusMessage)
         assertTrue(!controller.requestCancel(running))
         assertEquals(1, cancelCalls)
     }
@@ -591,20 +591,20 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(!quickAvailable)
             assertTrue(showCancel)
             assertTrue(cancelEnabled)
-            assertEquals("Quick campaign is running.", statusMessage)
+            assertEquals("Quick 测试正在运行。", statusMessage)
         }
         with(presentation(PrototypeCampaignSession.Cancelling(config))) {
             assertTrue(quickRunning)
             assertTrue(!quickAvailable)
             assertTrue(showCancel)
             assertTrue(!cancelEnabled)
-            assertEquals("Cancelling Quick campaign…", statusMessage)
+            assertEquals("正在取消 Quick 测试…", statusMessage)
         }
         with(presentation(PrototypeCampaignSession.Finished(config, result))) {
             assertTrue(!quickRunning)
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
-            assertEquals("Quick campaign finished.", statusMessage)
+            assertEquals("Quick 测试已结束。", statusMessage)
         }
         with(
             presentation(
@@ -619,7 +619,7 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
             assertEquals(
-                "Quick campaign saved locally · evidence publication failed (P018).",
+                "Quick 测试已保存到本机 · 证据发布失败 (P018)。",
                 statusMessage,
             )
         }
@@ -627,13 +627,13 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(!quickRunning)
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
-            assertEquals("Quick campaign failed: node unavailable", statusMessage)
+            assertEquals("Quick 测试失败：node unavailable", statusMessage)
         }
         with(presentation(PrototypeCampaignSession.Cancelled(config))) {
             assertTrue(!quickRunning)
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
-            assertEquals("Quick campaign cancelled · partial evidence saved.", statusMessage)
+            assertEquals("Quick 测试已取消 · 部分证据已保存。", statusMessage)
         }
         with(
             presentation(
@@ -647,8 +647,8 @@ class PrototypeCampaignUiControllerTest {
             assertTrue(quickAvailable)
             assertTrue(!showCancel)
             assertEquals(
-                "Quick campaign cancelled · partial evidence saved locally · " +
-                    "evidence publication failed (P018).",
+                "Quick 测试已取消 · 部分证据已保存到本机 · " +
+                    "证据发布失败 (P018)。",
                 statusMessage,
             )
         }
@@ -682,7 +682,7 @@ class PrototypeCampaignUiControllerTest {
         val running = PrototypeCampaignSession.Running(config)
 
         assertEquals(
-            "Running Baseline · 0/3 processed",
+            "正在测量 基线 Baseline · 已处理 0/3",
             status(
                 running,
                 PrototypeCampaignProgress.Running(
@@ -698,7 +698,7 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertEquals(
-            "Preparing Slow · 1/3 processed",
+            "正在准备 慢速 Slow · 已处理 1/3",
             status(
                 running,
                 PrototypeCampaignProgress.Cooldown(
@@ -714,7 +714,7 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertEquals(
-            "Running Slow · 1/3 processed",
+            "正在测量 慢速 Slow · 已处理 1/3",
             status(
                 running,
                 PrototypeCampaignProgress.Running(
@@ -730,7 +730,7 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertEquals(
-            "Running Unstable · 2/3 processed",
+            "正在测量 不稳定 Unstable · 已处理 2/3",
             status(
                 running,
                 PrototypeCampaignProgress.Running(
@@ -746,7 +746,7 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertEquals(
-            "Preparing Unstable · 2/3 processed",
+            "正在准备 不稳定 Unstable · 已处理 2/3",
             status(
                 running,
                 PrototypeCampaignProgress.Cooldown(
@@ -766,17 +766,17 @@ class PrototypeCampaignUiControllerTest {
             processedRuns = 2,
             totalRuns = 3,
         )
-        assertEquals("Saving local result… · 2/3 processed", status(running, saving))
+        assertEquals("正在保存本地结果… · 已处理 2/3", status(running, saving))
 
         assertEquals(
-            "Quick campaign is running.",
+            "Quick 测试正在运行。",
             status(
                 running,
                 saving.copy(campaignId = otherConfig.campaignId),
             ),
         )
         assertEquals(
-            "Quick campaign is running.",
+            "Quick 测试正在运行。",
             status(
                 running,
                 PrototypeCampaignProgress.Running(
@@ -788,23 +788,23 @@ class PrototypeCampaignUiControllerTest {
             ),
         )
         assertEquals(
-            "Cancelling Quick campaign…",
+            "正在取消 Quick 测试…",
             status(PrototypeCampaignSession.Cancelling(config), saving),
         )
         assertEquals(
-            "Quick campaign finished.",
+            "Quick 测试已结束。",
             status(PrototypeCampaignSession.Finished(config, result), saving),
         )
         assertEquals(
-            "Quick campaign failed: node unavailable",
+            "Quick 测试失败：node unavailable",
             status(PrototypeCampaignSession.Failed(config, "node unavailable"), saving),
         )
         assertEquals(
-            "Quick campaign cancelled · partial evidence saved.",
+            "Quick 测试已取消 · 部分证据已保存。",
             status(PrototypeCampaignSession.Cancelled(config), saving),
         )
         assertTrue(controller.requestCancel(running))
-        assertEquals("Cancelling Quick campaign…", status(running, saving))
+        assertEquals("正在取消 Quick 测试…", status(running, saving))
         }
 
     @Test
@@ -838,7 +838,7 @@ class PrototypeCampaignUiControllerTest {
         )
 
         assertEquals(
-            "Running Slow — run 3 of 3 · 7/9 processed",
+            "正在测量 慢速 Slow — 第 3 / 3 次 · 已处理 7/9",
             presentation.statusMessage,
         )
     }
@@ -882,9 +882,9 @@ class PrototypeCampaignUiControllerTest {
         )
 
         with(checkNotNull(presentation(progress).liveExecution)) {
-            assertEquals("Slow — run 3 of 3", currentRunLabel)
-            assertEquals("7 / 9 completed", completedRunsLabel)
-            assertEquals("Streaming", phaseLabel)
+            assertEquals("慢速 Slow — 第 3 / 3 次", currentRunLabel)
+            assertEquals("7 / 9 已完成", completedRunsLabel)
+            assertEquals("正在接收流", phaseLabel)
             assertEquals("912.3 ms", ttftLabel)
             assertEquals("7.9 events/s", eventRateLabel)
             assertTrue(stallDetected)
@@ -924,23 +924,23 @@ class PrototypeCampaignUiControllerTest {
         )
 
         with(checkNotNull(live(running(PrototypeRunLivePhase.CONNECTING)))) {
-            assertEquals("Baseline — run 1 of 1", currentRunLabel)
-            assertEquals("0 / 3 completed", completedRunsLabel)
-            assertEquals("Connecting", phaseLabel)
+            assertEquals("基线 Baseline — 第 1 / 1 次", currentRunLabel)
+            assertEquals("0 / 3 已完成", completedRunsLabel)
+            assertEquals("正在连接", phaseLabel)
             assertNull(ttftLabel)
             assertNull(eventRateLabel)
             assertFalse(stallDetected)
         }
         assertEquals(
-            "Waiting for first event",
+            "等待首事件",
             live(running(PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT))?.phaseLabel,
         )
         assertEquals(
-            "Finalizing",
+            "正在完成",
             live(running(PrototypeRunLivePhase.FINALIZING))?.phaseLabel,
         )
         assertEquals(
-            "Preparing next run",
+            "准备下一次测量",
             live(
                 PrototypeCampaignProgress.Cooldown(
                     campaignId = config.campaignId,
@@ -951,7 +951,7 @@ class PrototypeCampaignUiControllerTest {
             )?.phaseLabel,
         )
         assertEquals(
-            "Saving",
+            "正在保存",
             live(PrototypeCampaignProgress.Saving(config.campaignId, 3, 3))?.phaseLabel,
         )
 

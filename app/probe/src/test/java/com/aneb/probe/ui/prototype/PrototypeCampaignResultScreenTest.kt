@@ -12,23 +12,23 @@ class PrototypeCampaignResultScreenTest {
     fun `publication acknowledgement removes only the warning and keeps interrupted measurements`() {
         val interruption = PrototypeCampaignBlockingErrorPresentation(
             code = "P008_STREAM_INTERRUPTED",
-            title = "Stream interrupted",
+            title = "数据流中断",
             cause = "No terminal receipt",
             action = "Keep partial evidence",
-            detail = "40/120 events retained",
+            detail = "40/120 个事件已保留",
             evidenceRetained = true,
         )
         val original = PrototypeCampaignResultLoadState.Ready(
             campaignId = "saved-interrupted",
-            presentation = resultPresentation("Partial").copy(blockingError = interruption),
+            presentation = resultPresentation("部分完成").copy(blockingError = interruption),
             publicationWarning = "P018_EVIDENCE_PUBLICATION_FAILED",
         )
 
         val acknowledged = original.withConfirmedPublication() as PrototypeCampaignResultLoadState.Ready
 
         assertEquals(null, acknowledged.publicationWarning)
-        assertTrue(acknowledged.presentation.integrity.contains("Original node confirmed publication"))
-        assertTrue(acknowledged.presentation.integrity.contains("device ZIP remains unverified"))
+        assertTrue(acknowledged.presentation.integrity.contains("原节点已确认发布"))
+        assertTrue(acknowledged.presentation.integrity.contains("设备 ZIP 仍未验证"))
         assertEquals(
             original.presentation,
             acknowledged.presentation.copy(integrity = original.presentation.integrity),
@@ -40,23 +40,23 @@ class PrototypeCampaignResultScreenTest {
     fun `action state projection controls both actions and exact status message`() {
         val expected = listOf(
             Triple(PrototypeCampaignResultActionState.Idle, true, null),
-            Triple(PrototypeCampaignResultActionState.Exporting, false, "Exporting…"),
-            Triple(PrototypeCampaignResultActionState.PreparingShare, false, "Preparing share…"),
-            Triple(PrototypeCampaignResultActionState.Publishing, false, "Retrying evidence publication…"),
-            Triple(PrototypeCampaignResultActionState.Published, true, "Original node confirmed evidence publication."),
+            Triple(PrototypeCampaignResultActionState.Exporting, false, "正在导出…"),
+            Triple(PrototypeCampaignResultActionState.PreparingShare, false, "正在准备分享…"),
+            Triple(PrototypeCampaignResultActionState.Publishing, false, "正在重试发布证据…"),
+            Triple(PrototypeCampaignResultActionState.Published, true, "原节点已确认收到并发布证据；不表示测试成功。"),
             Triple(
                 PrototypeCampaignResultActionState.PublicationFailed,
                 true,
-                "P018 · Publication failed. Local evidence is retained. Restore the original node, then retry.",
+                "P018 · 发布失败，本地证据已保留。恢复原节点后重试。",
             ),
-            Triple(PrototypeCampaignResultActionState.Saved, true, "Saved to Downloads/ANEB"),
-            Triple(PrototypeCampaignResultActionState.ShareOpened, true, "Share sheet opened"),
+            Triple(PrototypeCampaignResultActionState.Saved, true, "已保存到 Downloads/ANEB"),
+            Triple(PrototypeCampaignResultActionState.ShareOpened, true, "已打开分享面板"),
             Triple(
                 PrototypeCampaignResultActionState.ShareUnavailable,
                 true,
-                "Saved, but share is unavailable",
+                "已保存，但暂时无法分享",
             ),
-            Triple(PrototypeCampaignResultActionState.Failed, true, "Export failed"),
+            Triple(PrototypeCampaignResultActionState.Failed, true, "导出失败"),
         )
 
         expected.forEach { (state, actionsEnabled, message) ->
@@ -95,11 +95,11 @@ class PrototypeCampaignResultScreenTest {
     fun `only ready load states expose the same action contract for complete and partial results`() {
         val complete = PrototypeCampaignResultLoadState.Ready(
             campaignId = "campaign-complete",
-            presentation = resultPresentation("Complete"),
+            presentation = resultPresentation("已完成"),
         )
         val partial = PrototypeCampaignResultLoadState.Ready(
             campaignId = "campaign-partial",
-            presentation = resultPresentation("Partial"),
+            presentation = resultPresentation("部分完成"),
         )
         val expectedIdle = prototypeCampaignResultActionPresentation(
             PrototypeCampaignResultActionState.Idle,
@@ -128,7 +128,7 @@ class PrototypeCampaignResultScreenTest {
             prototypeCampaignResultActions(partial, PrototypeCampaignResultActionState.Idle),
         )
         assertEquals(
-            "Export failed",
+            "导出失败",
             prototypeCampaignResultActions(
                 complete,
                 PrototypeCampaignResultActionState.Failed,
@@ -155,7 +155,7 @@ class PrototypeCampaignResultScreenTest {
         assertTrue(screen.contains("publicationWarning?.let"))
         assertTrue(
             screen.contains(
-                "P018 · Evidence publication failed. The local campaign result is still saved",
+                "P018 · 证据发布失败，本地测试结果仍已保存",
             ),
         )
         assertTrue(screen.contains("presentation.evidenceBadge"))
@@ -174,13 +174,13 @@ class PrototypeCampaignResultScreenTest {
         assertTrue(screen.contains("presentation.conditions.forEach"))
         assertTrue(screen.contains("condition.metricNullReason"))
         assertTrue(screen.contains("condition.rpiNullReasons"))
-        assertTrue(screen.contains("Text(\"Export ZIP\""))
-        assertTrue(screen.contains("Text(\"Share ZIP\""))
-        assertTrue(screen.contains("Text(\"Back\""))
+        assertTrue(screen.contains("Text(\"导出 ZIP\""))
+        assertTrue(screen.contains("Text(\"分享 ZIP\""))
+        assertTrue(screen.contains("Text(\"返回\""))
         assertTrue(screen.contains("onClick = onExport"))
         assertTrue(screen.contains("onClick = onShare"))
         assertTrue(screen.contains("onClick = onRetryPublication"))
-        assertTrue(screen.contains("Text(\"Retry evidence publication\""))
+        assertTrue(screen.contains("Text(\"重试发布证据\""))
 
         assertTrue(activity.contains("PrototypeCampaignResultScreen("))
         assertTrue(activity.contains("prototypeCampaignResultNavigator.dismiss("))
@@ -205,8 +205,8 @@ class PrototypeCampaignResultScreenTest {
             successfulRuns = "3",
             failedRuns = "0",
             notStartedRuns = "0",
-            integrity = "Local campaign result saved · evidence bundle unverified",
-            evidenceBadge = "Synthetic application-layer condition",
+            integrity = "本地测试结果已保存 · 证据包尚未验证",
+            evidenceBadge = "应用层合成条件",
             confidenceExplanation = "Evidence completeness only",
             rpiLabel = "Relative Prototype Index",
             disclosure = "Synthetic local probe result",

@@ -53,17 +53,17 @@ internal fun prototypeNodeErrorPresentation(
 ): PrototypeNodeErrorPresentation? = when (nodeState) {
     is PrototypeNodeState.Compatible -> null
     is PrototypeNodeState.ConnectedIncompatible -> PrototypeNodeErrorPresentation(
-        title = "P007_CONTRACT_MISMATCH · Connected, incompatible",
+        title = "P007_CONTRACT_MISMATCH · 已连接，但协议不兼容",
         detail = nodeState.message + "\n\n" +
-            "Use the APK and server from the same release package, then test the connection again. " +
-            "No campaign was started. Saved results are unchanged.",
+            "请使用同一发布包中的 APK 和服务端，再检查连接。" +
+            "未启动测试，已保存结果未改变。",
     )
     null -> errorMessage?.let { detail ->
         PrototypeNodeErrorPresentation(
-            title = "P006_NODE_UNREACHABLE · Node unavailable",
+            title = "P006_NODE_UNREACHABLE · 节点不可达",
             detail = detail + "\n\n" +
-                "Check the node URL, the shared LAN and the launcher firewall guidance. " +
-                "Then test the connection again. No campaign was started. Saved results are unchanged.",
+                "请检查节点地址、同一局域网及启动器的防火墙说明。" +
+                "然后重新检查连接。未启动测试，已保存结果未改变。",
         )
     }
 }
@@ -106,15 +106,15 @@ fun PrototypeModeScreen(
         AnebTopBar(showBack = true, onBack = onBack)
         AnebPageIntro(
             eyebrow = "Prototype 0.1",
-            title = "Synthetic streaming comparison",
-            subtitle = "Compare Baseline, Slow and Unstable conditions inside one controlled campaign.",
+            title = "应用层合成流对比",
+            subtitle = "同一轮测试对比基线 Baseline、慢速 Slow、不稳定 Unstable 三种条件。",
         )
         Spacer(Modifier.height(18.dp))
         AnebGradientCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Synthetic application-layer test", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                Text("这项测试测什么？", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
                 Text(
-                    "This mode measures app-to-node streaming behavior. It is not AQS, radio latency, packet loss, an operator rating or an SLA.",
+                    "测量手机到所选节点的应用层合成流表现，不是真实 AI 应用或模型推理测试。Quick 每种条件测 1 次（共 3 次），Acceptance 每种条件测 3 次（共 9 次）。不代表 AQS、无线时延、IP 丢包、运营商评级或 SLA。",
                     fontSize = 11.sp,
                     lineHeight = 17.sp,
                     color = colors.muted,
@@ -127,23 +127,23 @@ fun PrototypeModeScreen(
             enabled = canOpenSavedCampaigns,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Saved campaigns")
+            Text("已保存的测试")
         }
         Text(
-            "Open a local result to export it or retry evidence publication. No new test is started.",
+            "打开本地结果，可导出备份或重试发布证据；不会开始新测试。",
             fontSize = 11.sp,
             lineHeight = 17.sp,
             color = colors.muted,
         )
         Spacer(Modifier.height(14.dp))
-        Text("NODE", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
+        Text("节点", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
         Spacer(Modifier.height(7.dp))
         OutlinedTextField(
             value = nodeUrl,
             onValueChange = onNodeUrlChange,
             enabled = !quickRunning && !checkingNode,
             singleLine = true,
-            label = { Text("Node base URL") },
+            label = { Text("节点地址") },
             placeholder = { Text("http://192.168.1.20:18088") },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = colors.ink,
@@ -162,7 +162,7 @@ fun PrototypeModeScreen(
             enabled = nodeUrl.isNotBlank() && !checkingNode && !quickRunning,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (checkingNode) "Checking…" else "Test connection")
+            Text(if (checkingNode) "正在检查…" else "检查连接")
         }
         Spacer(Modifier.height(12.dp))
         when (nodeState) {
@@ -178,7 +178,7 @@ fun PrototypeModeScreen(
         }
         if (quickStatusMessage != null && liveExecution == null) {
             StatusCard(
-                title = "Campaign",
+                title = "本轮测试",
                 detail = quickStatusMessage,
                 accent = colors.brand,
             )
@@ -192,7 +192,7 @@ fun PrototypeModeScreen(
             colors = ButtonDefaults.buttonColors(containerColor = colors.brand, contentColor = Color(0xFF03131A)),
             modifier = Modifier.fillMaxWidth().height(50.dp),
         ) {
-            Text(if (quickRunning) "Campaign is running" else "Review Quick · 3 runs", fontWeight = FontWeight.Bold)
+            Text(if (quickRunning) "测试正在运行" else "确认 Quick 快速测试 · 共 3 次", fontWeight = FontWeight.Bold)
         }
         if (showQuickCancel) {
             Spacer(Modifier.height(8.dp))
@@ -201,7 +201,7 @@ fun PrototypeModeScreen(
                 enabled = quickCancelEnabled,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (quickCancelEnabled) "Cancel campaign" else "Cancelling…")
+                Text(if (quickCancelEnabled) "取消本轮测试" else "正在取消…")
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -212,7 +212,7 @@ fun PrototypeModeScreen(
             enabled = quickAvailable && nodeState?.canStartQuick == true && !quickRunning && !checkingNode,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Review Acceptance · 9 runs")
+            Text("确认 Acceptance 验收测试 · 共 9 次")
         }
         Spacer(Modifier.height(28.dp))
     }
@@ -264,15 +264,15 @@ private fun SavedPrototypeCampaignsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF121728),
-        title = { Text("Saved campaigns", color = colors.ink) },
+        title = { Text("已保存的测试", color = colors.ink) },
         text = {
             when {
                 loadFailed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Unable to read saved results. Nothing has been changed.", color = colors.muted)
-                    TextButton(onClick = { reload += 1 }) { Text("Try again") }
+                    Text("无法读取已保存结果，数据未改变。", color = colors.muted)
+                    TextButton(onClick = { reload += 1 }) { Text("重试") }
                 }
-                campaigns == null -> Text("Loading saved results…", color = colors.muted)
-                campaigns.orEmpty().isEmpty() -> Text("No saved campaigns on this device yet.", color = colors.muted)
+                campaigns == null -> Text("正在加载已保存结果…", color = colors.muted)
+                campaigns.orEmpty().isEmpty() -> Text("此设备尚无已保存测试。", color = colors.muted)
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -284,14 +284,14 @@ private fun SavedPrototypeCampaignsDialog(
                         ) {
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(campaign.campaignId, fontSize = 12.sp, color = colors.ink)
-                                Text("Original node: ${campaign.nodeBaseUrl}", fontSize = 11.sp, color = colors.muted)
+                                Text("原节点：${campaign.nodeBaseUrl}", fontSize = 11.sp, color = colors.muted)
                             }
                         }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
     )
 }
 
@@ -302,20 +302,20 @@ private fun PrototypeLiveExecutionCard(
     val colors = AnebTheme.colors
     AnebGradientCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("LIVE EXECUTION", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
+            Text("实时进度", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
             Text(
                 live.currentRunLabel,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = colors.ink,
             )
-            LiveExecutionDetail("Overall", live.completedRunsLabel)
-            LiveExecutionDetail("Phase", live.phaseLabel)
-            live.ttftLabel?.let { value -> LiveExecutionDetail("TTFT", value) }
-            live.eventRateLabel?.let { value -> LiveExecutionDetail("Rate", value) }
+            LiveExecutionDetail("总进度", live.completedRunsLabel)
+            LiveExecutionDetail("当前阶段", live.phaseLabel)
+            live.ttftLabel?.let { value -> LiveExecutionDetail("首事件等待 TTFT", value) }
+            live.eventRateLabel?.let { value -> LiveExecutionDetail("事件速率", value) }
             if (live.stallDetected) {
                 Text(
-                    "Stall detected · provisional until the saved result is finalized",
+                    "检测到停顿 Stall · 当前为临时值，以保存后的结果为准",
                     fontSize = 11.sp,
                     lineHeight = 17.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -347,17 +347,17 @@ private fun PrototypeCampaignLaunchConfirmationDialog(
         containerColor = Color(0xFF121728),
         title = {
             Text(
-                "Confirm ${confirmation.modeLabel} campaign",
+                "确认 ${confirmation.modeLabel} 测试",
                 color = colors.ink,
                 fontWeight = FontWeight.Bold,
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ConfirmationDetail("Mode", confirmation.modeLabel)
-                ConfirmationDetail("Runs", confirmation.runCount.toString())
-                ConfirmationDetail("Estimated time", confirmation.estimatedDuration)
-                Text("FIXED ORDER", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ConfirmationDetail("模式", confirmation.modeLabel)
+                ConfirmationDetail("次数", confirmation.runCount.toString())
+                ConfirmationDetail("预计耗时", confirmation.estimatedDuration)
+                Text("固定顺序（B 基线 / S 慢速 / U 不稳定）", fontSize = 9.sp, letterSpacing = 1.2.sp, color = colors.faint)
                 Text(
                     confirmation.runOrder,
                     fontSize = 11.sp,
@@ -386,12 +386,12 @@ private fun PrototypeCampaignLaunchConfirmationDialog(
                     contentColor = Color(0xFF03131A),
                 ),
             ) {
-                Text("Start campaign", fontWeight = FontWeight.Bold)
+                Text("开始测试", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("取消")
             }
         },
     )
@@ -413,14 +413,14 @@ private fun CompatibleNodeCard(state: PrototypeNodeState.Compatible) {
     AnebGradientCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Compatible", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.good)
+                Text("兼容", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.good)
                 Text(capability.serverVersion, fontSize = 10.sp, color = colors.muted)
             }
-            DetailLine("Workload", capability.workloadVersion)
-            DetailLine("Profile", capability.profileManifestSha256.take(12) + "…")
-            DetailLine("Conditions", capability.conditions.joinToString(" · "))
-            DetailLine("Evidence", capability.evidenceSchemaVersion)
-            DetailLine("Score policy", capability.scorePolicyId)
+            DetailLine("负载", capability.workloadVersion)
+            DetailLine("配置", capability.profileManifestSha256.take(12) + "…")
+            DetailLine("测试条件", capability.conditions.joinToString(" · "))
+            DetailLine("证据", capability.evidenceSchemaVersion)
+            DetailLine("评分规则", capability.scorePolicyId)
         }
     }
 }

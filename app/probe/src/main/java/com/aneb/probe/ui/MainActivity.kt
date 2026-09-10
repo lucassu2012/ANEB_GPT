@@ -447,10 +447,10 @@ class MainActivity : ComponentActivity() {
                                 throw error
                             } catch (error: IllegalArgumentException) {
                                 prototypeNodeState = null
-                                prototypeNodeError = error.message ?: "Invalid Prototype node URL."
+                                prototypeNodeError = error.message ?: "Prototype 节点地址无效。"
                             } catch (_: Exception) {
                                 prototypeNodeState = null
-                                prototypeNodeError = "Unable to reach this Prototype node."
+                                prototypeNodeError = "无法连接此 Prototype 节点。"
                             } finally {
                                 prototypeNodeChecking = false
                             }
@@ -477,7 +477,7 @@ class MainActivity : ComponentActivity() {
                             is PrototypeCampaignUiActionResult.Started,
                             -> null
                             is PrototypeCampaignUiActionResult.LaunchFailed ->
-                                "Unable to start Quick: ${outcome.message}"
+                                "无法启动测试：${outcome.message}"
                         }
                         if (outcome is PrototypeCampaignUiActionResult.Started) {
                             val route = prototypeCampaignResultNavigator.suppressForAcceptedStart(

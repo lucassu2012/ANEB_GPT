@@ -11,6 +11,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Explicit UTF-8 console output also works on an English Windows installation.
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 . (Join-Path $PSScriptRoot 'common.ps1')
 
 function Stop-AnEbLaunch {
@@ -308,6 +310,24 @@ try {
         }
     }
 
+    # Metadata only affects guidance; admitted addresses remain the source of URLs.
+    # Legacy doctor output is usable but cannot establish a physical recommendation.
+    $lanCandidates = @($lanAddresses | ForEach-Object { [pscustomobject]@{ Address = $_; Kind = 'advanced' } })
+    $candidateLines = @($doctorOutput | Where-Object { [string]$_ -cmatch '^INFO LAN_CANDIDATES .+$' })
+    if ($candidateLines.Count -eq 1) {
+        try {
+            $metadata = ConvertFrom-Json -InputObject (([string]$candidateLines[0]).Substring('INFO LAN_CANDIDATES '.Length))
+            foreach ($candidate in $lanCandidates) {
+                $match = @($metadata | Where-Object { $_.Address -ceq $candidate.Address })
+                if ($match.Count -eq 1 -and $match[0].Kind -cin @('wifi', 'ethernet', 'advanced')) {
+                    $candidate.Kind = $match[0].Kind
+                }
+            }
+        }
+        catch { } # An unavailable hint never promotes an unknown interface.
+    }
+    $lanCandidates = @($lanCandidates | Sort-Object @{ Expression = { switch ($_.Kind) { 'wifi' { 0 } 'ethernet' { 1 } default { 2 } } } }, Address)
+
     $version = $null
     try {
         $version = Read-AnEbUtf8Strict -Path (Join-Path $rootFull 'VERSION.json') | ConvertFrom-Json
@@ -404,14 +424,7 @@ try {
     }
     Assert-AnEbCapabilityResponse -Capability $capability -Version $version -ServerPath $serverPath
 
-    Write-Output 'ANEB Prototype 0.1 - READY'
-    foreach ($lanAddress in $lanAddresses) {
-        Write-Output ("Node URL: http://" + $lanAddress + ':' + $Port)
-    }
-    Write-Output 'Android: open ANEB Prototype Mode and enter the displayed node URL'
-    Write-Output ('Results: ' + (Join-Path $rootFull 'results'))
-    Write-Output 'Scope: deterministic application-layer synthetic conditions'
-    Write-Output 'Press Q and Enter to stop ANEB cleanly.'
+    Get-AnEbReadyGuide -Candidates $lanCandidates -Port $Port -ResultsDirectory (Join-Path $rootFull 'results')
     if (-not $ExitAfterReady) {
         $input = Read-Host
         if ($input -notmatch '^(?i)q$') {

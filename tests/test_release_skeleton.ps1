@@ -922,7 +922,7 @@ try {
     $zipReplacementSource = [System.IO.File]::ReadAllText($zipReplacementVerifier)
     $zipReplacementInstrumented = [regex]::Replace(
         $zipReplacementSource,
-        '(?m)^(\s*\$packageZipSnapshot\s*=\s*Assert-AnEbExternalArtifactAdmission[^\r\n]+)$',
+        '(?m)^(\s*\$packageZipSnapshot\s*=\s*Assert-AnEbExternalArtifactAdmission[^\r\n]+)\r?$',
         ('$1' + "`r`n" + '        if (-not [string]::IsNullOrWhiteSpace($env:ANEB_TEST_REPLACE_ADMITTED_ZIP_WITH)) { Move-Item -LiteralPath $env:ANEB_TEST_REPLACE_ADMITTED_ZIP_WITH -Destination $PackageZipPath -Force }'),
         1
     )

@@ -125,7 +125,13 @@ function New-AnEbSyntheticSource {
         'verify-evidence.ps1',
         'verify-package.ps1'
     )) {
-        $toolText = [System.IO.File]::ReadAllText((Join-Path $repo ('tools\' + $name))).Replace("`r`n", "`n")
+        $toolSource = Join-Path $repo ('tools\' + $name)
+        $toolText = [System.IO.File]::ReadAllText($toolSource).Replace("`r`n", "`n")
+        $toolBytes = [System.IO.File]::ReadAllBytes($toolSource)
+        # Keep a source BOM: PowerShell 5.1 needs it for Chinese script literals.
+        if ($toolBytes.Length -ge 3 -and $toolBytes[0] -eq 0xEF -and $toolBytes[1] -eq 0xBB -and $toolBytes[2] -eq 0xBF) {
+            $toolText = [string][char]0xFEFF + $toolText
+        }
         Write-AnEbBuilderUtf8 -Path (Join-Path $Path ('tools\' + $name)) -Text $toolText
     }
     Write-AnEbBuilderUtf8 -Path (Join-Path $Path 'DO_NOT_COPY.txt') -Text "TEST_SECRET_SENTINEL must not enter the package`n"

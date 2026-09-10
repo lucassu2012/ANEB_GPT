@@ -52,16 +52,16 @@ internal fun prototypeCampaignResultActionPresentation(
         state != PrototypeCampaignResultActionState.Publishing,
     message = when (state) {
         PrototypeCampaignResultActionState.Idle -> null
-        PrototypeCampaignResultActionState.Exporting -> "Exporting…"
-        PrototypeCampaignResultActionState.PreparingShare -> "Preparing share…"
-        PrototypeCampaignResultActionState.Saved -> "Saved to Downloads/ANEB"
-        PrototypeCampaignResultActionState.ShareOpened -> "Share sheet opened"
-        PrototypeCampaignResultActionState.ShareUnavailable -> "Saved, but share is unavailable"
-        PrototypeCampaignResultActionState.Failed -> "Export failed"
-        PrototypeCampaignResultActionState.Publishing -> "Retrying evidence publication…"
-        PrototypeCampaignResultActionState.Published -> "Original node confirmed evidence publication."
+        PrototypeCampaignResultActionState.Exporting -> "正在导出…"
+        PrototypeCampaignResultActionState.PreparingShare -> "正在准备分享…"
+        PrototypeCampaignResultActionState.Saved -> "已保存到 Downloads/ANEB"
+        PrototypeCampaignResultActionState.ShareOpened -> "已打开分享面板"
+        PrototypeCampaignResultActionState.ShareUnavailable -> "已保存，但暂时无法分享"
+        PrototypeCampaignResultActionState.Failed -> "导出失败"
+        PrototypeCampaignResultActionState.Publishing -> "正在重试发布证据…"
+        PrototypeCampaignResultActionState.Published -> "原节点已确认收到并发布证据；不表示测试成功。"
         PrototypeCampaignResultActionState.PublicationFailed ->
-            "P018 · Publication failed. Local evidence is retained. Restore the original node, then retry."
+            "P018 · 发布失败，本地证据已保留。恢复原节点后重试。"
     },
 )
 
@@ -97,12 +97,12 @@ internal fun PrototypeCampaignResultScreen(
         AnebTopBar(showBack = true, onBack = onBack)
         when (loadState) {
             is PrototypeCampaignResultLoadState.Loading -> ResultState(
-                title = "Loading campaign result",
-                detail = "Validating the locally persisted campaign graph…",
+                title = "正在加载测试结果",
+                detail = "正在校验本地保存的测试及证据…",
             )
             is PrototypeCampaignResultLoadState.Unavailable -> ResultState(
-                title = "Campaign result unavailable",
-                detail = "The local campaign result is missing or failed validation.",
+                title = "测试结果不可用",
+                detail = "本地测试结果不存在或未通过校验。",
             )
             is PrototypeCampaignResultLoadState.Ready -> ReadyResult(
                 presentation = loadState.presentation,
@@ -147,15 +147,15 @@ private fun ReadyResult(
     val colors = AnebTheme.colors
     AnebPageIntro(
         eyebrow = "Prototype 0.1",
-        title = "Campaign result",
+        title = "测试结果",
         subtitle = "${presentation.status} · ${presentation.campaignMode}",
     )
     publicationWarning?.let {
         Spacer(Modifier.height(12.dp))
         AnebGradientCard(Modifier.fillMaxWidth()) {
             Text(
-                "P018 · Evidence publication failed. The local campaign result is still saved " +
-                    "and can be exported.",
+                "P018 · 证据发布失败，本地测试结果仍已保存" +
+                    "，可导出备份。",
                 color = colors.brand,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
@@ -180,10 +180,10 @@ private fun ReadyResult(
                 fontWeight = FontWeight.SemiBold,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Count("Attempted", presentation.attemptedRuns)
-                Count("Successful", presentation.successfulRuns)
-                Count("Failed", presentation.failedRuns)
-                Count("Not started", presentation.notStartedRuns)
+                Count("已尝试", presentation.attemptedRuns)
+                Count("成功", presentation.successfulRuns)
+                Count("失败", presentation.failedRuns)
+                Count("未开始", presentation.notStartedRuns)
             }
         }
     }
@@ -233,7 +233,7 @@ private fun ReadyResult(
         }
     }
     Spacer(Modifier.height(18.dp))
-    Text("CONDITIONS", color = colors.faint, fontSize = 9.sp, letterSpacing = 1.2.sp)
+    Text("各条件结果", color = colors.faint, fontSize = 9.sp, letterSpacing = 1.2.sp)
     Spacer(Modifier.height(8.dp))
     presentation.conditions.forEach { condition ->
         ConditionCard(condition, presentation.rpiLabel)
@@ -250,9 +250,9 @@ private fun ReadyResult(
         Spacer(Modifier.height(10.dp))
     }
     Text(
-        "Restore this campaign's original node: ${presentation.publicationNodeUrl}\n" +
-            "Retry publishes the saved evidence only; it does not run a new campaign. " +
-            "Export and Share save an unverified device backup, not the node's canonical report.",
+        "恢复本轮测试的原节点：${presentation.publicationNodeUrl}\n" +
+            "重试仅发布已保存证据，不会重新测量。" +
+            "导出和分享仅提供未验证的五文件设备备份，不是节点的正式报告。",
         color = colors.muted,
         fontSize = 11.sp,
         lineHeight = 17.sp,
@@ -263,7 +263,7 @@ private fun ReadyResult(
         enabled = actionPresentation.actionsEnabled,
         modifier = Modifier.fillMaxWidth().height(48.dp),
     ) {
-        Text("Retry evidence publication", fontWeight = FontWeight.Bold)
+        Text("重试发布证据", fontWeight = FontWeight.Bold)
     }
     Spacer(Modifier.height(8.dp))
     Button(
@@ -271,7 +271,7 @@ private fun ReadyResult(
         enabled = actionPresentation.actionsEnabled,
         modifier = Modifier.fillMaxWidth().height(48.dp),
     ) {
-        Text("Export ZIP", fontWeight = FontWeight.Bold)
+        Text("导出 ZIP", fontWeight = FontWeight.Bold)
     }
     Spacer(Modifier.height(8.dp))
     OutlinedButton(
@@ -279,14 +279,14 @@ private fun ReadyResult(
         enabled = actionPresentation.actionsEnabled,
         modifier = Modifier.fillMaxWidth().height(48.dp),
     ) {
-        Text("Share ZIP", fontWeight = FontWeight.SemiBold)
+        Text("分享 ZIP", fontWeight = FontWeight.SemiBold)
     }
     Spacer(Modifier.height(8.dp))
     OutlinedButton(
         onClick = onBack,
         modifier = Modifier.fillMaxWidth().height(48.dp),
     ) {
-        Text("Back", fontWeight = FontWeight.SemiBold)
+        Text("返回", fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -307,25 +307,25 @@ private fun ConditionCard(
     val colors = AnebTheme.colors
     AnebGradientCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(condition.title, color = colors.ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text("Confidence · ${condition.confidence}", color = colors.muted, fontSize = 10.sp)
+                Text("证据完整度 Confidence · ${condition.confidence}", color = colors.muted, fontSize = 10.sp)
             }
-            MetricRow("TTFT", condition.ttft)
-            MetricRow("Completion", condition.completion)
-            MetricRow("Event rate", condition.eventRate)
-            MetricRow("Stall count", condition.stallCount)
-            MetricRow("Stall duration", condition.stallDuration)
-            MetricRow("Success rate", condition.successRate)
+            MetricRow("首事件等待 TTFT", condition.ttft)
+            MetricRow("完成耗时 Completion", condition.completion)
+            MetricRow("事件速率 Event rate", condition.eventRate)
+            MetricRow("停顿次数 Stall", condition.stallCount)
+            MetricRow("停顿时长 Stall", condition.stallDuration)
+            MetricRow("成功率 Success rate", condition.successRate)
             Spacer(Modifier.height(2.dp))
             Text(rpiLabel, color = colors.faint, fontSize = 9.sp, lineHeight = 13.sp)
             Text(condition.rpi, color = colors.brand, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             condition.metricNullReason?.let { reason ->
-                Text("Metric null reason · $reason", color = colors.muted, fontSize = 10.sp)
+                Text("指标缺失原因 · $reason", color = colors.muted, fontSize = 10.sp)
             }
             if (condition.rpiNullReasons.isNotEmpty()) {
                 Text(
-                    "RPI null reason · ${condition.rpiNullReasons.joinToString(", ")}",
+                    "RPI 缺失原因 · ${condition.rpiNullReasons.joinToString(", ")}",
                     color = colors.muted,
                     fontSize = 10.sp,
                 )
@@ -338,7 +338,7 @@ private fun ConditionCard(
 private fun MetricRow(label: String, value: String) {
     val colors = AnebTheme.colors
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = colors.faint, fontSize = 10.sp)
+        Text(label, modifier = Modifier.weight(1f), color = colors.faint, fontSize = 11.sp)
         Text(value, color = colors.ink, fontSize = 11.sp)
     }
 }
