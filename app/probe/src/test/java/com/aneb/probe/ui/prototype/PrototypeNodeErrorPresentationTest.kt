@@ -14,35 +14,35 @@ class PrototypeNodeErrorPresentationTest {
             "http://192.168.1.20:18088", "claim scope does not match",
         )
         val presentation = prototypeNodeErrorPresentation(incompatible, null)
-        assertEquals("P007_CONTRACT_MISMATCH · Connected, incompatible", presentation?.title)
+        assertEquals("P007_CONTRACT_MISMATCH · 已连接，但协议不兼容", presentation?.title)
         assertTrue(presentation!!.detail.startsWith("claim scope does not match"))
         assertFalse(incompatible.canStartQuick)
     }
 
     @Test
     fun `unreachable node presents the required P006 code`() {
-        val presentation = prototypeNodeErrorPresentation(null, "Unable to reach this Prototype node.")
-        assertEquals("P006_NODE_UNREACHABLE · Node unavailable", presentation?.title)
-        assertTrue(presentation!!.detail.startsWith("Unable to reach this Prototype node."))
+        val presentation = prototypeNodeErrorPresentation(null, "无法连接此 Prototype 节点。")
+        assertEquals("P006_NODE_UNREACHABLE · 节点不可达", presentation?.title)
+        assertTrue(presentation!!.detail.startsWith("无法连接此 Prototype 节点。"))
     }
 
     @Test
     fun `node failures explain recovery without claiming a new result`() {
-        val unreachable = prototypeNodeErrorPresentation(null, "Unable to reach this Prototype node.")!!
-        assertTrue(unreachable.detail.contains("Check the node URL, the shared LAN and the launcher firewall guidance."))
-        assertTrue(unreachable.detail.contains("No campaign was started. Saved results are unchanged."))
+        val unreachable = prototypeNodeErrorPresentation(null, "无法连接此 Prototype 节点。")!!
+        assertTrue(unreachable.detail.contains("请检查节点地址、同一局域网及启动器的防火墙说明。"))
+        assertTrue(unreachable.detail.contains("未启动测试，已保存结果未改变。"))
         val incompatible = prototypeNodeErrorPresentation(
             PrototypeNodeState.ConnectedIncompatible("http://192.168.1.20:18088", "claim scope does not match"),
             null,
         )!!
-        assertTrue(incompatible.detail.contains("Use the APK and server from the same release package, then test the connection again."))
-        assertTrue(incompatible.detail.contains("No campaign was started. Saved results are unchanged."))
+        assertTrue(incompatible.detail.contains("请使用同一发布包中的 APK 和服务端，再检查连接。"))
+        assertTrue(incompatible.detail.contains("未启动测试，已保存结果未改变。"))
     }
 
     @Test
     fun `node failures retain their diagnostic detail without enabling a campaign`() {
-        val unreachable = prototypeNodeErrorPresentation(null, "Unable to reach this Prototype node.")
-        assertTrue(unreachable!!.detail.startsWith("Unable to reach this Prototype node."))
+        val unreachable = prototypeNodeErrorPresentation(null, "无法连接此 Prototype 节点。")
+        assertTrue(unreachable!!.detail.startsWith("无法连接此 Prototype 节点。"))
         val incompatible = PrototypeNodeState.ConnectedIncompatible(
             "http://192.168.1.20:18088", "claim scope does not match",
         )

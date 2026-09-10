@@ -72,21 +72,21 @@ internal object PrototypeCampaignResultPresenter {
             campaignId = stored.campaignId,
             publicationNodeUrl = stored.nodeBaseUrl,
             status = when (summary.status) {
-                PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE -> "Complete"
-                PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL -> "Partial"
-                PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED -> "Cancelled"
+                PrototypeQuickCampaignRunner.CampaignStatus.COMPLETE -> "已完成"
+                PrototypeQuickCampaignRunner.CampaignStatus.PARTIAL -> "部分完成"
+                PrototypeQuickCampaignRunner.CampaignStatus.CANCELLED -> "已取消"
             },
             campaignMode = campaignModeLabel,
             attemptedRuns = summary.attemptedRuns.toString(),
             successfulRuns = summary.successfulRuns.toString(),
             failedRuns = summary.failedRuns.toString(),
             notStartedRuns = summary.notStartedRuns.toString(),
-            integrity = "Local campaign result saved · evidence bundle unverified",
-            evidenceBadge = "Synthetic application-layer condition",
+            integrity = "本地测试结果已保存 · 证据包尚未验证",
+            evidenceBadge = "应用层合成条件",
             confidenceExplanation =
-                "Confidence is evidence completeness for this $campaignModeLabel campaign, " +
-                    "not an industry or network confidence interval.",
-            rpiLabel = "Relative Prototype Index (same-campaign synthetic comparison)",
+                "Confidence 表示本轮 $campaignModeLabel 的证据完整度，" +
+                    "不是行业或网络质量的统计置信区间。",
+            rpiLabel = "相对原型指标 RPI（同一轮合成条件对比，不是网络绝对评分）",
             disclosure = DISCLOSURE,
             conditions = summary.conditionSummaries.mapIndexed { index, condition ->
                 val failedRun = stored.runs.firstOrNull { run ->
@@ -117,9 +117,9 @@ internal object PrototypeCampaignResultPresenter {
             blockingError = invalidSequenceRun?.let { run ->
                 PrototypeCampaignBlockingErrorPresentation(
                     code = "P009_INVALID_SEQUENCE",
-                    title = "Invalid event sequence",
-                    cause = "A content event was missing, duplicated, or out of order.",
-                    action = "Evidence was retained. Report this implementation defect.",
+                    title = "事件顺序无效",
+                    cause = "内容事件存在缺失、重复或乱序。",
+                    action = "证据已保留，请报告此实现缺陷。",
                     detail = "Run ${run.runIndex} · ${run.conditionId} · ${run.runId} · " +
                         "${run.eventsReceived}/120 events retained",
                     evidenceRetained = true,
@@ -127,9 +127,9 @@ internal object PrototypeCampaignResultPresenter {
             } ?: interruptedRun?.let { run ->
                 PrototypeCampaignBlockingErrorPresentation(
                     code = "P008_STREAM_INTERRUPTED",
-                    title = "Stream interrupted",
-                    cause = "The stream ended before a valid terminal receipt arrived.",
-                    action = "Partial evidence was retained. Check the node connection, then start a new campaign.",
+                    title = "数据流中断",
+                    cause = "收到有效结束回执前，数据流已中断。",
+                    action = "部分证据已保留。仅发布证据可重试发布；需要重新测量时，检查节点连接后开始新一轮测试。",
                     detail = "Run ${run.runIndex} · ${run.conditionId} · ${run.runId} · " +
                         "${run.eventsReceived}/120 events retained",
                     evidenceRetained = true,
@@ -147,12 +147,15 @@ internal object PrototypeCampaignResultPresenter {
         "slow_v0.1",
         "unstable_v0.1",
     )
-    private val CONDITION_TITLES = listOf("Baseline", "Slow", "Unstable")
+    private val CONDITION_TITLES = listOf("基线 Baseline", "慢速 Slow", "不稳定 Unstable")
     private const val MISSING_VALUE = "—"
     private const val DISCLOSURE =
-        "This score compares deterministic application-layer conditions against this campaign's Baseline. " +
-            "It is not a formal ANEB industry score and does not represent a third-party AI application's " +
-            "network requirement. These results are synthetic application-layer measurements from this " +
-            "local probe and do not measure or represent packet loss, RAN, core network, operator, public " +
-            "Internet, a real third-party AI app, model inference, AQS, MOS, network quality, an SLA, or a grade."
+        "读数说明：TTFT 是请求发出到首个有效流事件的等待时间，不是模型推理时延；Completion 是请求发出到有效结束回执的耗时。" +
+            "Stall 是相邻事件间隔超过冻结阈值的停顿，停顿时长按超出该条件正常间隔的部分累计；不包括首事件等待和结束回执等待。" +
+            "Success rate 是成功次数占本条件计划次数的比例，耗时与停顿汇总取成功测量的中位数。事件速率是 events/s，不是 tokens/s 或带宽。— 表示无可用值，不是 0。\n\n" +
+        "此分数将确定性应用层合成条件与同一轮 Baseline 基线比较。" +
+            "它不是正式 ANEB 行业评分，也不代表第三方 AI 应用的" +
+            "网络需求。这些结果来自本机" +
+            "探针的应用层合成测量，不测量或代表 IP 丢包、RAN、核心网、运营商、公网、" +
+            "真实第三方 AI 应用、模型推理、AQS、MOS、网络质量、SLA 或等级。"
 }

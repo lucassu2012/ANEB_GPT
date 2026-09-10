@@ -40,7 +40,7 @@ class PrototypeCampaignResultPresenterTest {
                 assertEquals("Acceptance", presentation.campaignMode)
                 assertEquals("9", presentation.attemptedRuns)
                 assertEquals("9", presentation.successfulRuns)
-                assertEquals(listOf("Baseline", "Slow", "Unstable"), presentation.conditions.map {
+                assertEquals(listOf("基线 Baseline", "慢速 Slow", "不稳定 Unstable"), presentation.conditions.map {
                     it.title
                 })
                 stored.summary.conditionSummaries.zip(presentation.conditions).forEach {
@@ -70,21 +70,23 @@ class PrototypeCampaignResultPresenterTest {
 
             assertEquals(CAMPAIGN_ID, presentation.campaignId)
             assertEquals(stored.nodeBaseUrl, presentation.publicationNodeUrl)
-            assertEquals("Complete", presentation.status)
+            assertEquals("已完成", presentation.status)
             assertEquals("Quick", presentation.campaignMode)
+            listOf("TTFT", "Completion", "Stall", "Success rate", "events/s", "不是 0", "不是正式 ANEB 行业评分")
+                .forEach { assertTrue("Missing metric boundary: $it", presentation.disclosure.contains(it)) }
             assertEquals("3", presentation.attemptedRuns)
             assertEquals("3", presentation.successfulRuns)
             assertEquals("0", presentation.failedRuns)
             assertEquals("0", presentation.notStartedRuns)
             assertEquals(
-                "Local campaign result saved · evidence bundle unverified",
+                "本地测试结果已保存 · 证据包尚未验证",
                 presentation.integrity,
             )
             assertEquals(
-                "Relative Prototype Index (same-campaign synthetic comparison)",
+                "相对原型指标 RPI（同一轮合成条件对比，不是网络绝对评分）",
                 presentation.rpiLabel,
             )
-            assertEquals(listOf("Baseline", "Slow", "Unstable"), presentation.conditions.map { it.title })
+            assertEquals(listOf("基线 Baseline", "慢速 Slow", "不稳定 Unstable"), presentation.conditions.map { it.title })
             val authoritativeBaseline = stored.summary.conditionSummaries.first()
             with(presentation.conditions.first()) {
                 assertEquals("baseline_v0.1", conditionId)
@@ -117,7 +119,7 @@ class PrototypeCampaignResultPresenterTest {
 
             val presentation = PrototypeCampaignResultPresenter.present(stored)
 
-            assertEquals("Partial", presentation.status)
+            assertEquals("部分完成", presentation.status)
             assertEquals("2", presentation.attemptedRuns)
             assertEquals("1", presentation.successfulRuns)
             assertEquals("1", presentation.failedRuns)
@@ -178,13 +180,13 @@ class PrototypeCampaignResultPresenterTest {
             assertNotNull(error)
             requireNotNull(error)
             assertEquals("P009_INVALID_SEQUENCE", error.code)
-            assertEquals("Invalid event sequence", error.title)
+            assertEquals("事件顺序无效", error.title)
             assertEquals(
-                "A content event was missing, duplicated, or out of order.",
+                "内容事件存在缺失、重复或乱序。",
                 error.cause,
             )
             assertEquals(
-                "Evidence was retained. Report this implementation defect.",
+                "证据已保留，请报告此实现缺陷。",
                 error.action,
             )
             assertEquals(true, error.evidenceRetained)
@@ -242,27 +244,27 @@ class PrototypeCampaignResultPresenterTest {
 
             val presentation = PrototypeCampaignResultPresenter.present(stored)
 
-            assertEquals("Synthetic application-layer condition", presentation.evidenceBadge)
+            assertEquals("应用层合成条件", presentation.evidenceBadge)
             assertEquals(
-                "Confidence is evidence completeness for this Quick campaign, " +
-                    "not an industry or network confidence interval.",
+                "Confidence 表示本轮 Quick 的证据完整度，" +
+                    "不是行业或网络质量的统计置信区间。",
                 presentation.confidenceExplanation,
             )
             assertEquals(
                 listOf(
-                    "baseline_v0.1" to "Baseline",
-                    "slow_v0.1" to "Slow",
-                    "unstable_v0.1" to "Unstable",
+                    "baseline_v0.1" to "基线 Baseline",
+                    "slow_v0.1" to "慢速 Slow",
+                    "unstable_v0.1" to "不稳定 Unstable",
                 ),
                 presentation.conditions.map { condition -> condition.conditionId to condition.title },
             )
             assertEquals(
-                "This score compares deterministic application-layer conditions against this campaign's Baseline. " +
-                    "It is not a formal ANEB industry score and does not represent a third-party AI application's " +
-                    "network requirement. These results are synthetic application-layer measurements from this " +
-                    "local probe and do not measure or represent packet loss, RAN, core network, operator, public " +
-                    "Internet, a real third-party AI app, model inference, AQS, MOS, network quality, an SLA, or a grade.",
-                presentation.disclosure,
+                "此分数将确定性应用层合成条件与同一轮 Baseline 基线比较。" +
+                    "它不是正式 ANEB 行业评分，也不代表第三方 AI 应用的" +
+                    "网络需求。这些结果来自本机" +
+                    "探针的应用层合成测量，不测量或代表 IP 丢包、RAN、核心网、运营商、公网、" +
+                    "真实第三方 AI 应用、模型推理、AQS、MOS、网络质量、SLA 或等级。",
+                presentation.disclosure.substringAfter("\n\n"),
             )
             listOf("Excellent", "Good", "Poor").forEach { forbiddenGrade ->
                 assertFalse(presentation.disclosure.contains(forbiddenGrade))

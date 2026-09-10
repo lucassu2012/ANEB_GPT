@@ -79,7 +79,7 @@ class PrototypeCampaignResultNavigationTest {
             val loaded = navigator.load(requireNotNull(route.openCampaignId))
                 as PrototypeCampaignResultLoadState.Ready
             assertEquals(config.campaignId, loaded.presentation.campaignId)
-            assertEquals("Cancelled", loaded.presentation.status)
+            assertEquals("已取消", loaded.presentation.status)
             assertTrue(loaded.presentation.conditions.all { it.rpi == "—" })
             assertNull(loaded.publicationWarning)
         } finally {
@@ -111,9 +111,9 @@ class PrototypeCampaignResultNavigationTest {
 
             assertEquals("P008_STREAM_INTERRUPTED", loaded.presentation.blockingError?.code)
             assertEquals(true, loaded.presentation.blockingError?.evidenceRetained)
-            assertTrue(loaded.presentation.blockingError?.action?.contains("new campaign") == true)
+            assertTrue(loaded.presentation.blockingError?.action?.contains("新一轮测试") == true)
             assertEquals("P018_EVIDENCE_PUBLICATION_FAILED", loaded.publicationWarning)
-            assertEquals("Partial", loaded.presentation.status)
+            assertEquals("部分完成", loaded.presentation.status)
             assertEquals("stream_interrupted", loaded.presentation.conditions[1].metricNullReason)
             assertTrue(loaded.presentation.conditions.all { it.rpi == "—" })
         } finally {
@@ -217,7 +217,7 @@ class PrototypeCampaignResultNavigationTest {
             assertEquals(config.campaignId, route.openCampaignId)
             assertTrue(loaded is PrototypeCampaignResultLoadState.Ready)
             loaded as PrototypeCampaignResultLoadState.Ready
-            assertEquals("Cancelled", loaded.presentation.status)
+            assertEquals("已取消", loaded.presentation.status)
             assertNull(loaded.presentation.blockingError)
             assertEquals("1", loaded.presentation.attemptedRuns)
             assertEquals("1", loaded.presentation.failedRuns)

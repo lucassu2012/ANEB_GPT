@@ -68,8 +68,8 @@ class PrototypeCampaignResultRouteTest {
         assertFalse(route.contains("lifecycleScope"))
         assertFalse(route.contains("PrototypeCampaignResultActionState.Failed"))
         assertFalse(route.contains("presentation.status"))
-        assertFalse(route.contains("Complete"))
-        assertFalse(route.contains("Partial"))
+        assertFalse(route.contains("已完成"))
+        assertFalse(route.contains("部分完成"))
 
         assertEquals(1, activity.countOccurrences("PrototypeDeviceFallbackExporter("))
         assertTrue(

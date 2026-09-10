@@ -11,6 +11,19 @@ import org.junit.Test
 
 class PrototypeModeScreenConfirmationTest {
     @Test
+    fun chineseFirstUseExplainsScopeCountsAndKeepsOriginalActions() {
+        val screen = source("ui/prototype/PrototypeModeScreen.kt")
+        listOf(
+            "手机到所选节点", "不是真实 AI 应用或模型推理测试",
+            "Quick 每种条件测 1 次（共 3 次）", "Acceptance 每种条件测 3 次（共 9 次）",
+            "基线 Baseline", "慢速 Slow", "不稳定 Unstable", "运营商评级或 SLA",
+            "检查连接", "已保存的测试", "取消本轮测试",
+        ).forEach { assertTrue("Missing first-use explanation: $it", screen.contains(it)) }
+        assertTrue(screen.contains("confirmation.runOrder"))
+        assertTrue(screen.contains("Modifier.verticalScroll(rememberScrollState())"))
+    }
+
+    @Test
     fun quickSelectionRequiresConfirmationBeforeStarting() {
         var quickStarts = 0
         var acceptanceStarts = 0
@@ -40,7 +53,7 @@ class PrototypeModeScreenConfirmationTest {
             ?: error("Quick confirmation was not selected")
 
         assertEquals("B1 → S1 → U1", confirmation.runOrder)
-        assertEquals("About 35 seconds", confirmation.estimatedDuration)
+        assertEquals("约 35 秒", confirmation.estimatedDuration)
     }
 
     @Test
@@ -56,14 +69,14 @@ class PrototypeModeScreenConfirmationTest {
             "B1 → S1 → U1 → B2 → S2 → U2 → B3 → S3 → U3",
             confirmation.runOrder,
         )
-        assertEquals("About 1 minute 45 seconds", confirmation.estimatedDuration)
+        assertEquals("约 1 分 45 秒", confirmation.estimatedDuration)
         assertEquals(
-            "Results are stored locally in Room. After a result is saved, you can export " +
-                "an unverified ZIP on this device.",
+            "结果保存在本机，保存后可导出" +
+                "未验证的五文件 ZIP 备份；它不是节点的正式报告。",
             confirmation.evidenceNotice,
         )
         assertEquals(
-            "Synthetic app-layer measurement only — not AQS, an operator rating or an SLA.",
+            "仅测手机到所选节点的应用层合成流，不代表真实 AI 表现、AQS、运营商评级或 SLA。",
             confirmation.claimBoundary,
         )
     }
@@ -111,7 +124,7 @@ class PrototypeModeScreenConfirmationTest {
         assertTrue(source.contains("PrototypeCampaignLaunchMode.QUICK"))
         assertTrue(source.contains("PrototypeCampaignLaunchMode.ACCEPTANCE"))
         assertTrue(source.contains("launchState = launchState.confirm("))
-        assertTrue(source.contains("Text(\"Start campaign\""))
+        assertTrue(source.contains("Text(\"开始测试\""))
         assertTrue(source.contains("launchState = launchState.cancel()"))
         assertTrue(source.contains("confirmation.runOrder"))
         assertTrue(source.contains("confirmation.estimatedDuration"))

@@ -117,7 +117,7 @@ internal class PrototypeCampaignUiController(
         } catch (failure: Exception) {
             if (pendingCampaignId == config.campaignId) pendingCampaignId = null
             PrototypeCampaignUiActionResult.LaunchFailed(
-                failure.message ?: "Unable to start Prototype Quick campaign.",
+                failure.message ?: "无法启动 Prototype Quick 测试。",
             )
         }
     }
@@ -191,32 +191,32 @@ internal class PrototypeCampaignUiController(
         }
         val statusMessage = when (val session = input.session) {
             PrototypeCampaignSession.Idle -> if (startPending) {
-                "Starting ${campaignLabel(pendingCampaignMode)} campaign…"
+                "正在启动 ${campaignLabel(pendingCampaignMode)} 测试…"
             } else {
                 null
             }
             is PrototypeCampaignSession.Running -> if (cancellationPending) {
-                "Cancelling ${campaignLabel(session.config.campaignMode)} campaign…"
+                "正在取消 ${campaignLabel(session.config.campaignMode)} 测试…"
             } else {
                 progressMessage(session, input.progress)
-                    ?: "${campaignLabel(session.config.campaignMode)} campaign is running."
+                    ?: "${campaignLabel(session.config.campaignMode)} 测试正在运行。"
             }
             is PrototypeCampaignSession.Cancelling ->
-                "Cancelling ${campaignLabel(session.config.campaignMode)} campaign…"
+                "正在取消 ${campaignLabel(session.config.campaignMode)} 测试…"
             is PrototypeCampaignSession.Finished -> if (session.publicationWarning != null) {
-                "${campaignLabel(session.config.campaignMode)} campaign saved locally · " +
-                    "evidence publication failed (P018)."
+                "${campaignLabel(session.config.campaignMode)} 测试已保存到本机 · " +
+                    "证据发布失败 (P018)。"
             } else {
-                "${campaignLabel(session.config.campaignMode)} campaign finished."
+                "${campaignLabel(session.config.campaignMode)} 测试已结束。"
             }
             is PrototypeCampaignSession.Failed ->
-                "${campaignLabel(session.config.campaignMode)} campaign failed: ${session.message}"
+                "${campaignLabel(session.config.campaignMode)} 测试失败：${session.message}"
             is PrototypeCampaignSession.Cancelled -> if (session.publicationWarning != null) {
-                "${campaignLabel(session.config.campaignMode)} campaign cancelled · " +
-                    "partial evidence saved locally · evidence publication failed (P018)."
+                "${campaignLabel(session.config.campaignMode)} 测试已取消 · " +
+                    "部分证据已保存到本机 · 证据发布失败 (P018)。"
             } else {
-                "${campaignLabel(session.config.campaignMode)} campaign cancelled · " +
-                    "partial evidence saved."
+                "${campaignLabel(session.config.campaignMode)} 测试已取消 · " +
+                    "部分证据已保存。"
             }
         }
         return PrototypeCampaignUiPresentation(
@@ -247,10 +247,10 @@ internal class PrototypeCampaignUiController(
                 val condition = conditionLabel(progress.currentRunRef.conditionId) ?: return null
                 currentRunLabel = liveRunLabel(session, condition, progress.currentRunRef.runIndex)
                 phaseLabel = when (progress.live.phase) {
-                    PrototypeRunLivePhase.CONNECTING -> "Connecting"
-                    PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT -> "Waiting for first event"
-                    PrototypeRunLivePhase.STREAMING -> "Streaming"
-                    PrototypeRunLivePhase.FINALIZING -> "Finalizing"
+                    PrototypeRunLivePhase.CONNECTING -> "正在连接"
+                    PrototypeRunLivePhase.WAITING_FOR_FIRST_EVENT -> "等待首事件"
+                    PrototypeRunLivePhase.STREAMING -> "正在接收流"
+                    PrototypeRunLivePhase.FINALIZING -> "正在完成"
                 }
                 ttftLabel = progress.live.ttftMs?.let { metricLabel(it, "ms") }
                 eventRateLabel = progress.live.eventRateEps?.let { metricLabel(it, "events/s") }
@@ -259,14 +259,14 @@ internal class PrototypeCampaignUiController(
             is PrototypeCampaignProgress.Cooldown -> {
                 val condition = conditionLabel(progress.nextRunRef.conditionId) ?: return null
                 currentRunLabel = liveRunLabel(session, condition, progress.nextRunRef.runIndex)
-                phaseLabel = "Preparing next run"
+                phaseLabel = "准备下一次测量"
                 ttftLabel = null
                 eventRateLabel = null
                 stallDetected = false
             }
             is PrototypeCampaignProgress.Saving -> {
-                currentRunLabel = "Campaign"
-                phaseLabel = "Saving"
+                currentRunLabel = "本轮测试"
+                phaseLabel = "正在保存"
                 ttftLabel = null
                 eventRateLabel = null
                 stallDetected = false
@@ -274,7 +274,7 @@ internal class PrototypeCampaignUiController(
         }
         return PrototypeCampaignLiveExecutionPresentation(
             currentRunLabel = currentRunLabel,
-            completedRunsLabel = "${progress.processedRuns} / ${progress.totalRuns} completed",
+            completedRunsLabel = "${progress.processedRuns} / ${progress.totalRuns} 已完成",
             phaseLabel = phaseLabel,
             ttftLabel = ttftLabel,
             eventRateLabel = eventRateLabel,
@@ -289,7 +289,7 @@ internal class PrototypeCampaignUiController(
     ): String {
         val runsPerCondition = session.config.campaignMode.runsPerCondition
         val occurrence = (runIndex - 1) / 3 + 1
-        return "$condition — run $occurrence of $runsPerCondition"
+        return "$condition — 第 $occurrence / $runsPerCondition 次"
     }
 
     private fun metricLabel(value: Double, unit: String): String? =
@@ -307,23 +307,23 @@ internal class PrototypeCampaignUiController(
         val phase = when (progress) {
             is PrototypeCampaignProgress.Running -> {
                 val condition = conditionLabel(progress.currentRunRef.conditionId) ?: return null
-                "Running $condition${runOccurrence(session, progress.currentRunRef.runIndex)}"
+                "正在测量 $condition${runOccurrence(session, progress.currentRunRef.runIndex)}"
             }
 
             is PrototypeCampaignProgress.Cooldown -> {
                 val condition = conditionLabel(progress.nextRunRef.conditionId) ?: return null
-                "Preparing $condition${runOccurrence(session, progress.nextRunRef.runIndex)}"
+                "正在准备 $condition${runOccurrence(session, progress.nextRunRef.runIndex)}"
             }
 
-            is PrototypeCampaignProgress.Saving -> "Saving local result…"
+            is PrototypeCampaignProgress.Saving -> "正在保存本地结果…"
         }
-        return "$phase · ${progress.processedRuns}/${progress.totalRuns} processed"
+        return "$phase · 已处理 ${progress.processedRuns}/${progress.totalRuns}"
     }
 
     private fun conditionLabel(conditionId: String): String? = when (conditionId) {
-        "baseline_v0.1" -> "Baseline"
-        "slow_v0.1" -> "Slow"
-        "unstable_v0.1" -> "Unstable"
+        "baseline_v0.1" -> "基线 Baseline"
+        "slow_v0.1" -> "慢速 Slow"
+        "unstable_v0.1" -> "不稳定 Unstable"
         else -> null
     }
 
@@ -338,7 +338,7 @@ internal class PrototypeCampaignUiController(
     private fun runOccurrence(session: PrototypeCampaignSession.Running, runIndex: Int): String =
         if (session.config.campaignMode == PrototypeQuickCampaignRunner.CampaignMode.ACCEPTANCE) {
             val occurrence = (runIndex - 1) / 3 + 1
-            " — run $occurrence of 3"
+            " — 第 $occurrence / 3 次"
         } else {
             ""
         }
