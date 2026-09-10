@@ -160,10 +160,15 @@ try {
     $serverBinary = Join-Path $tempRoot 'aneb-server.exe'
     Push-Location (Join-Path $repo 'server')
     try {
+        # Go writes normal cold-cache download progress to stderr. Windows
+        # PowerShell 5.1 must judge the native exit code, not terminate on it.
+        $buildErrorPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $buildOutput = @(& go build -buildvcs=false -trimpath -o $serverBinary . 2>&1)
         $buildExitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $buildErrorPreference
         Pop-Location
     }
     Assert-AnEbG3Test -Condition ($buildExitCode -eq 0 -and (Test-Path -LiteralPath $serverBinary -PathType Leaf)) -Message ('actual Prototype server builds for launcher test output=' + [string]::Join([char]10, $buildOutput))
