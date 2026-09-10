@@ -39,6 +39,7 @@ Assert-Guide ($text.Contains('已就绪 READY') -and $text.Contains('ANEB Protot
 Assert-Guide ((@($guide | Where-Object { $_ -like '推荐先试*' })).Count -eq 1 -and $text.Contains('http://192.0.2.30:18088')) 'exactly one first-choice URL'
 Assert-Guide ($text.Contains('高级备选') -and $text.IndexOf('高级备选') -lt $text.IndexOf('http://192.0.2.1:18088')) 'virtual URL separated under advanced heading'
 Assert-Guide ($text.Contains('Compatible') -and $text.Contains('不代表手机已经连通')) 'local Ready never claims phone connectivity'
+Assert-Guide ($text.Contains('检查连接')) 'launcher names the same connection button as the Chinese Android screen'
 Assert-Guide ($text.Contains('Quick') -and $text.Contains('Acceptance') -and $text.Contains('不是运营商评级')) 'next action and synthetic test limits visible'
 Assert-Guide ($text.Contains('Results: C:\test\results') -and $text.Contains('Q')) 'result path and owned-server stop instruction retained'
 $virtualOnly = @(Get-AnEbReadyGuide -Candidates @($candidates[2]) -Port 18088 -ResultsDirectory 'C:\test\results')

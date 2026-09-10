@@ -9,7 +9,7 @@
 1. 把完整 ZIP 解压到新的本地目录；不要直接在 ZIP 内运行，也不要覆盖旧候选目录。
 2. 双击 `START_ANEB.bat`。首次运行若 Windows 防火墙询问，只允许你信任的“专用网络”。校验通过后窗口会显示醒目的“ANEB 已就绪 READY”、地址与结果目录。READY 只表示电脑节点已启动，不表示手机已连通。
 3. 将 `android\aneb-prototype-0.1.apk` 复制到手机并手动安装，然后打开 ANEB Prototype。若 Android 报签名不一致，先停止，不要绕过；参见下方“安装与回滚”。
-4. 在 Prototype Mode 输入窗口“推荐先试”的地址（Wi-Fi 优先，其次有线），点“检查节点”，看到“兼容 / Compatible”后再运行 Quick。其他局域网地址是备选；“高级备选”中的虚拟/隧道/未识别地址不是首选。地址推荐只是本机网卡提示，不能保证手机可达；失败时先核对同一私人局域网，不要关闭防火墙。一次 Quick 固定按 Baseline → Slow → Unstable 执行。
+4. 在 Prototype Mode 输入窗口“推荐先试”的地址（Wi-Fi 优先，其次有线），点“检查连接”（旧版 Test connection），看到“兼容 / Compatible”后再运行 Quick。其他局域网地址是备选；“高级备选”中的虚拟/隧道/未识别地址不是首选。地址推荐只是本机网卡提示，不能保证手机可达；失败时先核对同一私人局域网，不要关闭防火墙。一次 Quick 固定按 Baseline → Slow → Unstable 执行。
 5. 完成后在启动器显示的 `results\<campaign_id>\` 中打开 `report.html`；`manifest.json`、CSV 和 JSONL 是同一份可验证证据，不要单独改写。
 
 ### 我在测试什么？

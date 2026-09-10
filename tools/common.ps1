@@ -88,7 +88,7 @@ function Get-AnEbReadyGuide {
     }
     ''
     '1. 手机与电脑连接同一个可互访的私人局域网。'
-    '2. 手机打开 ANEB Prototype，输入上方地址，点“检查节点 / Test connection”。'
+    '2. 手机打开 ANEB Prototype，输入上方地址，点“检查连接”（旧版 Test connection）。'
     '   看到“兼容 / Compatible”才开始；失败时核对地址并检查局域网隔离。'
     '   不要关闭防火墙；不要把公共网络改成受信任网络。'
     '3. 先运行 Quick（3 次），需要重复验证再运行 Acceptance（9 次）。'
