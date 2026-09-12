@@ -1083,6 +1083,11 @@ class MainActivity : ComponentActivity() {
         onBack: () -> Unit,
         showBack: Boolean = true,
     ) {
+        var researchOpen by rememberSaveable { mutableStateOf(false) }
+        if (researchOpen) {
+            com.aneb.probe.ui.research.ResearchRecordsScreen(onBack = { researchOpen = false })
+            return
+        }
         val history by produceState(initialValue = HistoryData()) {
             value = withContext(Dispatchers.IO) {
                 HistoryData(
@@ -1099,6 +1104,7 @@ class MainActivity : ComponentActivity() {
             onGenerateReport = onGenerateReport,
             onBack = onBack,
             showBack = showBack,
+            onOpenResearch = { researchOpen = true },
         )
     }
 

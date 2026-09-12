@@ -1,0 +1,299 @@
+{
+  "record_kind": "SAMPLE",
+  "method_id": "R1-visible-text-internal-v0.1",
+  "action_text": "请只用中文回答：用恰好10个编号要点解释“为什么移动网络时延会影响AI助手的交互体验”。每个要点写2句话；不要使用表格，不要调用外部工具，不要向我提问。",
+  "records": [
+    {
+      "record_kind": "SAMPLE",
+      "attempt_id": "SAMPLE-KIMI-R1",
+      "app": {
+        "name": "Kimi",
+        "version": null,
+        "model_mode": null
+      },
+      "condition": "C0_existing_unmodified",
+      "metadata": {
+        "device": null,
+        "observed_at": null,
+        "network_description": "SAMPLE only; no network observed"
+      },
+      "clock": {
+        "source": "sample_video_timeline",
+        "unit": "ms",
+        "video_id": "SAMPLE-NONEXISTENT-1",
+        "mapping": "fictional sample timestamps",
+        "domain_id": "SAMPLE-NONEXISTENT-1"
+      },
+      "anchors": {
+        "send": "SAMPLE user message insertion",
+        "feedback": "SAMPLE generation indicator",
+        "body": "SAMPLE final answer region"
+      },
+      "evidence": {
+        "exists": false,
+        "local_ref": null,
+        "sha256": null
+      },
+      "events": {
+        "send": {
+          "frame_range": null,
+          "time_ms": [
+            1000,
+            1040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        },
+        "first_feedback": {
+          "frame_range": null,
+          "time_ms": [
+            1800,
+            1840
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        },
+        "first_content": {
+          "frame_range": null,
+          "time_ms": [
+            3000,
+            3040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        },
+        "last_content": {
+          "frame_range": null,
+          "time_ms": [
+            9000,
+            9040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        },
+        "complete_confirm": {
+          "frame_range": null,
+          "time_ms": [
+            12100,
+            12140
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        },
+        "observation_end": {
+          "frame_range": null,
+          "time_ms": [
+            13000,
+            13040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-1"
+        }
+      },
+      "observed_intervals": [
+        {
+          "kind": "update_gap",
+          "resumed": true,
+          "fully_visible": true,
+          "start_ms": [
+            4000,
+            4040
+          ],
+          "end_ms": [
+            6400,
+            6440
+          ]
+        }
+      ],
+      "missing_reasons": {},
+      "outcome": {
+        "executed": true,
+        "status": "completed",
+        "visible_completion": "yes",
+        "instruction_following": "yes",
+        "completion_basis": "SAMPLE: stable body and exited generation; no error"
+      },
+      "method_id": "R1-visible-text-internal-v0.1",
+      "action_text": "请只用中文回答：用恰好10个编号要点解释“为什么移动网络时延会影响AI助手的交互体验”。每个要点写2句话；不要使用表格，不要调用外部工具，不要向我提问。",
+      "summary_group": {
+        "confirmed": false,
+        "id": null,
+        "reason": "SAMPLE metadata unknown; do not auto-group"
+      },
+      "completion_observation": {
+        "body_continuously_visible": true,
+        "ui_exited_generation_normally": true
+      }
+    },
+    {
+      "record_kind": "SAMPLE",
+      "attempt_id": "SAMPLE-KIMI-R2",
+      "app": {
+        "name": "Kimi",
+        "version": null,
+        "model_mode": null
+      },
+      "condition": "C0_existing_unmodified",
+      "metadata": {
+        "device": null,
+        "observed_at": null,
+        "network_description": "SAMPLE only; no network observed"
+      },
+      "clock": {
+        "source": "sample_video_timeline",
+        "unit": "ms",
+        "video_id": "SAMPLE-NONEXISTENT-2",
+        "mapping": "fictional sample timestamps",
+        "domain_id": "SAMPLE-NONEXISTENT-2"
+      },
+      "anchors": {
+        "send": "SAMPLE user message insertion",
+        "feedback": "SAMPLE generation indicator",
+        "body": "SAMPLE final answer region"
+      },
+      "evidence": {
+        "exists": false,
+        "local_ref": null,
+        "sha256": null
+      },
+      "events": {
+        "send": {
+          "frame_range": null,
+          "time_ms": [
+            1000,
+            1040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-2"
+        },
+        "first_feedback": {
+          "frame_range": null,
+          "time_ms": [
+            1500,
+            1540
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-2"
+        },
+        "first_content": {
+          "frame_range": null,
+          "time_ms": [
+            2000,
+            2040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-2"
+        },
+        "last_content": {
+          "frame_range": null,
+          "time_ms": [
+            4000,
+            4040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-2"
+        },
+        "complete_confirm": null,
+        "observation_end": {
+          "frame_range": null,
+          "time_ms": [
+            7000,
+            7040
+          ],
+          "clock_domain_id": "SAMPLE-NONEXISTENT-2"
+        }
+      },
+      "observed_intervals": [
+        {
+          "kind": "unclosed_tail",
+          "resumed": false,
+          "fully_visible": true,
+          "start_ms": [
+            4000,
+            4040
+          ],
+          "end_ms": [
+            7000,
+            7040
+          ]
+        }
+      ],
+      "missing_reasons": {
+        "completion": "observation ended while generation still visible",
+        "complete_confirm": "not observed"
+      },
+      "outcome": {
+        "executed": true,
+        "status": "incomplete",
+        "visible_completion": "uncertain",
+        "instruction_following": "uncertain",
+        "completion_basis": null
+      },
+      "method_id": "R1-visible-text-internal-v0.1",
+      "action_text": "请只用中文回答：用恰好10个编号要点解释“为什么移动网络时延会影响AI助手的交互体验”。每个要点写2句话；不要使用表格，不要调用外部工具，不要向我提问。",
+      "summary_group": {
+        "confirmed": false,
+        "id": null,
+        "reason": "SAMPLE metadata unknown; do not auto-group"
+      },
+      "completion_observation": {
+        "body_continuously_visible": null,
+        "ui_exited_generation_normally": false
+      }
+    },
+    {
+      "record_kind": "SAMPLE",
+      "attempt_id": "SAMPLE-KIMI-R3",
+      "app": {
+        "name": "Kimi",
+        "version": null,
+        "model_mode": null
+      },
+      "condition": "C0_existing_unmodified",
+      "metadata": {
+        "device": null,
+        "observed_at": null,
+        "network_description": "SAMPLE only; no network observed"
+      },
+      "clock": {
+        "source": "sample_video_timeline",
+        "unit": "ms",
+        "video_id": "SAMPLE-NONEXISTENT-3",
+        "mapping": "fictional sample timestamps",
+        "domain_id": "SAMPLE-NONEXISTENT-3"
+      },
+      "anchors": {
+        "send": "SAMPLE user message insertion",
+        "feedback": "SAMPLE generation indicator",
+        "body": "SAMPLE final answer region"
+      },
+      "evidence": {
+        "exists": false,
+        "local_ref": null,
+        "sha256": null
+      },
+      "events": {
+        "send": null,
+        "first_feedback": null,
+        "first_content": null,
+        "last_content": null,
+        "complete_confirm": null,
+        "observation_end": null
+      },
+      "observed_intervals": [],
+      "missing_reasons": {
+        "all_timing": "SAMPLE unavailable app before send; no actual run"
+      },
+      "outcome": {
+        "executed": false,
+        "status": "not_run",
+        "visible_completion": null,
+        "instruction_following": null,
+        "completion_basis": null
+      },
+      "method_id": "R1-visible-text-internal-v0.1",
+      "action_text": "请只用中文回答：用恰好10个编号要点解释“为什么移动网络时延会影响AI助手的交互体验”。每个要点写2句话；不要使用表格，不要调用外部工具，不要向我提问。",
+      "summary_group": {
+        "confirmed": false,
+        "id": null,
+        "reason": "SAMPLE metadata unknown; do not auto-group"
+      },
+      "completion_observation": {
+        "body_continuously_visible": null,
+        "ui_exited_generation_normally": null
+      }
+    }
+  ],
+  "input_revision": "alignment-1",
+  "time_unit": "ms"
+}
