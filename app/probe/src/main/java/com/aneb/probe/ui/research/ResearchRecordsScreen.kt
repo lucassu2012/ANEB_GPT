@@ -45,6 +45,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var pendingAnalysis by remember { mutableStateOf<ByteArray?>(null) }
     var analysisImportSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var analysisExportId by remember { mutableStateOf<String?>(null) }
+    var manualOpen by rememberSaveable { mutableStateOf(false) }
+
+    if (manualOpen) {
+        ManualResearchEntryScreen(store, onBack = { manualOpen = false }, onSaved = { saved ->
+            manualOpen = false; selectedId = saved.id; document = saved; pending = null
+            notice = "手工记录已保存，可重开或确认导出；不是自动测量或来源核验。"
+        })
+        return
+    }
 
     suspend fun refresh() { entries = withContext(Dispatchers.IO) { store.list() } }
     fun action(block: suspend () -> Unit) {
@@ -147,6 +156,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         notice?.let { Text(it, color = colors.ink, modifier = Modifier.padding(vertical = 8.dp)) }
         val current = document
         if (current == null) {
+            Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
             Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
             Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
