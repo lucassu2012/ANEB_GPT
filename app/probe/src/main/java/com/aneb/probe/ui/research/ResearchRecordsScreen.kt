@@ -164,12 +164,13 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 items(entries, key = { it.id }) { entry ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
-                            Text(if (entry.document == null) "无法读取的本地记录" else "${if (entry.document.isVideo) "视频 · " else ""}${entry.document.sourceLabel} · ${entry.document.records.size} 次尝试")
+                            if (entry.document == null) Text("无法读取的本地记录")
                             entry.document?.let { doc ->
+                                ResearchBatchHeading(doc)
                                 Text(doc.sourceNotice, style = MaterialTheme.typography.bodySmall)
                                 if (doc.records.any { it.sourceWarnings.isNotEmpty() }) Text("有记录缺少来源信息，请打开核对。")
                             }
-                            Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
+                            if (entry.document == null) Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
                             if (entry.error != null) Text(entry.error)
                             else TextButton(onClick = { selectedId = entry.id }, enabled = !busy) { Text("查看记录") }
                         }
@@ -195,19 +196,19 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
-                    Text("${current.sourceLabel} · ${current.records.size} 次尝试 · ${if (pending != null) "预览，尚未保存" else "已保存"}", color = colors.brand)
+                    ResearchBatchHeading(current)
+                    Text(if (pending != null) "预览，尚未保存" else "已保存", color = colors.brand)
                     Text(current.sourceNotice, color = colors.ink)
                     SelectionContainer { Text("输入 SHA-256：${current.id}", color = colors.muted, style = MaterialTheme.typography.bodySmall) }
-                    Text("方法：${current.methodId ?: "UNKNOWN"}", color = colors.ink)
+                    Text("方法：${researchDeclaredValue(current.methodId) ?: "未提供（见逐条）"}", color = colors.ink)
                     if (current.isVideo) {
-                        Text("视频 App：${current.root.text("app") ?: "UNKNOWN"}", color = colors.ink)
                         Text("计划槽：${current.records.size}；已执行：${current.records.count { it.status == "EXECUTED" }}；未执行：${current.records.count { it.status == "NOT_RUN" }}。未执行不计播放失败。", color = colors.ink)
                         Text("30秒从可见打开 V0 开始，包括首次等待；不是播放完成。视频首画面不套用文本 TTFC/T3。", color = colors.muted)
                         Text("原始来源声明：${current.root.text("record_kind")}；PTS 单位为秒，仅展示原标注。", color = colors.muted)
                         SelectionContainer { Text(displayValue(current.root["evidence"]), style = MaterialTheme.typography.bodySmall) }
                     } else {
-                        Text("操作：${current.root.text("action_text") ?: "UNKNOWN"}", color = colors.ink)
-                        Text("原始单位：${current.root.text("time_unit") ?: "UNKNOWN（见各记录时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
+                        Text("操作：${researchDeclaredValue(current.root.text("action_text")) ?: "未提供（见逐条原记录）"}", color = colors.ink)
+                        Text("原始单位：${researchDeclaredValue(current.root.text("time_unit")) ?: "未提供（见逐条时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
                     }
                 }
                 if (pending == null) item {
@@ -286,6 +287,13 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         }) { Text("确认导出") } },
         dismissButton = { TextButton(onClick = { confirmExport = false; analysisExportId = null }) { Text("取消") } },
     )
+}
+
+@Composable
+private fun ResearchBatchHeading(document: ResearchDocument) {
+    document.batchSummaryLines.forEachIndexed { index, line ->
+        Text(line, style = if (index == 0) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodySmall)
+    }
 }
 
 @Composable
