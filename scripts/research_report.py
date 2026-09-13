@@ -36,6 +36,7 @@ def render_report(data):
         parts.append('<aside class="notice"><h2>SAMPLE 演示｜没有真实 App 测量</h2>'
                      '<p>本页使用虚构时间与不存在的录像演示报告功能；不是Kimi或其他App的实测表现，不能用于体验排名或网络判断。</p></aside>')
     counts = data['counts']
+    parts.append('<p>可见完成按源标注计数，不等于指令成功或App成功率。</p>')
     for key, label in [('planned', '计划'), ('attempted', '发送/尝试'),
                        ('not_run', '未执行'), ('visible_completed_confirmed', '已确认完成')]:
         parts.append('<p>' + label + '：' + esc(counts.get(key)) + '</p>')
@@ -63,6 +64,25 @@ def render_report(data):
                 parts.append('<p>未执行，因此无此指标</p>')
             elif metric.get('reason') == 'completion_unconfirmed':
                 parts.append('<p>未确认正常完成，完成时长不可用</p>')
+            elif metric.get('reason') == 'completion_timing_unavailable':
+                parts.append('<p>源标注可见完成；完成时长不可计算</p>')
+                labels = {
+                    'status_not_completed': '执行状态未标注完成',
+                    'completion_basis_missing': '缺少完成依据',
+                    'send_unavailable': '缺少发送时间（T0）',
+                    'last_content_unavailable': '缺少末次正文时间（T3）',
+                    'complete_confirm_unavailable': '缺少完成确认时间',
+                    'continuous_visibility_unconfirmed': '连续可见覆盖未确认',
+                    'normal_exit_unconfirmed': '正常退出生成状态未确认',
+                    'stable_tail_unconfirmed': '至少三秒稳定尾段未确认',
+                    'timing_event_unavailable': '时间事件不足',
+                    'timing_clock_unavailable': '时钟依据不足',
+                    'timing_invalid_interval': '时间区间无效',
+                    'timing_clock_domain_mismatch': '时钟域不一致',
+                    'timing_event_order_uncertain': '时间事件顺序不确定',
+                }
+                for code in metric.get('missing_conditions', []):
+                    parts.append('<p>' + labels.get(code, '其他计时条件不足') + '</p>')
             elif metric['status'] in ('NA', 'uncertain'):
                 parts.append('<p>信息不足，待核对原记录</p>')
         stalls = row['stalls']

@@ -70,14 +70,33 @@ def feedback(record, end_name="first_feedback", start_name="send"):
 def completion(record):
     outcome = record.get("outcome", {})
     observation = record.get("completion_observation", {})
-    stable = feedback(record, "complete_confirm", "last_content")
-    if (outcome.get("status") != "completed" or outcome.get("visible_completion") != "yes"
-            or not outcome.get("completion_basis")
-            or observation.get("body_continuously_visible") is not True
-            or observation.get("ui_exited_generation_normally") is not True
-            or stable["interval_s"] is None or stable["interval_s"][0] < 3):
+    if outcome.get("executed") is not True or outcome.get("visible_completion") != "yes":
         return {"status": "NA", "interval_s": None, "reason": "completion_unconfirmed"}
-    return feedback(record, "last_content")
+    stable = feedback(record, "complete_confirm", "last_content")
+    duration = feedback(record, "last_content")
+    missing = []
+    if outcome.get("status") != "completed":
+        missing.append("status_not_completed")
+    if not outcome.get("completion_basis"):
+        missing.append("completion_basis_missing")
+    for event in ("send", "last_content", "complete_confirm"):
+        if (record.get("events", {}).get(event) or {}).get("time_ms") is None:
+            missing.append(event + "_unavailable")
+    if observation.get("body_continuously_visible") is not True:
+        missing.append("continuous_visibility_unconfirmed")
+    if observation.get("ui_exited_generation_normally") is not True:
+        missing.append("normal_exit_unconfirmed")
+    if stable["interval_s"] is None or stable["interval_s"][0] < 3:
+        missing.append("stable_tail_unconfirmed")
+    for metric in (stable, duration):
+        if metric["interval_s"] is None:
+            code = "timing_" + metric["reason"]
+            if code not in missing:
+                missing.append(code)
+    if missing:
+        return {"status": "NA", "interval_s": None,
+                "reason": "completion_timing_unavailable", "missing_conditions": missing}
+    return duration
 
 
 def stalls(record):
@@ -148,7 +167,9 @@ def analyze(document):
     return {"record_kind": document["record_kind"], "input_revision": "alignment-1",
             "records": rows, "groups": summarize(rows), "counts": {"planned": len(rows), "attempted": attempted,
             "not_run": sum(r["input_record"].get("outcome", {}).get("executed") is False for r in rows),
-            "visible_completed_confirmed": sum(r["completion"]["interval_s"] is not None for r in rows)}}
+            "visible_completed_confirmed": sum(
+                r["input_record"]["outcome"].get("executed") is True
+                and r["input_record"]["outcome"].get("visible_completion") == "yes" for r in rows)}}
 
 
 def main():

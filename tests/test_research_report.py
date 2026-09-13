@@ -34,6 +34,20 @@ class ReportTests(unittest.TestCase):
                      '计划：3', '发送/尝试：2', '未执行：1', '已确认完成：1', 'a' * 64]:
             self.assertIn(text, page)
 
+    def test_visible_completion_and_missing_duration_are_not_conflated(self):
+        data = self.sample()
+        data['records'][0]['completion'].update(
+            reason='completion_timing_unavailable',
+            missing_conditions=['last_content_unavailable', 'continuous_visibility_unconfirmed'])
+        page = self.render(data)
+        self.assertIn('源标注可见完成；完成时长不可计算', page)
+        self.assertIn('缺少末次正文时间（T3）', page)
+        self.assertIn('连续可见覆盖未确认', page)
+        self.assertNotIn('未确认正常完成，完成时长不可用', page)
+        self.assertIn('可见完成按源标注计数，不等于指令成功或App成功率', page)
+        data['records'][0]['completion']['reason'] = 'completion_unconfirmed'
+        self.assertIn('未确认正常完成，完成时长不可用', self.render(data))
+
     def test_private_record_is_not_dumped_and_hostile_text_is_inert(self):
         data = self.sample()
         data['record_kind'] = 'OBSERVED'

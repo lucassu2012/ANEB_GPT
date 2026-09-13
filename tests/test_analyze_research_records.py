@@ -21,6 +21,45 @@ def sample():
 
 
 class ResearchTests(unittest.TestCase):
+    def test_visible_completion_missing_timing_has_separate_reason_and_unchanged_gates(self):
+        document = sample()
+        r = document['records'][0]
+        r['outcome'].update(status='completed', visible_completion='yes', completion_basis='source note')
+        r['completion_observation'] = {'body_continuously_visible': True, 'ui_exited_generation_normally': True}
+        for name, times in [('last_content', [9000, 9040]), ('complete_confirm', [12100, 12140])]:
+            r['events'][name] = {'time_ms': times, 'clock_domain_id': 'sample-video'}
+        for mutate, missing in [
+            (lambda x: x['events'].update(last_content=None), 'last_content_unavailable'),
+            (lambda x: x['events'].update(send=None), 'send_unavailable'),
+            (lambda x: x['completion_observation'].update(body_continuously_visible=None), 'continuous_visibility_unconfirmed'),
+            (lambda x: x['events']['complete_confirm'].update(time_ms=[12039, 12100]), 'stable_tail_unconfirmed')]:
+            with self.subTest(missing=missing):
+                changed = copy.deepcopy(document)
+                mutate(changed['records'][0])
+                metric = analyze(changed)['records'][0]['completion']
+                self.assertIsNone(metric['interval_s'])
+                self.assertEqual(metric['reason'], 'completion_timing_unavailable')
+                self.assertIn(missing, metric['missing_conditions'])
+        r['outcome']['visible_completion'] = 'uncertain'
+        self.assertEqual(analyze(document)['records'][0]['completion']['reason'], 'completion_unconfirmed')
+
+    def test_visible_yes_count_does_not_require_completion_timing(self):
+        document = sample()
+        base = document['records'][0]
+        document['records'] = []
+        for i, visible in enumerate(['uncertain', 'yes', 'yes']):
+            r = copy.deepcopy(base)
+            r['attempt_id'] = str(i)
+            r['outcome'].update(status='completed', visible_completion=visible,
+                                instruction_following='uncertain')
+            document['records'].append(r)
+        result = analyze(document)
+        self.assertEqual(result['counts'], {'planned': 3, 'attempted': 3, 'not_run': 0,
+                                           'visible_completed_confirmed': 2})
+        self.assertTrue(all(r['completion']['interval_s'] is None for r in result['records']))
+        document['records'][2]['outcome']['executed'] = False
+        self.assertEqual(analyze(document)['counts']['visible_completed_confirmed'], 1)
+
     def test_unknown_metadata_or_same_id_different_app_never_groups(self):
         document = sample()
         document["records"][0]["summary_group"] = {"confirmed": True, "id": "g"}
@@ -132,7 +171,7 @@ class ResearchTests(unittest.TestCase):
             document["records"].append(row)
         result = analyze(document)
         self.assertEqual(result["counts"], {"planned": 4, "attempted": 3,
-                         "not_run": 1, "visible_completed_confirmed": 0})
+                         "not_run": 1, "visible_completed_confirmed": 1})
         self.assertEqual(len(result["records"]), 4)
         self.assertIsNone(result["records"][0]["completion"]["interval_s"])
 
