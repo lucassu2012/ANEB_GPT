@@ -36,6 +36,9 @@ data class ResearchAttempt(val raw: JsonObject) {
 }
 
 data class ResearchDocument(val id: String, val root: JsonObject, val records: List<ResearchAttempt>) {
+    /** Display only; decode validates unanimity, and the original root/bytes remain untouched. */
+    val methodId: String? get() = if (root.containsKey("method_id")) root.text("method_id")
+        else records.map { it.raw.text("method_id") }.distinct().singleOrNull()
     val recordKind: String get() = root.text("record_kind") ?: "UNKNOWN"
     val sourceLabel: String get() = when (recordKind) {
         "SAMPLE" -> "SAMPLE · 虚构样例（非实测）"
@@ -137,12 +140,21 @@ class ResearchRecordStore(private val directory: File) {
                 if (kind != "SAMPLE" && kind != "OBSERVED") {
                     throw ResearchImportException("来源类型未确认：仅支持 SAMPLE 或 OBSERVED，不自动转换。请核对原输入文件。")
                 }
-                require(!root.text("method_id").isNullOrBlank()) { "缺少 method_id" }
+                val batchMethod = root.text("method_id")
+                if (root.containsKey("method_id") && batchMethod.isNullOrBlank()) {
+                    throw ResearchImportException("批次 method_id 必须为非空字符串；显式空值不作为缺省。整批未保存。")
+                }
                 val rows = root["records"] as? JsonArray ?: throw IllegalArgumentException("缺少 records 数组")
                 require(rows.isNotEmpty()) { "records 为空" }
                 val seenIds = mutableMapOf<String, Int>()
+                var recordMethod: String? = null
                 val records = rows.mapIndexed { index, it ->
                     val raw = it as? JsonObject ?: throw IllegalArgumentException("记录不是对象")
+                    val method = raw.text("method_id")
+                    if (method.isNullOrBlank()) throw ResearchImportException("第 ${index + 1} 条 method_id 缺失或不是非空字符串；整批未保存。")
+                    if (recordMethod != null && method != recordMethod) throw ResearchImportException("第 ${index + 1} 条 method_id 与第 1 条不一致；整批未保存，不自动选择或转换方法。")
+                    if (batchMethod != null && method != batchMethod) throw ResearchImportException("第 ${index + 1} 条 method_id 与批次 method_id 不一致；整批未保存。")
+                    recordMethod = method
                     if (raw.text("record_kind") != kind) {
                         throw ResearchImportException("第 ${index + 1} 条来源类型与批次不一致或缺失；SAMPLE 和 OBSERVED 必须分别导入纯批次。整批未保存，请核对原输入。")
                     }

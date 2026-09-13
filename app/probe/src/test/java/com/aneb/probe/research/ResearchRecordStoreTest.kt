@@ -10,6 +10,52 @@ import org.junit.rules.TemporaryFolder
 class ResearchRecordStoreTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun perAttemptMethodsImportWithoutInventingBatchMethodAndExportExactBytes() {
+        // New, fabricated shape only; no real observation text, account, media or path.
+        val bytes = """{
+          "record_kind":"OBSERVED","input_revision":"alignment-1",
+          "records":[
+            {"record_kind":"OBSERVED","attempt_id":"TEST-ONLY-1","method_id":"R1-visible-text-internal-v0.1","outcome":{"executed":true,"status":"incomplete"}},
+            {"record_kind":"OBSERVED","attempt_id":"TEST-ONLY-2","method_id":"R1-visible-text-internal-v0.1","outcome":{"executed":true,"status":"completed"}},
+            {"record_kind":"OBSERVED","attempt_id":"TEST-ONLY-3","method_id":"R1-visible-text-internal-v0.1","outcome":{"executed":false,"status":"not_run"}}
+          ]
+        }""".toByteArray(Charsets.UTF_8)
+        val store = ResearchRecordStore(temporary.newFolder())
+        val decoded = ResearchRecordStore.decode(bytes)
+        assertEquals("OBSERVED", decoded.recordKind)
+        assertFalse(decoded.root.containsKey("method_id"))
+        assertEquals("R1-visible-text-internal-v0.1", decoded.methodId)
+        assertEquals(3, decoded.records.size)
+        val saved = store.save(bytes)
+        assertEquals(decoded.id, saved.id)
+        assertEquals(listOf("incomplete", "completed", "not_run"), store.open(saved.id).records.map { it.status })
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(saved.id, it) }.toByteArray())
+    }
+
+    @Test fun methodConflictsLocateTheFieldWithoutEchoingValuesOrSavingPartialRecords() {
+        val root = Json.parseToJsonElement(observedTestInput().toString(Charsets.UTF_8)).jsonObject
+        val rows = root["records"]!!.jsonArray
+        val noRoot = root.toMutableMap().apply { remove("method_id") }
+        val conflicts = listOf(
+            JsonObject(noRoot + ("method_id" to JsonNull)) to "批次 method_id",
+            JsonObject(noRoot + ("method_id" to JsonPrimitive(""))) to "批次 method_id",
+            JsonObject(noRoot + ("method_id" to JsonPrimitive("TEST-ONLY-DO-NOT-ECHO"))) to "第 1 条 method_id",
+            JsonObject(noRoot + ("records" to JsonArray(rows.mapIndexed { index, item ->
+                if (index == 1) JsonObject(item.jsonObject.toMutableMap().apply { put("method_id", JsonPrimitive("TEST-ONLY-DO-NOT-ECHO")) }) else item
+            }))) to "第 2 条 method_id",
+            JsonObject(noRoot + ("records" to JsonArray(rows.mapIndexed { index, item ->
+                if (index == 1) JsonObject(item.jsonObject.toMutableMap().apply { remove("method_id") }) else item
+            }))) to "第 2 条 method_id",
+        )
+        val store = ResearchRecordStore(temporary.newFolder())
+        conflicts.forEach { (input, field) ->
+            val error = assertThrows(ResearchImportException::class.java) { store.save(input.toString().toByteArray()) }
+            assertTrue(error.message, error.message!!.contains(field))
+            assertFalse(error.message!!.contains("TEST-ONLY-DO-NOT-ECHO"))
+            assertTrue(store.list().isEmpty())
+        }
+    }
+
     @Test fun cancelledUnknownAndNotRunRemainSeparateAndRawBytesDefineBatchIdentity() {
         val root = Json.parseToJsonElement(observedTestInput().toString(Charsets.UTF_8)).jsonObject
         val rows = root["records"]!!.jsonArray.mapIndexed { index, element ->

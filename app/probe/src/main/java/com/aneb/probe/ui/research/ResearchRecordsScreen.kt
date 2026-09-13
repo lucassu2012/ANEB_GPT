@@ -198,7 +198,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Text("${current.sourceLabel} · ${current.records.size} 次尝试 · ${if (pending != null) "预览，尚未保存" else "已保存"}", color = colors.brand)
                     Text(current.sourceNotice, color = colors.ink)
                     SelectionContainer { Text("输入 SHA-256：${current.id}", color = colors.muted, style = MaterialTheme.typography.bodySmall) }
-                    Text("方法：${current.root.text("method_id") ?: "UNKNOWN"}", color = colors.ink)
+                    Text("方法：${current.methodId ?: "UNKNOWN"}", color = colors.ink)
                     Text("操作：${current.root.text("action_text") ?: "UNKNOWN"}", color = colors.ink)
                     Text("原始单位：${current.root.text("time_unit") ?: "UNKNOWN（见各记录时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
                 }
