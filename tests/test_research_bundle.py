@@ -16,9 +16,61 @@ def sha(raw):
 
 
 class BundleTests(unittest.TestCase):
-    def fixture(self, root, name='SAMPLE App', identity='sample'):
-        source = json.dumps({'record_kind': 'SAMPLE', 'private_unused': 'synthetic only'}).encode()
-        data = {'record_kind': 'SAMPLE', 'source_sha256': sha(source),
+    def video_fixture(self, root, blocked=False, identity='video'):
+        if blocked:
+            source = {'record_kind': 'video_observation_preflight_blocked', 'app': 'SAMPLE blocked video',
+                      'planned_slots': 3, 'actual_measured_opens': 0, 'not_run': 3,
+                      'attempts': [{'slot': 'R' + str(i), 'status': 'NOT_RUN', 'V0': None, 'VF': None,
+                                    'window_end': None, 'window_complete': 'not_started',
+                                    'visible_target_playback': 'not_observed',
+                                    'reason': 'opening blocked <not a playback failure>'} for i in range(1, 4)]}
+        else:
+            source = json.loads((SCRIPT.parents[1] / 'docs/real-app-research/samples/video-observation.sample.json').read_text(encoding='utf-8'))
+        path = root / (identity + '-source.json')
+        path.write_text(json.dumps(source, ensure_ascii=False), encoding='utf-8')
+        analysis_path = root / (identity + '-analysis.json')
+        result = subprocess.run([sys.executable, '-B', str(SCRIPT.with_name('research_video.py')), str(path),
+                                 '--output-json', str(analysis_path), '--output-html', str(root / (identity + '-standalone.html'))],
+                                capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return {'id': identity, 'kind': 'video', 'app': source['app'],
+                'source_file': path.name, 'source_sha256': sha(path.read_bytes()),
+                'analysis_file': analysis_path.name, 'analysis_sha256': sha(analysis_path.read_bytes())}
+
+    def test_video_sample_or_not_run_has_offline_entry_without_conclusion_card(self):
+        for blocked in [False, True]:
+            with self.subTest(blocked=blocked), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                entry = self.video_fixture(root, blocked)
+                result = self.run_bundle(root, [entry])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = root / 'bundle'
+                for key in ('source', 'analysis'):
+                    self.assertEqual((output / ('sources/video-' + key + '.json')).read_bytes(),
+                                     (root / entry[key + '_file']).read_bytes())
+                bound = json.loads((output / 'bundle-manifest.json').read_text(encoding='utf-8'))['apps'][0]
+                self.assertEqual(bound['kind'], 'video')
+                self.assertNotIn('conclusion_file', bound)
+                self.assertFalse((output / 'sources/video-conclusion.md').exists())
+                page = (output / 'video.html').read_text(encoding='utf-8')
+                index = (output / 'index.html').read_text(encoding='utf-8')
+                self.assertIn('video.html', index)
+                self.assertIn('index.html', page)
+                self.assertIn('可见打开至首画面', page)
+                self.assertIn('原始记录', page)
+                self.assertNotIn('研究结论卡原文', page)
+                if blocked:
+                    self.assertIn('视频计划未执行', index)
+                    self.assertIn('实际打开0次', index)
+                    self.assertIn('opening blocked &lt;not a playback failure&gt;', page)
+                    self.assertIn('OBSERVED', page)
+                else:
+                    self.assertIn('SAMPLE 演示（不计真实观察）', index)
+                    self.assertIn('[2.2, 2.5]', page)
+
+    def fixture(self, root, name='SAMPLE App', identity='sample', record_kind='SAMPLE'):
+        source = json.dumps({'record_kind': record_kind, 'private_unused': 'synthetic only'}).encode()
+        data = {'record_kind': record_kind, 'source_sha256': sha(source),
                 'counts': {'planned': 3, 'attempted': 3, 'not_run': 0,
                            'visible_completed_confirmed': 2}, 'groups': [],
                 'records': [{'attempt_id': 'SAMPLE-1', 'input_record': {
@@ -41,11 +93,105 @@ class BundleTests(unittest.TestCase):
             entry[key + '_sha256'] = sha(raw)
         return entry
 
+    def test_explicit_type_and_video_source_slot_kind_binding_reject_mixing(self):
+        cases = ['unknown_kind', 'video_as_text', 'text_as_video', 'wrong_app', 'input_copy',
+                 'slot', 'duplicate_slot', 'row_status', 'record_kind', 'counts', 'format']
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                entry = self.fixture(root) if case == 'text_as_video' else self.video_fixture(root, True)
+                analysis_path = root / entry['analysis_file']
+                analysis = json.loads(analysis_path.read_text(encoding='utf-8'))
+                if case == 'unknown_kind':
+                    entry['kind'] = 'automatic'
+                elif case == 'video_as_text':
+                    del entry['kind']
+                elif case == 'text_as_video':
+                    entry['kind'] = 'video'
+                elif case == 'wrong_app':
+                    entry['app'] = 'another App'
+                elif case == 'input_copy':
+                    analysis['input_record']['attempts'][0]['reason'] = 'forged'
+                elif case == 'slot':
+                    analysis['attempts'][0]['slot'] = 'R9'
+                elif case == 'duplicate_slot':
+                    analysis['attempts'][1]['slot'] = analysis['attempts'][0]['slot']
+                elif case == 'row_status':
+                    analysis['attempts'][0]['status'] = 'EXECUTED'
+                elif case == 'record_kind':
+                    analysis['record_kind'] = 'SAMPLE'
+                elif case == 'counts':
+                    analysis['counts']['executed'] = 3
+                elif case == 'format':
+                    source = analysis['input_record']
+                    source.update(format='text-automatic', record_kind='OBSERVED')
+                    new_source = json.dumps(source).encode()
+                    (root / entry['source_file']).write_bytes(new_source)
+                    analysis['source_sha256'] = entry['source_sha256'] = sha(new_source)
+                raw = json.dumps(analysis).encode()
+                analysis_path.write_bytes(raw)
+                entry['analysis_sha256'] = sha(raw)
+                run = self.run_bundle(root, [entry])
+                self.assertEqual(run.returncode, 1)
+                self.assertIn(b'BUNDLE_INPUT_INVALID:', run.stderr)
+                self.assertFalse((root / 'bundle').exists())
+
     def run_bundle(self, root, entries):
         manifest = root / 'input.json'
         manifest.write_text(json.dumps({'apps': entries}), encoding='utf-8')
         return subprocess.run([sys.executable, '-B', str(SCRIPT), str(manifest),
                                '-o', str(root / 'bundle')], capture_output=True)
+
+    def test_mixed_bundle_preserves_text_bindings_links_and_separates_sample_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            texts = [self.fixture(root, 'Synthetic ' + key, key, 'OBSERVED') for key in ('one', 'two', 'three')]
+            entries = texts + [self.video_fixture(root, True), self.video_fixture(root, False, 'sample-video')]
+            result = self.run_bundle(root, entries)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = root / 'bundle'
+            index = (output / 'index.html').read_text(encoding='utf-8')
+            self.assertIn('3款App有文本观察', index)
+            self.assertIn('视频计划未执行（3槽，实际打开0次）', index)
+            self.assertIn('SAMPLE 演示入口：1（不计真实观察）', index)
+            self.assertNotIn('4款实测', index)
+            self.assertNotIn('成功率', index)
+            expected = {'index.html', 'README.txt', 'bundle-manifest.json', 'SHA256SUMS.txt'}
+            for entry in entries:
+                expected.add(entry['id'] + '.html')
+                for key in (('source', 'analysis', 'conclusion') if entry in texts else ('source', 'analysis')):
+                    name = 'sources/' + entry['id'] + '-' + key + ('.md' if key == 'conclusion' else '.json')
+                    expected.add(name)
+                    self.assertEqual((output / name).read_bytes(), (root / entry[key + '_file']).read_bytes())
+            self.assertEqual({p.relative_to(output).as_posix() for p in output.rglob('*') if p.is_file()}, expected)
+            for line in (output / 'SHA256SUMS.txt').read_text().splitlines():
+                hashed, name = line.split('  ', 1)
+                self.assertEqual(hashed, sha((output / name).read_bytes()))
+            class Links(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.links, self.tags = [], []
+                def handle_starttag(self, tag, attrs):
+                    self.tags.append(tag)
+                    self.links.extend(value for key, value in attrs if key in ('href', 'src'))
+            for page in output.glob('*.html'):
+                parser = Links()
+                parser.feed(page.read_text(encoding='utf-8'))
+                self.assertFalse(set(parser.tags) & {'script', 'iframe', 'video', 'audio', 'img'})
+                for link in parser.links:
+                    self.assertNotIn(':', link)
+                    self.assertTrue((page.parent / link).is_file())
+            # The new route must not make the old text card optional.
+            del texts[0]['conclusion_file']
+            fresh = root / 'second'
+            fresh.mkdir()
+            for entry in texts:
+                for key in ('source_file', 'analysis_file', 'conclusion_file'):
+                    if key in entry:
+                        entry[key] = str(root / entry[key])
+            run = self.run_bundle(fresh, texts)
+            self.assertEqual(run.returncode, 1)
+            self.assertFalse((fresh / 'bundle').exists())
 
     def test_offline_page_combines_existing_metrics_and_bound_conclusion(self):
         with tempfile.TemporaryDirectory() as directory:
