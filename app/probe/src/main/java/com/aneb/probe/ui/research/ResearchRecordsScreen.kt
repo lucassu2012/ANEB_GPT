@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -178,6 +179,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 }
             }
         } else {
+            var appFilter by remember(current.id) { mutableStateOf<ResearchAppFilter?>(null) }
+            val appFilters = remember(current.id) { current.appFilters }
+            val visibleRecords = current.recordsForApp(appFilter)
             if (pending != null) {
                 Button(enabled = !busy, onClick = {
                     val bytes = pending ?: return@Button
@@ -193,6 +197,16 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 }) { Text("确认保存 ${current.recordKind}") }
             } else {
                 Button(enabled = !busy, onClick = { confirmExport = true }) { Text("导出原始 JSON") }
+            }
+            if (!current.isVideo) {
+                Text("按输入声明 App 查看", style = MaterialTheme.typography.labelLarge)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { FilterChip(selected = appFilter == null, onClick = { appFilter = null }, enabled = !busy, label = { Text("全部") }) }
+                    items(appFilters) { option ->
+                        FilterChip(selected = appFilter == option, onClick = { appFilter = option }, enabled = !busy, label = { Text(option.label) })
+                    }
+                }
+                Text("显示 ${visibleRecords.size} / ${current.records.size} 条记录；仅筛选下方记录，分析与导出仍属整批。", style = MaterialTheme.typography.bodySmall)
             }
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
@@ -239,6 +253,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(if (pendingAnalysis == null) "已保存分析副本" else "分析预览 · 尚未保存", style = MaterialTheme.typography.titleMedium)
+                            if (!current.isVideo) Text("整批分析（未按 App 筛选）：以下计数与分组不代表当前 App 的指标；不自动合组或排名。")
                             SelectionContainer { Text("分析 SHA-256：${currentAnalysis.id}\n关联原文：${currentAnalysis.sourceId}", style = MaterialTheme.typography.bodySmall) }
                             currentAnalysis.summaryLines.forEach { Text(it) }
                             if (pendingAnalysis != null) Button(enabled = !busy, onClick = {
@@ -256,7 +271,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         }
                     }
                 }
-                items(current.records, key = { it.attemptId }) { attempt ->
+                items(visibleRecords, key = { it.attemptId }) { attempt ->
                     if (current.isVideo) ResearchVideoAttemptCard(attempt, currentAnalysis)
                     else ResearchAttemptCard(attempt, currentAnalysis)
                 }
