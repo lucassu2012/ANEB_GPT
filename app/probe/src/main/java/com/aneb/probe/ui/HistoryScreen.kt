@@ -52,6 +52,7 @@ fun HistoryScreen(
     onGenerateReport: () -> Unit,
     onBack: () -> Unit,
     showBack: Boolean = true,
+    onOpenResearch: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
     val ordered = remember(runs, basicRuns) {
@@ -80,6 +81,12 @@ fun HistoryScreen(
         )
 
         TrendCard(avg = avg, best = best, worst = worst, trend = trend)
+
+        if (onOpenResearch != null) {
+            androidx.compose.material3.TextButton(onClick = onOpenResearch) {
+                Text("App 研究记录 · 人工来源", color = colors.brand)
+            }
+        }
 
         AnebSectionTitle(
             text = "全部记录",

@@ -1,0 +1,16 @@
+{
+  "format": "research-video-1",
+  "record_kind": "SAMPLE",
+  "app": "SAMPLE 视频 App（合成演示）",
+  "evidence": [{"reference": "SAMPLE-not-a-real-video.mp4", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "note": "合成占位，不存在真实媒体，不得当作OBSERVED"}],
+  "attempts": [{
+    "slot": "SAMPLE-R1",
+    "status": "EXECUTED",
+    "V0": {"clock_id": "SAMPLE-original-pts", "pts_s": [10, 10.1]},
+    "VF": {"clock_id": "SAMPLE-original-pts", "pts_s": [12.3, 12.5]},
+    "window_end": {"clock_id": "SAMPLE-original-pts", "pts_s": [40.1, 40.2]},
+    "visible_target_playback": "yes",
+    "window_complete": "yes",
+    "reason": "纯合成演示：首画面/运动与窗口覆盖均是假定测试输入，不是真实播放事实。"
+  }]
+}
