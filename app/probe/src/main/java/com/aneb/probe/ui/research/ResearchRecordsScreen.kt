@@ -160,11 +160,11 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
             Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (entries.isEmpty()) item { Text("暂无研究记录。可导入 1a 的 alignment-1 SAMPLE 文件。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
+                if (entries.isEmpty()) item { Text("暂无研究记录。可导入文本 alignment-1 或视频 research-video-1 文件；样例与观察声明分开。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
                 items(entries, key = { it.id }) { entry ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
-                            Text(if (entry.document == null) "无法读取的本地记录" else "${entry.document.sourceLabel} · ${entry.document.records.size} 次尝试")
+                            Text(if (entry.document == null) "无法读取的本地记录" else "${if (entry.document.isVideo) "视频 · " else ""}${entry.document.sourceLabel} · ${entry.document.records.size} 次尝试")
                             entry.document?.let { doc ->
                                 Text(doc.sourceNotice, style = MaterialTheme.typography.bodySmall)
                                 if (doc.records.any { it.sourceWarnings.isNotEmpty() }) Text("有记录缺少来源信息，请打开核对。")
@@ -199,14 +199,22 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Text(current.sourceNotice, color = colors.ink)
                     SelectionContainer { Text("输入 SHA-256：${current.id}", color = colors.muted, style = MaterialTheme.typography.bodySmall) }
                     Text("方法：${current.methodId ?: "UNKNOWN"}", color = colors.ink)
-                    Text("操作：${current.root.text("action_text") ?: "UNKNOWN"}", color = colors.ink)
-                    Text("原始单位：${current.root.text("time_unit") ?: "UNKNOWN（见各记录时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
+                    if (current.isVideo) {
+                        Text("视频 App：${current.root.text("app") ?: "UNKNOWN"}", color = colors.ink)
+                        Text("计划槽：${current.records.size}；已执行：${current.records.count { it.status == "EXECUTED" }}；未执行：${current.records.count { it.status == "NOT_RUN" }}。未执行不计播放失败。", color = colors.ink)
+                        Text("30秒从可见打开 V0 开始，包括首次等待；不是播放完成。视频首画面不套用文本 TTFC/T3。", color = colors.muted)
+                        Text("原始来源声明：${current.root.text("record_kind")}；PTS 单位为秒，仅展示原标注。", color = colors.muted)
+                        SelectionContainer { Text(displayValue(current.root["evidence"]), style = MaterialTheme.typography.bodySmall) }
+                    } else {
+                        Text("操作：${current.root.text("action_text") ?: "UNKNOWN"}", color = colors.ink)
+                        Text("原始单位：${current.root.text("time_unit") ?: "UNKNOWN（见各记录时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
+                    }
                 }
                 if (pending == null) item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("派生分析 · 独立副本", style = MaterialTheme.typography.titleMedium)
-                            Text("选择 3a 的分析 JSON；按原文 SHA-256 与 attempt_id 关联，不覆盖原文。重开后可从下列副本中选择。")
+                            Text("选择 3a 的分析 JSON；按原文 SHA-256 与${if (current.isVideo) "视频 slot" else " attempt_id"}关联，不覆盖原文。重开后可从下列副本中选择。")
                             Button(enabled = !busy, onClick = {
                                 analysisImportSourceId = current.id
                                 analysis = null; pendingAnalysis = null
@@ -247,7 +255,10 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         }
                     }
                 }
-                items(current.records, key = { it.attemptId }) { attempt -> ResearchAttemptCard(attempt, currentAnalysis) }
+                items(current.records, key = { it.attemptId }) { attempt ->
+                    if (current.isVideo) ResearchVideoAttemptCard(attempt, currentAnalysis)
+                    else ResearchAttemptCard(attempt, currentAnalysis)
+                }
             }
         }
     }
@@ -275,6 +286,24 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         }) { Text("确认导出") } },
         dismissButton = { TextButton(onClick = { confirmExport = false; analysisExportId = null }) { Text("取消") } },
     )
+}
+
+@Composable
+private fun ResearchVideoAttemptCard(attempt: ResearchAttempt, analysis: ResearchAnalysis?) {
+    val raw = attempt.raw
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("${attempt.attemptId} · ${attempt.statusLabel}", style = MaterialTheme.typography.titleMedium)
+            Text("目标播放声明：${displayValue(raw["visible_target_playback"])}；完整窗口声明：${displayValue(raw["window_complete"])}")
+            if (analysis == null) Text("首画面区间与30秒观察窗：尚未关联分析，不补 0、不推算时长。")
+            else analysis.attemptLines(attempt.attemptId).forEach { Text(it) }
+            listOf("V0" to "可见打开 V0", "VF" to "目标首画面 VF", "window_end" to "实际标注观察终点", "reason" to "原始说明").forEach { (key, label) ->
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                SelectionContainer { Text(displayValue(raw[key]), style = MaterialTheme.typography.bodySmall) }
+            }
+            Text("引用仅作文本保留；未打开录像或核验播放。缓冲 / 暂停未计算，不能据此归因网络。", style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 @Composable

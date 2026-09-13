@@ -75,7 +75,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Test real-App research analysis and offline delivery
-        run: python -B -m unittest tests.test_analyze_research_records tests.test_research_report tests.test_research_bundle -v
+        run: python -B -m unittest tests.test_analyze_research_records tests.test_research_report tests.test_research_bundle tests.test_research_video -v
       - name: Test deterministic model
         working-directory: tools/aneb-ai-behavior-model
         env:

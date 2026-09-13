@@ -4,6 +4,7 @@ import kotlinx.serialization.json.*
 
 /** Chinese labels over imported values only: no duration, count, or aggregate is calculated here. */
 val ResearchAnalysis.summaryLines: List<String> get() {
+    if (isVideo) return videoSummaryLines
     val counts = root["counts"] as? JsonObject
     return listOf(
         "导入的派生分析 · ${root.text("record_kind")} · 未独立核验数值或媒体",
@@ -14,6 +15,7 @@ val ResearchAnalysis.summaryLines: List<String> get() {
 }
 
 fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
+    if (isVideo) return videoAttemptLines(attemptId)
     val row = records[attemptId] ?: return listOf("此尝试尚未关联分析（非 0）。")
     return buildList {
         metricNames.forEach { (key, label) ->
@@ -58,6 +60,7 @@ fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
 }
 
 val ResearchAnalysis.groupLines: List<String> get() {
+    if (isVideo) return listOf("视频研究不跨 App 汇总、排名或推断网络原因。")
     val groups = root["groups"] as? JsonArray
     if (groups.isNullOrEmpty()) return listOf("无可比较分组；不自动合组或生成汇总。")
     return buildList {

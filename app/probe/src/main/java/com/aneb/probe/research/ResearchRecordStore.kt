@@ -11,15 +11,17 @@ import java.security.MessageDigest
 import kotlinx.serialization.json.*
 
 /** R1 display projection only. Original input remains the evidence; no derived metrics. */
-data class ResearchAttempt(val raw: JsonObject) {
-    val attemptId: String get() = raw.text("attempt_id") ?: "UNKNOWN"
-    val status: String? get() = (raw["outcome"] as? JsonObject)?.text("status")
+data class ResearchAttempt(val raw: JsonObject, val isVideo: Boolean = false) {
+    val attemptId: String get() = raw.text(if (isVideo) "slot" else "attempt_id") ?: "UNKNOWN"
+    val status: String? get() = if (isVideo) raw.text("status") else (raw["outcome"] as? JsonObject)?.text("status")
     val statusLabel: String get() = when (status) {
         "completed" -> "记录为完成"
         "failed" -> "失败"
         "cancelled" -> "已取消"
         "incomplete" -> "未完成"
         "not_run" -> "未执行"
+        "NOT_RUN" -> if (isVideo) "未执行（NOT_RUN，不计播放失败）" else "未知：$status"
+        "EXECUTED" -> if (isVideo) "已执行（不等于播放成功）" else "未知：$status"
         else -> "未知：${status ?: "NA"}"
     }
     val sourceWarnings: List<String> get() = buildList {
@@ -36,10 +38,12 @@ data class ResearchAttempt(val raw: JsonObject) {
 }
 
 data class ResearchDocument(val id: String, val root: JsonObject, val records: List<ResearchAttempt>) {
+    val isVideo: Boolean get() = ResearchVideoFormat.matches(root)
     /** Display only; decode validates unanimity, and the original root/bytes remain untouched. */
-    val methodId: String? get() = if (root.containsKey("method_id")) root.text("method_id")
+    val methodId: String? get() = if (isVideo) "research-video-1" else if (root.containsKey("method_id")) root.text("method_id")
         else records.map { it.raw.text("method_id") }.distinct().singleOrNull()
-    val recordKind: String get() = root.text("record_kind") ?: "UNKNOWN"
+    val recordKind: String get() = if (isVideo && root.text("record_kind") == ResearchVideoFormat.BLOCKED_KIND) "OBSERVED"
+        else root.text("record_kind") ?: "UNKNOWN"
     val sourceLabel: String get() = when (recordKind) {
         "SAMPLE" -> "SAMPLE · 虚构样例（非实测）"
         "OBSERVED" -> "OBSERVED · 输入声明为实际观察（未核验）"
@@ -136,6 +140,9 @@ class ResearchRecordStore(private val directory: File) {
                 }
                 val root = Json.parseToJsonElement(text) as? JsonObject
                     ?: throw IllegalArgumentException("需要批量 JSON 对象")
+                if (ResearchVideoFormat.matches(root)) {
+                    return ResearchDocument(hash(bytes), root, ResearchVideoFormat.readAttempts(root))
+                }
                 val kind = root.text("record_kind")
                 if (kind != "SAMPLE" && kind != "OBSERVED") {
                     throw ResearchImportException("来源类型未确认：仅支持 SAMPLE 或 OBSERVED，不自动转换。请核对原输入文件。")
