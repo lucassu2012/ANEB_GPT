@@ -10,6 +10,62 @@ import org.junit.rules.TemporaryFolder
 class ResearchAnalysisStoreTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun sourceConfirmedCompletionCountDoesNotImplyUsableDurationAndMissingConditionsSurviveImport() {
+        // TEST ONLY: three fabricated attempts; mirrors the two-yes/one-uncertain pattern, not private evidence.
+        val raw = Json.parseToJsonElement(resource("r1-sample.json").toString(Charsets.UTF_8)).jsonObject
+        val originals = raw["records"]!!.jsonArray.mapIndexed { index, element ->
+            JsonObject(element.jsonObject.toMutableMap().apply {
+                put("outcome", buildJsonObject {
+                    put("executed", true); put("status", "completed")
+                    put("visible_completion", if (index == 0) "uncertain" else "yes")
+                    put("instruction_following", "uncertain")
+                })
+            })
+        }
+        val source = ResearchRecordStore.decode(JsonObject(raw.toMutableMap().apply {
+            put("records", JsonArray(originals))
+        }).toString().toByteArray())
+        val template = Json.parseToJsonElement(resource("r1-analysis-sample.json").toString(Charsets.UTF_8)).jsonObject
+        val rows = template["records"]!!.jsonArray.mapIndexed { index, element ->
+            JsonObject(element.jsonObject.toMutableMap().apply {
+                put("input_record", originals[index])
+                put("completion", buildJsonObject {
+                    put("status", "NA"); put("interval_s", JsonNull)
+                    put("reason", if (index == 0) "completion_unconfirmed" else "completion_timing_unavailable")
+                    if (index != 0) put("missing_conditions", JsonArray(listOf(
+                        "last_content_unavailable", "continuous_visibility_unconfirmed", "stable_tail_unconfirmed",
+                        "timing_event_unavailable", "TEST-ONLY-future-reason",
+                    ).map(::JsonPrimitive)))
+                })
+            })
+        }
+        val bytes = JsonObject(template.toMutableMap().apply {
+            put("source_sha256", JsonPrimitive(source.id)); put("records", JsonArray(rows))
+            put("counts", buildJsonObject { put("planned", 3); put("attempted", 3); put("not_run", 0); put("visible_completed_confirmed", 2) })
+        }).toString().toByteArray()
+        val store = ResearchAnalysisStore(temporary.newFolder())
+        val saved = store.save(source, bytes)
+        val analysis = store.open(source, saved.id)
+        val first = analysis.attemptLines(source.records[0].attemptId).single { it.startsWith("完成 Completion") }
+        assertTrue(first, first.contains("可见完成未确认"))
+        source.records.drop(1).forEach { attempt ->
+            val lines = analysis.attemptLines(attempt.attemptId).joinToString("\n")
+            assertTrue(lines, lines.contains("源标注可见完成；完成时长不可计算"))
+            assertTrue(lines, lines.contains("缺少最后正文时刻（T3）"))
+            assertTrue(lines, lines.contains("正文连续可见未确认"))
+            assertTrue(lines, lines.contains("至少3秒稳定窗口未确认"))
+            assertTrue(lines, lines.contains("完成时长条件不可用（未知原因）"))
+            assertFalse(lines, lines.contains("TEST-ONLY-future-reason"))
+            assertFalse(lines, lines.contains("可见完成未确认"))
+        }
+        assertTrue(analysis.summaryLines.joinToString("\n").contains("可见完成按源标注计数，不等于指令成功或App成功率"))
+        assertTrue(analysis.summaryLines.joinToString("\n").contains("可见完成已确认：2"))
+        source.records.forEach { assertTrue(analysis.attemptLines(it.attemptId).any { line -> line.startsWith("完成 Completion：NA") }) }
+        println("TEST ONLY Chinese consumer evidence:\n" + analysis.summaryLines.joinToString("\n"))
+        source.records.forEach { attempt -> println(attempt.attemptId + "\n" + analysis.attemptLines(attempt.attemptId).filter { it.startsWith("完成") }.joinToString("\n")) }
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(source, saved.id, it) }.toByteArray())
+    }
+
     @Test fun importedAnalysisReopensBySourceAndAttemptWithoutChangingEitherOriginal() {
         val rawBytes = resource("r1-sample.json")
         val analysisBytes = resource("r1-analysis-sample.json")
@@ -168,5 +224,9 @@ class ResearchAnalysisStoreTest {
         assertArrayEquals(sourceBytes, ByteArrayOutputStream().also { originals.export(source.id, it) }.toByteArray())
     }
 
-    private fun resource(name: String): ByteArray = checkNotNull(javaClass.getResourceAsStream("/research/$name")).use { it.readBytes() }
+    // These repository fixtures bind a Git/LF SHA; do not inherit Windows checkout CRLF.
+    // Production imports remain byte-exact and never normalize user documents.
+    private fun resource(name: String): ByteArray = checkNotNull(javaClass.getResourceAsStream("/research/$name")).use {
+        it.readBytes().toString(Charsets.UTF_8).replace("\r\n", "\n").toByteArray(Charsets.UTF_8)
+    }
 }

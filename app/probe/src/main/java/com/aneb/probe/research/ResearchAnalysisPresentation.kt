@@ -8,6 +8,7 @@ val ResearchAnalysis.summaryLines: List<String> get() {
     return listOf(
         "导入的派生分析 · ${root.text("record_kind")} · 未独立核验数值或媒体",
         "计划：${number(counts?.get("planned"))}；已尝试：${number(counts?.get("attempted"))}；未执行：${number(counts?.get("not_run"))}；可见完成已确认：${number(counts?.get("visible_completed_confirmed"))}",
+        "可见完成按源标注计数，不等于指令成功或App成功率，也不是完成时长有效数。",
         "以下时长为秒区间，不是精确时间点或区间中点；不用于网络归因。",
     )
 }
@@ -24,6 +25,11 @@ fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
                 else -> "未知分析状态：${status ?: "NA"}"
             }
             add("$label：$value${reason(metric?.get("reason"))}")
+            if (key == "completion" && metric?.text("reason") == "completion_timing_unavailable") {
+                (metric["missing_conditions"] as? JsonArray)?.forEach { condition ->
+                    add("完成时长缺失条件：${completionConditionLabel(condition)}")
+                }
+            }
         }
         val stalls = row["stalls"] as? JsonObject
         add("停顿观察：${when (stalls?.text("status")) {
@@ -85,6 +91,7 @@ private fun reason(value: JsonElement?): String {
     val label = when (code) {
         "not_executed" -> "未执行"
         "completion_unconfirmed" -> "可见完成未确认"
+        "completion_timing_unavailable" -> "源标注可见完成；完成时长不可计算"
         "clock_unavailable" -> "时钟依据不可用"
         "event_unavailable" -> "缺少事件"
         "invalid_interval" -> "原始区间无效"
@@ -93,4 +100,21 @@ private fun reason(value: JsonElement?): String {
         else -> "分析提供的原因"
     }
     return "；$label（$code）"
+}
+
+private fun completionConditionLabel(value: JsonElement): String = when ((value as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+    "status_not_completed" -> "执行状态未标注完成"
+    "completion_basis_missing" -> "缺少完成依据"
+    "send_unavailable" -> "缺少发送时刻（T0）"
+    "last_content_unavailable" -> "缺少最后正文时刻（T3）"
+    "complete_confirm_unavailable" -> "缺少完成确认时刻"
+    "continuous_visibility_unconfirmed" -> "正文连续可见未确认"
+    "normal_exit_unconfirmed" -> "正常退出生成状态未确认"
+    "stable_tail_unconfirmed" -> "至少3秒稳定窗口未确认"
+    "timing_event_unavailable" -> "时间事件不足"
+    "timing_clock_unavailable" -> "时钟依据不可用"
+    "timing_invalid_interval" -> "时间区间无效"
+    "timing_clock_domain_mismatch" -> "时钟域不一致"
+    "timing_event_order_uncertain" -> "时间事件先后不确定"
+    else -> "完成时长条件不可用（未知原因）"
 }
