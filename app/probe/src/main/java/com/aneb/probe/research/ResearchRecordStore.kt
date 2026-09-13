@@ -18,12 +18,14 @@ data class ResearchAttempt(val raw: JsonObject, val isVideo: Boolean = false) {
         "completed" -> "记录为完成"
         "failed" -> "失败"
         "cancelled" -> "已取消"
-        "incomplete" -> "未完成"
+        "incomplete" -> "完成未确认"
         "not_run" -> "未执行"
         "NOT_RUN" -> if (isVideo) "未执行（NOT_RUN，不计播放失败）" else "未知：$status"
         "EXECUTED" -> if (isVideo) "已执行（不等于播放成功）" else "未知：$status"
         else -> "未知：${status ?: "NA"}"
     }
+    val statusNotice: String? get() = if (status == "incomplete")
+        "可能尚未完成，或完成证据不足；不表示 App 失败。" else null
     val sourceWarnings: List<String> get() = buildList {
         if (raw.text("record_kind") == "OBSERVED") {
             val evidence = raw["evidence"] as? JsonObject

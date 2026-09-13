@@ -116,7 +116,7 @@ class ResearchRecordStoreTest {
         val document = store.open(saved.id)
         assertEquals("OBSERVED · 输入声明为实际观察（未核验）", document.sourceLabel)
         assertTrue(document.exportFileName.startsWith("ANEB-R1-OBSERVED-"))
-        assertEquals(listOf("失败", "未完成", "未执行"), document.records.map { it.statusLabel })
+        assertEquals(listOf("失败", "完成未确认", "未执行"), document.records.map { it.statusLabel })
         assertTrue(document.records.all { row -> row.sourceWarnings.any { it.contains("缺少本地来源引用") } })
         assertTrue(document.sourceNotice.contains("未打开媒体"))
         val withReference = document.records[0].raw.toMutableMap().apply {
