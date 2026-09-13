@@ -97,6 +97,18 @@ def analyze(source, raw):
                 status, reason = 'uncertain', 'ORDER_OVERLAP'
             elif record['visible_target_playback'] != 'yes':
                 status, reason = 'uncertain', 'TARGET_PLAYBACK_UNCONFIRMED'
+            elif Decimal(str(first[0])) > Decimal(str(start[1])) + 30:
+                status, reason = 'NA', 'VF_AFTER_PLANNED_WINDOW'
+            elif (event_valid(record['window_end'])
+                  and record['window_end']['clock_id'] == record['VF']['clock_id']
+                  and first[0] > record['window_end']['pts_s'][1]):
+                status, reason = 'NA', 'VF_AFTER_OBSERVATION_END'
+            elif Decimal(str(first[1])) > Decimal(str(start[0])) + 30:
+                status, reason = 'uncertain', 'VF_PLANNED_BOUNDARY_UNCERTAIN'
+            elif (event_valid(record['window_end'])
+                  and record['window_end']['clock_id'] == record['VF']['clock_id']
+                  and first[1] > record['window_end']['pts_s'][0]):
+                status, reason = 'uncertain', 'VF_OBSERVATION_BOUNDARY_UNCERTAIN'
         wait = None if reason else [float(Decimal(str(first[0])) - Decimal(str(start[1]))),
                                      float(Decimal(str(first[1])) - Decimal(str(start[0])))]
         rows.append({'slot': record['slot'], 'status': record['status'], 'reason': record.get('reason'),
@@ -121,6 +133,10 @@ def render(result):
                'V0_INVALID': '打开边界或时钟无效', 'VF_INVALID': '首画面边界或时钟无效',
                'CLOCK_MISMATCH': '时钟不一致', 'ORDER_OVERLAP': '先后顺序区间重叠',
                'ORDER_REVERSED': '首画面早于打开边界', 'TARGET_PLAYBACK_UNCONFIRMED': '目标播放尚未确认',
+               'VF_AFTER_PLANNED_WINDOW': '首画面确定晚于计划30秒截止，本窗不可计算，不计播放失败',
+               'VF_AFTER_OBSERVATION_END': '首画面确定晚于已记录观察截止，本窗不可计算，不计播放失败',
+               'VF_PLANNED_BOUNDARY_UNCERTAIN': '首画面区间跨越可能的计划30秒截止，无法确定在本窗内',
+               'VF_OBSERVATION_BOUNDARY_UNCERTAIN': '首画面区间跨越可能的实际观察截止，无法确定已在截止前观察到',
                'WINDOW_END_MISSING': '缺少观察终点', 'WINDOW_END_INVALID': '观察终点无效',
                'WINDOW_CLOCK_MISMATCH': '窗口时钟不一致', 'WINDOW_ORDER_REVERSED': '观察终点早于打开',
                'WINDOW_ORDER_OVERLAP': '观察终点与打开的顺序区间重叠',

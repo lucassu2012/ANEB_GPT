@@ -44,6 +44,14 @@ clock_id 必须非空、非UNKNOWN，两个事件必须逐字相同；**同名�
 ## 结果语义
 
 - 可见打开至首画面：`[VF.lo - V0.hi, VF.hi - V0.lo]`，显示秒，不取中点、不夹到0。
+- 首帧必须可确定在本次计划30秒窗内：VF下界晚于计划终点上界为
+  `NA/null + VF_AFTER_PLANNED_WINDOW`；否则VF上界超过计划终点下界为
+  `uncertain/null + VF_PLANNED_BOUNDARY_UNCERTAIN`。恰好不晚于截止可计算，不夹到30。
+  有有效同钟window_end时同样检查实际截止：确定晚于为`VF_AFTER_OBSERVATION_END`，
+  跨可能截止为`VF_OBSERVATION_BOUNDARY_UNCERTAIN`；任一确定超截止优先于边界不确定。
+  缺失/无效/异钟window_end不伪造实测截止，计划30秒限制仍生效。
+  这些原因均有中文提示，保留原VF/原输入SHA，不把窗外或未观察到记成播放失败；
+  不改变window本身的覆盖声明/计算和执行次数，也不推算右删失时长。
 - 缺端点/非法端点/确定倒序：NA/null+reason；跨时钟/顺序重叠/目标播放未确认：uncertain/null+reason。
 - 30秒计划窗从V0开始，计划终点区间是 `[V0.lo+30,V0.hi+30]`，包括首次等待，
   不是播放完成、有效播放量或实测窗口终点；缺VF绝不以30秒补值。

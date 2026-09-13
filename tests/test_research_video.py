@@ -27,6 +27,77 @@ def sample():
 
 
 class VideoCliTest(unittest.TestCase):
+    def test_first_frame_after_planned_window_is_na_with_original_preserved(self):
+        for end in [event(40.1, 40.2), None]:
+            with self.subTest(end=end), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                payload = sample()
+                payload['attempts'][0].update(VF=event(41, 42), window_end=end)
+                result, raw = self.invoke(root, payload)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+                row = output['attempts'][0]
+                self.assertEqual(row['first_frame_wait'], {
+                    'status': 'NA', 'interval_s': None, 'reason': 'VF_AFTER_PLANNED_WINDOW'})
+                self.assertEqual(output['input_record'], payload)
+                self.assertEqual(output['source_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(output['counts'], {'planned': 1, 'executed': 1, 'not_run': 0})
+                self.assertEqual(row['window']['status'], 'observed_complete' if end else 'NA')
+                if end is None:
+                    self.assertEqual(row['window']['reason'], 'WINDOW_END_MISSING')
+                self.assertIn('首画面确定晚于计划30秒截止',
+                              (root / 'report.html').read_text(encoding='utf-8'))
+
+    def test_first_frame_after_known_early_end_is_na_without_changing_coverage(self):
+        for end, status, reason in [(event(20, 20.1), 'NA', 'VF_AFTER_OBSERVATION_END'),
+                                    (event(20, 20.1, 'other-clock'), 'valid', None),
+                                    (None, 'valid', None)]:
+            with self.subTest(end=end), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                payload = sample()
+                payload['attempts'][0].update(VF=event(21, 22), window_end=end, window_complete='no')
+                result, raw = self.invoke(root, payload)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+                row = output['attempts'][0]
+                self.assertEqual(row['first_frame_wait'], {'status': status,
+                    'interval_s': None if reason else [10.9, 12.0], 'reason': reason})
+                self.assertEqual(output['input_record'], payload)
+                self.assertEqual(output['source_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(output['counts'], {'planned': 1, 'executed': 1, 'not_run': 0})
+                if reason:
+                    self.assertEqual(row['window']['status'], 'observed_partial')
+                    self.assertIn('首画面确定晚于已记录观察截止',
+                                  (root / 'report.html').read_text(encoding='utf-8'))
+
+    def test_first_frame_overlapping_cutoff_is_uncertain_not_clamped(self):
+        cases = [(event(40, 40.05), event(41, 42), 'uncertain', 'VF_PLANNED_BOUNDARY_UNCERTAIN'),
+                 (event(39.9, 40.2), None, 'uncertain', 'VF_PLANNED_BOUNDARY_UNCERTAIN'),
+                 (event(19.9, 20.2), event(20, 20.1), 'uncertain', 'VF_OBSERVATION_BOUNDARY_UNCERTAIN'),
+                 (event(39.9, 40), event(40.1, 40.2), 'valid', None),
+                 (event(19.9, 20), event(20, 20.1), 'valid', None),
+                 (event(40, 40.05), event(20, 20.1), 'NA', 'VF_AFTER_OBSERVATION_END')]
+        for first, end, status, reason in cases:
+            with self.subTest(first=first, end=end), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                payload = sample()
+                payload['attempts'][0].update(VF=first, window_end=end)
+                result, raw = self.invoke(root, payload)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+                wait = output['attempts'][0]['first_frame_wait']
+                self.assertEqual(wait['status'], status)
+                self.assertEqual(wait['reason'], reason)
+                if reason:
+                    self.assertIsNone(wait['interval_s'])
+                else:
+                    self.assertEqual(wait['interval_s'], [29.8, 30.0] if first['pts_s'][1] == 40 else [9.8, 10.0])
+                self.assertEqual(output['input_record'], payload)
+                self.assertEqual(output['source_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(output['counts'], {'planned': 1, 'executed': 1, 'not_run': 0})
+                if status == 'uncertain':
+                    self.assertIn('首画面区间跨越', (root / 'report.html').read_text(encoding='utf-8'))
+
     def invoke(self, root, payload):
         raw = (json.dumps(payload, ensure_ascii=False) + '\n').encode('utf-8')
         source = root / 'input.json'
@@ -145,7 +216,11 @@ class VideoCliTest(unittest.TestCase):
                 row = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))['attempts'][0]
                 self.assertEqual(row['window'], {'planned_end_pts_s': [40, 40.1],
                                                'status': status, 'reason': reason})
-                self.assertEqual(row['first_frame_wait']['interval_s'], [2.2, 2.5])
+                if reason == 'WINDOW_ORDER_OVERLAP':
+                    self.assertEqual(row['first_frame_wait'], {'status': 'NA', 'interval_s': None,
+                                                              'reason': 'VF_AFTER_OBSERVATION_END'})
+                else:
+                    self.assertEqual(row['first_frame_wait']['interval_s'], [2.2, 2.5])
                 self.assertEqual(row['buffering_pause'], {'status': 'not_computed', 'count': None, 'duration_s': None})
 
     def test_invalid_pts_or_unknown_clock_cannot_produce_wait(self):
