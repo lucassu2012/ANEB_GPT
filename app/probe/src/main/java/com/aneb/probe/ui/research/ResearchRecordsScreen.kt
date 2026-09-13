@@ -323,6 +323,7 @@ private fun ResearchAttemptCard(attempt: ResearchAttempt, analysis: ResearchAnal
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("${app?.text("name") ?: "UNKNOWN"} · ${attempt.statusLabel}", style = MaterialTheme.typography.titleMedium)
+            attempt.statusNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("${raw.text("record_kind") ?: "未确认来源"} · ${attempt.attemptId}")
             attempt.sourceWarnings.forEach { Text(it, color = AnebTheme.colors.fair) }
             Text("版本：${app?.text("version") ?: "UNKNOWN"}；模式：${app?.text("model_mode") ?: "UNKNOWN"}")

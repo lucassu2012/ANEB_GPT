@@ -11,7 +11,7 @@ val ResearchDocument.batchSummaryLines: List<String> get() {
     return listOf(
         (if (isVideo) "视频 · " else "") + declaredSummary(apps, "App"),
         declaredSummary(versions, "版本"),
-        "$sourceLabel · ${records.size} 次尝试 · ${id.take(12)}…",
+        "$sourceLabel · ${records.size} 条记录 · ${id.take(12)}…",
     )
 }
 
