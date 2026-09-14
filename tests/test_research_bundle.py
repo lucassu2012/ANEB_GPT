@@ -9,6 +9,8 @@ from html.parser import HTMLParser
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'research_bundle.py'
+sys.path.insert(0, str(SCRIPT.parent))
+from research_bundle import build_bundle
 
 
 def sha(raw):
@@ -16,6 +18,101 @@ def sha(raw):
 
 
 class BundleTests(unittest.TestCase):
+    def test_dossier_keeps_unknown_sample_and_observed_conditions_separate_and_escaped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = 'Shared <script>App</script>'
+            entries = [self.fixture(root, app, 'sample'), self.fixture(root, app, 'observed', 'OBSERVED')]
+            entry = entries[1]
+            path = root / entry['analysis_file']
+            data = json.loads(path.read_bytes())
+            data['records'][0]['input_record']['app']['model_mode'] = '<img src="private.png">'
+            raw = json.dumps(data).encode()
+            path.write_bytes(raw)
+            entry['analysis_sha256'] = entry['conclusion_analysis_sha256'] = sha(raw)
+            card = ('<script>not executable</script>\n' + sha(raw)).encode()
+            (root / entry['conclusion_file']).write_bytes(card)
+            entry['conclusion_sha256'] = sha(card)
+            result = self.run_bundle(root, entries)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            page = (root / 'bundle/index.html').read_text(encoding='utf-8')
+            for value in ('Shared &lt;script&gt;App&lt;/script&gt;', '未知／未提供',
+                          '未核验', 'SAMPLE 演示', 'OBSERVED 声明', 'SAMPLE不计真实观察',
+                          '&lt;img src=&quot;private.png&quot;&gt;'):
+                self.assertIn(value, page)
+            self.assertNotIn('<script>', page)
+            self.assertNotIn('<img ', page)
+            self.assertIn('&lt;script&gt;not executable&lt;/script&gt;',
+                          (root / 'bundle/observed.html').read_text(encoding='utf-8'))
+
+    def test_mixed_app_analysis_cannot_be_presented_as_single_app_batch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry = self.fixture(root)
+            path = root / entry['analysis_file']
+            data = json.loads(path.read_bytes())
+            other = json.loads(json.dumps(data['records'][0]))
+            other['input_record']['app']['name'] = 'Other App'
+            data['records'].append(other)
+            raw = json.dumps(data).encode()
+            path.write_bytes(raw)
+            entry['analysis_sha256'] = entry['conclusion_analysis_sha256'] = sha(raw)
+            card = sha(raw).encode()
+            (root / entry['conclusion_file']).write_bytes(card)
+            entry['conclusion_sha256'] = sha(card)
+            result = self.run_bundle(root, [entry])
+            self.assertEqual(result.stderr.decode().strip(), 'BUNDLE_INPUT_INVALID:APP_MISMATCH')
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse((root / 'bundle').exists())
+
+    def test_same_app_batches_open_independent_reports_and_bound_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entries = [self.fixture(root, 'SAMPLE Shared App', identity)
+                       for identity in ('first-batch', 'second-batch')]
+            for index, entry in enumerate(entries, 1):
+                path = root / entry['analysis_file']
+                data = json.loads(path.read_bytes())
+                data['counts']['planned'] = index
+                data['counts']['attempted'] = index
+                data['counts']['visible_completed_confirmed'] = 0
+                row = data['records'][0]
+                data['records'] = [dict(row, attempt_id=f'SAMPLE-{index}-{n}')
+                                   for n in range(index)]
+                for record in data['records']:
+                    record['input_record']['app'].update(version=f'v{index}', model_mode=f'mode{index}')
+                    record['input_record']['method_id'] = f'method{index}'
+                raw = json.dumps(data).encode()
+                path.write_bytes(raw)
+                entry['analysis_sha256'] = entry['conclusion_analysis_sha256'] = sha(raw)
+                card = f'# SAMPLE batch {index}\nAnalysis SHA256: {sha(raw)}\n'.encode()
+                (root / entry['conclusion_file']).write_bytes(card)
+                entry['conclusion_sha256'] = sha(card)
+            manifest = root / 'input.json'
+            manifest.write_text(json.dumps({'apps': entries}), encoding='utf-8')
+            build_bundle(manifest, root / 'bundle')
+            output = root / 'bundle'
+            index_page = (output / 'index.html').read_text(encoding='utf-8')
+            self.assertEqual(index_page.count('<h2>SAMPLE Shared App</h2>'), 1)
+            self.assertIn('独立批次：2', index_page)
+            self.assertIn('不合并分母', index_page)
+            for number, entry in enumerate(entries, 1):
+                identity = entry['id']
+                for value in (identity, f'v{number}', f'mode{number}', f'method{number}',
+                              identity + '.html#conclusion', '未核验', 'SAMPLE'):
+                    self.assertIn(value, index_page)
+                page = (output / (identity + '.html')).read_text(encoding='utf-8')
+                self.assertIn(f'计划：{number}', page)
+                self.assertIn(f'SAMPLE batch {number}', page)
+                self.assertNotIn(f'SAMPLE batch {3-number}', page)
+                self.assertIn('NA', page)
+                for key, suffix in [('source', 'json'), ('analysis', 'json'), ('conclusion', 'md')]:
+                    self.assertEqual((output / f'sources/{identity}-{key}.{suffix}').read_bytes(),
+                                     (root / entry[key + '_file']).read_bytes())
+            for line in (output / 'SHA256SUMS.txt').read_text().splitlines():
+                digest, relative = line.split('  ', 1)
+                self.assertEqual(digest, sha((output / relative).read_bytes()))
+
     def video_fixture(self, root, blocked=False, identity='video'):
         if blocked:
             source = {'record_kind': 'video_observation_preflight_blocked', 'app': 'SAMPLE blocked video',
@@ -180,7 +277,10 @@ class BundleTests(unittest.TestCase):
                 self.assertFalse(set(parser.tags) & {'script', 'iframe', 'video', 'audio', 'img'})
                 for link in parser.links:
                     self.assertNotIn(':', link)
-                    self.assertTrue((page.parent / link).is_file())
+                    target, _, anchor = link.partition('#')
+                    self.assertTrue((page.parent / target).is_file())
+                    if anchor:
+                        self.assertIn('id="' + anchor + '"', (page.parent / target).read_text(encoding='utf-8'))
             # The new route must not make the old text card optional.
             del texts[0]['conclusion_file']
             fresh = root / 'second'
@@ -276,7 +376,10 @@ class BundleTests(unittest.TestCase):
                 self.assertFalse(set(parser.tags) & {'script', 'iframe', 'img', 'video', 'audio'})
                 for link in parser.links:
                     self.assertNotIn(':', link)
-                    self.assertTrue((page.parent / link).is_file(), link)
+                    target, _, anchor = link.partition('#')
+                    self.assertTrue((page.parent / target).is_file(), link)
+                    if anchor:
+                        self.assertIn('id="' + anchor + '"', (page.parent / target).read_text(encoding='utf-8'))
             index = (output / 'index.html').read_text(encoding='utf-8')
             for entry in entries:
                 self.assertIn(entry['id'] + '.html', index)
