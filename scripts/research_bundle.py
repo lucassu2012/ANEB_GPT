@@ -53,6 +53,23 @@ def bind_video(analysis, source, app):
         raise ValueError('VIDEO_BLOCKED_CONFLICT')
 
 
+def batch_metadata(analysis, content_kind):
+    """Display declared conditions per record; never infer or aggregate metrics."""
+    if content_kind == 'video':
+        return '<p>视频方法／版本／模式：未知／未提供（未核验）；以原标注页为准。</p>'
+    rows = []
+    for row in analysis['records']:
+        record = row['input_record']
+        app = record['app']
+        values = [row.get('attempt_id'), record.get('method_id'),
+                  app.get('version'), app.get('model_mode')]
+        cells = [html.escape(str(value)) if value is not None and value != ''
+                 else '未知／未提供' for value in values]
+        rows.append('<li>记录：' + cells[0] + '；方法：' + cells[1]
+                    + '；版本：' + cells[2] + '；模式：' + cells[3] + '</li>')
+    return '<p>原记录元信息（未核验，不推定同批条件一致）</p><ul>' + ''.join(rows) + '</ul>'
+
+
 def build_bundle(manifest_path, output):
     manifest_path, output = Path(manifest_path), Path(output)
     if output.exists():
@@ -60,7 +77,7 @@ def build_bundle(manifest_path, output):
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     if not isinstance(manifest['apps'], list) or not manifest['apps']:
         raise ValueError('EMPTY_MANIFEST')
-    files, bindings, links, seen = {}, [], [], set()
+    files, bindings, dossiers, seen = {}, [], {}, set()
     observed_text_apps, observed_videos, sample_count = set(), [], 0
     for entry in manifest['apps']:
         content_kind = entry.get('kind', 'text')
@@ -122,7 +139,20 @@ def build_bundle(manifest_path, output):
         conclusion += '</section>'
         page = page.replace('</body>', conclusion + '</body>')
         files[identity + '.html'] = page.encode('utf-8')
-        links.append('<li><a href="' + identity + '.html">' + html.escape(entry['app']) + '</a><p>' + description + '</p></li>')
+        batch_links = '<a href="' + identity + '.html">原指标／NA报告</a>'
+        if content_kind == 'text':
+            batch_links += ' · <a href="' + identity + '.html#conclusion">对应结论</a>'
+        for key, label in labels:
+            batch_links += ' · <a href="' + bound[key + '_file'] + '">' + label + '</a>'
+        dossiers.setdefault(entry['app'], []).append(
+            '<li><h3>独立 entry／批次：' + identity + '</h3><p>来源类型：'
+            + content_kind + ' · ' + description + '</p>'
+            + batch_metadata(analysis, content_kind) + '<p>' + batch_links + '</p></li>')
+    links = []
+    for app, batches in dossiers.items():
+        links.append('<section><h2>' + html.escape(app) + '</h2><p>独立批次：'
+                     + str(len(batches)) + '；按声明顺序保留，不选最新为真、不合并分母。</p><ul>'
+                     + ''.join(batches) + '</ul></section>')
     summary = ''
     if any(bound.get('kind') == 'video' for bound in bindings):
         summary = '<p>' + str(len(observed_text_apps)) + '款App有文本观察（原记录声明）'
@@ -135,10 +165,10 @@ def build_bundle(manifest_path, output):
     files['index.html'] = ('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">'
-        '<title>R1 离线研究包</title><style>body{font-family:system-ui,sans-serif;max-width:960px;margin:auto;padding:32px;background:#f4f6f8;color:#172b3a;line-height:1.7}li{background:white;padding:20px;margin:16px 0;border-radius:12px}a{color:#075d80}aside{background:#fff0cc;padding:16px}ul{list-style:none;padding:0}</style>'
-        '<body><h1>R1 · App 观察研究包</h1><aside>仅本地研究交付，不作跨App排名。可见结束不等于指令成功或可计完成时长；NA/uncertain不等于零。</aside>'
-        + summary + '<p>从下列页面分别阅读指标与结论；保留各自观察方法和缺口，不计算跨App汇总。</p><ul>' + ''.join(links) + '</ul>'
-        '<p><a href="README.txt">使用与隐私说明</a> · <a href="bundle-manifest.json">来源清单</a> · <a href="SHA256SUMS.txt">文件校验清单</a></p>'
+        '<title>离线 App 研究档案</title><style>body{font-family:system-ui,sans-serif;max-width:960px;margin:auto;padding:32px;background:#f4f6f8;color:#172b3a;line-height:1.7;overflow-wrap:anywhere}li{background:white;padding:20px;margin:16px 0;border-radius:12px}li li{padding:4px;margin:4px 0}a{color:#075d80}aside{background:#fff0cc;padding:16px}ul{list-style:none;padding:0}</style>'
+        '<body><h1>App → 独立研究批次</h1><aside>仅本地研究交付，不作跨App排名。可见结束不等于指令成功或可计完成时长；NA/uncertain不等于零。</aside>'
+        + summary + '<p>按原声明App查找各entry；分组仅导航，不合并数据、分母或指标。逐页保留已有分析与结论；没有统一评分。SAMPLE不计真实观察。</p>' + ''.join(links)
+        + '<p><a href="README.txt">使用与隐私说明</a> · <a href="bundle-manifest.json">来源清单</a> · <a href="SHA256SUMS.txt">文件校验清单</a></p>'
         '<p>不包含原视频、截图或可执行脚本；结论中的媒体路径仅为原文引用，不会自动打开或复制。</p></body></html>\n').encode('utf-8')
     files['bundle-manifest.json'] = (json.dumps({'apps': bindings}, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     files['README.txt'] = ('R1 离线研究包\n双击 index.html；移动时保留整个目录。无需服务器或网络。\n'
