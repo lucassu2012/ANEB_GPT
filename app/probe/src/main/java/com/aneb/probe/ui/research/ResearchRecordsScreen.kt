@@ -47,10 +47,14 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var analysisImportSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var analysisExportId by remember { mutableStateOf<String?>(null) }
     var manualOpen by rememberSaveable { mutableStateOf(false) }
+    var profilesOpen by rememberSaveable { mutableStateOf(false) }
+    var profileSelection by remember { mutableStateOf<ResearchAppProfile?>(null) }
+    var requestedAppFilter by remember { mutableStateOf<ResearchAppFilter?>(null) }
 
     if (manualOpen) {
         ManualResearchEntryScreen(store, onBack = { manualOpen = false }, onSaved = { saved ->
             manualOpen = false; selectedId = saved.id; document = saved; pending = null
+            requestedAppFilter = null
             notice = "手工记录已保存，可重开或确认导出；不是自动测量或来源核验。"
         })
         return
@@ -108,6 +112,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
             val preview = withContext(Dispatchers.IO) { ResearchRecordStore.decode(bytes) }
             selectedId = null
+            requestedAppFilter = null
             pending = bytes
             document = preview
         }
@@ -143,43 +148,58 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         if (!busy) {
             if (document != null) {
                 selectedId = null; document = null; pending = null; notice = null
+                requestedAppFilter = null
                 analysis = null; pendingAnalysis = null; analysisEntries = emptyList()
             }
+            else if (profilesOpen) profilesOpen = false
             else onBack()
         }
     }
     BackHandler(onBack = back)
     val colors = AnebTheme.colors
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
-        TextButton(onClick = back, enabled = !busy) { Text(if (document == null) "返回测试历史" else "返回研究列表") }
+        TextButton(onClick = back, enabled = !busy) {
+            Text(if (document != null && profilesOpen) "返回 App 研究索引" else if (document != null || profilesOpen) "返回研究列表" else "返回测试历史")
+        }
         AnebPageIntro("R1 · MANUAL", "App 研究记录", subtitle = "人工来源 · SAMPLE 样例与 OBSERVED 观察声明分批保存，不代表工具已核验。与测速历史、AQS 和 RPI 分开。")
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
         notice?.let { Text(it, color = colors.ink, modifier = Modifier.padding(vertical = 8.dp)) }
         val current = document
         if (current == null) {
-            Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
-            Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
-            Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (entries.isEmpty()) item { Text("暂无研究记录。可导入文本 alignment-1 或视频 research-video-1 文件；样例与观察声明分开。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
-                items(entries, key = { it.id }) { entry ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
-                            if (entry.document == null) Text("无法读取的本地记录")
-                            entry.document?.let { doc ->
-                                ResearchBatchHeading(doc)
-                                Text(doc.sourceNotice, style = MaterialTheme.typography.bodySmall)
-                                if (doc.records.any { it.sourceWarnings.isNotEmpty() }) Text("有记录缺少来源信息，请打开核对。")
+            if (profilesOpen) {
+                ResearchAppProfilesPane(entries, profileSelection, onSelect = { profileSelection = it }, onOpenBatch = { batch ->
+                    requestedAppFilter = batch.filter
+                    selectedId = batch.sourceId
+                }, onOpenVideo = { id ->
+                    requestedAppFilter = null
+                    selectedId = id
+                }, busy = busy, modifier = Modifier.weight(1f))
+            } else {
+                OutlinedButton(onClick = { action { refresh(); profilesOpen = true } }, enabled = !busy) { Text("App 研究索引 · 已存研究") }
+                Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
+                Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
+                Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (entries.isEmpty()) item { Text("暂无研究记录。可导入文本 alignment-1 或视频 research-video-1 文件；样例与观察声明分开。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
+                    items(entries, key = { it.id }) { entry ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                if (entry.document == null) Text("无法读取的本地记录")
+                                entry.document?.let { doc ->
+                                    ResearchBatchHeading(doc)
+                                    Text(doc.sourceNotice, style = MaterialTheme.typography.bodySmall)
+                                    if (doc.records.any { it.sourceWarnings.isNotEmpty() }) Text("有记录缺少来源信息，请打开核对。")
+                                }
+                                if (entry.document == null) Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
+                                if (entry.error != null) Text(entry.error)
+                                else TextButton(onClick = { requestedAppFilter = null; selectedId = entry.id }, enabled = !busy) { Text("查看记录") }
                             }
-                            if (entry.document == null) Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
-                            if (entry.error != null) Text(entry.error)
-                            else TextButton(onClick = { selectedId = entry.id }, enabled = !busy) { Text("查看记录") }
                         }
                     }
                 }
             }
         } else {
-            var appFilter by remember(current.id) { mutableStateOf<ResearchAppFilter?>(null) }
+            var appFilter by remember(current.id) { mutableStateOf(requestedAppFilter?.takeIf { it.sourceId == current.id }) }
             val appFilters = remember(current.id) { current.appFilters }
             val visibleRecords = current.recordsForApp(appFilter)
             if (pending != null) {
