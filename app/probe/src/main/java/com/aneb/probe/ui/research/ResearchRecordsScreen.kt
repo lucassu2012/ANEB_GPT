@@ -202,6 +202,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             var appFilter by remember(current.id) { mutableStateOf(requestedAppFilter?.takeIf { it.sourceId == current.id }) }
             val appFilters = remember(current.id) { current.appFilters }
             val visibleRecords = current.recordsForApp(appFilter)
+            val conversations = remember(current.id, appFilter) { current.conversationsForApp(appFilter) }
+            var conversation by remember(current.id, appFilter) { mutableStateOf<ResearchConversation?>(null) }
+            val visibleTurns = conversations.turnsForSelection(conversation)
             if (pending != null) {
                 Button(enabled = !busy, onClick = {
                     val bytes = pending ?: return@Button
@@ -226,7 +229,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         FilterChip(selected = appFilter == option, onClick = { appFilter = option }, enabled = !busy, label = { Text(option.label) })
                     }
                 }
-                Text("显示 ${visibleRecords.size} / ${current.records.size} 条记录；仅筛选下方记录，分析与导出仍属整批。", style = MaterialTheme.typography.bodySmall)
+                Text("App 范围：${visibleRecords.size} / ${current.records.size} 条记录；可在下方进一步选会话，整批分析与导出范围不变。", style = MaterialTheme.typography.bodySmall)
             }
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
@@ -273,7 +276,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(if (pendingAnalysis == null) "已保存分析副本" else "分析预览 · 尚未保存", style = MaterialTheme.typography.titleMedium)
-                            if (!current.isVideo) Text("整批分析（未按 App 筛选）：以下计数与分组不代表当前 App 的指标；不自动合组或排名。")
+                            if (!current.isVideo) Text("整批分析（未按 App / 会话筛选）：以下计数与分组不代表当前选中范围的指标；不自动合组或排名。")
                             SelectionContainer { Text("分析 SHA-256：${currentAnalysis.id}\n关联原文：${currentAnalysis.sourceId}", style = MaterialTheme.typography.bodySmall) }
                             currentAnalysis.summaryLines.forEach { Text(it) }
                             if (pendingAnalysis != null) Button(enabled = !busy, onClick = {
@@ -291,9 +294,11 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         }
                     }
                 }
-                items(visibleRecords, key = { it.attemptId }) { attempt ->
-                    if (current.isVideo) ResearchVideoAttemptCard(attempt, currentAnalysis)
-                    else ResearchAttemptCard(attempt, currentAnalysis)
+                if (current.isVideo) {
+                    items(visibleRecords, key = { it.attemptId }) { attempt -> ResearchVideoAttemptCard(attempt, currentAnalysis) }
+                } else {
+                    item { ResearchConversationPane(conversations, conversation, onSelect = { conversation = it }, busy = busy) }
+                    items(visibleTurns, key = { it.attempt.attemptId }) { turn -> ResearchAttemptCard(turn, currentAnalysis) }
                 }
             }
         }
@@ -350,7 +355,9 @@ private fun ResearchVideoAttemptCard(attempt: ResearchAttempt, analysis: Researc
 }
 
 @Composable
-private fun ResearchAttemptCard(attempt: ResearchAttempt, analysis: ResearchAnalysis?) {
+private fun ResearchAttemptCard(turn: ResearchConversationTurn, analysis: ResearchAnalysis?) {
+    val attempt = turn.attempt
+    var rawExpanded by remember(turn.sourceId, attempt.attemptId) { mutableStateOf(false) }
     val raw = attempt.raw
     val app = raw["app"] as? JsonObject
     val outcome = raw["outcome"] as? JsonObject
@@ -364,14 +371,13 @@ private fun ResearchAttemptCard(attempt: ResearchAttempt, analysis: ResearchAnal
             Text("版本：${app?.text("version") ?: "UNKNOWN"}；模式：${app?.text("model_mode") ?: "UNKNOWN"}")
             Text("已发送：${displayValue(outcome?.get("executed"))}；可见完成：${displayValue(outcome?.get("visible_completion"))}；遵循指令：${displayValue(outcome?.get("instruction_following"))}")
             Text("时钟：${clock?.text("source") ?: "UNKNOWN"}；单位：${clock?.text("unit") ?: "UNKNOWN"}；域：${clock?.text("domain_id") ?: "UNKNOWN"}")
-            if (analysis == null) Text("TTFR / TTFC / Completion：尚未选择分析结果（非 0）。证据引用未在本机核验。")
-            else {
-                Text("导入分析 · 未在本机重算", style = MaterialTheme.typography.labelLarge)
-                analysis.attemptLines(attempt.attemptId).forEach { Text(it) }
-            }
-            listOf("metadata" to "设备、时间与网络", "events" to "原始事件与区间", "observed_intervals" to "原始观察区间", "missing_reasons" to "缺失原因", "evidence" to "证据引用（不打开外部路径）", "completion_observation" to "完成观察依据").forEach { (key, label) ->
-                Text(label, style = MaterialTheme.typography.labelLarge)
-                SelectionContainer { Text(displayValue(raw[key]), style = MaterialTheme.typography.bodySmall) }
+            ResearchConversationTurnContent(turn, analysis)
+            TextButton(onClick = { rawExpanded = !rawExpanded }) { Text(if (rawExpanded) "收起原始标注与证据引用" else "展开原始标注与证据引用") }
+            if (rawExpanded) {
+                listOf("context_observation" to "上下文原标注（含未识别字段，不补推断）", "metadata" to "设备、时间与网络", "events" to "原始事件与区间", "observed_intervals" to "原始观察区间", "missing_reasons" to "缺失原因", "evidence" to "证据引用（不打开外部路径）", "completion_observation" to "完成观察依据").forEach { (key, label) ->
+                    Text(label, style = MaterialTheme.typography.labelLarge)
+                    SelectionContainer { Text(displayValue(raw[key]), style = MaterialTheme.typography.bodySmall) }
+                }
             }
         }
     }
