@@ -11,6 +11,30 @@ import org.junit.rules.TemporaryFolder
 class ResearchConversationPresentationTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun resultsFirstSelectionKeepsOnlyCurrentScopeAndExplicitAnalysis() {
+        val document = ResearchRecordStore.decode(source(listOf(
+            row("a", "App甲", "会话甲", 1, "甲提示"),
+            row("b", "App乙", "会话乙", 1, "乙提示"),
+        )))
+        val analyses = ResearchAnalysisStore(temporary.newFolder())
+        val selected = analyses.save(document, analysisBytes(document, "uncertain"))
+        val other = ResearchRecordStore.decode(source(listOf(row("a", "App甲", "会话甲", 1, "另一批"))))
+        val app = document.appFilters.first()
+        val conversation = document.conversationsForApp(app).single()
+        val reading = document.readerSelection(app, conversation, selected)
+        assertEquals(listOf("a"), reading.turns.map { it.attempt.attemptId })
+        assertSame(selected, reading.analysis)
+        assertEquals(selected.attemptLines("a"), reading.turns.single().analysisLines(reading.analysis))
+        assertTrue(reading.scopeLabel.contains("App甲"))
+        assertTrue(reading.scopeLabel.contains("会话甲"))
+        assertNull(document.readerSelection(app, conversation, null).analysis)
+        val switched = other.readerSelection(app, conversation, selected)
+        assertNull(switched.analysis)
+        assertEquals("另一批", switched.turns.single().prompt)
+        assertTrue(switched.scopeLabel.contains("全部"))
+        assertEquals(listOf("b"), document.readerSelection(document.appFilters.last(), conversation, selected).turns.map { it.attempt.attemptId })
+    }
+
     @Test fun reopenedBatchShowsExplicitTurnsAndKeepsUnassignedRecordsWithoutChangingExport() {
         val bytes = source(listOf(
             row("second", "示例App", "会话甲", 2, "合成提示：缩短时间", "first"),
@@ -33,6 +57,23 @@ class ResearchConversationPresentationTest {
         assertEquals("未分会话", conversations[1].label)
         assertEquals("逐轮提示词未提供", conversations[1].turns.single().prompt)
         assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(saved.id, it) }.toByteArray())
+    }
+
+    @Test fun videoReaderKeepsWholeVideoScopeAndDoesNotSelectAnAnalysisImplicitly() {
+        val bytes = """{"format":"research-video-1","record_kind":"SAMPLE","app":"SAMPLE video",
+          "attempts":[{"slot":"SAMPLE-video","status":"NOT_RUN","reason":"SAMPLE not executed",
+            "V0":null,"VF":null,"window_end":null,"window_complete":"not_started","visible_target_playback":"not_observed"}]}""".toByteArray()
+        val store = ResearchRecordStore(temporary.newFolder())
+        val document = store.open(store.save(bytes).id)
+        val text = ResearchRecordStore.decode(source(listOf(row("a", "App甲", "会话甲", 1, "提示"))))
+        val reading = document.readerSelection(text.appFilters.single(), text.conversationsForApp(null).single(), null)
+        assertTrue(reading.turns.isEmpty())
+        assertEquals(document.records, reading.records)
+        assertEquals("当前范围：本批全部视频记录", reading.scopeLabel)
+        assertNull(reading.analysis)
+        assertEquals(document.records.single().statusLabel, reading.records.single().statusLabel)
+        assertTrue(reading.records.single().statusLabel.contains("不计播放失败"))
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
     }
 
     @Test fun switchingAppOrSourceCannotRetainAnotherConversationOrAnalysis() {

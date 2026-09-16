@@ -30,6 +30,32 @@ data class ResearchConversationTurn(val sourceId: String, val attempt: ResearchA
             ?: listOf("尚未选择本批分析（非 0）；可在上方选择已有副本。")
 }
 
+/** Current reader scope only; analysis values remain the imported presentation's responsibility. */
+data class ResearchReaderSelection(
+    val scopeLabel: String,
+    val turns: List<ResearchConversationTurn>,
+    val records: List<ResearchAttempt>,
+    val analysis: ResearchAnalysis?,
+)
+
+fun ResearchDocument.readerSelection(
+    app: ResearchAppFilter?,
+    conversation: ResearchConversation?,
+    analysis: ResearchAnalysis?,
+): ResearchReaderSelection {
+    val currentApp = app?.takeIf { it in appFilters }
+    val groups = conversationsForApp(currentApp)
+    val currentConversation = conversation?.takeIf { it in groups }
+    val turns = groups.turnsForSelection(currentConversation)
+    return ResearchReaderSelection(
+        if (isVideo) "当前范围：本批全部视频记录"
+        else "当前范围：${currentApp?.label ?: "全部 App"} · ${currentConversation?.label ?: "全部会话 / 未分会话"}",
+        turns,
+        if (isVideo) records else turns.map { it.attempt },
+        analysis?.takeIf { it.sourceId == id },
+    )
+}
+
 /** A stale selection from another App/batch never supplies records to the current reader. */
 fun List<ResearchConversation>.turnsForSelection(selection: ResearchConversation?): List<ResearchConversationTurn> =
     firstOrNull { it == selection }?.turns ?: flatMap { it.turns }
