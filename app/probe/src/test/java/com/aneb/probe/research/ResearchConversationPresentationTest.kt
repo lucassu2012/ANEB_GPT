@@ -11,6 +11,123 @@ import org.junit.rules.TemporaryFolder
 class ResearchConversationPresentationTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun topLevelAnnotationsRemainVisibleAfterReopenWithoutRewritingSource() {
+        val raw = JsonObject(row("synthetic-t2", "SyntheticApp", null, null, "Synthetic prompt").toMutableMap().apply {
+            put("conversation_id", JsonPrimitive("synthetic-conversation"))
+            put("turn_index", JsonPrimitive(2))
+            put("depends_on_attempt_id", JsonPrimitive("synthetic-t1"))
+        })
+        val bytes = source(listOf(raw))
+        val store = ResearchRecordStore(temporary.newFolder())
+        val document = store.open(store.save(bytes).id)
+        val conversation = document.conversationsForApp(null).single()
+        assertEquals("synthetic-conversation", conversation.conversationId)
+        val turn = conversation.turns.single()
+        assertEquals("第 2 轮（原标注）", turn.label)
+        assertTrue(turn.contextLines.any { it.contains("依赖记录：synthetic-t1") })
+        assertEquals(1, document.readerSelection(null, conversation, null).records.size)
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
+    }
+
+    @Test fun conflictingAnnotationsStayUnknownInsteadOfChoosingOneOrigin() {
+        val raw = JsonObject(row("conflict", "SyntheticApp", "nested", 1, "prompt", "nested-parent").toMutableMap().apply {
+            put("conversation_id", JsonPrimitive("top")); put("turn_index", JsonPrimitive(2))
+            put("depends_on_attempt_id", JsonPrimitive("top-parent"))
+        })
+        val bytes = source(listOf(raw))
+        val store = ResearchRecordStore(temporary.newFolder())
+        val doc = store.open(store.save(bytes).id)
+        val group = doc.conversationsForApp(null).single()
+        assertNull(group.conversationId)
+        assertNull(group.turns.single().turnIndex)
+        val lines = group.turns.single().contextLines
+        assertTrue(lines.any { it.startsWith("会话标注：") && it.contains("冲突") })
+        assertTrue(lines.any { it.startsWith("依赖记录：") && it.contains("冲突") })
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(doc.id, it) }.toByteArray())
+    }
+
+    @Test fun importedLongIntervalIsDisplayedOutwardWithoutChangingAnalysisBytes() {
+        val doc = ResearchRecordStore.decode(source(listOf(row("timing", "SyntheticApp", "conversation", 2, "prompt"))))
+        val root = Json.parseToJsonElement(analysisBytes(doc, "interval").toString(Charsets.UTF_8)).jsonObject
+        val originalRow = root["records"]!!.jsonArray.single().jsonObject
+        val bytes = JsonObject(root.toMutableMap().apply {
+            put("records", JsonArray(listOf(JsonObject(originalRow.toMutableMap().apply {
+                put("ttfc", buildJsonObject {
+                    put("status", "interval")
+                    put("interval_s", Json.parseToJsonElement("[10.235444444444444,10.437222222222223]"))
+                })
+            }))))
+        }).toString().toByteArray()
+        val store = ResearchAnalysisStore(temporary.newFolder())
+        val analysis = store.open(doc, store.save(doc, bytes).id)
+        val reading = doc.readerSelection(null, null, analysis)
+        val lines = reading.turns.single().analysisLines(reading.analysis)
+        assertTrue(lines.any { it.contains("TTFC：[10.235, 10.438] 秒") })
+        assertTrue(lines.any { it.contains("向外取整") && it.contains("原始数据未改") })
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(doc, analysis.id, it) }.toByteArray())
+    }
+
+    @Test fun topLevelTurnsStayWithinTheirFileAndInvalidTurnRemainsUnassigned() {
+        fun top(id: String, index: JsonElement) = JsonObject(row(id, "SyntheticApp", null, null, id).toMutableMap().apply {
+            put("conversation_id", JsonPrimitive("same-explicit-conversation")); put("turn_index", index)
+        })
+        val first = ResearchRecordStore.decode(source(listOf(top("first", JsonPrimitive(1)))))
+        val second = ResearchRecordStore.decode(source(listOf(top("second", JsonPrimitive(2)), top("invalid", JsonPrimitive("3")))))
+        val stale = first.conversationsForApp(null).single()
+        val current = second.readerSelection(null, stale, null)
+        assertEquals(listOf("second", "invalid"), current.records.map { it.attemptId })
+        assertEquals(2, current.turns.first().turnIndex)
+        assertNull(current.turns.last().turnIndex)
+        assertEquals("未分会话", second.conversationsForApp(null).last().label)
+        assertTrue(current.turns.all { it.sourceId == second.id })
+        assertTrue(current.turns.first().contextLines.any { it.contains("不拼接跨文件") })
+    }
+
+    @Test fun intervalDisplayKeepsExactBoundariesAndUnknownsWhenAnalysisChanges() {
+        val doc = ResearchRecordStore.decode(source(listOf(row("timing", "SyntheticApp", null, null, "prompt"))))
+        val store = ResearchAnalysisStore(temporary.newFolder())
+        val template = Json.parseToJsonElement(analysisBytes(doc, "interval").toString(Charsets.UTF_8)).jsonObject
+        val original = template["records"]!!.jsonArray.single().jsonObject
+        listOf("[0.9999,1.0001]" to "[0.999, 1.001]", "[1.234,1.234]" to "[1.234, 1.234]").forEach { (raw, expected) ->
+            val bytes = JsonObject(template.toMutableMap().apply {
+                put("records", JsonArray(listOf(JsonObject(original.toMutableMap().apply {
+                    put("ttfc", buildJsonObject { put("status", "interval"); put("interval_s", Json.parseToJsonElement(raw)) })
+                }))))
+            }).toString().toByteArray()
+            val analysis = store.open(doc, store.save(doc, bytes).id)
+            assertTrue(doc.readerSelection(null, null, analysis).turns.single().analysisLines(analysis).any { it.contains(expected) })
+            assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(doc, analysis.id, it) }.toByteArray())
+        }
+        listOf("uncertain", "NA").forEach { status ->
+            val bytes = analysisBytes(doc, status)
+            val analysis = store.open(doc, store.save(doc, bytes).id)
+            val lines = doc.readerSelection(null, null, analysis).turns.single().analysisLines(analysis)
+            assertTrue(lines.single { it.startsWith("首个内容 TTFC") }.contains(status))
+            assertFalse(lines.single { it.startsWith("首个内容 TTFC") }.contains("[0"))
+        }
+        assertNull(doc.readerSelection(null, null, null).analysis)
+    }
+
+    @Test fun extremeImportedExponentRemainsExportableAndDoesNotCrashReader() {
+        val doc = ResearchRecordStore.decode(source(listOf(row("extreme", "SyntheticApp", null, null, "prompt"))))
+        val root = Json.parseToJsonElement(analysisBytes(doc, "interval").toString(Charsets.UTF_8)).jsonObject
+        val original = root["records"]!!.jsonArray.single().jsonObject
+        val bytes = JsonObject(root.toMutableMap().apply {
+            put("records", JsonArray(listOf(JsonObject(original.toMutableMap().apply {
+                put("ttfc", buildJsonObject {
+                    put("status", "interval"); put("interval_s", Json.parseToJsonElement("[1e2147483647,1e2147483647]"))
+                })
+            }))))
+        }).toString().toByteArray()
+        val store = ResearchAnalysisStore(temporary.newFolder())
+        val analysis = store.open(doc, store.save(doc, bytes).id)
+        val reading = doc.readerSelection(null, null, analysis)
+        val line = reading.turns.single().analysisLines(reading.analysis).single { it.startsWith("首个内容 TTFC") }
+        assertTrue(line, line.contains("无法显示") && line.contains("原始数据保留"))
+        assertFalse(line, line.contains("[0"))
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(doc, analysis.id, it) }.toByteArray())
+    }
+
     @Test fun resultsFirstSelectionKeepsOnlyCurrentScopeAndExplicitAnalysis() {
         val document = ResearchRecordStore.decode(source(listOf(
             row("a", "App甲", "会话甲", 1, "甲提示"),

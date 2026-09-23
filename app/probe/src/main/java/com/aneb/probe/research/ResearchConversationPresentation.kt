@@ -18,8 +18,10 @@ data class ResearchConversationTurn(val sourceId: String, val attempt: ResearchA
     val contextLines: List<String> get() {
         val context = attempt.raw["context_observation"] as? JsonObject
         return listOf(
-            "会话标注：${context?.text("conversation_id") ?: "未提供"}",
-            "依赖记录：${context?.text("depends_on_attempt_id") ?: "未标注 / 不适用"}",
+            "会话标注：${attempt.raw.annotationDisplay("conversation_id")}",
+            "依赖记录：${attempt.raw.annotationDisplay("depends_on_attempt_id")}",
+            if (attempt.raw.annotationConflict("turn_index")) "轮次标注：未知（顶层与上下文标注冲突）" else label,
+            "仅显示本文件原标注；不拼接跨文件会话。",
             "动作及顺序保留（原观察）：${observation(context?.get("visible_actions_and_order_retained"))}",
             "纳入上下文观察分母（原标注）：${observation(context?.get("eligible_context_denominator"))}",
         )
@@ -63,9 +65,8 @@ fun List<ResearchConversation>.turnsForSelection(selection: ResearchConversation
 fun ResearchDocument.conversationsForApp(filter: ResearchAppFilter?): List<ResearchConversation> {
     if (isVideo) return emptyList()
     return recordsForApp(filter).map { attempt ->
-        val context = attempt.raw["context_observation"] as? JsonObject
-        val index = (context?.get("turn_index") as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()?.takeIf { it > 0 }
-        val id = context?.text("conversation_id")?.takeIf { it.isNotBlank() && it != "UNKNOWN" }
+        val index = (attempt.raw.annotation("turn_index") as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()?.takeIf { it > 0 }
+        val id = attempt.raw.annotationText("conversation_id")
         val valid = id != null && index != null
         val app = researchDeclaredValue((attempt.raw["app"] as? JsonObject)?.text("name"))
         (app to if (valid) id else null) to ResearchConversationTurn(this.id, attempt, if (valid) index else null)
@@ -73,6 +74,25 @@ fun ResearchDocument.conversationsForApp(filter: ResearchAppFilter?): List<Resea
         ResearchConversation(id, key.first, key.second, if (key.second == null) turns else turns.sortedBy { it.turnIndex })
     }
 }
+
+/** Optional annotations only, never inferred from record IDs or another source. */
+private fun JsonObject.annotation(key: String): JsonElement? {
+    if (annotationConflict(key)) return null
+    val nested = get("context_observation") as? JsonObject
+    return if (nested?.containsKey(key) == true) nested[key] else get(key)
+}
+
+private fun JsonObject.annotationConflict(key: String): Boolean {
+    val nested = get("context_observation") as? JsonObject
+    return containsKey(key) && nested?.containsKey(key) == true && get(key) != nested[key]
+}
+
+private fun JsonObject.annotationDisplay(key: String): String =
+    if (annotationConflict(key)) "未知（顶层与上下文标注冲突）"
+    else annotationText(key) ?: "未知（未提供、无效或不适用）"
+
+private fun JsonObject.annotationText(key: String): String? =
+    (annotation(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() && it != "UNKNOWN" }
 
 private fun observation(value: JsonElement?): String = when (value) {
     null, JsonNull -> "未记录 / 不适用"
