@@ -1,6 +1,7 @@
 package com.aneb.probe.research
 
 import kotlinx.serialization.json.*
+import java.math.RoundingMode
 
 /** Chinese labels over imported values only: no duration, count, or aggregate is calculated here. */
 val ResearchAnalysis.summaryLines: List<String> get() {
@@ -11,6 +12,7 @@ val ResearchAnalysis.summaryLines: List<String> get() {
         "计划：${number(counts?.get("planned"))}；已尝试：${number(counts?.get("attempted"))}；未执行：${number(counts?.get("not_run"))}；可见完成已确认：${number(counts?.get("visible_completed_confirmed"))}",
         "可见完成按源标注计数，不等于指令成功或App成功率，也不是完成时长有效数。",
         "以下时长为秒区间，不是精确时间点或区间中点；不用于网络归因。",
+        intervalDisplayNotice,
     )
 }
 
@@ -33,6 +35,7 @@ fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
                 }
             }
         }
+        add(intervalDisplayNotice)
         val stalls = row["stalls"] as? JsonObject
         add("停顿观察：${when (stalls?.text("status")) {
             "partial" -> "部分观察（partial）"
@@ -79,6 +82,7 @@ val ResearchAnalysis.groupLines: List<String> get() {
 }
 
 private val metricNames = listOf("ttfr" to "首个反馈 TTFR", "ttfc" to "首个内容 TTFC", "completion" to "完成 Completion")
+private const val intervalDisplayNotice = "数值区间向外取整至 0.001 秒；原始数据未改。"
 
 private fun number(value: JsonElement?, missing: String = "NA"): String =
     (value as? JsonPrimitive)?.takeIf { !it.isString && it.content.toBigDecimalOrNull() != null }?.content ?: missing
@@ -86,7 +90,9 @@ private fun number(value: JsonElement?, missing: String = "NA"): String =
 private fun seconds(value: JsonElement?, missing: String = "NA（未提供区间）"): String {
     val pair = value as? JsonArray ?: return missing
     if (pair.size != 2 || pair.any { number(it) == "NA" }) return missing
-    return "[${number(pair[0])}, ${number(pair[1])}] 秒"
+    val lower = number(pair[0]).toBigDecimal().setScale(3, RoundingMode.FLOOR).stripTrailingZeros().toPlainString()
+    val upper = number(pair[1]).toBigDecimal().setScale(3, RoundingMode.CEILING).stripTrailingZeros().toPlainString()
+    return "[$lower, $upper] 秒"
 }
 
 private fun reason(value: JsonElement?): String {
