@@ -89,9 +89,19 @@ private fun number(value: JsonElement?, missing: String = "NA"): String =
 
 private fun seconds(value: JsonElement?, missing: String = "NA（未提供区间）"): String {
     val pair = value as? JsonArray ?: return missing
-    if (pair.size != 2 || pair.any { number(it) == "NA" }) return missing
-    val lower = number(pair[0]).toBigDecimal().setScale(3, RoundingMode.FLOOR).stripTrailingZeros().toPlainString()
-    val upper = number(pair[1]).toBigDecimal().setScale(3, RoundingMode.CEILING).stripTrailingZeros().toPlainString()
+    if (pair.size != 2) return missing
+    val unavailable = "无法显示区间（超出显示范围；原始数据保留）"
+    val decimals = pair.map {
+        val token = (it as? JsonPrimitive)?.takeIf { primitive -> !primitive.isString }?.content ?: return missing
+        // Display resource budget, not an input/schema or measurement limit. Check before exponent expansion.
+        if (token.length > 1024) return unavailable
+        val decimal = token.toBigDecimalOrNull() ?: return missing
+        if (decimal.scale() !in -1000..1000 || decimal.precision() > 1000 ||
+            decimal.precision().toLong() - decimal.scale().toLong() > 12) return unavailable
+        decimal
+    }
+    val lower = decimals[0].setScale(3, RoundingMode.FLOOR).stripTrailingZeros().toPlainString()
+    val upper = decimals[1].setScale(3, RoundingMode.CEILING).stripTrailingZeros().toPlainString()
     return "[$lower, $upper] 秒"
 }
 

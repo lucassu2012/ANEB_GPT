@@ -108,6 +108,26 @@ class ResearchConversationPresentationTest {
         assertNull(doc.readerSelection(null, null, null).analysis)
     }
 
+    @Test fun extremeImportedExponentRemainsExportableAndDoesNotCrashReader() {
+        val doc = ResearchRecordStore.decode(source(listOf(row("extreme", "SyntheticApp", null, null, "prompt"))))
+        val root = Json.parseToJsonElement(analysisBytes(doc, "interval").toString(Charsets.UTF_8)).jsonObject
+        val original = root["records"]!!.jsonArray.single().jsonObject
+        val bytes = JsonObject(root.toMutableMap().apply {
+            put("records", JsonArray(listOf(JsonObject(original.toMutableMap().apply {
+                put("ttfc", buildJsonObject {
+                    put("status", "interval"); put("interval_s", Json.parseToJsonElement("[1e2147483647,1e2147483647]"))
+                })
+            }))))
+        }).toString().toByteArray()
+        val store = ResearchAnalysisStore(temporary.newFolder())
+        val analysis = store.open(doc, store.save(doc, bytes).id)
+        val reading = doc.readerSelection(null, null, analysis)
+        val line = reading.turns.single().analysisLines(reading.analysis).single { it.startsWith("首个内容 TTFC") }
+        assertTrue(line, line.contains("无法显示") && line.contains("原始数据保留"))
+        assertFalse(line, line.contains("[0"))
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(doc, analysis.id, it) }.toByteArray())
+    }
+
     @Test fun resultsFirstSelectionKeepsOnlyCurrentScopeAndExplicitAnalysis() {
         val document = ResearchRecordStore.decode(source(listOf(
             row("a", "App甲", "会话甲", 1, "甲提示"),
