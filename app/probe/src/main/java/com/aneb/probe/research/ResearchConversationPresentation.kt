@@ -13,6 +13,11 @@ data class ResearchConversation(
 }
 
 data class ResearchConversationTurn(val sourceId: String, val attempt: ResearchAttempt, val turnIndex: Int?) {
+    /** Original record text only; independent of analysis selection and outcome interpretation. */
+    val resultAnnotationLines: List<String> get() = listOf(
+        "完成依据（原文）：${attempt.raw.resultAnnotation("outcome", "completion_basis")}",
+        "样本限制与分组说明（原文）：${attempt.raw.resultAnnotation("summary_group", "reason")}",
+    )
     val label: String get() = turnIndex?.let { "第 $it 轮（原标注）" } ?: "轮次未提供或无效 · 原输入顺序"
     val prompt: String get() = attempt.raw.text("action_text")?.takeIf { it.isNotBlank() } ?: "逐轮提示词未提供"
     val contextLines: List<String> get() {
@@ -73,6 +78,19 @@ fun ResearchDocument.conversationsForApp(filter: ResearchAppFilter?): List<Resea
     }.groupBy({ it.first }, { it.second }).map { (key, turns) ->
         ResearchConversation(id, key.first, key.second, if (key.second == null) turns else turns.sortedBy { it.turnIndex })
     }
+}
+
+/** Display-only absence/type handling; never repairs or interprets the stored annotation. */
+private fun JsonObject.resultAnnotation(parent: String, key: String): String {
+    val container = get(parent)
+    if (container == null || container == JsonNull) return "未提供原标注"
+    if (container !is JsonObject) return "原标注格式无法显示"
+    val value = container[key]
+    if (value == null || value == JsonNull) return "未提供原标注"
+    val text = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+        ?: return "原标注格式无法显示"
+    if (text.isBlank()) return "未提供原标注"
+    return if (text == "UNKNOWN" || text == "未知") "$text\n原文标为未知" else text
 }
 
 /** Optional annotations only, never inferred from record IDs or another source. */

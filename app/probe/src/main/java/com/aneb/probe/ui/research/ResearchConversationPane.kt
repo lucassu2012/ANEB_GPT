@@ -32,9 +32,20 @@ fun ResearchConversationPane(
 @Composable
 fun ResearchConversationTurnContent(turn: ResearchConversationTurn, analysis: ResearchAnalysis?) {
     var contextExpanded by remember(turn.sourceId, turn.attempt.attemptId) { mutableStateOf(false) }
+    var resultNotesExpanded by remember(turn.sourceId, turn.attempt.attemptId) { mutableStateOf(true) }
     Text(turn.label, style = MaterialTheme.typography.titleSmall)
     Text("本轮结果 · 原分析，未重算或核验", style = MaterialTheme.typography.labelLarge)
     turn.analysisLines(analysis).forEach { Text(it) }
+    Text("结果怎么读（原标注）", style = MaterialTheme.typography.labelLarge)
+    Text("以下文字来自当前所选记录，按原文显示；本应用未据此核验研究结论。", style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = { resultNotesExpanded = !resultNotesExpanded }) {
+        Text(if (resultNotesExpanded) "收起原文" else "展开原文（原文尚未全部显示）")
+    }
+    if (resultNotesExpanded) {
+        turn.resultAnnotationLines.forEach { line ->
+            SelectionContainer { Text(line, style = MaterialTheme.typography.bodyMedium) }
+        }
+    }
     TextButton(onClick = { contextExpanded = !contextExpanded }) {
         Text(if (contextExpanded) "收起提示词与上下文" else "展开提示词与上下文")
     }
