@@ -11,6 +11,98 @@ import org.junit.rules.TemporaryFolder
 class ResearchConversationPresentationTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun reopenedReaderShowsOriginalResultNotesWithoutChangingExport() {
+        val raw = JsonObject(row("notes", "SyntheticApp", "conversation", 1, "prompt").toMutableMap().apply {
+            put("outcome", buildJsonObject {
+                put("status", "incomplete"); put("visible_completion", "uncertain")
+                put("completion_basis", "合成说明：完成范围包含正文后的标题与链接。")
+            })
+            put("summary_group", buildJsonObject {
+                put("confirmed", false)
+                put("reason", "合成说明：修订不是独立样本；持久身份未知。")
+            })
+        })
+        val bytes = source(listOf(raw))
+        val directory = temporary.newFolder()
+        val saved = ResearchRecordStore(directory).save(bytes)
+        val store = ResearchRecordStore(directory)
+        val document = store.open(saved.id)
+        val turn = document.readerSelection(null, null, null).turns.single()
+        assertEquals(listOf(
+            "完成依据（原文）：合成说明：完成范围包含正文后的标题与链接。",
+            "样本限制与分组说明（原文）：合成说明：修订不是独立样本；持久身份未知。",
+        ), turn.resultAnnotationLines)
+        assertEquals("完成未确认", turn.attempt.statusLabel)
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
+    }
+
+    @Test fun missingAndInvalidResultNotesKeepTheOtherOriginalNote() {
+        val examples = listOf(
+            null to "未提供原标注", JsonNull to "未提供原标注",
+            JsonPrimitive("") to "未提供原标注", JsonPrimitive(" \n\t") to "未提供原标注",
+            JsonPrimitive(1) to "原标注格式无法显示", JsonPrimitive(false) to "原标注格式无法显示",
+            JsonArray(emptyList()) to "原标注格式无法显示", buildJsonObject {} to "原标注格式无法显示",
+        )
+        val fields = listOf("outcome" to "completion_basis", "summary_group" to "reason")
+        val store = ResearchRecordStore(temporary.newFolder())
+        fields.forEachIndexed { index, (parent, field) ->
+            examples.forEach { (value, expected) ->
+                val raw = notesRow("notes", "App", "conversation", "Original basis", "Original sample limit").toMutableMap()
+                raw[parent] = JsonObject(raw[parent]!!.jsonObject.toMutableMap().apply {
+                    if (value == null) remove(field) else put(field, value)
+                })
+                val bytes = source(listOf(JsonObject(raw)))
+                val document = store.open(store.save(bytes).id)
+                val turn = document.readerSelection(null, null, null).turns.single()
+                assertTrue("$parent/$value: ${turn.resultAnnotationLines}", turn.resultAnnotationLines[index].endsWith(expected))
+                assertTrue(turn.resultAnnotationLines[1 - index].endsWith(if (index == 0) "Original sample limit" else "Original basis"))
+                assertEquals("完成未确认", turn.attempt.statusLabel)
+                assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
+            }
+        }
+    }
+
+    @Test fun unknownResultNoteStaysOriginalAndDoesNotReplaceAQualifiedSentence() {
+        val sentence = "Synthetic related revision, not independent sample; persistent identity UNKNOWN."
+        val bytes = source(listOf(notesRow("unknown", "App", "conversation", "UNKNOWN", sentence)))
+        val store = ResearchRecordStore(temporary.newFolder())
+        val document = store.open(store.save(bytes).id)
+        val lines = document.readerSelection(null, null, null).turns.single().resultAnnotationLines
+        assertEquals("完成依据（原文）：UNKNOWN\n原文标为未知", lines[0])
+        assertEquals("样本限制与分组说明（原文）：$sentence", lines[1])
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
+    }
+
+    @Test fun longOriginalNotesStayCompleteAndFollowTheCurrentReaderSource() {
+        val longNote = "  Synthetic annotation, no verified conclusion.\n".repeat(100) +
+            "END https://example.invalid/note E:/synthetic/note.txt  "
+        val bytes = source(listOf(
+            notesRow("a", "App甲", "会话一", longNote, "Original limit A"),
+            notesRow("b", "App甲", "会话二", "Original basis B", "Original limit B"),
+            notesRow("c", "App乙", "会话一", "Original basis C", "Original limit C"),
+        ))
+        val directory = temporary.newFolder()
+        val saved = ResearchRecordStore(directory).save(bytes)
+        val store = ResearchRecordStore(directory)
+        val document = store.open(saved.id)
+        val app = document.appFilters.first { it.appName == "App甲" }
+        val conversations = document.conversationsForApp(app)
+        val first = document.readerSelection(app, conversations.first(), null).turns.single()
+        assertEquals("完成依据（原文）：$longNote", first.resultAnnotationLines[0])
+        val second = document.readerSelection(app, conversations.last(), null).turns.single()
+        assertEquals("完成依据（原文）：Original basis B", second.resultAnnotationLines[0])
+        val otherApp = document.appFilters.first { it.appName == "App乙" }
+        assertEquals("完成依据（原文）：Original basis C", document.readerSelection(otherApp, conversations.first(), null).turns.single().resultAnnotationLines[0])
+        val laterBytes = source(listOf(row("a", "App甲", "会话一", 1, "Later source without notes")))
+        val later = store.open(store.save(laterBytes).id)
+        val current = later.readerSelection(app, conversations.first(), null).turns.single()
+        assertEquals(listOf("完成依据（原文）：未提供原标注", "样本限制与分组说明（原文）：未提供原标注"), current.resultAnnotationLines)
+        assertEquals("完成依据（原文）：$longNote", store.open(saved.id).readerSelection(app, conversations.first(), null).turns.single().resultAnnotationLines[0])
+        listOf(document.id to bytes, later.id to laterBytes).forEach { (id, original) ->
+            assertArrayEquals(original, ByteArrayOutputStream().also { store.export(id, it) }.toByteArray())
+        }
+    }
+
     @Test fun topLevelAnnotationsRemainVisibleAfterReopenWithoutRewritingSource() {
         val raw = JsonObject(row("synthetic-t2", "SyntheticApp", null, null, "Synthetic prompt").toMutableMap().apply {
             put("conversation_id", JsonPrimitive("synthetic-conversation"))
@@ -242,6 +334,12 @@ class ResearchConversationPresentationTest {
         assertEquals(6, groups.turnsForSelection(null).size)
         assertEquals("保留此提示", groups.first().turns.first().prompt)
     }
+
+    private fun notesRow(id: String, app: String, conversation: String, basis: String, reason: String): JsonObject =
+        JsonObject(row(id, app, conversation, 1, "Synthetic prompt").toMutableMap().apply {
+            put("outcome", JsonObject(get("outcome")!!.jsonObject.toMutableMap().apply { put("completion_basis", JsonPrimitive(basis)) }))
+            put("summary_group", buildJsonObject { put("confirmed", false); put("reason", reason) })
+        })
 
     private fun analysisBytes(document: ResearchDocument, status: String): ByteArray = buildJsonObject {
         put("source_sha256", document.id); put("record_kind", "SAMPLE"); put("input_revision", "alignment-1")
