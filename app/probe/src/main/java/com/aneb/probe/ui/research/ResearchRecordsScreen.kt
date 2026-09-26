@@ -1,10 +1,15 @@
 package com.aneb.probe.ui.research
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -41,6 +46,8 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var pending by remember { mutableStateOf<ByteArray?>(null) }
     var busy by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var batchImportPreview by remember { mutableStateOf<ResearchBatchImportPreview?>(null) }
+    var batchSaveReceipt by remember { mutableStateOf<ResearchBatchImportSaveReceipt?>(null) }
     var confirmExport by remember { mutableStateOf(false) }
     var analysisEntries by remember { mutableStateOf(emptyList<ResearchAnalysisEntry>()) }
     var analysis by remember { mutableStateOf<ResearchAnalysis?>(null) }
@@ -145,6 +152,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             notice = "原文 SHA-256 与尝试身份已关联；这不等于数值或媒体已核验。请确认保存独立副本。"
         }
     }
+    val batchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        // Picker cancellation returns no URIs: no preview, Store call, or write is made.
+        if (uris.isNotEmpty()) action {
+            val files = withContext(Dispatchers.IO) { readResearchBatchFiles(context, uris) }
+            batchImportPreview = withContext(Dispatchers.IO) { ResearchBatchImport.preview(files, store, analysisStore) }
+            batchSaveReceipt = null
+            notice = "已生成本地预览；关闭预览不会保存。原文与分析分别保留，不重算或自动选择分析。"
+        }
+    }
     val back: () -> Unit = {
         if (!busy) {
             if (document != null) {
@@ -180,6 +196,10 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 OutlinedButton(onClick = { action { refresh(); profilesOpen = true } }, enabled = !busy) { Text("App 研究索引 · 已存研究") }
                 Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
                 Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
+                Button(onClick = {
+                    batchPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                }, enabled = !busy) { Text("批量导入原文与分析 JSON") }
+                Text("每次最多 20 个文件、总计 10 MiB；单份仍限 1 MiB。只在预览中确认后写入本机。", color = colors.muted)
                 Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (entries.isEmpty()) item { Text("暂无研究记录。可导入文本 alignment-1 或视频 research-video-1 文件；样例与观察声明分开。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
@@ -324,6 +344,73 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
         }
     }
+    batchImportPreview?.let { preview ->
+        val readyCount = preview.items.count { it.status == ResearchBatchImportItemStatus.READY }
+        AlertDialog(
+            onDismissRequest = { if (!busy) batchImportPreview = null },
+            title = { Text("导入预览 · $readyCount 项可保存") },
+            text = {
+                Column(
+                    Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("配对只按原文 SHA-256 与已有 attempt 身份校验；不会合并原文和分析，也不会自动选择分析。")
+                    preview.pairs.forEach { pair ->
+                        Text("${pair.rawFileName ?: "本机已有原文"} · ${pair.sourceId.take(12)}…")
+                        pair.analysisFileNames.forEach { Text("  ↳ ${it}") }
+                    }
+                    preview.items.forEach { item ->
+                        val kind = when (item.kind) {
+                            ResearchBatchImportItemKind.RAW -> "原文"
+                            ResearchBatchImportItemKind.ANALYSIS -> "分析"
+                            ResearchBatchImportItemKind.UNKNOWN -> "未知 JSON"
+                        }
+                        val status = when (item.status) {
+                            ResearchBatchImportItemStatus.READY -> "可保存"
+                            ResearchBatchImportItemStatus.INVALID -> "无效"
+                            ResearchBatchImportItemStatus.UNMATCHED_SOURCE -> "找不到原文"
+                            ResearchBatchImportItemStatus.DUPLICATE -> "重复项"
+                        }
+                        Text("$kind · $status · ${item.fileName}")
+                        item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.muted) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !busy && readyCount > 0,
+                    onClick = {
+                        val selectedPreview = batchImportPreview ?: return@TextButton
+                        action {
+                            val receipt = withContext(Dispatchers.IO) { selectedPreview.confirmSave() }
+                            batchSaveReceipt = receipt
+                            batchImportPreview = null
+                            refresh()
+                            notice = "导入处理完成：已保存 ${receipt.savedCount}/${receipt.items.size} 项；未保存项已逐项列出。"
+                        }
+                    },
+                ) { Text("确认保存 $readyCount 项") }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { batchImportPreview = null }) { Text("取消 · 不保存") } },
+        )
+    }
+    batchSaveReceipt?.let { receipt ->
+        AlertDialog(
+            onDismissRequest = { batchSaveReceipt = null },
+            title = { Text("导入结果 · 已保存 ${receipt.savedCount}/${receipt.items.size} 项") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    receipt.items.forEach { item ->
+                        val label = if (item.status == ResearchBatchImportSaveStatus.SAVED) "已保存" else "未保存"
+                        Text("$label · ${item.fileName}")
+                        item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.muted) }
+                    }
+                    Text("已保存项保留；未保存项没有被当作成功，也不会回滚其它独立 Store。", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { batchSaveReceipt = null }) { Text("完成") } },
+        )
+    }
     if (confirmExport || analysisExportId != null) AlertDialog(
         onDismissRequest = { confirmExport = false; analysisExportId = null },
         title = { Text(if (analysisExportId != null) "导出独立分析副本？" else "导出原始记录？") },
@@ -415,3 +502,57 @@ private fun displayValue(value: JsonElement?): String = when (value) {
     is JsonPrimitive -> when (value.content) { "true", "yes" -> "是"; "false", "no" -> "否"; "uncertain" -> "不确定"; else -> value.content }
     else -> displayJson.encodeToString(JsonElement.serializer(), value)
 }
+
+private fun readResearchBatchFiles(context: Context, uris: List<Uri>): List<ResearchBatchImportFile> {
+    if (uris.size > ResearchBatchImport.MAX_FILES) {
+        return uris.map { uri ->
+            ResearchBatchImportFile(displayName(context, uri), byteArrayOf(), readError = "too_many")
+        }
+    }
+    var totalBytes = 0L
+    var batchBudgetReached = false
+    return uris.map { uri ->
+        val name = displayName(context, uri)
+        if (batchBudgetReached || totalBytes >= ResearchBatchImport.MAX_TOTAL_BYTES) {
+            batchBudgetReached = true
+            return@map ResearchBatchImportFile(name, byteArrayOf(), readError = "batch_limit")
+        }
+        val remainingBatchBytes = ResearchBatchImport.MAX_TOTAL_BYTES - totalBytes
+        try {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (output.size().toLong() + count > ResearchRecordStore.MAX_BYTES) throw ResearchFileTooLarge()
+                    if (output.size().toLong() + count > remainingBatchBytes) throw ResearchBatchTooLarge()
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: throw IllegalStateException("open failed")
+            totalBytes += bytes.size
+            ResearchBatchImportFile(name, bytes)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ResearchFileTooLarge) {
+            ResearchBatchImportFile(name, byteArrayOf(), readError = "too_large")
+        } catch (e: ResearchBatchTooLarge) {
+            batchBudgetReached = true
+            ResearchBatchImportFile(name, byteArrayOf(), readError = "batch_limit")
+        } catch (_: Exception) {
+            ResearchBatchImportFile(name, byteArrayOf(), readError = "unreadable")
+        }
+    }
+}
+
+private fun displayName(context: Context, uri: Uri): String = try {
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0)?.take(160) else null
+    } ?: uri.lastPathSegment?.take(160) ?: "未命名 JSON"
+} catch (_: Exception) {
+    "未命名 JSON"
+}
+
+private class ResearchFileTooLarge : IllegalArgumentException()
+private class ResearchBatchTooLarge : IllegalArgumentException()

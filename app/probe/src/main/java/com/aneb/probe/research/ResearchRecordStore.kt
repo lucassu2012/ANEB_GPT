@@ -66,6 +66,28 @@ class ResearchImportException(message: String) : IllegalArgumentException(messag
 internal fun JsonObject.text(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
+/** Shared byte/UTF-8/depth guard used before any JSON tree parse in local import paths. */
+internal fun validatedResearchInputText(bytes: ByteArray): String {
+    val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
+    // A local parser resource budget, not a research/schema claim.
+    var depth = 0
+    var quoted = false
+    var escaped = false
+    for (character in text) {
+        if (quoted) {
+            if (escaped) escaped = false
+            else if (character == '\\') escaped = true
+            else if (character == '"') quoted = false
+        } else when (character) {
+            '"' -> quoted = true
+            '{', '[' -> { depth++; require(depth <= 64) { "JSON 嵌套过深" } }
+            '}', ']' -> depth--
+        }
+    }
+    return text
+}
+
 /** App-private raw documents, independent of Room/AQS/Prototype evidence. Call on IO dispatcher. */
 class ResearchRecordStore(private val directory: File) {
     fun save(bytes: ByteArray): ResearchDocument {
@@ -123,23 +145,7 @@ class ResearchRecordStore(private val directory: File) {
         fun decode(bytes: ByteArray): ResearchDocument {
             require(bytes.size <= MAX_BYTES) { "研究记录超过 1 MiB" }
             try {
-                val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
-                // Local import resource budget, not a research/schema claim.
-                var depth = 0
-                var quoted = false
-                var escaped = false
-                for (character in text) {
-                    if (quoted) {
-                        if (escaped) escaped = false
-                        else if (character == '\\') escaped = true
-                        else if (character == '"') quoted = false
-                    } else when (character) {
-                        '"' -> quoted = true
-                        '{', '[' -> { depth++; require(depth <= 64) { "JSON 嵌套过深" } }
-                        '}', ']' -> depth--
-                    }
-                }
+                val text = validatedResearchInputText(bytes)
                 val root = Json.parseToJsonElement(text) as? JsonObject
                     ?: throw IllegalArgumentException("需要批量 JSON 对象")
                 if (ResearchVideoFormat.matches(root)) {
