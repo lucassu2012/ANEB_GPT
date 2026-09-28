@@ -244,6 +244,38 @@ class ResearchConversationPresentationTest {
         assertEquals(listOf("b"), document.readerSelection(document.appFilters.last(), conversation, selected).turns.map { it.attempt.attemptId })
     }
 
+    @Test fun readerConditionScopeFiltersTurnsButKeepsTheWholeSelectedAnalysis() {
+        fun scopedRow(id: String, turn: Int, condition: String) = JsonObject(
+            row(id, "SyntheticApp", "synthetic-conversation", turn, "SAMPLE prompt $id").toMutableMap().apply {
+                put("condition", JsonPrimitive(condition))
+            },
+        )
+        val bytes = source(listOf(
+            scopedRow("SAMPLE-1", 1, "W1"),
+            scopedRow("SAMPLE-2", 2, "W1_REQUESTED_PARTIAL_PROVENANCE"),
+            scopedRow("SAMPLE-3", 3, "W1_REQUESTED_PARTIAL_PROVENANCE"),
+        ))
+        val sourceStore = ResearchRecordStore(temporary.newFolder())
+        val saved = sourceStore.save(bytes)
+        val document = sourceStore.open(saved.id)
+        val analysisStore = ResearchAnalysisStore(temporary.newFolder())
+        val selectedAnalysis = analysisStore.open(document, analysisStore.save(document, analysisBytes(document, "SAMPLE whole-source analysis")).id)
+        val app = document.appFilters.single()
+        val scope = ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.SAMPLE,
+            condition = ResearchConditionFilter.Literal("W1_REQUESTED_PARTIAL_PROVENANCE"),
+        )
+        val conversations = document.conversationsForScope(app, scope)
+        val reading = document.readerSelection(app, conversations.single(), selectedAnalysis, scope)
+
+        assertEquals(listOf("SAMPLE-2", "SAMPLE-3"), reading.records.map { it.attemptId })
+        assertEquals(listOf(2, 3), reading.turns.map { it.turnIndex })
+        assertTrue(reading.scopeLabel.contains("W1_REQUESTED_PARTIAL_PROVENANCE"))
+        assertSame(selectedAnalysis, reading.analysis)
+        assertEquals(3, reading.analysis?.records?.size)
+        assertArrayEquals(bytes, ByteArrayOutputStream().also { sourceStore.export(saved.id, it) }.toByteArray())
+    }
+
     @Test fun reopenedBatchShowsExplicitTurnsAndKeepsUnassignedRecordsWithoutChangingExport() {
         val bytes = source(listOf(
             row("second", "示例App", "会话甲", 2, "合成提示：缩短时间", "first"),

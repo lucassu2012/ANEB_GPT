@@ -49,14 +49,15 @@ fun ResearchDocument.readerSelection(
     app: ResearchAppFilter?,
     conversation: ResearchConversation?,
     analysis: ResearchAnalysis?,
+    scope: ResearchRecordScopeFilter = ResearchRecordScopeFilter(),
 ): ResearchReaderSelection {
     val currentApp = app?.takeIf { it in appFilters }
-    val groups = conversationsForApp(currentApp)
+    val groups = conversationsForScope(currentApp, scope)
     val currentConversation = conversation?.takeIf { it in groups }
     val turns = groups.turnsForSelection(currentConversation)
     return ResearchReaderSelection(
         if (isVideo) "当前范围：本批全部视频记录"
-        else "当前范围：${currentApp?.label ?: "全部 App"} · ${currentConversation?.label ?: "全部会话 / 未分会话"}",
+        else "当前范围：${currentApp?.label ?: "全部 App"} · ${scope.sourceKind.displayLabel} · ${scope.condition.displayLabel} · ${currentConversation?.label ?: "全部会话 / 未分会话"}",
         turns,
         if (isVideo) records else turns.map { it.attempt },
         analysis?.takeIf { it.sourceId == id },
@@ -69,7 +70,20 @@ fun List<ResearchConversation>.turnsForSelection(selection: ResearchConversation
 
 fun ResearchDocument.conversationsForApp(filter: ResearchAppFilter?): List<ResearchConversation> {
     if (isVideo) return emptyList()
-    return recordsForApp(filter).map { attempt ->
+    return conversationsForRecords(recordsForApp(filter))
+}
+
+fun ResearchDocument.conversationsForScope(
+    filter: ResearchAppFilter?,
+    scope: ResearchRecordScopeFilter,
+): List<ResearchConversation> {
+    if (isVideo) return emptyList()
+    val currentApp = filter?.takeIf { it in appFilters }
+    return conversationsForRecords(recordsForScope(currentApp, scope))
+}
+
+private fun ResearchDocument.conversationsForRecords(attempts: List<ResearchAttempt>): List<ResearchConversation> =
+    attempts.map { attempt ->
         val index = (attempt.raw.annotation("turn_index") as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()?.takeIf { it > 0 }
         val id = attempt.raw.annotationText("conversation_id")
         val valid = id != null && index != null
@@ -78,6 +92,18 @@ fun ResearchDocument.conversationsForApp(filter: ResearchAppFilter?): List<Resea
     }.groupBy({ it.first }, { it.second }).map { (key, turns) ->
         ResearchConversation(id, key.first, key.second, if (key.second == null) turns else turns.sortedBy { it.turnIndex })
     }
+
+val ResearchSourceKindSelection.displayLabel: String get() = when (this) {
+    ResearchSourceKindSelection.ALL -> "全部来源"
+    ResearchSourceKindSelection.SAMPLE -> "SAMPLE"
+    ResearchSourceKindSelection.OBSERVED -> "OBSERVED"
+    ResearchSourceKindSelection.UNKNOWN -> "来源未提供/未知"
+}
+
+val ResearchConditionFilter.displayLabel: String get() = when (this) {
+    ResearchConditionFilter.All -> "全部 condition"
+    ResearchConditionFilter.MissingOrUnrecognized -> "condition 未提供/无效"
+    is ResearchConditionFilter.Literal -> "condition ${JsonPrimitive(value)}"
 }
 
 /** Display-only absence/type handling; never repairs or interprets the stored annotation. */
