@@ -24,7 +24,7 @@ class ResearchAppProfileTest {
         val mixed = profile.batches.single { it.sourceId == first.id }
         assertEquals(listOf("FIRST-1", "FIRST-3"), mixed.records.map { it.attemptId })
         assertEquals(1, profile.batches.single { it.sourceId == second.id }.records.size)
-        assertTrue(mixed.summaryLines.joinToString().contains("本 App：2 条记录"))
+        assertTrue(mixed.summaryLines.joinToString().contains("本 App 原记录：2 条"))
         assertTrue(mixed.recordLines.joinToString().contains("SAMPLE-V1"))
         assertTrue(mixed.recordLines.joinToString().contains("SAMPLE-M1"))
         val later = profile.batches.single { it.sourceId == second.id }
@@ -44,6 +44,59 @@ class ResearchAppProfileTest {
         assertThrows(IllegalArgumentException::class.java) { ResearchAnalysisStore.decode(target, analysisBytes(second)) }
         assertArrayEquals(firstBytes, ByteArrayOutputStream().also { reopenedStore.export(first.id, it) }.toByteArray())
         assertArrayEquals(secondBytes, ByteArrayOutputStream().also { reopenedStore.export(second.id, it) }.toByteArray())
+    }
+
+    @Test fun appIndexScopeShowsExactMatchesAndKeepsOriginalBatchCountAndConditionText() {
+        val sample = ResearchRecordStore.decode(source(
+            "SAMPLE", listOf("Kimi", "Kimi", "Kimi"), "SAMPLE-V1", "SAMPLE-M1",
+            conditions = listOf("W1", "W1_REQUESTED_PARTIAL_PROVENANCE", "W1_REQUESTED_PARTIAL_PROVENANCE"),
+        ))
+        val observed = ResearchRecordStore.decode(source(
+            "OBSERVED", listOf("Kimi"), "SAMPLE-V2", "SAMPLE-M2", recordKind = "OBSERVED",
+            conditions = listOf("W1_REQUESTED_PARTIAL_PROVENANCE"),
+        ))
+        val entries = listOf(
+            ResearchEntry(sample.id, sample, null),
+            ResearchEntry(observed.id, observed, null),
+        )
+        val scope = ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.SAMPLE,
+            condition = ResearchConditionFilter.Literal("W1_REQUESTED_PARTIAL_PROVENANCE"),
+        )
+
+        val batch = entries.appResearchProfiles(scope).single().batches.single { it.sourceId == sample.id }
+        assertEquals(sample.id, batch.sourceId)
+        assertEquals(listOf("SAMPLE-2", "SAMPLE-3"), batch.records.map { it.attemptId })
+        assertEquals(3, batch.originalAppRecords.size)
+        assertTrue(batch.summaryLines.joinToString().contains("筛选显示：2 条"))
+        assertTrue(batch.summaryLines.joinToString().contains("原批次：3 条"))
+        assertTrue(batch.summaryLines.joinToString().contains("不是成功率分母"))
+        assertTrue(batch.summaryLines.joinToString().contains(sample.id))
+        assertTrue(batch.recordLines.all { it.contains("W1_REQUESTED_PARTIAL_PROVENANCE") })
+        assertEquals(
+            listOf(observed.id),
+            entries.appResearchProfiles(scope.copy(sourceKind = ResearchSourceKindSelection.OBSERVED))
+                .flatMap { it.batches }.filter { it.records.isNotEmpty() }.map { it.sourceId },
+        )
+    }
+
+    @Test fun conditionChangeKeepsSelectedAppWhenItsIntersectionBecomesEmpty() {
+        val document = ResearchRecordStore.decode(source(
+            "TWO-APPS", listOf("Kimi", "豆包"), "SAMPLE-V1", "SAMPLE-M1",
+            conditions = listOf("W1", "C1"),
+        ))
+        val entries = listOf(ResearchEntry(document.id, document, null))
+        val selected = entries.appResearchProfiles().single { it.appName == "Kimi" }
+        val profiles = entries.appResearchProfiles(ResearchRecordScopeFilter(
+            condition = ResearchConditionFilter.Literal("C1"),
+        ))
+        val current = selected.let { selection ->
+            profiles.firstOrNull { it.appName == selection.appName }
+        } ?: profiles.firstOrNull()
+
+        assertEquals("Kimi", current?.appName)
+        assertTrue(current?.batches?.all { it.records.isEmpty() } == true)
+        assertEquals(listOf("TWO-APPS-2"), profiles.single { it.appName == "豆包" }.batches.single().records.map { it.attemptId })
     }
 
     @Test fun unknownMetadataAndOneDamagedFileDoNotHideHealthyBatchesOnReopen() {
@@ -66,11 +119,52 @@ class ResearchAppProfileTest {
         assertEquals(saved.id, batch.sourceId)
         assertEquals(listOf("UNKNOWN-1", "UNKNOWN-2"), batch.records.map { it.attemptId })
         assertTrue(batch.recordLines.all { it.contains("版本：未提供/未知") && it.contains("模式：未提供/未知") })
+        assertTrue(batch.recordLines.all { it.contains("原始 condition：未提供（原字段缺失）") })
         assertTrue(batch.recordLines.all { it.contains("完成未确认") && it.contains("uncertain") })
         assertTrue(batch.summaryLines.joinToString().contains("alignment-1"))
         assertTrue(batch.summaryLines.joinToString().contains("SAMPLE"))
         assertEquals(listOf("UNKNOWN-3"), profiles.single { it.appName == "Kimi" }.batches.single().records.map { it.attemptId })
         assertArrayEquals(bytes, ByteArrayOutputStream().also { reopenedStore.export(saved.id, it) }.toByteArray())
+    }
+
+    @Test fun unknownSourceFilterLeavesVideoAndUnreadableEntriesOnTheirSeparatePaths() {
+        val sample = ResearchRecordStore.decode(source("SAMPLE", listOf("Kimi"), "SAMPLE-V1", "SAMPLE-M1", conditions = listOf("W1")))
+        val unknownSource = ResearchRecordStore.decode(source("LEGACY", listOf("Kimi"), "SAMPLE-V2", "SAMPLE-M2"))
+        val unknown = unknownSource.copy(
+            id = "legacy-source",
+            root = JsonObject(unknownSource.root.toMutableMap().apply { put("record_kind", JsonPrimitive("LEGACY_KIND")) }),
+        )
+        val unreadable = ResearchEntry("damaged-source", null, "无法读取；原文件保留")
+        val videoBytes = buildJsonObject {
+            put("format", "research-video-1"); put("record_kind", "SAMPLE"); put("app", "Kimi")
+            put("attempts", buildJsonArray { add(buildJsonObject {
+                put("slot", "SAMPLE-VIDEO-1"); put("status", "NOT_RUN")
+                put("V0", JsonNull); put("VF", JsonNull); put("window_end", JsonNull)
+                put("window_complete", "not_started"); put("visible_target_playback", "not_observed")
+            }) })
+        }.toString().toByteArray()
+        val video = ResearchRecordStore.decode(videoBytes)
+        val entries = listOf(
+            ResearchEntry(sample.id, sample, null),
+            ResearchEntry(unknown.id, unknown, null),
+            video.let { ResearchEntry(it.id, it, null) },
+            unreadable,
+        )
+
+        val unknownProfiles = entries.appResearchProfiles(ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.UNKNOWN,
+            condition = ResearchConditionFilter.MissingOrUnrecognized,
+        ))
+        assertEquals(
+            listOf(unknown.id),
+            unknownProfiles.flatMap { it.batches }.filter { it.records.isNotEmpty() }.map { it.sourceId },
+        )
+        assertEquals(listOf(unreadable), entries.filter { it.document == null })
+        assertEquals(listOf(video.id), entries.filter { it.document?.isVideo == true }.map { it.id })
+        assertEquals(listOf(sample.id), entries.appResearchProfiles(ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.SAMPLE,
+            condition = ResearchConditionFilter.Literal("W1"),
+        )).flatMap { it.batches }.filter { it.records.isNotEmpty() }.map { it.sourceId })
     }
 
     @Test fun videoWithSameAppNameKeepsASeparateSourceEntry() {
@@ -93,15 +187,23 @@ class ResearchAppProfileTest {
         assertArrayEquals(videoBytes, ByteArrayOutputStream().also { store.export(video.id, it) }.toByteArray())
     }
 
-    private fun source(prefix: String, names: List<String?>, version: String?, mode: String?): ByteArray = buildJsonObject {
-        put("record_kind", "SAMPLE")
+    private fun source(
+        prefix: String,
+        names: List<String?>,
+        version: String?,
+        mode: String?,
+        recordKind: String = "SAMPLE",
+        conditions: List<String?> = emptyList(),
+    ): ByteArray = buildJsonObject {
+        put("record_kind", recordKind)
         put("records", buildJsonArray { names.forEachIndexed { i, name -> add(buildJsonObject {
-            put("record_kind", "SAMPLE"); put("method_id", "alignment-1"); put("attempt_id", "$prefix-${i + 1}")
+            put("record_kind", recordKind); put("method_id", "alignment-1"); put("attempt_id", "$prefix-${i + 1}")
             put("app", buildJsonObject {
                 if (name != null) put("name", name)
                 if (version != null) put("version", version)
                 if (mode != null) put("model_mode", mode)
             })
+            conditions.getOrNull(i)?.let { put("condition", it) }
             put("outcome", buildJsonObject { put("status", "incomplete"); put("visible_completion", "uncertain") })
         }) } })
     }.toString().toByteArray()

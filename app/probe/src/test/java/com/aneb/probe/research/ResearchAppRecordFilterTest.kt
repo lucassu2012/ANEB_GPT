@@ -40,6 +40,82 @@ class ResearchAppRecordFilterTest {
         assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(document.id, it) }.toByteArray())
     }
 
+    @Test fun sourceKindAndLiteralConditionIntersectAppWithoutReordering() {
+        val bytes = buildJsonObject {
+            put("record_kind", "SAMPLE")
+            put("records", buildJsonArray {
+                listOf(
+                    "W1",
+                    "W1_REQUESTED_PARTIAL_PROVENANCE",
+                    "W1_REQUESTED_PARTIAL_PROVENANCE",
+                    "W1",
+                    "W1_REQUESTED_PARTIAL_PROVENANCE",
+                ).forEachIndexed { index, condition -> add(buildJsonObject {
+                    put("record_kind", "SAMPLE"); put("method_id", "alignment-1")
+                    put("attempt_id", "SAMPLE-${index + 1}")
+                    put("app", buildJsonObject { put("name", if (index == 2) "豆包" else "Kimi") })
+                    put("condition", condition)
+                    put("outcome", buildJsonObject { put("status", "incomplete") })
+                }) }
+            })
+        }.toString().toByteArray()
+        val document = ResearchRecordStore.decode(bytes)
+        val kimi = document.appFilters.single { it.appName == "Kimi" }
+        val exactScope = ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.SAMPLE,
+            condition = ResearchConditionFilter.Literal("W1_REQUESTED_PARTIAL_PROVENANCE"),
+        )
+
+        assertEquals(
+            listOf("SAMPLE-2", "SAMPLE-5"),
+            document.recordsForScope(kimi, exactScope).map { it.attemptId },
+        )
+        assertEquals(
+            listOf("SAMPLE-1", "SAMPLE-2", "SAMPLE-4", "SAMPLE-5"),
+            document.recordsForScope(kimi, ResearchRecordScopeFilter()).map { it.attemptId },
+        )
+        assertTrue(document.recordsForScope(kimi, exactScope.copy(sourceKind = ResearchSourceKindSelection.OBSERVED)).isEmpty())
+    }
+
+    @Test fun missingInvalidAndEmptyConditionsRemainFindableWithoutNormalizingLiterals() {
+        val cases = listOf(
+            "missing" to null,
+            "null" to JsonNull,
+            "empty" to JsonPrimitive(""),
+            "boolean" to JsonPrimitive(false),
+            "number" to JsonPrimitive(1),
+            "object" to buildJsonObject { put("name", "synthetic") },
+            "array" to buildJsonArray { add("synthetic") },
+            "whitespace" to JsonPrimitive(" "),
+            "condition-w1" to JsonPrimitive("W1"),
+            "condition-partial" to JsonPrimitive("W1_REQUESTED_PARTIAL_PROVENANCE"),
+        )
+        val bytes = buildJsonObject {
+            put("record_kind", "SAMPLE")
+            put("records", buildJsonArray { cases.forEach { (suffix, condition) -> add(buildJsonObject {
+                put("record_kind", "SAMPLE"); put("method_id", "alignment-1"); put("attempt_id", "SAMPLE-$suffix")
+                put("app", buildJsonObject { put("name", "Kimi") })
+                if (condition != null) put("condition", condition)
+                put("outcome", buildJsonObject { put("status", "incomplete") })
+            }) } })
+        }.toString().toByteArray()
+        val document = ResearchRecordStore.decode(bytes)
+
+        assertEquals(
+            cases.take(7).map { "SAMPLE-${it.first}" },
+            document.recordsForScope(null, ResearchRecordScopeFilter(condition = ResearchConditionFilter.MissingOrUnrecognized))
+                .map { it.attemptId },
+        )
+        assertEquals(listOf("SAMPLE-whitespace"), document.recordsForScope(
+            null, ResearchRecordScopeFilter(condition = ResearchConditionFilter.Literal(" ")),
+        ).map { it.attemptId })
+        assertEquals(listOf("SAMPLE-condition-partial"), document.recordsForScope(
+            null, ResearchRecordScopeFilter(condition = ResearchConditionFilter.Literal("W1_REQUESTED_PARTIAL_PROVENANCE")),
+        ).map { it.attemptId })
+        assertEquals(document.records, document.recordsForScope(null))
+        assertEquals(10, document.recordsForScope(null).size)
+    }
+
     @Test fun missingAppsRemainBrowsableAndSourceSwitchCannotLeaveAStaleFilter() {
         val store = ResearchRecordStore(temporary.newFolder())
         val bytes = source(listOf("Kimi", null, "UNKNOWN", "", "豆包"))
@@ -71,6 +147,13 @@ class ResearchAppRecordFilterTest {
         val video = store.open(store.save(bytes).id)
         assertTrue(video.appFilters.isEmpty())
         assertEquals(video.records, video.recordsForApp(ResearchAppFilter(video.id, "SAMPLE Video")))
+        assertEquals(video.records, video.recordsForScope(
+            ResearchAppFilter(video.id, "SAMPLE Video"),
+            ResearchRecordScopeFilter(
+                sourceKind = ResearchSourceKindSelection.OBSERVED,
+                condition = ResearchConditionFilter.Literal("not-video-condition"),
+            ),
+        ))
         assertEquals("NOT_RUN", video.records.single().status)
         assertArrayEquals(bytes, ByteArrayOutputStream().also { store.export(video.id, it) }.toByteArray())
     }

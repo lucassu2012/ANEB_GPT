@@ -58,11 +58,14 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var profilesOpen by rememberSaveable { mutableStateOf(false) }
     var profileSelection by remember { mutableStateOf<ResearchAppProfile?>(null) }
     var requestedAppFilter by remember { mutableStateOf<ResearchAppFilter?>(null) }
+    var indexScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
+    var requestedScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
 
     if (manualOpen) {
         ManualResearchEntryScreen(store, onBack = { manualOpen = false }, onSaved = { saved ->
             manualOpen = false; selectedId = saved.id; document = saved; pending = null
             requestedAppFilter = null
+            requestedScopeFilter = ResearchRecordScopeFilter()
             notice = "手工记录已保存，可重开或确认导出；不是自动测量或来源核验。"
         })
         return
@@ -121,6 +124,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             val preview = withContext(Dispatchers.IO) { ResearchRecordStore.decode(bytes) }
             selectedId = null
             requestedAppFilter = null
+            requestedScopeFilter = ResearchRecordScopeFilter()
             pending = bytes
             document = preview
         }
@@ -166,6 +170,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             if (document != null) {
                 selectedId = null; document = null; pending = null; notice = null
                 requestedAppFilter = null
+                requestedScopeFilter = ResearchRecordScopeFilter()
                 analysis = null; pendingAnalysis = null; analysisEntries = emptyList()
             }
             else if (profilesOpen) profilesOpen = false
@@ -185,11 +190,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         val current = document
         if (current == null) {
             if (profilesOpen) {
-                ResearchAppProfilesPane(entries, profileSelection, onSelect = { profileSelection = it }, onOpenBatch = { batch ->
+                ResearchAppProfilesPane(entries, profileSelection, indexScopeFilter, onSelect = { profileSelection = it }, onScopeChange = {
+                    indexScopeFilter = it
+                }, onOpenBatch = { batch ->
                     requestedAppFilter = batch.filter
+                    requestedScopeFilter = batch.scope
                     selectedId = batch.sourceId
                 }, onOpenVideo = { id ->
                     requestedAppFilter = null
+                    requestedScopeFilter = ResearchRecordScopeFilter()
                     selectedId = id
                 }, busy = busy, modifier = Modifier.weight(1f))
             } else {
@@ -214,7 +223,11 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                 }
                                 if (entry.document == null) Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
                                 if (entry.error != null) Text(entry.error)
-                                else TextButton(onClick = { requestedAppFilter = null; selectedId = entry.id }, enabled = !busy) { Text("查看记录") }
+                                else TextButton(onClick = {
+                                    requestedAppFilter = null
+                                    requestedScopeFilter = ResearchRecordScopeFilter()
+                                    selectedId = entry.id
+                                }, enabled = !busy) { Text("查看记录") }
                             }
                         }
                     }
@@ -222,16 +235,19 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
         } else {
             var appFilter by remember(current.id) { mutableStateOf(requestedAppFilter?.takeIf { it.sourceId == current.id }) }
+            var readerScopeFilter by remember(current.id) { mutableStateOf(requestedScopeFilter) }
             val appFilters = remember(current.id) { current.appFilters }
-            val conversations = remember(current.id, appFilter) { current.conversationsForApp(appFilter) }
-            var conversation by remember(current.id, appFilter) { mutableStateOf<ResearchConversation?>(null) }
-            val reading = current.readerSelection(appFilter, conversation, analysis)
+            val conversations = remember(current.id, appFilter, readerScopeFilter) {
+                current.conversationsForScope(appFilter, readerScopeFilter)
+            }
+            var conversation by remember(current.id, appFilter, readerScopeFilter) { mutableStateOf<ResearchConversation?>(null) }
+            val reading = current.readerSelection(appFilter, conversation, analysis, readerScopeFilter)
             val currentAnalysis = reading.analysis
             var sourceExpanded by remember(current.id) { mutableStateOf(false) }
             var analysisChoicesExpanded by remember(current.id) { mutableStateOf(false) }
             var summaryExpanded by remember(current.id, currentAnalysis?.id) { mutableStateOf(false) }
             val readerListState = rememberLazyListState()
-            LaunchedEffect(current.id, appFilter, conversation, currentAnalysis?.id) { readerListState.scrollToItem(0) }
+            LaunchedEffect(current.id, appFilter, readerScopeFilter, conversation, currentAnalysis?.id) { readerListState.scrollToItem(0) }
             if (pending != null) {
                 Button(enabled = !busy, onClick = {
                     val bytes = pending ?: return@Button
@@ -259,10 +275,20 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 item {
                     Text("${current.sourceLabel} · 批次 ${current.id.take(8)}…", style = MaterialTheme.typography.labelLarge)
                     if (!current.isVideo) ResearchConversationPane(conversations, conversation, onSelect = { conversation = it }, busy = busy)
-                    Text("${reading.scopeLabel} · ${reading.records.size} 条", style = MaterialTheme.typography.labelLarge)
+                    Text("${reading.scopeLabel} · 当前匹配 ${reading.records.size} 条 / 原批次 ${current.records.size} 条（展示数量，非成功率分母）", style = MaterialTheme.typography.labelLarge)
                     Text(if (currentAnalysis == null) "尚未选择本批分析 · 结果未知，不补 0"
-                        else "${if (pendingAnalysis != null) "预览分析（未保存）" else "所选分析"} ${currentAnalysis.id.take(12)}… · 未重算或核验",
+                        else "${if (pendingAnalysis != null) "预览分析（未保存）" else "所选分析"} ${currentAnalysis.id.take(12)}… · 整批原副本，未按当前筛选重算或核验",
                         style = MaterialTheme.typography.bodySmall)
+                    if (!current.isVideo && (readerScopeFilter != ResearchRecordScopeFilter() || appFilter != null || conversation != null)) {
+                        TextButton(enabled = !busy, onClick = {
+                            readerScopeFilter = ResearchRecordScopeFilter()
+                            requestedScopeFilter = ResearchRecordScopeFilter()
+                            indexScopeFilter = ResearchRecordScopeFilter()
+                            appFilter = null
+                            conversation = null
+                        }) { Text("清除 App / 来源 / condition / 会话筛选") }
+                    }
+                    if (!current.isVideo) Text("筛选只改变原记录的显示范围；已保存分析仍是整批副本，不会按当前筛选重算。", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (pending == null) TextButton(onClick = { analysisChoicesExpanded = !analysisChoicesExpanded }, enabled = !busy, modifier = Modifier.weight(1f)) {
                             Text(if (analysisChoicesExpanded) "收起副本" else "选择分析")
@@ -275,7 +301,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     ResearchBatchHeading(current)
                     Text(if (pending != null) "预览，尚未保存" else "已保存", color = colors.brand)
                     Text(current.sourceNotice, color = colors.ink)
-                    Text("只按原标注分组，不是全文聊天回放；缺少有效会话或轮次的记录保留在“未分会话”。逐轮结果随范围切换，整批统计及原文导出不随筛选改变。", style = MaterialTheme.typography.bodySmall)
+                    Text("只按原标注分组，不是全文聊天回放；缺少有效会话或轮次的记录保留在“未分会话”。逐轮结果随 App / 来源 / condition / 会话筛选切换；整批分析与原文导出不随筛选改变。", style = MaterialTheme.typography.bodySmall)
                     if (pending == null) TextButton(enabled = !busy, onClick = { confirmExport = true }) { Text("导出整批原始 JSON") }
                     SelectionContainer { Text("输入 SHA-256：${current.id}", color = colors.muted, style = MaterialTheme.typography.bodySmall) }
                     Text("方法：${researchDeclaredValue(current.methodId) ?: "未提供（见逐条）"}", color = colors.ink)
@@ -318,7 +344,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(if (pendingAnalysis == null) "已保存分析副本" else "分析预览 · 尚未保存", style = MaterialTheme.typography.titleMedium)
-                            if (!current.isVideo) Text("整批分析（未按 App / 会话筛选）：以下计数与分组不代表当前选中范围的指标；不自动合组或排名。")
+                            if (!current.isVideo) Text("整批分析（未按 App / 来源 / condition / 会话筛选）：以下计数与分组不代表当前显示范围的指标；不自动合组或排名。")
                             SelectionContainer { Text("分析 SHA-256：${currentAnalysis.id}\n关联原文：${currentAnalysis.sourceId}", style = MaterialTheme.typography.bodySmall) }
                             currentAnalysis.summaryLines.forEach { Text(it) }
                             if (pendingAnalysis != null) Button(enabled = !busy, onClick = {
@@ -339,6 +365,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 if (current.isVideo) {
                     items(reading.records, key = { it.attemptId }) { attempt -> ResearchVideoAttemptCard(attempt, currentAnalysis) }
                 } else {
+                    if (reading.turns.isEmpty()) item {
+                        Text("当前筛选没有匹配记录；原始批次、损坏项与视频入口仍保留，可清除筛选后查看。")
+                    }
                     items(reading.turns, key = { it.attempt.attemptId }) { turn -> ResearchAttemptCard(turn, currentAnalysis) }
                 }
             }
@@ -479,6 +508,7 @@ private fun ResearchAttemptCard(turn: ResearchConversationTurn, analysis: Resear
             Text("${app?.text("name") ?: "UNKNOWN"} · ${attempt.statusLabel}", style = MaterialTheme.typography.titleMedium)
             attempt.statusNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("${raw.text("record_kind") ?: "未确认来源"} · ${attempt.attemptId}")
+            Text("原始 condition：${attempt.originalConditionDisplay}")
             ResearchConversationTurnContent(turn, analysis)
             TextButton(onClick = { rawExpanded = !rawExpanded }) { Text(if (rawExpanded) "收起原始标注与证据引用" else "展开原始标注与证据引用") }
             if (rawExpanded) {
