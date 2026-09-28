@@ -3,8 +3,6 @@ package com.aneb.probe.research
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -73,23 +71,7 @@ class ResearchAnalysisStore(private val directory: File) {
         fun decode(source: ResearchDocument, bytes: ByteArray): ResearchAnalysis {
             try {
                 require(bytes.size <= ResearchRecordStore.MAX_BYTES)
-                val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
-                // Local resource budget only; calculations and research rules remain owned by 3a.
-                var depth = 0
-                var quoted = false
-                var escaped = false
-                for (c in text) {
-                    if (quoted) {
-                        if (escaped) escaped = false
-                        else if (c == '\\') escaped = true
-                        else if (c == '"') quoted = false
-                    } else when (c) {
-                        '"' -> quoted = true
-                        '{', '[' -> { depth++; require(depth <= 64) }
-                        '}', ']' -> depth--
-                    }
-                }
+                val text = validatedResearchInputText(bytes)
                 val root = Json.parseToJsonElement(text) as? JsonObject ?: error("分析需要对象")
                 require(root.text("source_sha256") == source.id) { "原文 SHA-256 不匹配" }
                 require(root.text("record_kind") == source.recordKind) { "来源类型不匹配" }
