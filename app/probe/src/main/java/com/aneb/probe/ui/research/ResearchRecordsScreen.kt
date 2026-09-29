@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -60,10 +61,14 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var requestedAppFilter by remember { mutableStateOf<ResearchAppFilter?>(null) }
     var indexScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
     var requestedScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
+    var requestedAttemptLocator by remember { mutableStateOf<ResearchAttemptLocator?>(null) }
+
+    fun clearAttemptTarget() { requestedAttemptLocator = null }
 
     if (manualOpen) {
         ManualResearchEntryScreen(store, onBack = { manualOpen = false }, onSaved = { saved ->
             manualOpen = false; selectedId = saved.id; document = saved; pending = null
+            clearAttemptTarget()
             requestedAppFilter = null
             requestedScopeFilter = ResearchRecordScopeFilter()
             notice = "手工记录已保存，可重开或确认导出；不是自动测量或来源核验。"
@@ -71,7 +76,10 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         return
     }
 
-    suspend fun refresh() { entries = withContext(Dispatchers.IO) { store.list() } }
+    suspend fun refresh() {
+        clearAttemptTarget()
+        entries = withContext(Dispatchers.IO) { store.list() }
+    }
     fun action(block: suspend () -> Unit) {
         if (busy) return
         busy = true
@@ -103,7 +111,14 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 catch (_: Exception) { notice = "分析目录无法读取；原始记录仍可查看和导出，分析副本未删除。" }
             }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { notice = "记录无法打开；原文件保留。"; document = null; selectedId = null }
+            catch (_: Exception) {
+                val failedTargetOpen = requestedAttemptLocator?.sourceId == id
+                clearAttemptTarget()
+                notice = if (failedTargetOpen) "定位失败：原始来源当前无法打开；未跳转到其他来源。"
+                    else "记录无法打开；原文件保留。"
+                document = null
+                selectedId = null
+            }
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -123,6 +138,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
             val preview = withContext(Dispatchers.IO) { ResearchRecordStore.decode(bytes) }
             selectedId = null
+            clearAttemptTarget()
             requestedAppFilter = null
             requestedScopeFilter = ResearchRecordScopeFilter()
             pending = bytes
@@ -169,6 +185,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         if (!busy) {
             if (document != null) {
                 selectedId = null; document = null; pending = null; notice = null
+                clearAttemptTarget()
                 requestedAppFilter = null
                 requestedScopeFilter = ResearchRecordScopeFilter()
                 analysis = null; pendingAnalysis = null; analysisEntries = emptyList()
@@ -193,10 +210,18 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 ResearchAppProfilesPane(entries, profileSelection, indexScopeFilter, onSelect = { profileSelection = it }, onScopeChange = {
                     indexScopeFilter = it
                 }, onOpenBatch = { batch ->
+                    clearAttemptTarget()
                     requestedAppFilter = batch.filter
                     requestedScopeFilter = batch.scope
                     selectedId = batch.sourceId
+                }, onOpenAttempt = { batch, attempt ->
+                    requestedAppFilter = batch.filter
+                    requestedScopeFilter = batch.scope
+                    requestedAttemptLocator = ResearchAttemptLocator(batch.sourceId, attempt.attemptId)
+                    selectedId = batch.sourceId
+                    notice = null
                 }, onOpenVideo = { id ->
+                    clearAttemptTarget()
                     requestedAppFilter = null
                     requestedScopeFilter = ResearchRecordScopeFilter()
                     selectedId = id
@@ -224,6 +249,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                 if (entry.document == null) Text("输入 SHA-256：${entry.id}", style = MaterialTheme.typography.bodySmall)
                                 if (entry.error != null) Text(entry.error)
                                 else TextButton(onClick = {
+                                    clearAttemptTarget()
                                     requestedAppFilter = null
                                     requestedScopeFilter = ResearchRecordScopeFilter()
                                     selectedId = entry.id
@@ -247,7 +273,25 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             var analysisChoicesExpanded by remember(current.id) { mutableStateOf(false) }
             var summaryExpanded by remember(current.id, currentAnalysis?.id) { mutableStateOf(false) }
             val readerListState = rememberLazyListState()
-            LaunchedEffect(current.id, appFilter, readerScopeFilter, conversation, currentAnalysis?.id) { readerListState.scrollToItem(0) }
+            val attemptListStartIndex = 1 +
+                (if (sourceExpanded) 1 else 0) +
+                (if (pending == null && analysisChoicesExpanded) 1 else 0) +
+                (if (currentAnalysis != null && (summaryExpanded || pendingAnalysis != null)) 1 else 0)
+            LaunchedEffect(current.id, appFilter, readerScopeFilter, conversation, currentAnalysis?.id, requestedAttemptLocator) {
+                val target = requestedAttemptLocator
+                val targetIndex = target?.takeIf { it.sourceId == current.id }?.let(reading::attemptIndex)
+                if (target != null) {
+                    if (targetIndex == null || current.isVideo) {
+                        notice = "当前来源与筛选范围内找不到这条记录；未扩大筛选范围。"
+                        clearAttemptTarget()
+                        readerListState.scrollToItem(0)
+                    } else {
+                        readerListState.scrollToItem(attemptListStartIndex + targetIndex)
+                    }
+                } else {
+                    readerListState.scrollToItem(0)
+                }
+            }
             if (pending != null) {
                 Button(enabled = !busy, onClick = {
                     val bytes = pending ?: return@Button
@@ -265,22 +309,26 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             if (!current.isVideo) {
                 Text("按输入声明 App 查看", style = MaterialTheme.typography.labelLarge)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item { FilterChip(selected = appFilter == null, onClick = { appFilter = null }, enabled = !busy, label = { Text("全部") }) }
+                    item { FilterChip(selected = appFilter == null, onClick = { clearAttemptTarget(); appFilter = null }, enabled = !busy, label = { Text("全部") }) }
                     items(appFilters) { option ->
-                        FilterChip(selected = appFilter == option, onClick = { appFilter = option }, enabled = !busy, label = { Text(option.label) })
+                        FilterChip(selected = appFilter == option, onClick = { clearAttemptTarget(); appFilter = option }, enabled = !busy, label = { Text(option.label) })
                     }
                 }
             }
             LazyColumn(Modifier.weight(1f), state = readerListState, contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     Text("${current.sourceLabel} · 批次 ${current.id.take(8)}…", style = MaterialTheme.typography.labelLarge)
-                    if (!current.isVideo) ResearchConversationPane(conversations, conversation, onSelect = { conversation = it }, busy = busy)
+                    if (!current.isVideo) ResearchConversationPane(conversations, conversation, onSelect = {
+                        clearAttemptTarget()
+                        conversation = it
+                    }, busy = busy)
                     Text("${reading.scopeLabel} · 当前匹配 ${reading.records.size} 条 / 原批次 ${current.records.size} 条（展示数量，非成功率分母）", style = MaterialTheme.typography.labelLarge)
                     Text(if (currentAnalysis == null) "尚未选择本批分析 · 结果未知，不补 0"
                         else "${if (pendingAnalysis != null) "预览分析（未保存）" else "所选分析"} ${currentAnalysis.id.take(12)}… · 整批原副本，未按当前筛选重算或核验",
                         style = MaterialTheme.typography.bodySmall)
                     if (!current.isVideo && (readerScopeFilter != ResearchRecordScopeFilter() || appFilter != null || conversation != null)) {
                         TextButton(enabled = !busy, onClick = {
+                            clearAttemptTarget()
                             readerScopeFilter = ResearchRecordScopeFilter()
                             requestedScopeFilter = ResearchRecordScopeFilter()
                             indexScopeFilter = ResearchRecordScopeFilter()
@@ -368,7 +416,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     if (reading.turns.isEmpty()) item {
                         Text("当前筛选没有匹配记录；原始批次、损坏项与视频入口仍保留，可清除筛选后查看。")
                     }
-                    items(reading.turns, key = { it.attempt.attemptId }) { turn -> ResearchAttemptCard(turn, currentAnalysis) }
+                    items(reading.turns, key = { it.attempt.attemptId }) { turn ->
+                        ResearchAttemptCard(
+                            turn,
+                            currentAnalysis,
+                            isNavigationTarget = requestedAttemptLocator?.let {
+                                it.sourceId == turn.sourceId && it.attemptId == turn.attempt.attemptId
+                            } == true,
+                        )
+                    }
                 }
             }
         }
@@ -496,15 +552,23 @@ private fun ResearchVideoAttemptCard(attempt: ResearchAttempt, analysis: Researc
 }
 
 @Composable
-private fun ResearchAttemptCard(turn: ResearchConversationTurn, analysis: ResearchAnalysis?) {
+private fun ResearchAttemptCard(
+    turn: ResearchConversationTurn,
+    analysis: ResearchAnalysis?,
+    isNavigationTarget: Boolean = false,
+) {
     val attempt = turn.attempt
     var rawExpanded by remember(turn.sourceId, attempt.attemptId) { mutableStateOf(false) }
     val raw = attempt.raw
     val app = raw["app"] as? JsonObject
     val outcome = raw["outcome"] as? JsonObject
     val clock = raw["clock"] as? JsonObject
-    Card(Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        border = if (isNavigationTarget) BorderStroke(2.dp, AnebTheme.colors.brand) else null,
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (isNavigationTarget) Text("当前定位记录", color = AnebTheme.colors.brand, style = MaterialTheme.typography.labelLarge)
             Text("${app?.text("name") ?: "UNKNOWN"} · ${attempt.statusLabel}", style = MaterialTheme.typography.titleMedium)
             attempt.statusNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("${raw.text("record_kind") ?: "未确认来源"} · ${attempt.attemptId}")

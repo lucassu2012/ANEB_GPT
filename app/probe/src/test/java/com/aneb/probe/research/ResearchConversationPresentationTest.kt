@@ -367,6 +367,42 @@ class ResearchConversationPresentationTest {
         assertEquals("保留此提示", groups.first().turns.first().prompt)
     }
 
+    @Test fun directAttemptTargetUsesSourceAndAttemptIdentityWithoutWideningScope() {
+        fun scopedRow(condition: String) = JsonObject(
+            row("shared-attempt", "Kimi", null, null, "Synthetic prompt").toMutableMap().apply {
+                put("condition", JsonPrimitive(condition))
+            },
+        )
+        val first = ResearchRecordStore.decode(source(listOf(
+            JsonObject(row("earlier-attempt", "Kimi", null, null, "Earlier prompt").toMutableMap().apply {
+                put("condition", JsonPrimitive("W1"))
+            }),
+            scopedRow("W1"),
+            JsonObject(row("other-attempt", "Kimi", null, null, "Other prompt").toMutableMap().apply {
+                put("condition", JsonPrimitive("W2"))
+            }),
+        )))
+        val second = ResearchRecordStore.decode(source(listOf(scopedRow("W1"))))
+        assertEquals("shared-attempt", first.records[1].attemptId)
+        assertEquals("shared-attempt", second.records.single().attemptId)
+        assertNotEquals(first.id, second.id)
+
+        val locator = ResearchAttemptLocator(first.id, "shared-attempt")
+        val app = first.appFilters.single()
+        val selectedScope = ResearchRecordScopeFilter(
+            sourceKind = ResearchSourceKindSelection.SAMPLE,
+            condition = ResearchConditionFilter.Literal("W1"),
+        )
+
+        assertEquals(1, first.readerSelection(app, null, null, selectedScope).attemptIndex(locator))
+        assertNull(second.readerSelection(second.appFilters.single(), null, null, selectedScope).attemptIndex(locator))
+        assertNull(first.readerSelection(app, null, null, selectedScope)
+            .attemptIndex(ResearchAttemptLocator(first.id, "missing-attempt")))
+        assertNull(first.readerSelection(app, null, null, selectedScope.copy(
+            condition = ResearchConditionFilter.Literal("W2"),
+        )).attemptIndex(locator))
+    }
+
     private fun notesRow(id: String, app: String, conversation: String, basis: String, reason: String): JsonObject =
         JsonObject(row(id, app, conversation, 1, "Synthetic prompt").toMutableMap().apply {
             put("outcome", JsonObject(get("outcome")!!.jsonObject.toMutableMap().apply { put("completion_basis", JsonPrimitive(basis)) }))

@@ -45,6 +45,14 @@ data class ResearchReaderSelection(
     val analysis: ResearchAnalysis?,
 )
 
+/** Exact navigation pointer; attempt IDs are only unique inside their original source. */
+data class ResearchAttemptLocator(val sourceId: String, val attemptId: String)
+
+/** Resolve only within the already-filtered reader selection; never widens App/source/condition scope. */
+fun ResearchReaderSelection.attemptIndex(locator: ResearchAttemptLocator): Int? =
+    turns.indexOfFirst { it.sourceId == locator.sourceId && it.attempt.attemptId == locator.attemptId }
+        .takeIf { it >= 0 }
+
 fun ResearchDocument.readerSelection(
     app: ResearchAppFilter?,
     conversation: ResearchConversation?,
