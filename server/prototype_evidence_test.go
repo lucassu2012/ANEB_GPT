@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -199,6 +200,115 @@ func TestPrototypeEvidencePublicationNeverOverwritesPublishedCampaign(t *testing
 	}
 }
 
+func startPrototypeEvidencePublicationRequest(t *testing.T, a *app, requestBody string) (*httptest.ResponseRecorder, <-chan struct{}, context.CancelFunc) {
+	t.Helper()
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/prototype/campaigns/evidence",
+		strings.NewReader(requestBody),
+	).WithContext(requestContext)
+	request.Header.Set("Content-Type", "application/json")
+	responseRecorder := httptest.NewRecorder()
+	requestDone := make(chan struct{})
+	t.Cleanup(func() {
+		cancelRequest()
+		<-requestDone
+	})
+	go func() {
+		defer close(requestDone)
+		a.routes().ServeHTTP(responseRecorder, request)
+	}()
+	return responseRecorder, requestDone, cancelRequest
+}
+
+func TestPrototypeEvidencePublicationCleansUpAfterSubtestReturns(t *testing.T) {
+	runtimePath := buildPrototypeEvidenceRuntime(t)
+	resultsRoot := filepath.Join(t.TempDir(), "published")
+	a := &app{
+		prototypeEvidenceRuntime: runtimePath,
+		prototypeResultsRoot:     resultsRoot,
+	}
+	startedPath := filepath.Join(resultsRoot, "runtime-started")
+	invocationPath := filepath.Join(resultsRoot, "runtime-invocation.json")
+
+	var firstDone <-chan struct{}
+	var cancelFirst context.CancelFunc
+	defer func() {
+		if firstDone == nil {
+			return
+		}
+		select {
+		case <-firstDone:
+			return
+		default:
+			// This is RED-only salvage after assertions; it must not make the lifecycle assertions pass.
+			if cancelFirst != nil {
+				cancelFirst()
+			}
+			<-firstDone
+		}
+	}()
+
+	childPassed := t.Run("return while runtime is blocked", func(t *testing.T) {
+		_, firstDone, cancelFirst = startPrototypeEvidencePublicationRequest(
+			t,
+			a,
+			`{"schema_version":"aneb-prototype-upload-0.1","campaign_id":"campaign-block"}`,
+		)
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(startedPath); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("evidence runtime did not enter blocking state")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		select {
+		case <-firstDone:
+			t.Fatal("evidence request completed before runtime release")
+		default:
+		}
+		// Returning here intentionally leaves the runtime blocked; subtest cleanup must cancel and join it.
+	})
+	if !childPassed {
+		t.Error("blocked child subtest did not reach its early return")
+	}
+
+	requestCompleted := false
+	if firstDone != nil {
+		select {
+		case <-firstDone:
+			requestCompleted = true
+		default:
+		}
+	}
+	if !requestCompleted {
+		t.Error("evidence request was still running after the blocked subtest returned")
+	}
+	invocationBytes, err := os.ReadFile(invocationPath)
+	if err != nil {
+		t.Errorf("read runtime invocation after subtest return: %v", err)
+		return
+	}
+	var invocation struct {
+		InputPath string `json:"input_path"`
+	}
+	if err := json.Unmarshal(invocationBytes, &invocation); err != nil {
+		t.Errorf("decode runtime invocation after subtest return: %v", err)
+		return
+	}
+	if invocation.InputPath == "" {
+		t.Error("runtime invocation did not record its temporary input path")
+		return
+	}
+	if _, err := os.Lstat(invocation.InputPath); !os.IsNotExist(err) {
+		t.Errorf("temporary input still exists after subtest return: %q; err=%v", invocation.InputPath, err)
+	}
+}
+
 func TestPrototypeEvidencePublicationAllowsOnlyOneRuntimeAtATime(t *testing.T) {
 	runtimePath := buildPrototypeEvidenceRuntime(t)
 	resultsRoot := filepath.Join(t.TempDir(), "published")
@@ -207,20 +317,11 @@ func TestPrototypeEvidencePublicationAllowsOnlyOneRuntimeAtATime(t *testing.T) {
 		prototypeResultsRoot:     resultsRoot,
 	}
 
-	var firstRecorder *httptest.ResponseRecorder
-	var firstWG sync.WaitGroup
-	firstWG.Add(1)
-	go func() {
-		defer firstWG.Done()
-		firstReq := httptest.NewRequest(
-			http.MethodPost,
-			"/api/v1/prototype/campaigns/evidence",
-			strings.NewReader(`{"schema_version":"aneb-prototype-upload-0.1","campaign_id":"campaign-block"}`),
-		)
-		firstReq.Header.Set("Content-Type", "application/json")
-		firstRecorder = httptest.NewRecorder()
-		a.routes().ServeHTTP(firstRecorder, firstReq)
-	}()
+	firstRecorder, firstDone, cancelFirst := startPrototypeEvidencePublicationRequest(
+		t,
+		a,
+		`{"schema_version":"aneb-prototype-upload-0.1","campaign_id":"campaign-block"}`,
+	)
 
 	startedPath := filepath.Join(resultsRoot, "runtime-started")
 	deadline := time.Now().Add(10 * time.Second)
@@ -252,7 +353,8 @@ func TestPrototypeEvidencePublicationAllowsOnlyOneRuntimeAtATime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(resultsRoot, "runtime-release"), []byte("release\n"), 0o600); err != nil {
 		t.Fatalf("release first runtime: %v", err)
 	}
-	firstWG.Wait()
+	<-firstDone
+	cancelFirst()
 	if firstRecorder == nil || firstRecorder.Code != http.StatusOK {
 		t.Fatalf("first evidence publication did not finish successfully: recorder=%v", firstRecorder)
 	}
