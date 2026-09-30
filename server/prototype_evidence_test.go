@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -525,6 +527,24 @@ func TestPrototypeEvidenceFlagsConfigureServerPublication(t *testing.T) {
 			t.Fatalf("server did not become ready: %v\n%s", err, logBytes)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+	if runtime.GOOS == "windows" {
+		// Windows scanners can briefly hold a freshly built executable. Confirm it can
+		// launch just before asking the server to execute it; the no-argument exit is 31.
+		readyDeadline := time.Now().Add(10 * time.Second)
+		for {
+			probeErr := exec.Command(runtimePath).Run()
+			if exitErr, ok := probeErr.(*exec.ExitError); ok && exitErr.ExitCode() == 31 {
+				break
+			}
+			if !errors.Is(probeErr, syscall.Errno(32)) {
+				t.Fatalf("fake evidence runtime probe failed unexpectedly: %v", probeErr)
+			}
+			if time.Now().After(readyDeadline) {
+				t.Fatalf("fake evidence runtime not executable after build: %v", probeErr)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
 	}
 
 	upload := `{"schema_version":"aneb-prototype-upload-0.1","campaign_id":"campaign-flags"}`

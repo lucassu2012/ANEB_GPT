@@ -35,11 +35,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 /** Local manual research only. No measurement, metrics calculation, or automatic sharing. */
+private data class PendingConclusionCard(
+    val sourceId: String,
+    val analysisId: String,
+    val bytes: ByteArray,
+    val preview: ResearchConclusion,
+)
+
 @Composable
 fun ResearchRecordsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val store = remember(context) { ResearchRecordStore(File(context.noBackupFilesDir, "r1-research")) }
     val analysisStore = remember(context) { ResearchAnalysisStore(File(context.noBackupFilesDir, "r1-research-analysis")) }
+    val conclusionStore = remember(context) { ResearchConclusionStore(File(context.noBackupFilesDir, "r1-research-conclusions")) }
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(emptyList<ResearchEntry>()) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -55,6 +63,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var pendingAnalysis by remember { mutableStateOf<ByteArray?>(null) }
     var analysisImportSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var analysisExportId by remember { mutableStateOf<String?>(null) }
+    var conclusionImportSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var conclusionImportAnalysisId by rememberSaveable { mutableStateOf<String?>(null) }
+    var loadedConclusionPair by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var conclusionEntries by remember { mutableStateOf(emptyList<ResearchConclusionEntry>()) }
+    var selectedConclusion by remember { mutableStateOf<ResearchConclusion?>(null) }
+    var conclusionRevision by remember { mutableIntStateOf(0) }
+    var conclusionLoadError by remember { mutableStateOf<Pair<Pair<String, String>, String>?>(null) }
+    var pendingConclusionCard by remember { mutableStateOf<PendingConclusionCard?>(null) }
+    var pendingConclusionError by remember { mutableStateOf<String?>(null) }
     var manualOpen by rememberSaveable { mutableStateOf(false) }
     var profilesOpen by rememberSaveable { mutableStateOf(false) }
     var profileSelection by remember { mutableStateOf<ResearchAppProfile?>(null) }
@@ -64,6 +81,14 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var requestedAttemptLocator by remember { mutableStateOf<ResearchAttemptLocator?>(null) }
 
     fun clearAttemptTarget() { requestedAttemptLocator = null }
+    fun clearConclusionView() {
+        loadedConclusionPair = null
+        conclusionEntries = emptyList()
+        selectedConclusion = null
+        conclusionLoadError = null
+        pendingConclusionCard = null
+        pendingConclusionError = null
+    }
 
     if (manualOpen) {
         ManualResearchEntryScreen(store, onBack = { manualOpen = false }, onSaved = { saved ->
@@ -172,6 +197,52 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             notice = "原文 SHA-256 与尝试身份已关联；这不等于数值或媒体已核验。请确认保存独立副本。"
         }
     }
+    val conclusionPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val sourceId = conclusionImportSourceId
+        val analysisId = conclusionImportAnalysisId
+        conclusionImportSourceId = null
+        conclusionImportAnalysisId = null
+        if (uri != null) action {
+            try {
+                if (sourceId == null || analysisId == null || selectedId != sourceId || document?.id != sourceId ||
+                    analysis?.id != analysisId || pending != null || pendingAnalysis != null) {
+                    throw ResearchImportException("原文或分析已切换；未关联所选结论卡，请重新选择。")
+                }
+                val bytes = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            if (output.size() + count > ResearchRecordStore.MAX_BYTES) {
+                                throw ResearchImportException("结论卡超过 1 MiB，未保存。")
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    } ?: throw ResearchImportException("无法打开结论卡；原文与分析未更改。")
+                }
+                if (selectedId != sourceId || document?.id != sourceId || analysis?.id != analysisId ||
+                    pending != null || pendingAnalysis != null) {
+                    throw ResearchImportException("读取期间原文或分析已切换；结论卡未保存。")
+                }
+                val preview = withContext(Dispatchers.IO) {
+                    val source = store.open(sourceId)
+                    val savedAnalysis = analysisStore.open(source, analysisId)
+                    conclusionStore.preview(source, savedAnalysis, bytes)
+                }
+                if (selectedId == sourceId && document?.id == sourceId && analysis?.id == analysisId &&
+                    pending == null && pendingAnalysis == null) {
+                    pendingConclusionCard = PendingConclusionCard(sourceId, analysisId, bytes, preview)
+                    pendingConclusionError = null
+                    notice = "已校验卡片与当前原文、分析的绑定；确认前不会保存。"
+                } else notice = "预览期间原文或分析已切换；结论卡未保存。"
+            } catch (e: CancellationException) { throw e }
+            catch (e: ResearchImportException) { notice = e.message }
+            catch (_: Exception) { notice = "结论卡无法预览。请核对完整分析 SHA-256、单 App 文本来源、UTF-8、文件权限与 1 MiB 限制；本次未保存。" }
+        }
+    }
     val batchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         // Picker cancellation returns no URIs: no preview, Store call, or write is made.
         if (uris.isNotEmpty()) action {
@@ -185,6 +256,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         if (!busy) {
             if (document != null) {
                 selectedId = null; document = null; pending = null; notice = null
+                clearConclusionView()
                 clearAttemptTarget()
                 requestedAppFilter = null
                 requestedScopeFilter = ResearchRecordScopeFilter()
@@ -269,6 +341,50 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             var conversation by remember(current.id, appFilter, readerScopeFilter) { mutableStateOf<ResearchConversation?>(null) }
             val reading = current.readerSelection(appFilter, conversation, analysis, readerScopeFilter)
             val currentAnalysis = reading.analysis
+            val conclusionEligible = selectedId == current.id && pending == null && pendingAnalysis == null &&
+                currentAnalysis?.let { candidate ->
+                    remember(current, candidate) { conclusionStore.canAttach(current, candidate) }
+                } == true
+            val conclusionPair = if (conclusionEligible) current.id to currentAnalysis!!.id else null
+            LaunchedEffect(conclusionPair, conclusionRevision) {
+                if (pendingConclusionCard?.let { it.sourceId to it.analysisId } != conclusionPair) {
+                    pendingConclusionCard = null
+                    pendingConclusionError = null
+                }
+                val previouslySelectedId = if (loadedConclusionPair == conclusionPair) selectedConclusion?.id else null
+                loadedConclusionPair = null
+                conclusionEntries = emptyList()
+                selectedConclusion = null
+                conclusionLoadError = null
+                val pair = conclusionPair ?: return@LaunchedEffect
+                try {
+                    val savedEntries = withContext(Dispatchers.IO) {
+                        val source = store.open(pair.first)
+                        val savedAnalysis = analysisStore.open(source, pair.second)
+                        check(conclusionStore.canAttach(source, savedAnalysis))
+                        conclusionStore.list(source, savedAnalysis)
+                    }
+                    if (selectedId == pair.first && document?.id == pair.first && analysis?.id == pair.second &&
+                        pending == null && pendingAnalysis == null) {
+                        conclusionEntries = savedEntries
+                        selectedConclusion = previouslySelectedId?.let { wanted ->
+                            savedEntries.firstOrNull { it.id == wanted && it.error == null }?.let {
+                                withContext(Dispatchers.IO) {
+                                    val source = store.open(pair.first)
+                                    val savedAnalysis = analysisStore.open(source, pair.second)
+                                    conclusionStore.open(source, savedAnalysis, wanted)
+                                }
+                            }
+                        }
+                        loadedConclusionPair = pair
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) {
+                    if (selectedId == pair.first && document?.id == pair.first && analysis?.id == pair.second) {
+                        conclusionLoadError = pair to "结论卡目录或所选分析无法读取；本次未删除文件，请核对本机原文、分析与结论卡副本。"
+                    }
+                }
+            }
             var sourceExpanded by remember(current.id) { mutableStateOf(false) }
             var analysisChoicesExpanded by remember(current.id) { mutableStateOf(false) }
             var summaryExpanded by remember(current.id, currentAnalysis?.id) { mutableStateOf(false) }
@@ -337,6 +453,76 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         }) { Text("清除 App / 来源 / condition / 会话筛选") }
                     }
                     if (!current.isVideo) Text("筛选只改变原记录的显示范围；已保存分析仍是整批副本，不会按当前筛选重算。", style = MaterialTheme.typography.bodySmall)
+                    if (conclusionPair != null) Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            var visibleConclusionCount by remember(conclusionPair) { mutableIntStateOf(50) }
+                            Text("人工结论卡 · 整批单 App", style = MaterialTheme.typography.titleMedium)
+                            Text("仅关联已保存的原文与分析 SHA-256；当前 App / condition / 会话筛选不改变此卡。卡片是人工原文，不是自动测量、媒体核验或网络性能归因。", style = MaterialTheme.typography.bodySmall)
+                            val pairError = conclusionLoadError?.takeIf { it.first == conclusionPair }?.second
+                            if (pairError != null) {
+                                Text(pairError, color = colors.ink, style = MaterialTheme.typography.bodySmall)
+                            } else if (loadedConclusionPair != conclusionPair) {
+                                Text("正在检查本机结论卡…", style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                Button(enabled = !busy, onClick = {
+                                    conclusionImportSourceId = conclusionPair.first
+                                    conclusionImportAnalysisId = conclusionPair.second
+                                    conclusionPicker.launch(arrayOf("text/plain", "text/markdown", "application/octet-stream"))
+                                }) { Text("选择并预览人工结论卡（UTF-8）") }
+                                if (conclusionEntries.isEmpty()) Text("尚无此原文 / 分析对应的结论卡；未知结论不补写。")
+                                else Text("列表只读文件名，点击后才校验并读取正文。", style = MaterialTheme.typography.bodySmall)
+                                conclusionEntries.take(visibleConclusionCount).forEach { entry ->
+                                    if (entry.error != null) Text("${entry.id.take(12)}…：${entry.error}", style = MaterialTheme.typography.bodySmall)
+                                    else TextButton(enabled = !busy, onClick = {
+                                        val pair = conclusionPair
+                                        selectedConclusion = null
+                                        action {
+                                            try {
+                                                val card = withContext(Dispatchers.IO) {
+                                                    val source = store.open(pair.first)
+                                                    val savedAnalysis = analysisStore.open(source, pair.second)
+                                                    conclusionStore.open(source, savedAnalysis, entry.id)
+                                                }
+                                                if (selectedId == pair.first && document?.id == pair.first && analysis?.id == pair.second &&
+                                                    pending == null && pendingAnalysis == null) selectedConclusion = card
+                                                else notice = "原文或分析已切换；旧结论卡未显示。"
+                                            } catch (e: CancellationException) { throw e }
+                                            catch (_: Exception) {
+                                                selectedConclusion = null
+                                                notice = "结论卡无法重新读取或校验；本次未删除文件，也未显示未经验证的正文。"
+                                            }
+                                        }
+                                    }) {
+                                        Text("校验并查看结论卡 ${entry.id.take(12)}…")
+                                    }
+                                }
+                                if (conclusionEntries.size > visibleConclusionCount) TextButton(onClick = {
+                                    visibleConclusionCount += 50
+                                }) { Text("再显示 50 张 · 共 ${conclusionEntries.size} 张") }
+                                selectedConclusion?.takeIf {
+                                    it.sourceId == conclusionPair.first && it.analysisId == conclusionPair.second
+                                }?.let { card ->
+                                    var cardPage by remember(card.id) { mutableIntStateOf(0) }
+                                    val pageSize = 8000
+                                    val codePointCount = remember(card.id) { card.text.codePointCount(0, card.text.length) }
+                                    val pageCount = ((codePointCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+                                    val safePage = cardPage.coerceIn(0, pageCount - 1)
+                                    val startCodePoint = safePage * pageSize
+                                    val startOffset = card.text.offsetByCodePoints(0, startCodePoint)
+                                    val endOffset = card.text.offsetByCodePoints(startOffset, minOf(pageSize, codePointCount - startCodePoint))
+                                    Text("${card.appName} · 纯文本第 ${safePage + 1}/$pageCount 页；不打开卡片内链接或媒体。", style = MaterialTheme.typography.bodySmall)
+                                    SelectionContainer { Text("卡片 SHA-256：${card.id}", style = MaterialTheme.typography.bodySmall) }
+                                    SelectionContainer {
+                                        Text(card.text.substring(startOffset, endOffset))
+                                    }
+                                    if (pageCount > 1) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(enabled = safePage > 0, onClick = { cardPage = safePage - 1 }) { Text("上一页") }
+                                        TextButton(enabled = safePage + 1 < pageCount, onClick = { cardPage = safePage + 1 }) { Text("下一页") }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (pending == null) TextButton(onClick = { analysisChoicesExpanded = !analysisChoicesExpanded }, enabled = !busy, modifier = Modifier.weight(1f)) {
                             Text(if (analysisChoicesExpanded) "收起副本" else "选择分析")
@@ -428,6 +614,60 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+    pendingConclusionCard?.takeIf { card ->
+        selectedId == card.sourceId && document?.id == card.sourceId && analysis?.id == card.analysisId &&
+            pending == null && pendingAnalysis == null
+    }?.let { card ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) { pendingConclusionCard = null; pendingConclusionError = null } },
+            title = { Text("确认保存人工结论卡？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pendingConclusionError?.let { Text(it, color = colors.ink, style = MaterialTheme.typography.bodySmall) }
+                    Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${card.preview.appName} · ${card.bytes.size} 字节 · 仅存本机私有目录")
+                        SelectionContainer {
+                            Text("原文 SHA-256：${card.sourceId}\n分析 SHA-256：${card.analysisId}\n卡片 SHA-256：${card.preview.id}", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text("下方仅预览前 1200 字符；确认后保存完整 UTF-8 原文。不自动核验结论真伪、不打开链接或媒体。", style = MaterialTheme.typography.bodySmall)
+                        val previewEnd = card.preview.text.offsetByCodePoints(
+                            0, minOf(1200, card.preview.text.codePointCount(0, card.preview.text.length))
+                        )
+                        SelectionContainer { Text(card.preview.text.substring(0, previewEnd), style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = {
+                    action {
+                        try {
+                            if (selectedId != card.sourceId || document?.id != card.sourceId || analysis?.id != card.analysisId ||
+                                pending != null || pendingAnalysis != null) {
+                                throw ResearchImportException("原文或分析已切换；结论卡未保存。")
+                            }
+                            val saved = withContext(Dispatchers.IO) {
+                                val source = store.open(card.sourceId)
+                                val savedAnalysis = analysisStore.open(source, card.analysisId)
+                                conclusionStore.save(source, savedAnalysis, card.bytes)
+                            }
+                            pendingConclusionCard = null
+                            pendingConclusionError = null
+                            if (selectedId == card.sourceId && document?.id == card.sourceId && analysis?.id == card.analysisId &&
+                                pending == null && pendingAnalysis == null) {
+                                loadedConclusionPair = card.sourceId to card.analysisId
+                                selectedConclusion = saved
+                                conclusionRevision++
+                                notice = "人工结论卡已保存；它不是自动测量、媒体核验或网络归因。"
+                            } else notice = "结论卡已保存到原先选择的批次；当前页面已切换，未显示旧结论。"
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: ResearchImportException) { pendingConclusionError = e.message }
+                        catch (_: Exception) { pendingConclusionError = "结论卡未能保存。请核对本机原文、分析与存储空间；本次未删除文件。" }
+                    }
+                }) { Text("确认保存") }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { pendingConclusionCard = null; pendingConclusionError = null }) { Text("取消 · 不保存") } },
+        )
     }
     batchImportPreview?.let { preview ->
         val readyCount = preview.items.count { it.status == ResearchBatchImportItemStatus.READY }
