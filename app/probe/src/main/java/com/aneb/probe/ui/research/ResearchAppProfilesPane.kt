@@ -20,6 +20,7 @@ internal fun ResearchAppProfilesPane(
     onSelect: (ResearchAppProfile) -> Unit,
     onScopeChange: (ResearchRecordScopeFilter) -> Unit,
     onOpenBatch: (ResearchAppProfileBatch) -> Unit,
+    onOpenAttempt: (ResearchAppProfileBatch, ResearchAttempt) -> Unit,
     onOpenVideo: (String) -> Unit,
     busy: Boolean,
     modifier: Modifier = Modifier,
@@ -96,7 +97,15 @@ internal fun ResearchAppProfilesPane(
                         Text(batch.filter.label, style = MaterialTheme.typography.titleMedium)
                         batch.summaryLines.forEach { Text(it) }
                         Text("版本、模式与状态均为输入声明（未核验）。", style = MaterialTheme.typography.bodySmall)
-                        batch.recordLines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        val recordLines = batch.recordLines
+                        batch.records.forEachIndexed { index, attempt ->
+                            Column {
+                                Text(recordLines[index], style = MaterialTheme.typography.bodySmall)
+                                TextButton(enabled = !busy, onClick = { onOpenAttempt(batch, attempt) }) {
+                                    Text("定位到这条原始记录")
+                                }
+                            }
+                        }
                         TextButton(enabled = !busy, onClick = { onOpenBatch(batch) }) { Text("查看本 App 原始记录与分析") }
                         Text("筛选只改变当前显示记录；分析仍属整批原副本，不按筛选重算。", style = MaterialTheme.typography.bodySmall)
                     }
