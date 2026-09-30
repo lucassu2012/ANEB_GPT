@@ -15,6 +15,15 @@ data class ResearchAppProfileBatch(
     val sourceId: String get() = document.id
     val records: List<ResearchAttempt> get() = document.recordsForScope(filter, scope)
     val originalAppRecords: List<ResearchAttempt> get() = document.recordsForApp(filter)
+    /** Preserve the original source spelling; display grouping may normalize UNKNOWN to null. */
+    val singleAppRawName: String? get() {
+        val names = document.records.map { (it.raw["app"] as? JsonObject)?.text("name") }
+        val first = names.firstOrNull()
+        return first?.takeIf { it.isNotBlank() && names.all { name -> name == it } }
+    }
+    /** A card describes its whole source; no entry is offered outside the current view scope. */
+    val canShowObservedConclusionEntry: Boolean get() =
+        document.recordKind == "OBSERVED" && records.isNotEmpty()
     val summaryLines: List<String> get() = listOf(
         "筛选显示：${records.size} 条 / 原批次：${document.records.size} 条（仅显示数量，不是成功率分母）",
         "本 App 原记录：${originalAppRecords.size} 条",
