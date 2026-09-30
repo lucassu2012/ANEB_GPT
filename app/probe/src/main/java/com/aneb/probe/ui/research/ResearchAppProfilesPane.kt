@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -20,6 +21,10 @@ internal fun ResearchAppProfilesPane(
     onSelect: (ResearchAppProfile) -> Unit,
     onScopeChange: (ResearchRecordScopeFilter) -> Unit,
     onOpenBatch: (ResearchAppProfileBatch) -> Unit,
+    conclusionTargets: Map<String, List<ResearchConclusionTarget>>,
+    conclusionIndexErrors: Set<String>,
+    conclusionIndexLoading: Boolean,
+    onOpenConclusion: (ResearchAppProfileBatch, ResearchConclusionTarget) -> Unit,
     onOpenAttempt: (ResearchAppProfileBatch, ResearchAttempt) -> Unit,
     onOpenVideo: (String) -> Unit,
     busy: Boolean,
@@ -37,7 +42,7 @@ internal fun ResearchAppProfilesPane(
         ?: profiles.firstOrNull()
     Column(modifier) {
         Text("App 研究索引", style = MaterialTheme.typography.titleLarge)
-        Text("按输入声明整理，未核验实际 App/来源；不同批次不自动可比。这里只查看已存研究，不是汇总结论。")
+        Text("按输入声明整理，未核验实际 App/来源；不同批次不自动可比。人工结论卡是原文候选，不是自动汇总或网络归因。")
         Text("来源类型（按批次原声明）", style = MaterialTheme.typography.labelLarge)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(ResearchSourceKindSelection.values().toList()) { option ->
@@ -97,6 +102,26 @@ internal fun ResearchAppProfilesPane(
                         Text(batch.filter.label, style = MaterialTheme.typography.titleMedium)
                         batch.summaryLines.forEach { Text(it) }
                         Text("版本、模式与状态均为输入声明（未核验）。", style = MaterialTheme.typography.bodySmall)
+                        if (batch.document.recordKind == "OBSERVED") {
+                            val targets = conclusionTargets[batch.sourceId].orEmpty()
+                            val singleApp = batch.singleAppRawName
+                            when {
+                                !batch.canShowObservedConclusionEntry -> Text("本批不在当前来源或 condition 筛选范围；整批结论卡入口已隐藏，原始记录仍可查看。", style = MaterialTheme.typography.bodySmall)
+                                singleApp == null -> Text("本批混合或缺少 App 身份；不能作为单 App 人工结论入口。原始记录仍可查看。", style = MaterialTheme.typography.bodySmall)
+                                conclusionIndexLoading -> Text("正在查找本机人工结论卡…", style = MaterialTheme.typography.bodySmall)
+                                batch.sourceId in conclusionIndexErrors -> Text("结论卡索引无法读取；原始记录仍可打开，未显示未经校验的正文。", style = MaterialTheme.typography.bodySmall)
+                                targets.isEmpty() -> Text("本批无可定位的单 App 文本人工结论卡；不据此补写结论。", style = MaterialTheme.typography.bodySmall)
+                                else -> {
+                                    Text("人工观察卡候选 ${targets.size} 张 · 卡片绑定整批原文，不随当前 condition 缩小；不自动选择最新或最佳。点击后重验三份副本。", style = MaterialTheme.typography.bodySmall)
+                                    targets.forEach { target ->
+                                        SelectionContainer { Text("原文 SHA-256：${target.sourceId}\n分析 SHA-256：${target.analysisId}\n卡片 SHA-256：${target.cardId}", style = MaterialTheme.typography.bodySmall) }
+                                        TextButton(enabled = !busy, onClick = { onOpenConclusion(batch, target) }) {
+                                            Text("校验并查看这张人工结论卡")
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (batch.document.recordKind == "SAMPLE") Text("SAMPLE 是虚构样例，不提供实际观察结论入口。", style = MaterialTheme.typography.bodySmall)
                         val recordLines = batch.recordLines
                         batch.records.forEachIndexed { index, attempt ->
                             Column {

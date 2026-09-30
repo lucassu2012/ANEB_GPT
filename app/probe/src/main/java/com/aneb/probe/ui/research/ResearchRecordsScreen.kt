@@ -48,6 +48,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     val store = remember(context) { ResearchRecordStore(File(context.noBackupFilesDir, "r1-research")) }
     val analysisStore = remember(context) { ResearchAnalysisStore(File(context.noBackupFilesDir, "r1-research-analysis")) }
     val conclusionStore = remember(context) { ResearchConclusionStore(File(context.noBackupFilesDir, "r1-research-conclusions")) }
+    val conclusionIndex = remember(store, analysisStore, conclusionStore) { ResearchConclusionIndex(store, analysisStore, conclusionStore) }
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(emptyList<ResearchEntry>()) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -72,6 +73,11 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var conclusionLoadError by remember { mutableStateOf<Pair<Pair<String, String>, String>?>(null) }
     var pendingConclusionCard by remember { mutableStateOf<PendingConclusionCard?>(null) }
     var pendingConclusionError by remember { mutableStateOf<String?>(null) }
+    var requestedConclusionTarget by remember { mutableStateOf<ResearchConclusionTarget?>(null) }
+    var indexedConclusionTargets by remember { mutableStateOf<Map<String, List<ResearchConclusionTarget>>>(emptyMap()) }
+    var conclusionIndexErrors by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var conclusionIndexLoading by remember { mutableStateOf(false) }
+    var conclusionIndexRun by remember { mutableIntStateOf(0) }
     var manualOpen by rememberSaveable { mutableStateOf(false) }
     var profilesOpen by rememberSaveable { mutableStateOf(false) }
     var profileSelection by remember { mutableStateOf<ResearchAppProfile?>(null) }
@@ -88,6 +94,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         conclusionLoadError = null
         pendingConclusionCard = null
         pendingConclusionError = null
+        requestedConclusionTarget = null
     }
 
     if (manualOpen) {
@@ -122,11 +129,37 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { notice = "无法读取记录列表；原文件保留。" }
     }
+    LaunchedEffect(profilesOpen, selectedId, entries, conclusionRevision) {
+        val thisRun = ++conclusionIndexRun
+        if (!profilesOpen || selectedId != null) {
+            conclusionIndexLoading = false
+            return@LaunchedEffect
+        }
+        conclusionIndexLoading = true
+        val targets = mutableMapOf<String, List<ResearchConclusionTarget>>()
+        val errors = mutableSetOf<String>()
+        try {
+            withContext(Dispatchers.IO) {
+                entries.mapNotNull { it.document }.filter { it.recordKind == "OBSERVED" && !it.isVideo }
+                    .map { it.id }.distinct().forEach { id ->
+                        try { targets[id] = conclusionIndex.list(id) }
+                        catch (_: Exception) { errors.add(id) }
+                    }
+            }
+            if (thisRun == conclusionIndexRun && profilesOpen && selectedId == null) {
+                indexedConclusionTargets = targets
+                conclusionIndexErrors = errors
+            }
+        } catch (e: CancellationException) { throw e }
+        finally { if (thisRun == conclusionIndexRun) conclusionIndexLoading = false }
+    }
     LaunchedEffect(selectedId) {
         analysis = null
         pendingAnalysis = null
         analysisEntries = emptyList()
         val id = selectedId
+        val conclusionTarget = requestedConclusionTarget?.takeIf { it.sourceId == id }
+        if (requestedConclusionTarget != null && conclusionTarget == null) requestedConclusionTarget = null
         if (id != null) {
             try {
                 val saved = withContext(Dispatchers.IO) { store.open(id) }
@@ -134,12 +167,27 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 try { analysisEntries = withContext(Dispatchers.IO) { analysisStore.list(saved) } }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { notice = "分析目录无法读取；原始记录仍可查看和导出，分析副本未删除。" }
+                if (conclusionTarget != null) {
+                    try {
+                        val opened = withContext(Dispatchers.IO) { conclusionIndex.open(conclusionTarget) }
+                        if (selectedId == id && requestedConclusionTarget == conclusionTarget) analysis = opened.analysis
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        if (selectedId == id && requestedConclusionTarget == conclusionTarget) {
+                            requestedConclusionTarget = null
+                            notice = "结论卡定位失败：原文、分析或卡片缺失或已变更；未显示未经校验的正文。"
+                        }
+                    }
+                }
             }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) {
                 val failedTargetOpen = requestedAttemptLocator?.sourceId == id
+                val failedConclusionOpen = conclusionTarget != null
                 clearAttemptTarget()
-                notice = if (failedTargetOpen) "定位失败：原始来源当前无法打开；未跳转到其他来源。"
+                requestedConclusionTarget = null
+                notice = if (failedConclusionOpen) "结论卡定位失败：原文、分析或卡片缺失或已变更；未显示未经校验的正文。"
+                    else if (failedTargetOpen) "定位失败：原始来源当前无法打开；未跳转到其他来源。"
                     else "记录无法打开；原文件保留。"
                 document = null
                 selectedId = null
@@ -286,6 +334,23 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     requestedAppFilter = batch.filter
                     requestedScopeFilter = batch.scope
                     selectedId = batch.sourceId
+                }, conclusionTargets = indexedConclusionTargets, conclusionIndexErrors = conclusionIndexErrors,
+                    conclusionIndexLoading = conclusionIndexLoading, onOpenConclusion = { batch, target ->
+                    action {
+                        try {
+                            val opened = withContext(Dispatchers.IO) { conclusionIndex.open(target) }
+                            check(opened.belongsTo(batch))
+                            clearAttemptTarget()
+                            clearConclusionView()
+                            requestedAppFilter = batch.filter
+                            requestedScopeFilter = batch.scope
+                            requestedConclusionTarget = target
+                            selectedId = target.sourceId
+                        } catch (e: CancellationException) { throw e }
+                        catch (_: Exception) {
+                            notice = "结论卡定位失败：原文、分析或卡片缺失或已变更；未跳转，也未显示未经校验的正文。"
+                        }
+                    }
                 }, onOpenAttempt = { batch, attempt ->
                     requestedAppFilter = batch.filter
                     requestedScopeFilter = batch.scope
@@ -357,6 +422,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 selectedConclusion = null
                 conclusionLoadError = null
                 val pair = conclusionPair ?: return@LaunchedEffect
+                val requestedId = requestedConclusionTarget?.takeIf {
+                    it.sourceId == pair.first && it.analysisId == pair.second
+                }?.cardId
                 try {
                     val savedEntries = withContext(Dispatchers.IO) {
                         val source = store.open(pair.first)
@@ -367,8 +435,10 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     if (selectedId == pair.first && document?.id == pair.first && analysis?.id == pair.second &&
                         pending == null && pendingAnalysis == null) {
                         conclusionEntries = savedEntries
-                        selectedConclusion = previouslySelectedId?.let { wanted ->
-                            savedEntries.firstOrNull { it.id == wanted && it.error == null }?.let {
+                        selectedConclusion = (requestedId ?: previouslySelectedId)?.let { wanted ->
+                            val candidate = savedEntries.firstOrNull { it.id == wanted && it.error == null }
+                            if (requestedId != null) checkNotNull(candidate) { "所选卡片已缺失" }
+                            candidate?.let {
                                 withContext(Dispatchers.IO) {
                                     val source = store.open(pair.first)
                                     val savedAnalysis = analysisStore.open(source, pair.second)
@@ -376,11 +446,13 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                 }
                             }
                         }
+                        if (requestedId != null && requestedConclusionTarget?.cardId == requestedId) requestedConclusionTarget = null
                         loadedConclusionPair = pair
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) {
                     if (selectedId == pair.first && document?.id == pair.first && analysis?.id == pair.second) {
+                        if (requestedId != null && requestedConclusionTarget?.cardId == requestedId) requestedConclusionTarget = null
                         conclusionLoadError = pair to "结论卡目录或所选分析无法读取；本次未删除文件，请核对本机原文、分析与结论卡副本。"
                     }
                 }
@@ -510,8 +582,8 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                     val startCodePoint = safePage * pageSize
                                     val startOffset = card.text.offsetByCodePoints(0, startCodePoint)
                                     val endOffset = card.text.offsetByCodePoints(startOffset, minOf(pageSize, codePointCount - startCodePoint))
-                                    Text("${card.appName} · 纯文本第 ${safePage + 1}/$pageCount 页；不打开卡片内链接或媒体。", style = MaterialTheme.typography.bodySmall)
-                                    SelectionContainer { Text("卡片 SHA-256：${card.id}", style = MaterialTheme.typography.bodySmall) }
+                                    Text("${card.appName} · ${current.sourceLabel} · 人工结论原文、非网络归因 · 纯文本第 ${safePage + 1}/$pageCount 页；不打开卡片内链接或媒体。", style = MaterialTheme.typography.bodySmall)
+                                    SelectionContainer { Text("原文 SHA-256：${card.sourceId}\n分析 SHA-256：${card.analysisId}\n卡片 SHA-256：${card.id}", style = MaterialTheme.typography.bodySmall) }
                                     SelectionContainer {
                                         Text(card.text.substring(startOffset, endOffset))
                                     }
