@@ -320,7 +320,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         TextButton(onClick = back, enabled = !busy) {
             Text(if (document != null && profilesOpen) "返回 App 研究索引" else if (document != null || profilesOpen) "返回研究列表" else "返回测试历史")
         }
-        if (document == null) AnebPageIntro("R1 · MANUAL", "App 研究记录", subtitle = "人工来源 · SAMPLE 样例与 OBSERVED 观察声明分批保存，不代表工具已核验。与测速历史、AQS 和 RPI 分开。")
+        if (document == null) AnebPageIntro("R1 · MANUAL", ResearchReaderCopy.title, subtitle = ResearchReaderCopy.introduction)
         else Text("研究结果", style = MaterialTheme.typography.titleLarge)
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
         notice?.let { Text(it, color = colors.ink, modifier = Modifier.padding(vertical = 8.dp)) }
@@ -597,7 +597,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (pending == null) TextButton(onClick = { analysisChoicesExpanded = !analysisChoicesExpanded }, enabled = !busy, modifier = Modifier.weight(1f)) {
-                            Text(if (analysisChoicesExpanded) "收起副本" else "选择分析")
+                            Text(if (analysisChoicesExpanded) "收起副本" else ResearchReaderCopy.analysisChoiceLabel)
                         }
                         TextButton(onClick = { sourceExpanded = !sourceExpanded }, modifier = Modifier.weight(1f)) { Text(if (sourceExpanded) "收起来源" else "来源 / 导出") }
                         if (currentAnalysis != null) TextButton(onClick = { summaryExpanded = !summaryExpanded }, modifier = Modifier.weight(1f)) { Text(if (summaryExpanded) "收起整批" else "整批摘要") }
@@ -608,16 +608,16 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Text(if (pending != null) "预览，尚未保存" else "已保存", color = colors.brand)
                     Text(current.sourceNotice, color = colors.ink)
                     Text("只按原标注分组，不是全文聊天回放；缺少有效会话或轮次的记录保留在“未分会话”。逐轮结果随 App / 来源 / condition / 会话筛选切换；整批分析与原文导出不随筛选改变。", style = MaterialTheme.typography.bodySmall)
-                    if (pending == null) TextButton(enabled = !busy, onClick = { confirmExport = true }) { Text("导出整批原始 JSON") }
+                    if (pending == null) TextButton(enabled = !busy, onClick = { confirmExport = true }) { Text(ResearchReaderCopy.recordExportLabel) }
                     SelectionContainer { Text("输入 SHA-256：${current.id}", color = colors.muted, style = MaterialTheme.typography.bodySmall) }
-                    Text("方法：${researchDeclaredValue(current.methodId) ?: "未提供（见逐条）"}", color = colors.ink)
+                    Text("方法（输入声明）：${researchDeclaredValue(current.methodId) ?: "未提供（见逐条）"}", color = colors.ink)
                     if (current.isVideo) {
                         Text("计划槽：${current.records.size}；已执行：${current.records.count { it.status == "EXECUTED" }}；未执行：${current.records.count { it.status == "NOT_RUN" }}。未执行不计播放失败。", color = colors.ink)
                         Text("30秒从可见打开 V0 开始，包括首次等待；不是播放完成。视频首画面不套用文本 TTFC/T3。", color = colors.muted)
                         Text("原始来源声明：${current.root.text("record_kind")}；PTS 单位为秒，仅展示原标注。", color = colors.muted)
                         SelectionContainer { Text(displayValue(current.root["evidence"]), style = MaterialTheme.typography.bodySmall) }
                     } else {
-                        Text("操作：${researchDeclaredValue(current.root.text("action_text")) ?: "未提供（见逐条原记录）"}", color = colors.ink)
+                        Text("操作（输入声明）：${researchDeclaredValue(current.root.text("action_text")) ?: "未提供（见逐条原记录）"}", color = colors.ink)
                         Text("原始单位：${researchDeclaredValue(current.root.text("time_unit")) ?: "未提供（见逐条时钟）"}。本机不计算派生时长；记录状态不等于网络成功。", color = colors.muted)
                     }
                 }
@@ -626,12 +626,12 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("派生分析 · 独立副本", style = MaterialTheme.typography.titleMedium)
                             if (currentAnalysis != null) TextButton(enabled = !busy, onClick = { analysis = null; pendingAnalysis = null }) { Text("取消分析选择") }
-                            Text("选择 3a 的分析 JSON；按原文 SHA-256 与${if (current.isVideo) "视频 slot" else " attempt_id"}关联，不覆盖原文。重开后可从下列副本中选择。")
+                            Text(ResearchReaderCopy.analysisGuide(current.isVideo))
                             Button(enabled = !busy, onClick = {
                                 analysisImportSourceId = current.id
                                 analysis = null; pendingAnalysis = null
                                 analysisPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                            }) { Text("选择分析 JSON") }
+                            }) { Text("${ResearchReaderCopy.analysisChoiceLabel} JSON") }
                             if (analysisEntries.isEmpty()) Text("尚无保存的分析副本。")
                             analysisEntries.forEach { entry ->
                                 if (entry.error != null) Text("${entry.id.take(12)}：${entry.error}")
@@ -663,7 +663,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                     notice = "分析副本已独立保存，可重开；原始记录未更改。"
                                 }
                             }) { Text("确认保存分析副本") }
-                            else TextButton(enabled = !busy, onClick = { analysisExportId = currentAnalysis.id }) { Text("导出此分析副本") }
+                            else TextButton(enabled = !busy, onClick = { analysisExportId = currentAnalysis.id }) { Text(ResearchReaderCopy.analysisExportLabel) }
                             currentAnalysis.groupLines.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                         }
                     }
@@ -757,11 +757,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                         pair.analysisFileNames.forEach { Text("  ↳ ${it}") }
                     }
                     preview.items.forEach { item ->
-                        val kind = when (item.kind) {
-                            ResearchBatchImportItemKind.RAW -> "原文"
-                            ResearchBatchImportItemKind.ANALYSIS -> "分析"
-                            ResearchBatchImportItemKind.UNKNOWN -> "未知 JSON"
-                        }
+                        val kind = ResearchReaderCopy.importKind(item.kind)
                         val status = when (item.status) {
                             ResearchBatchImportItemStatus.READY -> "可保存"
                             ResearchBatchImportItemStatus.INVALID -> "无效"
@@ -783,7 +779,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                             batchSaveReceipt = receipt
                             batchImportPreview = null
                             refresh()
-                            notice = "导入处理完成：已保存 ${receipt.savedCount}/${receipt.items.size} 项；未保存项已逐项列出。"
+                            notice = "导入处理完成：${ResearchReaderCopy.saveSummary(receipt)}；未保存项已逐项列出。"
                         }
                     },
                 ) { Text("确认保存 $readyCount 项") }
@@ -794,15 +790,15 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     batchSaveReceipt?.let { receipt ->
         AlertDialog(
             onDismissRequest = { batchSaveReceipt = null },
-            title = { Text("导入结果 · 已保存 ${receipt.savedCount}/${receipt.items.size} 项") },
+            title = { Text("导入结果 · ${ResearchReaderCopy.saveSummary(receipt)}") },
             text = {
                 Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     receipt.items.forEach { item ->
-                        val label = if (item.status == ResearchBatchImportSaveStatus.SAVED) "已保存" else "未保存"
+                        val label = if (item.status == ResearchBatchImportSaveStatus.SAVED) "保存处理成功" else "未保存"
                         Text("$label · ${item.fileName}")
                         item.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.muted) }
                     }
-                    Text("已保存项保留；未保存项没有被当作成功，也不会回滚其它独立 Store。", style = MaterialTheme.typography.bodySmall)
+                    Text(ResearchReaderCopy.saveNotice, style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = { TextButton(onClick = { batchSaveReceipt = null }) { Text("完成") } },
@@ -810,8 +806,8 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     }
     if (confirmExport || analysisExportId != null) AlertDialog(
         onDismissRequest = { confirmExport = false; analysisExportId = null },
-        title = { Text(if (analysisExportId != null) "导出独立分析副本？" else "导出原始记录？") },
-        text = { Text("${document?.sourceLabel ?: "未确认来源"}\n将${if (analysisExportId != null) "分析原始字节（含原文上下文）" else "原始 JSON"}保存到 Downloads/ANEB，可能包含操作文本和本地证据引用。不会打包录像，也不会自动上传或分享。分析未在本机重算或独立核验。请先确认内容适合导出。") },
+        title = { Text(ResearchReaderCopy.exportTitle(analysisExportId != null)) },
+        text = { Text(ResearchReaderCopy.exportConfirmation(document?.sourceLabel, document?.id, analysisExportId)) },
         confirmButton = { TextButton(onClick = {
             confirmExport = false
             val derivedId = analysisExportId
@@ -890,7 +886,12 @@ private fun ResearchAttemptCard(
             if (rawExpanded) {
                 attempt.sourceWarnings.forEach { Text(it, color = AnebTheme.colors.fair) }
                 Text("版本：${app?.text("version") ?: "UNKNOWN"}；模式：${app?.text("model_mode") ?: "UNKNOWN"}")
-                Text("已发送：${displayValue(outcome?.get("executed"))}；可见完成：${displayValue(outcome?.get("visible_completion"))}；遵循指令：${displayValue(outcome?.get("instruction_following"))}")
+                Text(ResearchReaderCopy.outcomeSummary(
+                    displayValue(outcome?.get("executed")),
+                    displayValue(outcome?.get("visible_completion")),
+                    displayValue(outcome?.get("instruction_following")),
+                ))
+                Text(ResearchReaderCopy.outcomeNotice, style = MaterialTheme.typography.bodySmall)
                 Text("时钟：${clock?.text("source") ?: "UNKNOWN"}；单位：${clock?.text("unit") ?: "UNKNOWN"}；域：${clock?.text("domain_id") ?: "UNKNOWN"}")
                 listOf("context_observation" to "上下文原标注（含未识别字段，不补推断）", "metadata" to "设备、时间与网络", "events" to "原始事件与区间", "observed_intervals" to "原始观察区间", "missing_reasons" to "缺失原因", "evidence" to "证据引用（不打开外部路径）", "completion_observation" to "完成观察依据").forEach { (key, label) ->
                     Text(label, style = MaterialTheme.typography.labelLarge)
