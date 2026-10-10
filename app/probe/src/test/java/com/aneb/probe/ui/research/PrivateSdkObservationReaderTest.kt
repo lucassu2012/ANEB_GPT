@@ -15,6 +15,32 @@ import org.junit.rules.TemporaryFolder
 class PrivateSdkObservationReaderTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun historicalVisibleObservationPreviewsOriginalJsonWithoutSavingOrOpeningDeclaredPaths() {
+        val directory = temporary.newFolder()
+        val bytes = visibleSdkTestInput()
+        val reader = PrivateSdkObservationReaderController(PrivateSdkObservationStore(directory))
+        val preview = reader.preview { ByteArrayInputStream(bytes) }
+        assertNotNull("historical visible SDK input must be readable", preview.document)
+        assertArrayEquals(bytes, preview.document!!.originalBytes())
+        assertFalse(preview.saved)
+        assertTrue(directory.listFiles()!!.isEmpty())
+    }
+
+    @Test fun historicalGetterAndCaptureTimeRowsKeepTheirOriginalTypesAndUnknownBoundaries() {
+        val bytes = visibleSdkTestInput()
+        val document = PrivateSdkObservationStore(temporary.newFolder()).preview(bytes)
+        val rows = PrivateSdkObservationPresentation.fields(document.root).associateBy { it.path }
+        assertEquals("JSON string", rows["sdk.raw_getter_objects.deep_label.checked"]?.type)
+        assertEquals("\"false\"", rows["sdk.raw_getter_objects.deep_label.checked"]?.literal)
+        assertEquals("\"0\"", rows["sdk.raw_fields.actions"]?.literal)
+        assertEquals("\"UNPROVEN\"", rows["sdk.raw_fields.owner"]?.literal)
+        assertEquals("true", rows["time_boundaries.non_atomic"]?.literal)
+        assertEquals("JSON boolean", rows["time_boundaries.non_atomic"]?.type)
+        assertEquals("\"UNKNOWN\"", rows["time_boundaries.phone_wall_clock_mapping"]?.literal)
+        assertEquals("\"TEST_HISTORICAL_TIME\"", rows["visible_witness.capture_start_utc_ns"]?.literal)
+        assertArrayEquals(bytes, document.originalBytes())
+    }
+
     @Test fun selectedInputIsPreviewedThenExplicitlySavedAndReopenedFromTheLocalList() {
         val directory = temporary.newFolder()
         val bytes = privateSdkTestInput()
@@ -123,3 +149,20 @@ class PrivateSdkObservationReaderTest {
         }
     }
 }
+
+/** Anonymous historical input; no real observation, identifiers, paths, or pixels. */
+internal fun visibleSdkTestInput(pngBytes: Int = 0, pngSha: String = "0".repeat(64)): ByteArray = """
+    {
+      "schema_version":1,"task":"TEST_ONLY","verdict":"PRIVATE_INPUT",
+      "visible_witness":{"status":"INPUT_DECLARATION","original_source":{
+        "path":"https://invalid.example/do-not-open.png","bytes":$pngBytes,"sha256":"$pngSha"},
+        "capture_start_utc_ns":"TEST_HISTORICAL_TIME","actually_viewed":true},
+      "sdk":{"raw_getter_objects":{
+        "deep_label":{"checked":"false","checkable":"false","visible":"true"},
+        "deep_parent":{},"search_label":{},"search_parent":{}},
+        "raw_fields":{"owner":"UNPROVEN","action_target":"UNPROVEN","actions":"0","permit":"NONE"}},
+      "time_boundaries":{"non_atomic":true,"host_and_android_domains_separate":true,
+        "phone_wall_clock_mapping":"UNKNOWN"},
+      "nonclaims":["semantic UNKNOWN","backend UNKNOWN"]
+    }
+""".trimIndent().toByteArray(Charsets.UTF_8)
