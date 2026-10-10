@@ -79,6 +79,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var conclusionIndexLoading by remember { mutableStateOf(false) }
     var conclusionIndexRun by remember { mutableIntStateOf(0) }
     var manualOpen by rememberSaveable { mutableStateOf(false) }
+    var privateSdkOpen by rememberSaveable { mutableStateOf(false) }
     var profilesOpen by rememberSaveable { mutableStateOf(false) }
     var profileSelection by remember { mutableStateOf<ResearchAppProfile?>(null) }
     var requestedAppFilter by remember { mutableStateOf<ResearchAppFilter?>(null) }
@@ -95,6 +96,11 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         pendingConclusionCard = null
         pendingConclusionError = null
         requestedConclusionTarget = null
+    }
+
+    if (privateSdkOpen) {
+        PrivateSdkObservationReaderScreen(onBack = { privateSdkOpen = false })
+        return
     }
 
     if (manualOpen) {
@@ -366,6 +372,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             } else {
                 OutlinedButton(onClick = { action { refresh(); profilesOpen = true } }, enabled = !busy) { Text("App 研究索引 · 已存研究") }
                 Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
+                OutlinedButton(onClick = { privateSdkOpen = true }, enabled = !busy) { Text("私有 SDK 观察 · 独立本机副本") }
                 Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
                 Button(onClick = {
                     batchPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
