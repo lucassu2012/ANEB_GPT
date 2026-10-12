@@ -45,6 +45,7 @@ android {
         targetSdk = 35
         versionCode = 20
         versionName = "0.2.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "PROTOTYPE_ENGINEERING", "false")
         buildConfigField("boolean", "PROTOTYPE_RELEASE", "false")
         buildConfigField("boolean", "PROTOTYPE_PRIVATE_CLEARTEXT", "false")
@@ -254,4 +255,9 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation("org.robolectric:robolectric:4.16.1")
+    // Private Android engineering executor; no production entry or permission.
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation(libs.junit)
 }
