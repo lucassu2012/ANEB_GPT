@@ -73,6 +73,11 @@ def _pin(path, root):
             "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+def _install_success_closed(raw):
+    """Only the known adb install success forms; no unknown prelude or suffix."""
+    return re.fullmatch(rb"(?:Performing Streamed Install\r?\n)?Success(?:\r?\n)?", raw) is not None
+
+
 def _current_agents_non_vpn(raw):
     """Understand current API31 agent/default facts, not listeners or historical text."""
     defaults = re.findall(rb"(?m)^Active default network:([^\r\n]*)", raw)
@@ -267,7 +272,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
         for package, key in ((DEBUG_PACKAGE, "debug_apk"), (TEST_PACKAGE, "test_apk")):
             flags = ["-r", "-d", "-t"] if package == DEBUG_PACKAGE and reader_updated else ["-t"]
             rc, raw, _ = command(["install", *flags, release[key]], "install")
-            if rc != 0 or raw.strip() != b"Success":
+            if rc != 0 or not _install_success_closed(raw):
                 raise RuntimeError("INSTALL_FAILED")
             if not (package == DEBUG_PACKAGE and reader_updated):
                 installed.append(package)
@@ -350,7 +355,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
         if reader_updated and package_mutation_safe:
             try:
                 rc, raw, _ = command(["install", "-r", "-d", "-t", release["original_debug_apk"]], "restore-original-reader")
-                if rc != 0 or raw.strip() != b"Success":
+                if rc != 0 or not _install_success_closed(raw):
                     raise RuntimeError("ORIGINAL_READER_RESTORE_FAILED")
                 verify_installed_reader(release["original_debug_apk_sha256"], "reader-restored")
                 result["original_reader_restored"] = True

@@ -43,6 +43,7 @@ class ExternalPhone:
         self.vendor_admission = False
         self.current_network_override = None
         self.preparation_unexpected_send = False
+        self.install_stdout = b"Success\n"
 
     def run(self, argv, timeout, *, cancel_file=None, on_cancel=None):
         self.commands.append(list(argv))
@@ -100,7 +101,7 @@ class ExternalPhone:
         if args[0] == "install":
             if "android-test" not in args[-1]:
                 self.installed_debug = Path(args[-1]).read_bytes()
-            return 0, b"Success\n", b""
+            return 0, self.install_stdout, b""
         if args[:3] == ["shell", "am", "instrument"]:
             if self.require_native_abi and ("feature_release" not in args or "payload_sha256" not in args or "ui_contract_b64" not in args):
                 return 1, b"INSTRUMENTATION_FAILED: NEW_FEATURE_RELEASE_REQUIRED\n", b""
@@ -157,6 +158,41 @@ class ExternalPhone:
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_public_preparation_rejects_unknown_failure_prelude_even_with_success_suffix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="PREPARATION_ONLY", ui_contract={})
+            phone = ExternalPhone()
+            phone.install_stdout = b"Failure [HOST_ONLY_UNKNOWN_INSTALL_FAILURE]\r\nSuccess\r\n"
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PREPARATION_STOPPED", result["state"])
+            self.assertEqual("INSTALL_FAILED", result["reason"])
+            self.assertEqual(0, result["send_calls"])
+            self.assertFalse(any("instrument" in argv for argv in phone.commands))
+
+    def test_public_preparation_streamed_install_closes_and_fresh_verifies_original_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="PREPARATION_ONLY", ui_contract={})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.old_apk = old.read_bytes()
+            phone.installed_debug = phone.old_apk
+            phone.install_stdout = b"Performing Streamed Install\r\nSuccess\r\n"
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PREPARATION_CLOSED", result["state"])
+            self.assertTrue(result["original_reader_restored"])
+            restored = root / "actual" / "reader-restored.apk"
+            self.assertEqual(release["original_debug_apk_sha256"], hashlib.sha256(restored.read_bytes()).hexdigest())
+            self.assertEqual([0], [row["send_calls"] for row in result["attempts"]])
+            self.assertFalse(any("clear" in argv or ("uninstall" in argv and "com.aneb.probe.codex" in argv) for argv in phone.commands))
+            self.assertEqual(result, json.loads((root / "actual" / "PREPARATION_RESULT.json").read_text()))
+
     def test_preparation_scope_violation_retains_observed_send_instead_of_relabelling_zero(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
