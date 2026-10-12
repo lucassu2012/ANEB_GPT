@@ -23,6 +23,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -57,6 +58,15 @@ class TongyiWholeEngineeringInstrumentation {
         val backend = NativePhone(root, condition, ui, preparationOnly)
         val result = if (preparationOnly) TongyiPreparationRunner(backend.preparationAndroid(), SystemClock::elapsedRealtimeNanos)
             .runOnce(runId, root) else TongyiEngineeringRunner(backend, SystemClock::elapsedRealtimeNanos).runOnce(runId, condition, root)
+        if (preparationOnly) {
+            val retention = runCatching { backend.persistRejectedPreparationObservation() }
+            val report = retention.getOrNull() ?: retention.exceptionOrNull()?.let {
+                "NOT_RETAINED:${it.javaClass.simpleName}"
+            }
+            if (report != null) runCatching {
+                instrumentation.sendStatus(0, Bundle().apply { putString("aneb_preparation_rejection_retention", report) })
+            }
+        }
         val terminal = JSONObject()
             .put("run_id", runId).put("network_condition", if (preparationOnly) JSONObject.NULL else condition)
             .put("state", result.state).put("send_calls", when (result.sendCalls) {
@@ -109,6 +119,25 @@ class TongyiWholeEngineeringInstrumentation {
         private var processShellSequence = 0
         private var preparationFrameSequence = 0
         private var preparationGeometrySequence = 0
+        private data class PreparationObservationBundle(
+            val frame: TongyiPreparationRunner.Frame,
+            val nodeProjection: ByteArray?,
+            val nodeProjectionFailure: String?,
+            val diagnosticPng: ByteArray?,
+            val pngCaptureState: String,
+            val pngCaptureFailure: String?,
+            val pngSource: String,
+            val pngWidth: Int?,
+            val pngHeight: Int?,
+            val nodeValuesObservedNanos: Long,
+            val pngStartedNanos: Long?,
+            val pngCompletedNanos: Long?,
+        )
+        // One slot only. Pinning a rejection freezes this exact Frame and its acquired bytes.
+        private var preparationObservationBundle: PreparationObservationBundle? = null
+        private var preparationRejectionReason: String? = null
+        private var preparationRejectionPinFailure: String? = null
+        private var preparationRejectionPersistenceAttempted = false
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
@@ -470,14 +499,26 @@ class TongyiWholeEngineeringInstrumentation {
                 override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
                     requireOwnedCurrent()
                     check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                    val observationOwner = targetOwner
                     val before = nodes()
                     val observed = values(before)
                     val rootBounds = bounds(before.first())
                     val rotation = device.displayRotation
                     var width = device.displayWidth
                     var height = device.displayHeight
+                    val nodeValuesObservedNanos = SystemClock.elapsedRealtimeNanos()
                     var pixelSha: String? = null
+                    var diagnosticPng: ByteArray? = null
+                    var pngCaptureState = "NOT_REQUESTED"
+                    var pngCaptureFailure: String? = null
+                    var pngSource = "NOT_REQUESTED"
+                    var pngWidth: Int? = null
+                    var pngHeight: Int? = null
+                    var pngStartedNanos: Long? = null
+                    var pngCompletedNanos: Long? = null
                     if (menuPixels) {
+                        pngSource = "existing_menu_public_argb_png"
+                        pngStartedNanos = SystemClock.elapsedRealtimeNanos()
                         val screenshot = checkNotNull(automation.takeScreenshot()) { "PUBLIC_SCREENSHOT_UNAVAILABLE" }
                         // Public screenshots may use a hardware Bitmap; CPU pixel reads require software.
                         // Always use the same public ARGB_8888 decoding step, never a tolerant fallback.
@@ -504,6 +545,16 @@ class TongyiWholeEngineeringInstrumentation {
                                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PUBLIC_SCREENSHOT_SAVE_FAILED" }
                                 output.fd.sync()
                             }
+                            // Reuse this acquisition's existing PNG; no second screenshot or Bitmap pointer.
+                            val reuse = runCatching {
+                                check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED" }
+                                File(root, "$label.png").readBytes().also { check(it.isNotEmpty()) }
+                            }
+                            diagnosticPng = reuse.getOrNull()
+                            pngCaptureState = if (reuse.isSuccess) "ACQUIRED" else "NOT_RETAINED"
+                            pngCaptureFailure = reuse.exceptionOrNull()?.javaClass?.simpleName
+                            pngWidth = bitmap.width
+                            pngHeight = bitmap.height
                             val owner = checkNotNull(targetOwner)
                             writeJson("$label.json", JSONObject().put("region_sha256", pixelSha)
                                 .put("canonical", "ANEB807_MENU_ARGB_V1_LF_100_LF_100_LF_then_y_x_ARGB_bytes")
@@ -519,7 +570,50 @@ class TongyiWholeEngineeringInstrumentation {
                             "TREE_CHANGED_DURING_PUBLIC_SCREENSHOT"
                         }
                         currentNodes = after
-                    } else currentNodes = before
+                        val completed = SystemClock.elapsedRealtimeNanos()
+                        pngCompletedNanos = completed
+                        if (completed >= preparationDeadline) {
+                            diagnosticPng = null
+                            pngCaptureState = "NOT_RETAINED"
+                            pngCaptureFailure = "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED"
+                        }
+                    } else {
+                        currentNodes = before
+                        val incompatibleGeometry = width != 1200 || height != 2640 || rotation != 0 ||
+                            rootBounds != TongyiPreparationRunner.Bounds(0, 0, 1200, 2486)
+                        if (incompatibleGeometry && preparationRejectionReason == null) {
+                            pngSource = "same_observation_incompatible_geometry_diagnostic"
+                            pngStartedNanos = SystemClock.elapsedRealtimeNanos()
+                            // Synchronous public capture, sequential after node values; not atomic or a selector source.
+                            val capture = runCatching {
+                                check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED" }
+                                requireDiagnosticCaptureOwner(observationOwner)
+                                val screenshot = checkNotNull(automation.takeScreenshot()) { "DIAGNOSTIC_SCREENSHOT_UNAVAILABLE" }
+                                val bitmap = try { checkNotNull(screenshot.copy(Bitmap.Config.ARGB_8888, false)) {
+                                    "DIAGNOSTIC_ARGB_BITMAP_UNAVAILABLE"
+                                } } finally { screenshot.recycle() }
+                                val acquired = try {
+                                    ByteArrayOutputStream().use { output ->
+                                        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "DIAGNOSTIC_PNG_ENCODING_FAILED" }
+                                        Triple(output.toByteArray(), bitmap.width, bitmap.height)
+                                    }
+                                } finally { bitmap.recycle() }
+                                requireDiagnosticCaptureOwner(observationOwner)
+                                check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED" }
+                                acquired
+                            }
+                            val completed = SystemClock.elapsedRealtimeNanos()
+                            pngCompletedNanos = completed
+                            capture.getOrNull()?.takeIf { completed < preparationDeadline }?.let { acquired ->
+                                diagnosticPng = acquired.first
+                                pngWidth = acquired.second
+                                pngHeight = acquired.third
+                            }
+                            pngCaptureState = if (diagnosticPng != null) "ACQUIRED" else "NOT_RETAINED"
+                            pngCaptureFailure = if (completed >= preparationDeadline) "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED"
+                                else capture.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+                        }
+                    }
                     val owner = checkNotNull(targetOwner)
                     return TongyiPreparationRunner.Frame(width, height, rotation, rootBounds,
                         "${owner.pid}/${owner.uid}/${owner.startTicks}/" +
@@ -532,6 +626,13 @@ class TongyiWholeEngineeringInstrumentation {
                                 .put("owner", it.owner)
                                 .put("elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString()))
                             lastFrame = it
+                            if (preparationRejectionReason == null) {
+                                val projection = runCatching { preparationNodeProjection(it) }
+                                preparationObservationBundle = PreparationObservationBundle(it, projection.getOrNull(),
+                                    projection.exceptionOrNull()?.javaClass?.simpleName, diagnosticPng, pngCaptureState,
+                                    pngCaptureFailure, pngSource, pngWidth, pngHeight, nodeValuesObservedNanos,
+                                    pngStartedNanos, pngCompletedNanos)
+                            }
                         }
                 }
                 override fun clickCurrent(node: TongyiPreparationRunner.Node): Boolean {
@@ -569,9 +670,107 @@ class TongyiWholeEngineeringInstrumentation {
                     })
                 }
                 override fun saveOriginals(label: String) = this@NativePhone.saveOriginals(label)
+                override fun onFrameRejected(observed: TongyiPreparationRunner.Frame, reason: String) {
+                    if (preparationRejectionReason != null) return
+                    if (preparationObservationBundle?.frame !== observed) {
+                        preparationRejectionPinFailure = "REJECTED_FRAME_REFERENCE_NOT_CACHED"
+                        return
+                    }
+                    preparationRejectionReason = reason // Memory-only pin; no UI, filesystem or resampling.
+                }
                 override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
                 override fun cleanupOwned() = this@NativePhone.cleanupOwned()
             }
+        }
+
+        private fun requireDiagnosticCaptureOwner(expected: OwnedProcessLifecycle.Owner?) {
+            check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED" }
+            check(expected != null && targetOwner == expected && targetPid == expected.pid) { "DIAGNOSTIC_OWNER_CHANGED" }
+            check(device.currentPackageName == TARGET && shell("pidof $TARGET").trim() == expected.pid)
+            processes.requireAlive(expected, readDeadline(preparationDeadline))
+            check(automation.rootInActiveWindow?.packageName?.toString() == TARGET)
+            check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "DIAGNOSTIC_PREPARATION_DEADLINE_EXPIRED" }
+        }
+
+        private fun preparationFrameMetadata(frame: TongyiPreparationRunner.Frame) = JSONObject()
+            .put("width", frame.width).put("height", frame.height).put("rotation", frame.rotation)
+            .put("root_bounds", JSONArray(listOf(frame.rootBounds.left, frame.rootBounds.top, frame.rootBounds.right, frame.rootBounds.bottom)))
+            .put("owner", frame.owner).put("owner_encoding", "pid/uid/start_ticks/raw_commandline_base64")
+            .put("menu_argb_sha256", frame.menuArgbSha256 ?: JSONObject.NULL)
+
+        private fun preparationNodeProjection(frame: TongyiPreparationRunner.Frame): ByteArray =
+            (JSONObject().put("kind", "same_returned_frame_node_value_projection_not_raw_uiautomator_xml")
+                .put("frame", preparationFrameMetadata(frame))
+                .put("nodes", JSONArray().apply {
+                    frame.nodes.forEach { node ->
+                        put(JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
+                            .put("package_name", node.packageName).put("class_name", node.className)
+                            .put("bounds", JSONArray(listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom)))
+                            .put("visible", node.visible).put("enabled", node.enabled).put("clickable", node.clickable)
+                            .put("text", node.text).put("resource_id", node.resourceId).put("hint", node.hint ?: JSONObject.NULL)
+                            .put("showing_hint", node.showingHint).put("editable", node.editable).put("focused", node.focused)
+                            .put("set_text_available", node.setTextAvailable).put("description", node.description))
+                    }
+                }).toString(2) + "\n").toByteArray(Charsets.UTF_8)
+
+        private fun writeNewPreparationDiagnostic(name: String, cached: ByteArray): JSONObject {
+            val file = File(root, name)
+            check(file.createNewFile()) { "REJECTION_RETENTION_ALREADY_EXISTS_NO_RETRY" }
+            FileOutputStream(file).use { output -> output.write(cached); output.fd.sync() }
+            val actual = file.readBytes()
+            check(actual.contentEquals(cached)) { "REJECTION_RETENTION_READBACK_MISMATCH" }
+            return JSONObject().put("name", name).put("bytes", actual.size).put("sha256", sha(actual))
+                .put("cached_bytes_sha256", sha(cached)).put("readback_equals_cached_bytes", true)
+        }
+
+        /** Runs only after preparation runOnce returns; uses pinned memory, never live UI or ownership. */
+        fun persistRejectedPreparationObservation(): String? {
+            check(preparationOnly)
+            if (preparationRejectionPersistenceAttempted) return null
+            preparationRejectionPersistenceAttempted = true
+            val reason = preparationRejectionReason
+            if (reason == null && preparationRejectionPinFailure == null) return null
+            val bundle = if (reason != null) preparationObservationBundle else null
+            val files = JSONArray()
+            val report = JSONObject().put("kind", "private_preparation_rejected_frame_diagnostic")
+                .put("reason", reason ?: JSONObject.NULL).put("pin_failure", preparationRejectionPinFailure ?: JSONObject.NULL)
+                .put("claim", "sequential_diagnostic_only_not_atomic_not_selector_or_qualification_source")
+                .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only")
+                .put("files", files)
+            var projectionRetained = false
+            var pngRetained = false
+            if (bundle != null) {
+                report.put("frame", preparationFrameMetadata(bundle.frame))
+                    .put("sample_order", "immutable_node_values_then_optional_public_screenshot_then_returned_frame_then_rejection_pin_then_cleanup_then_persistence")
+                    .put("node_values_observed_nanos", bundle.nodeValuesObservedNanos.toString())
+                    .put("png_started_nanos", bundle.pngStartedNanos?.toString() ?: JSONObject.NULL)
+                    .put("png_completed_nanos", bundle.pngCompletedNanos?.toString() ?: JSONObject.NULL)
+                    .put("png_source", bundle.pngSource).put("png_capture_state", bundle.pngCaptureState)
+                    .put("png_capture_failure", bundle.pngCaptureFailure ?: JSONObject.NULL)
+                    .put("diagnostic_png_width", bundle.pngWidth ?: JSONObject.NULL)
+                    .put("diagnostic_png_height", bundle.pngHeight ?: JSONObject.NULL)
+                    .put("capture_budget", "original_preparation_deadline_unchanged_synchronous_api_not_hard_timeout")
+                    .put("node_projection_failure", bundle.nodeProjectionFailure ?: JSONObject.NULL)
+                bundle.nodeProjection?.let { bytes ->
+                    val saved = runCatching { writeNewPreparationDiagnostic("preparation-rejected-node-projection.json", bytes) }
+                    saved.getOrNull()?.let { files.put(it); projectionRetained = true }
+                    saved.exceptionOrNull()?.let { report.put("node_projection_persistence_failure", it.javaClass.simpleName) }
+                }
+                bundle.diagnosticPng?.let { bytes ->
+                    val saved = runCatching { writeNewPreparationDiagnostic("preparation-rejected-diagnostic.png", bytes) }
+                    saved.getOrNull()?.let { files.put(it); pngRetained = true }
+                    saved.exceptionOrNull()?.let { report.put("png_persistence_failure", it.javaClass.simpleName) }
+                }
+            }
+            report.put("node_projection_persistence_state", if (projectionRetained) "RETAINED" else "NOT_RETAINED")
+                .put("png_persistence_state", if (pngRetained) "RETAINED" else "NOT_RETAINED")
+                .put("retention_state", if (projectionRetained && pngRetained) "RETAINED" else if (projectionRetained || pngRetained) "PARTIAL" else "NOT_RETAINED")
+            val seal = runCatching { writeNewPreparationDiagnostic("preparation-rejection-retention.json",
+                (report.toString(2) + "\n").toByteArray(Charsets.UTF_8)) }
+            seal.getOrNull()?.let { report.put("report_file", it).put("report_persistence_state", "RETAINED") }
+            seal.exceptionOrNull()?.let { report.put("report_persistence_state", "NOT_RETAINED")
+                .put("retention_state", "PARTIAL_REPORT_NOT_RETAINED").put("report_persistence_failure", it.javaClass.simpleName) }
+            return report.toString()
         }
 
         private fun nodes(): List<AccessibilityNodeInfo> {

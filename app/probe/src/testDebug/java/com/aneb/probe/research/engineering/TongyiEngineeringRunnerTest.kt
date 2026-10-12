@@ -66,6 +66,67 @@ class TongyiEngineeringRunnerTest {
         assertFalse(root.resolve("attempt/SEND_INTENT.json").exists())
     }
 
+    @Test fun preparationNotifiesSameRejectedHomeFrameBeforeCleanupWithoutBusinessActions() {
+        val root = Files.createTempDirectory("tongyi-preparation-rejected-frame-notification").toFile()
+        val directory = root.resolve("attempt")
+        val android = PreparationAndroid()
+        // HOST external observation values only; these are not Native XML/image originals.
+        val rejectedHome = android.currentFrame(false).copy(
+            rootBounds = TongyiPreparationRunner.Bounds(0,0,1200,2640),
+        )
+        val startup = rejectedHome.copy(nodes = listOf(
+            TongyiPreparationRunner.Node("startup-root", null, TongyiEngineeringRunner.PACKAGE,
+                "android.widget.FrameLayout", rejectedHome.rootBounds, true, true, false),
+        ))
+        val cleanupFrame = rejectedHome.copy(nodes = emptyList())
+        val boundary = object : TongyiPreparationRunner.Android by android {
+            val observedFrames = ArrayList<TongyiPreparationRunner.Frame>()
+            val rejections = ArrayList<Pair<TongyiPreparationRunner.Frame, String>>()
+            var cleanupObserved: TongyiPreparationRunner.Frame? = null
+            var rejectionBeforeCleanup = false
+            var textWrites = 0
+            override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
+                val observed = when (observedFrames.size) {
+                    0 -> startup
+                    1 -> rejectedHome
+                    else -> cleanupFrame
+                }
+                observedFrames.add(observed)
+                return observed
+            }
+            override fun onFrameRejected(observed: TongyiPreparationRunner.Frame, reason: String) {
+                rejections.add(observed to reason)
+                rejectionBeforeCleanup = cleanupObserved == null
+            }
+            override fun setTextCurrent(node: TongyiPreparationRunner.Node, text: String): Boolean {
+                textWrites++
+                return android.setTextCurrent(node, text)
+            }
+            override fun cleanupOwned(): Boolean {
+                cleanupObserved = currentFrame(false)
+                return android.cleanupOwned()
+            }
+        }
+        val runner = TongyiPreparationRunner(boundary, android)
+        val result = runner.runOnce("host-rejected-frame-notification", directory)
+        assertEquals("PREPARATION_UNKNOWN", result.state)
+        assertEquals("CURRENT_VIEWPORT_MISMATCH", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertTrue(result.ownedCleanup)
+        assertTrue(android.clicks.isEmpty())
+        assertEquals(0, boundary.textWrites)
+        assertTrue(android.originals.isEmpty())
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+        assertTrue(directory.isDirectory)
+        assertEquals(listOf(startup, rejectedHome, cleanupFrame), boundary.observedFrames)
+        assertTrue(boundary.cleanupObserved === cleanupFrame)
+        assertEquals("The public preparation result must notify its rejected observation before cleanup",
+            1, boundary.rejections.size)
+        assertTrue(boundary.rejections.single().first === rejectedHome)
+        assertEquals("CURRENT_VIEWPORT_MISMATCH", boundary.rejections.single().second)
+        assertTrue(boundary.rejectionBeforeCleanup)
+    }
+
     @Test fun preparationPublicEntryBindsCurrentAnonymousMenuAndOwnDraftWithoutSendCapability() {
         val root = Files.createTempDirectory("tongyi-preparation-external-android").toFile()
         val android = PreparationAndroid()

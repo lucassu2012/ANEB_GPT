@@ -135,6 +135,7 @@ class TongyiPreparationRunner(private val android: Android, private val clock: T
         fun clickCurrent(node: Node): Boolean
         fun setTextCurrent(node: Node, text: String): Boolean
         fun saveOriginals(label: String)
+        fun onFrameRejected(observed: Frame, reason: String) {}
         fun sleepMillis(milliseconds: Long)
         fun cleanupOwned(): Boolean
     }
@@ -152,8 +153,10 @@ class TongyiPreparationRunner(private val android: Android, private val clock: T
                 check(it.owner.isNotEmpty() && (owner == null || it.owner == owner)) { "CURRENT_OWNER_CHANGED" }
                 owner = it.owner
                 if (viewportRequired(it)) {
-                    check(it.width == 1200 && it.height == 2640 && it.rotation == 0 &&
-                        it.rootBounds == Bounds(0, 0, 1200, 2486)) { "CURRENT_VIEWPORT_MISMATCH" }
+                    val viewportMatches = it.width == 1200 && it.height == 2640 && it.rotation == 0 &&
+                        it.rootBounds == Bounds(0, 0, 1200, 2486)
+                    if (!viewportMatches) runCatching { android.onFrameRejected(it, "CURRENT_VIEWPORT_MISMATCH") }
+                    check(viewportMatches) { "CURRENT_VIEWPORT_MISMATCH" }
                 }
             }
         }
