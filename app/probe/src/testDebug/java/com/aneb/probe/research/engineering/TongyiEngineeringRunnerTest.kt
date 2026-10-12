@@ -9,6 +9,63 @@ import java.io.File
 import java.util.StringTokenizer
 
 class TongyiEngineeringRunnerTest {
+    @Test fun preparationAwaitsCurrentHomeAfterOwnedStartupFrameAndCompletesOwnDraftWithoutSend() {
+        val root = Files.createTempDirectory("tongyi-preparation-startup-order").toFile()
+        val android = PreparationAndroid()
+        val startup = object : TongyiPreparationRunner.Android by android {
+            var startupPending = true
+            override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
+                val observed = android.currentFrame(menuPixels)
+                if (!startupPending) return observed
+                startupPending = false
+                val bounds = TongyiPreparationRunner.Bounds(0,0,1200,2640)
+                // External Android observation only: same owned process, not yet the home witnesses.
+                return observed.copy(rootBounds = bounds, nodes = listOf(
+                    TongyiPreparationRunner.Node("startup-root", null, TongyiEngineeringRunner.PACKAGE,
+                        "android.widget.FrameLayout", bounds, true, true, false),
+                ))
+            }
+        }
+        val result = TongyiPreparationRunner(startup, android).runOnce("host-startup-order", root.resolve("attempt"))
+        assertEquals("PREPARATION_CLOSED; failure=${result.reason}", "PREPARATION_CLOSED", result.state)
+        assertEquals("0", result.sendCalls)
+        assertTrue(result.ownedCleanup)
+        assertEquals(listOf("new-empty", "draft-current"), android.originals)
+        assertEquals(TongyiEngineeringRunner.PAYLOAD, android.savedDraft)
+        assertEquals(239, checkNotNull(android.savedDraft).toByteArray(Charsets.UTF_8).size)
+        assertEquals("", android.actualDraft)
+        assertFalse(root.resolve("attempt/SEND_INTENT.json").exists())
+    }
+
+    @Test fun preparationRejectsFirstSemanticHomeWrongViewportWithoutWaitingForLaterValidFrame() {
+        val root = Files.createTempDirectory("tongyi-preparation-first-home-viewport").toFile()
+        val android = PreparationAndroid()
+        val firstHome = object : TongyiPreparationRunner.Android by android {
+            var frameReads = 0
+            var textWrites = 0
+            override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
+                val observed = android.currentFrame(menuPixels)
+                return if (frameReads++ == 0) observed.copy(
+                    rootBounds = TongyiPreparationRunner.Bounds(0,0,1200,2640),
+                ) else observed
+            }
+            override fun setTextCurrent(node: TongyiPreparationRunner.Node, text: String): Boolean {
+                textWrites++
+                return android.setTextCurrent(node, text)
+            }
+        }
+        val result = TongyiPreparationRunner(firstHome, android).runOnce("host-first-home-hold", root.resolve("attempt"))
+        assertEquals("PREPARATION_UNKNOWN", result.state)
+        assertEquals("CURRENT_VIEWPORT_MISMATCH", result.reason)
+        assertEquals(1, firstHome.frameReads)
+        assertTrue(android.clicks.isEmpty())
+        assertEquals(0, firstHome.textWrites)
+        assertEquals("0", result.sendCalls)
+        assertTrue(result.ownedCleanup)
+        assertTrue(android.originals.isEmpty())
+        assertFalse(root.resolve("attempt/SEND_INTENT.json").exists())
+    }
+
     @Test fun preparationPublicEntryBindsCurrentAnonymousMenuAndOwnDraftWithoutSendCapability() {
         val root = Files.createTempDirectory("tongyi-preparation-external-android").toFile()
         val android = PreparationAndroid()
