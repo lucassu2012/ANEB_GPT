@@ -134,8 +134,70 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertFalse(result.ownedCleanup || android.cleaned)
     }
 
-    /** Stateful substitute for the external Android boundary only; no fake PNG/XML or SDK evidence. */
-    private class CurrentUiAndroid(private val scenes: Map<Stage, Frame>) : TongyiUiReferenceQualificationRunner.Android {
+    @Test fun retainsAlreadyCapturedRejectedHomeOriginalsWithoutAcceptingOrActing() {
+        val home = homeFrame("home")
+        val drawer = frame(listOf(
+            node("drawer-root", null, "android.widget.FrameLayout", FULL_ROOT),
+            node("drawer-new-parent", "drawer-root", "android.widget.LinearLayout", Bounds(242,2339,813,2502), clickable = true),
+            node("drawer-new-text", "drawer-new-parent", "android.widget.TextView", Bounds(320,2385,736,2456),
+                text = "新建对话", resource = "com.aliyun.tongyi:id/tv_new_session"),
+        ))
+        // Opaque HOST-only originals supplied at the external boundary, not PNG/XML/Native SDK evidence.
+        val originals = linkedMapOf(
+            "HOST_ONLY_home-hierarchy.xml" to "HOST_ONLY_OPAQUE_XML_ORIGINAL_NOT_UIAUTOMATOR",
+            "HOST_ONLY_home-screen.png" to "HOST_ONLY_OPAQUE_PNG_ORIGINAL_NOT_A_MEASURED_IMAGE",
+            "HOST_ONLY_home-native-before.json" to "HOST_ONLY_OPAQUE_NODE_ORIGINAL_BEFORE_NOT_NATIVE_SDK",
+            "HOST_ONLY_home-native-after.json" to "HOST_ONLY_OPAQUE_NODE_ORIGINAL_AFTER_NOT_NATIVE_SDK",
+        ).mapValues { it.value.toByteArray(Charsets.UTF_8) }
+        val sink = File(temporary.root, "HOST_ONLY-rejected-originals")
+        val nonmatchingMenuDigest = "0".repeat(64) // Synthetic counterexample, not the consumed phone's digest.
+        // Every later scene still supports the whole legal path; only this capture's menu digest differs.
+        val android = CurrentUiAndroid(linkedMapOf(
+            Stage.HOME to home, Stage.DRAWER to drawer, Stage.NEW_EMPTY to homeFrame("new"),
+            Stage.EDITOR_EMPTY to editorFrame("", showingHint = true),
+            Stage.OWN_DRAFT to editorFrame(TongyiEngineeringRunner.PAYLOAD, showingHint = false),
+            Stage.OWN_CLEARED to editorFrame("", showingHint = true),
+        ), homeMenuArgbSha256 = nonmatchingMenuDigest, rejectedOriginalsDirectory = sink,
+            captureOriginals = originals)
+        val directory = File(temporary.root, "rejected-home-originals")
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runOnce("rejected-home-originals", directory)
+
+        assertTrue("the rejected qualification opportunity remains consumed", directory.isDirectory)
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("UI_REFERENCE_QUALIFICATION_UNKNOWN", result.state)
+        assertEquals("CURRENT_MENU_PIXELS_MISMATCH", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertTrue(android.retained.isEmpty())
+        assertEquals("no replacement acquisition for rejected evidence", listOf(Stage.HOME), android.captured)
+        assertTrue(android.clicks.isEmpty())
+        assertTrue(android.enteredTexts.isEmpty())
+        assertEquals(Stage.HOME, android.scene)
+        assertTrue(android.launched && android.cleanupAttempted)
+        assertEquals("diagnostics do not change existing owned-closure reporting", android.cleaned, result.ownedCleanup)
+        val observed = android.completeCapturedFrame
+            ?: throw AssertionError("a complete HOME observation was returned before rejection")
+        assertEquals(nonmatchingMenuDigest, observed.menuArgbSha256)
+        assertEquals(home.owner, observed.owner)
+        assertEquals(home.rootBounds, observed.rootBounds)
+        assertEquals(home.nodes, observed.nodes)
+
+        assertEquals("the complete already-acquired rejected bundle must survive predicate failure",
+            originals.keys.sorted(), sink.list()?.toList()?.sorted().orEmpty())
+        originals.forEach { (name, bytes) -> assertArrayEquals(bytes, File(sink, name).readBytes()) }
+        assertSame("diagnostic bytes stay bound to the returned rejected observation", observed, android.rejectedOriginalFrame)
+        assertEquals(result.reason, android.rejectedOriginalReason)
+    }
+
+    /** External Android substitute; optional opaque originals are HOST-only and never SDK acquisition proof. */
+    private class CurrentUiAndroid(
+        private val scenes: Map<Stage, Frame>,
+        private val homeMenuArgbSha256: String = TongyiPreparationRunner.MENU_SHA256,
+        private val rejectedOriginalsDirectory: File? = null,
+        private val captureOriginals: Map<String, ByteArray> = emptyMap(),
+    ) : TongyiUiReferenceQualificationRunner.Android {
         var scene = Stage.HOME
         var launched = false
         var cleaned = false
@@ -144,7 +206,14 @@ class TongyiUiReferenceQualificationRunnerTest {
         val captured = mutableListOf<Stage>()
         val clicks = mutableListOf<Pair<NamedClick, Node>>()
         val enteredTexts = mutableListOf<String>()
+        var completeCapturedFrame: Frame? = null
+            private set
+        var rejectedOriginalFrame: Frame? = null
+            private set
+        var rejectedOriginalReason: String? = null
+            private set
         private var latest: Frame? = null
+        private var capturedOriginalBytes: Map<String, ByteArray>? = null
 
         override fun launchOwned(deadlineNanos: Long) {
             check(!launched && System.nanoTime() < deadlineNanos)
@@ -159,10 +228,36 @@ class TongyiUiReferenceQualificationRunnerTest {
             check(scene !in captured) { "DUPLICATE_STAGE_PNG_ACQUISITION" }
             captured.add(scene)
             val supplied = scenes.getValue(scene)
-            val observed = if (menuPixels) supplied.copy(menuArgbSha256 = TongyiPreparationRunner.MENU_SHA256)
+            val observed = if (menuPixels) supplied.copy(menuArgbSha256 = homeMenuArgbSha256)
                 else supplied.copy(menuArgbSha256 = null)
             latest = observed
+            if (rejectedOriginalsDirectory != null && scene == Stage.HOME) {
+                check(menuPixels && captureOriginals.size == 4)
+                // Cache a copy during this acquisition; retention never creates replacement observation bytes.
+                capturedOriginalBytes = captureOriginals.mapValues { it.value.copyOf() }
+                completeCapturedFrame = observed
+            }
             return observed
+        }
+        // The external diagnostic port retains only the already acquired HOST-only bundle.
+        override fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean {
+            check(launched && !cleaned && System.nanoTime() < deadlineNanos)
+            check(stage == scene && observed === latest && observed === completeCapturedFrame)
+            check(retained.none { it.frame === observed })
+            val originals = checkNotNull(capturedOriginalBytes)
+            val directory = checkNotNull(rejectedOriginalsDirectory)
+            check(!directory.exists() && directory.mkdir())
+            originals.forEach { (name, bytes) ->
+                check(System.nanoTime() < deadlineNanos)
+                val file = File(directory, name)
+                check(file.createNewFile())
+                file.writeBytes(bytes)
+                check(file.readBytes().contentEquals(bytes))
+            }
+            check(System.nanoTime() < deadlineNanos)
+            rejectedOriginalFrame = observed
+            rejectedOriginalReason = reason
+            return true
         }
         override fun retainStage(stage: Stage, observed: Frame): Boolean {
             check(stage == scene && observed === latest)
