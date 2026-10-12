@@ -44,6 +44,7 @@ class ExternalPhone:
         self.current_network_override = None
         self.preparation_unexpected_send = False
         self.install_stdout = b"Success\n"
+        self.preparation_unknown_reason = None
 
     def run(self, argv, timeout, *, cancel_file=None, on_cancel=None):
         self.commands.append(list(argv))
@@ -118,6 +119,8 @@ class ExternalPhone:
                     claim_scope="preparation_inspection_only", send_calls=0, capture="NOT_STARTED", send_selector="UNKNOWN")
                 if self.preparation_unexpected_send:
                     terminal["send_calls"] = 1
+                if self.preparation_unknown_reason is not None:
+                    terminal.update(state="PREPARATION_UNKNOWN", reason=self.preparation_unknown_reason)
             if self.unknown_send:
                 terminal.update(state="OBSERVATION_UNKNOWN", send_calls="UNKNOWN")
             if self.cancel_during_capture:
@@ -133,6 +136,9 @@ class ExternalPhone:
             }
             if preparation:
                 del self.files[root]["video.mp4"]
+                if self.preparation_unknown_reason is not None:
+                    del self.files[root]["context.xml"]
+                    del self.files[root]["screen.png"]
             if self.require_native_abi:
                 self.instrument_alive = True
                 self.files[root]["OWNED_INSTRUMENTATION.json"] = json.dumps({"package":"com.aneb.probe.codex",
@@ -144,7 +150,9 @@ class ExternalPhone:
             if remote == "/data/app/HOST_ONLY/base.apk":
                 Path(dest).write_bytes(self.installed_debug)
                 return 0, b"1 file pulled\n", b""
-            Path(dest).mkdir(parents=True)
+            if not Path(dest).parent.is_dir():
+                return 1, b"", b"HOST_ONLY adb: cannot create destination: No such file or directory\n"
+            Path(dest).mkdir()
             for name, raw in self.files[remote].items():
                 if self.partial_pull_failure and name == "TERMINAL.json":
                     continue
@@ -158,6 +166,36 @@ class ExternalPhone:
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_public_preparation_materializes_native_unknown_without_fabricating_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="PREPARATION_ONLY", ui_contract={})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.old_apk = old.read_bytes()
+            phone.installed_debug = phone.old_apk
+            phone.install_stdout = b"Performing Streamed Install\r\nSuccess\r\n"
+            phone.preparation_unknown_reason = "CURRENT_VIEWPORT_MISMATCH"
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PREPARATION_UNKNOWN", result["attempts"][0]["state"])
+            self.assertEqual("PREPARATION_STOPPED", result["state"])
+            self.assertEqual(0, result["send_calls"])
+            self.assertTrue(result["attempts"][0]["owned_cleanup"])
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(release["original_debug_apk_sha256"], hashlib.sha256((root / "actual" / "reader-restored.apk").read_bytes()).hexdigest())
+            originals = root / "actual" / (release["pair_id"] + "-PREP") / "originals"
+            terminal = json.loads((originals / "TERMINAL.json").read_text())
+            self.assertEqual("CURRENT_VIEWPORT_MISMATCH", terminal["reason"])
+            self.assertEqual(0, terminal["send_calls"])
+            self.assertTrue(terminal["owned_cleanup"])
+            self.assertTrue(any(pin["path"].endswith("TERMINAL.json") for pin in result["attempts"][0]["artifacts"]))
+            self.assertFalse((originals / (release["pair_id"] + "-PREP")).exists())
+            self.assertFalse(any("clear" in argv or ("uninstall" in argv and "com.aneb.probe.codex" in argv) for argv in phone.commands))
+
     def test_public_preparation_rejects_unknown_failure_prelude_even_with_success_suffix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
