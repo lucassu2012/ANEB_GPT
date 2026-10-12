@@ -1,6 +1,8 @@
 package com.aneb.probe.engineering
 
 import android.content.Intent
+import android.graphics.Rect
+import android.graphics.Bitmap
 import android.media.MediaExtractor
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -16,6 +18,7 @@ import androidx.test.uiautomator.UiDevice
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
 import com.aneb.probe.research.engineering.TongyiEngineeringRunner
+import com.aneb.probe.research.engineering.TongyiPreparationRunner
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
@@ -36,25 +39,35 @@ class TongyiWholeEngineeringInstrumentation {
         check(args.getString("payload_sha256") == PAYLOAD_SHA) { "FIXED_PAYLOAD_NOT_BOUND" }
         check(sha(TongyiEngineeringRunner.PAYLOAD.toByteArray(Charsets.UTF_8)) == PAYLOAD_SHA)
         val runId = checkNotNull(args.getString("run_id"))
-        val condition = checkNotNull(args.getString("network_condition"))
+        val mode = args.getString("execution_mode") ?: "COLLECTION"
+        check(mode == "COLLECTION" || mode == "PREPARATION_ONLY") { "UNKNOWN_EXECUTION_MODE" }
+        val preparationOnly = mode == "PREPARATION_ONLY"
+        val condition = if (preparationOnly) "PREPARATION_ONLY" else checkNotNull(args.getString("network_condition"))
         val ui = JSONObject(String(Base64.decode(checkNotNull(args.getString("ui_contract_b64")), Base64.DEFAULT), Charsets.UTF_8))
         val parent = File(instrumentation.targetContext.getExternalFilesDir(null), "tongyi-engineering")
         check(parent.exists() || parent.mkdirs())
         val root = File(parent, runId)
-        val backend = NativePhone(root, condition, ui)
-        val result = TongyiEngineeringRunner(backend, SystemClock::elapsedRealtimeNanos)
-            .runOnce(runId, condition, root)
+        if (preparationOnly) {
+            check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
+            check(ui.getString("menu_argb_sha256").lowercase() == TongyiPreparationRunner.MENU_SHA256) { "FIXED_MENU_PIN_REQUIRED" }
+            check(ui.getBoolean("new_session_text_only_attachment_contract") && ui.getJSONArray("attachment_resource_ids").length() == 0) {
+                "ACCEPTED_NEW_SESSION_TEXT_ONLY_CONTRACT_REQUIRED"
+            }
+        }
+        val backend = NativePhone(root, condition, ui, preparationOnly)
+        val result = if (preparationOnly) TongyiPreparationRunner(backend.preparationAndroid(), SystemClock::elapsedRealtimeNanos)
+            .runOnce(runId, root) else TongyiEngineeringRunner(backend, SystemClock::elapsedRealtimeNanos).runOnce(runId, condition, root)
         val terminal = JSONObject()
-            .put("run_id", runId).put("network_condition", condition)
+            .put("run_id", runId).put("network_condition", if (preparationOnly) JSONObject.NULL else condition)
             .put("state", result.state).put("send_calls", when (result.sendCalls) {
                 "0" -> 0; "1" -> 1; else -> "UNKNOWN"
             })
             .put("owned_cleanup", result.ownedCleanup).put("reason", result.reason ?: JSONObject.NULL)
-            .put("claim_scope", "private_engineering_observation")
+            .put("claim_scope", if (preparationOnly) "preparation_inspection_only" else "private_engineering_observation")
             .put("backend_session", "UNKNOWN").put("backend_model", "UNKNOWN")
             .put("rpi", "not_computed").put("formal_new_slots", 0)
             .put("metrics", JSONObject.NULL)
-            .put("recording_readiness", "owned_process_and_current_mp4_file_growth_operational_only")
+            .put("recording_readiness", if (preparationOnly) "NOT_STARTED" else "owned_process_and_current_mp4_file_growth_operational_only")
             .put("send_first_response_video_coverage", "UNKNOWN")
             .put("semantic_video_review", "NOT_RUN")
             .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only")
@@ -64,6 +77,7 @@ class TongyiWholeEngineeringInstrumentation {
                     put(JSONObject().put("event", name).put("elapsed_realtime_nanos", nanos.toString()))
                 }
             })
+        if (preparationOnly) terminal.put("execution_mode", mode).put("capture", "NOT_STARTED").put("send_selector", "UNKNOWN")
         FileOutputStream(File(root, "TERMINAL.json")).use {
             it.write((terminal.toString(2) + "\n").toByteArray(Charsets.UTF_8))
             it.fd.sync()
@@ -75,6 +89,7 @@ class TongyiWholeEngineeringInstrumentation {
         private val root: File,
         private val condition: String,
         private val ui: JSONObject,
+        private val preparationOnly: Boolean = false,
     ) : TongyiEngineeringRunner.Phone {
         private val instrumentation = InstrumentationRegistry.getInstrumentation()
         private val automation = instrumentation.uiAutomation
@@ -92,6 +107,7 @@ class TongyiWholeEngineeringInstrumentation {
         private var recordingClosureUnknown = false
         private var preparationDeadline = 0L
         private var processShellSequence = 0
+        private var preparationFrameSequence = 0
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
@@ -100,7 +116,7 @@ class TongyiWholeEngineeringInstrumentation {
         val bootId: String? = runCatching { shell("cat /proc/sys/kernel/random/boot_id").trim() }.getOrNull()
         private val targetUid = context.packageManager.getApplicationInfo(TARGET, 0).uid
 
-        override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+        private fun launchOwned(deadlineNanos: Long) {
             preparationDeadline = deadlineNanos
             writeJson("OWNED_INSTRUMENTATION.json", JSONObject().put("package", context.packageName)
                 .put("pid", Process.myPid().toString()).put("uid", Process.myUid())
@@ -125,6 +141,10 @@ class TongyiWholeEngineeringInstrumentation {
                 .put("pid", pid).put("uid", owner.uid).put("start_ticks", ticks)
                 .put("cmdline", JSONArray(owner.commandLine)).put("raw_cmdline_b64",
                     Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)))
+        }
+
+        override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+            launchOwned(deadlineNanos)
             // Only inspect the declared visible empty-state witnesses, not old chat content.
             requireVisible("initial_empty")
             val existing = editNodeOrNull()
@@ -198,6 +218,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         override fun startRecording(readyDeadlineNanos: Long) {
+            check(!preparationOnly) { "PREPARATION_CAPTURE_UNREACHABLE" }
             check(shell("pidof screenrecord").trim().isEmpty()) { "UNKNOWN_CAPTURE_NOT_TOUCHED" }
             val video = File(root, "video.mp4")
             val pidFile = File(root, "capture.pid")
@@ -248,6 +269,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         override fun sendOnce() {
+            check(!preparationOnly) { "PREPARATION_SEND_UNREACHABLE" }
             requireOwnedCurrent()
             check(editNode().text?.toString() == TongyiEngineeringRunner.PAYLOAD)
             action { click("send") }
@@ -320,7 +342,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         override fun cleanupOwned(): Boolean {
-            var clean = runCatching { stopOwnedRecording() }.isSuccess
+            var clean = preparationOnly || runCatching { stopOwnedRecording() }.isSuccess
             val owner = targetOwner
             var targetClosed = owner == null && targetPid == null
             if (owner != null) {
@@ -334,7 +356,9 @@ class TongyiWholeEngineeringInstrumentation {
                         check(context.packageManager.getApplicationInfo(TARGET, 0).uid == targetUid)
                         if (device.currentPackageName == TARGET) {
                             val input = editNodeOrNull()
-                            if (input?.text?.toString() == TongyiEngineeringRunner.PAYLOAD) {
+                            if (preparationOnly) {
+                                check(input == null || currentEmpty(input)) { "PREPARATION_UNKNOWN_DRAFT_NOT_TOUCHED" }
+                            } else if (input?.text?.toString() == TongyiEngineeringRunner.PAYLOAD) {
                                 check(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                                     putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
                                 })) { "OWN_DRAFT_CLEAR_FAILED" }
@@ -418,6 +442,127 @@ class TongyiWholeEngineeringInstrumentation {
             check(targetPid != null && shell("pidof $TARGET").trim() == targetPid)
             processes.requireAlive(checkNotNull(targetOwner), readDeadline())
             check(automation.rootInActiveWindow?.packageName?.toString() == TARGET)
+        }
+
+        private fun currentEmpty(node: AccessibilityNodeInfo): Boolean = if (!node.isShowingHintText) node.text.isNullOrEmpty()
+            else !node.hintText.isNullOrEmpty() && (node.text.isNullOrEmpty() || node.text?.toString() == node.hintText?.toString())
+
+        /** The only substituted surface in core HOST tests is the actual public Android boundary. */
+        fun preparationAndroid(): TongyiPreparationRunner.Android {
+            check(preparationOnly)
+            var currentNodes = emptyList<AccessibilityNodeInfo>()
+            var lastFrame: TongyiPreparationRunner.Frame? = null
+            fun bounds(node: AccessibilityNodeInfo): TongyiPreparationRunner.Bounds {
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                return TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom)
+            }
+            fun values(nodes: List<AccessibilityNodeInfo>) = nodes.mapIndexed { index, node ->
+                TongyiPreparationRunner.Node(index.toString(), nodes.indexOf(node.parent).takeIf { it >= 0 }?.toString(),
+                    node.packageName?.toString().orEmpty(), node.className?.toString().orEmpty(), bounds(node), visible(node),
+                    node.isEnabled, node.isClickable, node.text?.toString().orEmpty(), node.viewIdResourceName.orEmpty(),
+                    node.hintText?.toString(), node.isShowingHintText, node.isEditable, node.isFocused,
+                    node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }, node.contentDescription?.toString().orEmpty())
+            }
+            return object : TongyiPreparationRunner.Android {
+                override fun launchOwned(deadlineNanos: Long) = this@NativePhone.launchOwned(deadlineNanos)
+                override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
+                    requireOwnedCurrent()
+                    check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                    val before = nodes()
+                    val observed = values(before)
+                    val rootBounds = bounds(before.first())
+                    val rotation = device.displayRotation
+                    var width = device.displayWidth
+                    var height = device.displayHeight
+                    var pixelSha: String? = null
+                    if (menuPixels) {
+                        val screenshot = checkNotNull(automation.takeScreenshot()) { "PUBLIC_SCREENSHOT_UNAVAILABLE" }
+                        // Public screenshots may use a hardware Bitmap; CPU pixel reads require software.
+                        // Always use the same public ARGB_8888 decoding step, never a tolerant fallback.
+                        val bitmap = try { checkNotNull(screenshot.copy(Bitmap.Config.ARGB_8888, false)) {
+                            "PUBLIC_ARGB_BITMAP_UNAVAILABLE"
+                        } } finally { screenshot.recycle() }
+                        try {
+                            width = bitmap.width
+                            height = bitmap.height
+                            check(width == 1200 && height == 2640 && rotation == 0) { "PUBLIC_SCREENSHOT_VIEWPORT_MISMATCH" }
+                            val pixels = IntArray(10000)
+                            bitmap.getPixels(pixels, 0, 100, 56, 193, 100, 100)
+                            val header = "ANEB807_MENU_ARGB_V1\n100\n100\n".toByteArray(Charsets.UTF_8)
+                            val canonical = ByteArray(header.size + 40000)
+                            header.copyInto(canonical)
+                            pixels.forEachIndexed { index, argb ->
+                                check(argb ushr 24 == 255) { "MENU_PIXEL_ALPHA_MISMATCH" }
+                                val offset = header.size + index * 4
+                                for (channel in 0..3) canonical[offset + channel] = (argb ushr (24 - channel * 8)).toByte()
+                            }
+                            pixelSha = sha(canonical)
+                            val label = "menu-frame-${++preparationFrameSequence}"
+                            FileOutputStream(File(root, "$label.png")).use { output ->
+                                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "PUBLIC_SCREENSHOT_SAVE_FAILED" }
+                                output.fd.sync()
+                            }
+                            val owner = checkNotNull(targetOwner)
+                            writeJson("$label.json", JSONObject().put("region_sha256", pixelSha)
+                                .put("canonical", "ANEB807_MENU_ARGB_V1_LF_100_LF_100_LF_then_y_x_ARGB_bytes")
+                                .put("region_bounds", JSONArray(listOf(56,193,156,293)))
+                                .put("width", width).put("height", height).put("rotation", rotation)
+                                .put("root_bounds", JSONArray(listOf(rootBounds.left,rootBounds.top,rootBounds.right,rootBounds.bottom)))
+                                .put("pid", owner.pid).put("uid", owner.uid).put("start_ticks", owner.startTicks)
+                                .put("elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString())
+                                .put("qualification", "exact_current_engineering_frame_not_atomic_vendor_semantics"))
+                        } finally { bitmap.recycle() }
+                        val after = nodes()
+                        check(values(after) == observed && bounds(after.first()) == rootBounds && device.displayRotation == rotation) {
+                            "TREE_CHANGED_DURING_PUBLIC_SCREENSHOT"
+                        }
+                        currentNodes = after
+                    } else currentNodes = before
+                    val owner = checkNotNull(targetOwner)
+                    return TongyiPreparationRunner.Frame(width, height, rotation, rootBounds,
+                        "${owner.pid}/${owner.uid}/${owner.startTicks}/" +
+                            Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP), observed, pixelSha)
+                        .also { lastFrame = it }
+                }
+                override fun clickCurrent(node: TongyiPreparationRunner.Node): Boolean {
+                    val menu = node.bounds == TongyiPreparationRunner.Bounds(56,193,156,293) && node.className == "android.widget.FrameLayout"
+                    check(menu || (node.bounds == TongyiPreparationRunner.Bounds(242,2339,813,2486) && node.className == "android.widget.LinearLayout") ||
+                        (node.bounds == TongyiPreparationRunner.Bounds(40,2348,1160,2486) && node.className == "android.view.ViewGroup")) {
+                        "PREPARATION_CLICK_CAPABILITY_NOT_ALLOWED"
+                    }
+                    val expected = checkNotNull(lastFrame)
+                    val fresh = currentFrame(menu)
+                    check(fresh == expected) { "CURRENT_BINDING_FRAME_CHANGED" }
+                    check(fresh.nodes.singleOrNull { it.id == node.id } == node) { "CURRENT_NODE_CHANGED" }
+                    if (menu) check(fresh.menuArgbSha256 == TongyiPreparationRunner.MENU_SHA256) { "CURRENT_MENU_PIXELS_MISMATCH" }
+                    val actual = currentNodes[node.id.toInt()]
+                    check(actual.refresh()) { "CURRENT_NODE_REFRESH_FAILED" }
+                    requireOwnedCurrent()
+                    check(values(currentNodes) == fresh.nodes) { "CURRENT_NODE_CHANGED" }
+                    return actual.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
+                override fun setTextCurrent(node: TongyiPreparationRunner.Node, text: String): Boolean {
+                    check(text == TongyiEngineeringRunner.PAYLOAD || text.isEmpty()) { "PREPARATION_TEXT_CAPABILITY_NOT_ALLOWED" }
+                    val expected = checkNotNull(lastFrame)
+                    val fresh = currentFrame(false)
+                    check(fresh == expected) { "CURRENT_EDITOR_FRAME_CHANGED" }
+                    check(fresh.nodes.singleOrNull { it.id == node.id } == node && node.editable && node.focused && node.setTextAvailable) {
+                        "CURRENT_EDITOR_CHANGED"
+                    }
+                    if (text.isEmpty()) check(!node.showingHint && node.text == TongyiEngineeringRunner.PAYLOAD) { "EXACT_OWN_DRAFT_REQUIRED" }
+                    val actual = currentNodes[node.id.toInt()]
+                    check(actual.refresh()) { "CURRENT_EDITOR_REFRESH_FAILED" }
+                    requireOwnedCurrent()
+                    check(values(currentNodes) == fresh.nodes) { "CURRENT_EDITOR_CHANGED" }
+                    return actual.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                    })
+                }
+                override fun saveOriginals(label: String) = this@NativePhone.saveOriginals(label)
+                override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
+                override fun cleanupOwned() = this@NativePhone.cleanupOwned()
+            }
         }
 
         private fun nodes(): List<AccessibilityNodeInfo> {

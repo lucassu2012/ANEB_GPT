@@ -119,6 +119,147 @@ class TongyiEngineeringRunner(
     }
 }
 
+/** Same feature, explicitly input-only. This boundary has no SEND or recording capability. */
+class TongyiPreparationRunner(private val android: Android, private val clock: TongyiEngineeringRunner.MonotonicClock) {
+    data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int)
+    data class Node(val id: String, val parent: String?, val packageName: String, val className: String,
+        val bounds: Bounds, val visible: Boolean, val enabled: Boolean, val clickable: Boolean,
+        val text: String = "", val resourceId: String = "", val hint: String? = null,
+        val showingHint: Boolean = false, val editable: Boolean = false, val focused: Boolean = false,
+        val setTextAvailable: Boolean = false, val description: String = "")
+    data class Frame(val width: Int, val height: Int, val rotation: Int, val rootBounds: Bounds,
+        val owner: String, val nodes: List<Node>, val menuArgbSha256: String? = null)
+    interface Android {
+        fun launchOwned(deadlineNanos: Long)
+        fun currentFrame(menuPixels: Boolean): Frame
+        fun clickCurrent(node: Node): Boolean
+        fun setTextCurrent(node: Node, text: String): Boolean
+        fun saveOriginals(label: String)
+        fun sleepMillis(milliseconds: Long)
+        fun cleanupOwned(): Boolean
+    }
+
+    fun runOnce(runId: String, directory: File): TongyiEngineeringRunner.Result {
+        require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        check(directory.mkdir()) { "PREPARATION_ALREADY_CONSUMED_NO_RETRY" }
+        val events = ArrayList<Pair<String, Long>>()
+        fun event(name: String) = clock.nowNanos().also { events.add(name to it) }
+        val deadline = event("preparation_only_started") + TongyiEngineeringRunner.PREP_NANOS
+        var owner: String? = null
+        fun frame(pixels: Boolean = false): Frame {
+            check(clock.nowNanos() < deadline && !File(directory, "CANCEL").exists()) { "PREPARATION_EXPIRED_OR_CANCELLED" }
+            return android.currentFrame(pixels).also {
+                check(it.owner.isNotEmpty() && (owner == null || it.owner == owner)) { "CURRENT_OWNER_CHANGED" }
+                owner = it.owner
+                check(it.width == 1200 && it.height == 2640 && it.rotation == 0 &&
+                    it.rootBounds == Bounds(0, 0, 1200, 2486)) { "CURRENT_VIEWPORT_MISMATCH" }
+            }
+        }
+        fun currentNodes(value: Frame) = value.nodes.filter { it.visible && it.packageName == TongyiEngineeringRunner.PACKAGE }
+        fun home(value: Frame): Boolean = currentNodes(value).count { it.text == "快速" } == 1 &&
+            currentNodes(value).count { it.text == "发消息或按住说话..." } == 1 && currentNodes(value).none { it.editable }
+        fun parent(value: Frame, text: String, resource: String?, bounds: Bounds, className: String): Node {
+            val witness = currentNodes(value).singleOrNull { it.text == text && it.className == "android.widget.TextView" &&
+                (resource == null || it.resourceId == resource) } ?: error("CURRENT_SEMANTIC_WITNESS_NOT_UNIQUE")
+            return currentNodes(value).singleOrNull { it.id == witness.parent && it.bounds == bounds &&
+                it.className == className && it.enabled && it.clickable } ?: error("EXACT_DIRECT_PARENT_REQUIRED")
+        }
+        fun editor(value: Frame): Node {
+            check(currentNodes(value).count { it.text == "快速" } == 1) { "CURRENT_ORDINARY_MODE_REQUIRED" }
+            return currentNodes(value).singleOrNull { it.editable && it.className == "android.widget.EditText" }
+                ?: error("CURRENT_EDITOR_NOT_UNIQUE")
+        }
+        fun empty(input: Node): Boolean = if (!input.showingHint) input.text.isEmpty()
+            else !input.hint.isNullOrEmpty() && (input.text.isEmpty() || input.text == input.hint)
+        fun menu(value: Frame): Node {
+            check(home(value) && value.menuArgbSha256 == MENU_SHA256) { "CURRENT_MENU_PIXELS_MISMATCH" }
+            val node = currentNodes(value).singleOrNull { it.className == "android.widget.FrameLayout" &&
+                it.bounds == Bounds(56,193,156,293) && it.enabled && it.clickable && it.text.isEmpty() &&
+                it.description.isEmpty() && it.resourceId.isEmpty() && it.hint.isNullOrEmpty() }
+                ?: error("CURRENT_IMAGE_NODE_NOT_UNIQUE")
+            val wrapper = currentNodes(value).singleOrNull { it.id == node.parent &&
+                it.className == "android.widget.LinearLayout" && !it.clickable && it.bounds == node.bounds }
+                ?: error("CURRENT_MENU_PARENT_MISMATCH")
+            val toolbar = currentNodes(value).singleOrNull { it.id == wrapper.parent &&
+                it.className == "android.widget.FrameLayout" && it.bounds == Bounds(0,154,1200,333) }
+                ?: error("CURRENT_TOOLBAR_MISMATCH")
+            check(currentNodes(value).filter { it.parent == toolbar.id }.map { it.className } ==
+                List(3) { "android.widget.LinearLayout" }) { "CURRENT_TOOLBAR_STRUCTURE_MISMATCH" }
+            return node
+        }
+        fun action(node: Node, text: String? = null, menuPixels: Boolean = false) {
+            val started = clock.nowNanos()
+            val fresh = frame(menuPixels)
+            val bound = when {
+                menuPixels -> menu(fresh)
+                text != null -> editor(fresh)
+                node.bounds == Bounds(242,2339,813,2486) -> parent(fresh,"新建对话","com.aliyun.tongyi:id/tv_new_session",
+                    Bounds(242,2339,813,2486),"android.widget.LinearLayout")
+                else -> parent(fresh,"发消息或按住说话...",null,Bounds(40,2348,1160,2486),"android.view.ViewGroup")
+            }
+            check(bound == node) { "CURRENT_NODE_CHANGED" }
+            check(if (text == null) android.clickCurrent(node) else android.setTextCurrent(node, text)) { "PUBLIC_ACTION_REFUSED" }
+            check(clock.nowNanos() - started <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_FIVE_SECOND_LIMIT" }
+        }
+        fun await(budgetNanos: Long = TongyiEngineeringRunner.READY_NANOS, predicate: (Frame) -> Boolean): Frame {
+            val ready = minOf(deadline, clock.nowNanos() + budgetNanos)
+            while (true) {
+                val observed = frame()
+                if (predicate(observed)) return observed
+                check(clock.nowNanos() < ready) { "EXPECTED_CURRENT_STATE_NOT_OBSERVED" }
+                android.sleepMillis(50)
+            }
+        }
+        var reason: String? = null
+        var completed = false
+        var cleaned: Boolean
+        try {
+            android.launchOwned(deadline)
+            await(predicate = ::home)
+            val initial = frame(pixels = true)
+            action(menu(initial), menuPixels = true)
+            val drawer = await { currentNodes(it).count { node -> node.text == "新建对话" &&
+                node.resourceId == "com.aliyun.tongyi:id/tv_new_session" } == 1 }
+            action(parent(drawer, "新建对话", "com.aliyun.tongyi:id/tv_new_session",
+                Bounds(242, 2339, 813, 2486), "android.widget.LinearLayout"))
+            val newEmpty = await(predicate = ::home)
+            event("new_empty_operationally_observed")
+            android.saveOriginals("new-empty")
+            action(parent(newEmpty, "发消息或按住说话...", null,
+                Bounds(40, 2348, 1160, 2486), "android.view.ViewGroup"))
+            val focused = editor(await(TongyiEngineeringRunner.INPUT_NANOS) { value -> runCatching { editor(value).focused }.getOrDefault(false) })
+            check(focused.enabled && focused.setTextAvailable && empty(focused)) { "CURRENT_EMPTY_FOCUS_REQUIRED" }
+            val inputStarted = event("input_started")
+            action(focused, TongyiEngineeringRunner.PAYLOAD)
+            val draft = editor(frame())
+            check(!draft.showingHint && draft.text == TongyiEngineeringRunner.PAYLOAD &&
+                draft.text.toByteArray(Charsets.UTF_8).size == 239) { "COMPLETE_239B_READBACK_MISMATCH" }
+            check(clock.nowNanos() - inputStarted <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_READBACK_FIVE_SECOND_LIMIT" }
+            event("complete_239b_readback_observed")
+            android.saveOriginals("draft-current")
+            check(editor(frame()) == draft) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
+            val clearStarted = clock.nowNanos()
+            action(draft, "")
+            check(empty(editor(frame()))) { "OWN_DRAFT_CLEAR_UNCONFIRMED" }
+            check(clock.nowNanos() - clearStarted <= TongyiEngineeringRunner.INPUT_NANOS) { "CLEAR_READBACK_FIVE_SECOND_LIMIT" }
+            event("own_exact_draft_cleared")
+            completed = true
+        } catch (failure: Exception) {
+            reason = failure.message ?: failure.javaClass.simpleName
+            event("preparation_failure_retained")
+        } finally {
+            cleaned = try { android.cleanupOwned() } catch (_: Exception) { false }
+            event("owned_cleanup_checked")
+        }
+        return TongyiEngineeringRunner.Result(if (completed && cleaned) "PREPARATION_CLOSED" else "PREPARATION_UNKNOWN",
+            "0", cleaned, reason ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null, events)
+    }
+
+    companion object {
+        const val MENU_SHA256 = "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f"
+    }
+}
+
 /** Actual public UiAutomation String-command boundary; scripts stay in the owned run. */
 class OwnedShellScriptTransport(private val directory: File) {
     data class Submission<T>(val handle: T, val scriptPath: String, val apiCommand: String)

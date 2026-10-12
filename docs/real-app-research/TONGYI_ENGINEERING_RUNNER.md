@@ -10,6 +10,10 @@ HOST 顺序执行 W1→C1。仅 W1 原件封存、原生终端及自有清场都
 
 私有新合同允许官方 Android instrumentation/UiAutomator/UiAutomation；不把 681 DeepSeek、旧 M6、旧 HOST 模型或 797–804 失败当通义资格，不通过本工具规避 Windows 工具限制。新设备执行必须由 Root 在固定 APK/配置/动作/目录和当前设备事实上另行放行。
 
+［KNOWN｜HIGH］HOST 准入/收口读取完整 `dumpsys window` 的唯一当前 focus，并保留独立 activity resumed Launcher、在线/RC、进程冲突与归属门；不从 vendor 的 windows 子集缺字段推断当前焦点。网络门只理解明确且完整边界的 `Current Networks` 中实际 `NetworkAgentInfo` 和唯一 `Active default network`：每个当前 agent 的身份/CONNECTED/物理 WIFI或CELLULAR transport/NOT_VPN 均须可理解，default必须对应当前 agent且有INTERNET/VALIDATED。任何真VPN当前agent（包括非default）、未知transport/agent/default、空/缺失/结构不明输出均继续HOLD。系统server的VPN LISTEN或历史/请求模板不是活动agent，不单独据其拒绝或声明全局VPN/内核清洁。此兼容修正只依据Root固定只读原件的结构；不证明当前WiFi是获准热点、不替代Root当前设备前后置，不改变原APK身份/保留数据恢复合同。
+
+有限HOST回归通过真实 `run_pair` 仅替换外部ADB边界，使用脱敏结构正文验证完整W1→C1收口；没有私有SSID/地址或旧聊天进入Git。旧foreground/真VPN/归属拒绝和有限未知当前网络负例保留。HOST通过不回填旧Android门/CI/APK，也不算只读诊断已消费采集机会。
+
 ## 构建与检查
 
 在 `app/` 目录：
@@ -43,7 +47,7 @@ python -m unittest scripts.test_tongyi_ordinary_text_engineering_runner
 | `additional_conflicting_packages` | Root 已知需要排除的 VPN/采集/业务包，不由 HOST 猜身份 |
 | `ui_contract` | 下述当前可见语义对象及空态/普通文本/无附件合同；历史 XML 不替代当前事实 |
 
-`ui_contract` 必须含 `initial_empty`, `ordinary_mode`, `menu`, `new_session`, `new_empty`, `focus_hint`, `send` 七个 selector。每个 selector 至少包含一个非空 `text` / `description` / `resource_id` / `hint`，并可提供其余字段作精确收窄。Android 每次重读实际当前树、所有祖先 visible-to-user、目标包、唯一匹配；点击还须 enabled/clickable。没有当前可识别 SEND/mode 对象就停止，绝不猜坐标或用旧树自动填值。
+`COLLECTION` 的 `ui_contract` 必须含 `initial_empty`, `ordinary_mode`, `menu`, `new_session`, `new_empty`, `focus_hint`, `send` 七个 selector。每个 selector 至少包含一个非空 `text` / `description` / `resource_id` / `hint`，并可提供其余字段作精确收窄。Android 每次重读实际当前树、所有祖先 visible-to-user、目标包、唯一匹配；点击还须 enabled/clickable。没有当前可识别 SEND/mode 对象就停止，绝不猜坐标或用旧树自动填值。
 
 另外必须有 `attachment_resource_ids`；非空时实际可见树扫描附件 ID。显式 `[]` 只允许 `new_session_text_only_attachment_contract=true` 的已接受新会话纯文本合同；此合同不是通用证明 App 内没有任何隐藏附件。执行不打开附件选择器或读取旧聊天。Root 首实机必须核实当前空态/模式/无附件与完整文本原件，不能由 HOST 绿推导。
 
@@ -53,7 +57,32 @@ python -m unittest scripts.test_tongyi_ordinary_text_engineering_runner
 python scripts/tongyi_ordinary_text_engineering_runner.py --release <Root固定配置.json> --output <新独占绝对目录> --execute-new-feature-release
 ```
 
-## 安装、原阅读器与数据边界
+## 同件 PREPARATION_ONLY（SEND0，不是采集资格）
+
+［FRAME｜LOW］这是 Root 已接受的当前 `1200×2640 / rotation=0 / root[0,0][1200,2486]` 工程 image-node 绑定，不是 vendor semantic、跨版本菜单身份或截图/树/点击的原子事务。实际公开 `UiAutomation.takeScreenshot()` 的 menu 区域 `[56,193][156,293]` 必须按 UTF-8头 `ANEB807_MENU_ARGB_V1\n100\n100\n` 加 y/x 顺序 ARGB字节的规范 SHA256，完全等于 `18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f`。任何一像素、alpha、viewport/rotation/可见性/owner/结构不符即停止；不近似、不缩放、不自动重绑、不坐标点击、不 hidden API。
+
+［KNOWN｜HIGH］核心真实入口是 `TongyiPreparationRunner.runOnce`；Native 同一 instrumentation method 在 `execution_mode=PREPARATION_ONLY` 时调用它。输入-only Android 能力面没有 send/recording 方法；Native 原 send/recording 方法还拒绝 preparation mode。HOST 同一 `run_pair` 公共入口根据固定 release mode 只执行一次 `-PREP`，不进入 W1/C1循环、不传 network_condition、不切 WiFi；仍复用全套 APK/cert/fresh reader 检查、owned instrumentation清场、数据保留恢复与 postflight。HOST supervisor≤220s，Android PREP180/READY20/focus与输入读回5s不放宽。
+
+新 release 需 `execution_mode="PREPARATION_ONLY"` 且 CLI 明确 `--preparation-only --execute-new-feature-release`，不得 `network_transition_authorized=true`。其它工具/APK/cert/serial/pair_id/原reader pins沿用上表，`ui_contract` 只需：
+
+```json
+{
+  "binding_scope": "root_current_807_ui_frame",
+  "menu_argb_sha256": "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f",
+  "attachment_resource_ids": [],
+  "new_session_text_only_attachment_contract": true
+}
+```
+
+［KNOWN｜HIGH］未知 send selector 可以缺席，不调用原 collection snapshot/matching("send")。menu筛选唯一可见 enabled/clickable FrameLayout[56,193][156,293]，精确 parent/toolbar结构及空主页/快速见证；截图前后树相等，立即动作前重新读 owner/tree/pixels并 refresh。新建对话用真实 text=`新建对话`、resource ID=`com.aliyun.tongyi:id/tv_new_session` 的唯一 TextView到精确direct LinearLayout parent[242,2339][813,2486]；focus用唯一 text=`发消息或按住说话...`到精确direct ViewGroup parent[40,2348][1160,2486]，不任意向上找clickable ancestor。每步 public ACTION_CLICK后需真正观察预期drawer/new-empty/focused editor；返回true本身不是后状态。
+
+［KNOWN｜HIGH］focused EditText 的 `text=发消息...` 不是字面空值。只按公开 `isShowingHintText/hintText` 区分：非hint文本必须真实为空；hint旗标true时hint须非空且text为空或完整等于hint。未知或不一致就HOLD；真实草稿恰好写着`发消息...`而旗标false不得归零。唯一编辑器须editable/focused/enabled、公开ACTION_SET_TEXT可用。完整239B PAYLOAD一次SET_TEXT并读回 exact全文/非hint，保存draft-current PNG/XML；清除前再核当前owner/编辑器/全文仍完全匹配，才SET_TEXT空并hint-aware读回空。部分/未知/替代草稿不删除，own closure未证实保留UNKNOWN。
+
+［KNOWN｜HIGH］保留新会话/new-empty与draft-current PNG/XML及各自owner时间戳，额外public menu-frame-N.png/json记录本次真实像素pin/viewport/root/owner/单调时间；PNG/XML不是原子同帧。模式无SEND_INTENT、IME/Enter、录像/网络capture、性能结果、W1C1 claim；terminal 为 preparation_inspection_only、send_calls=0、capture=NOT_STARTED、send_selector=UNKNOWN、metrics=null、formal_new_slots=0、rpi=not_computed。HOST只在fresh合法terminal后接受0；异常终端值或不完整原件保留实际值/UNKNOWN并停止，不用计划SEND0覆盖异常观察。
+
+［KNOWN｜HIGH］r4的core/HOST external-platform seam和APK编译不证明实际Android截图兼容、hint flags、TYPE/readback/清draft或设备清场。Root单独新资格之前这些仍NOT_RUN。现有COLLECTION的语义selector、SEND/capture/条件和consumed-intent合同保留；PREPARATION_ONLY成功不自动放行COLLECTION，不补旧机会。后续SEND发现只由Root审阅新draft-current原件并另行固定合同，本轮不发现后继续SEND。
+
+## 安装、原阅读器与数据边界（共用）
 
 当前安装包不明、split APK、证书不符、完整 APK SHA 不符或 companion test 包已存在，均 HOLD，不覆盖、不卸载、不清数据。已固定原阅读器时，仅相同证书的 `install -r -d -t` 数据保留更新；结束恢复原 APK 并重新 fresh pull 核完整 SHA/证书。原包绝不卸载。只有本轮前不存在且自己安装的 package 才可卸载；当前自有/未知进程不闭合时连卸载/恢复都停止，原件保留并交 Root。
 
