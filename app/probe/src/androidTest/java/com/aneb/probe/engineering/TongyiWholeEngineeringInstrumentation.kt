@@ -108,6 +108,7 @@ class TongyiWholeEngineeringInstrumentation {
         private var preparationDeadline = 0L
         private var processShellSequence = 0
         private var preparationFrameSequence = 0
+        private var preparationGeometrySequence = 0
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
@@ -523,7 +524,15 @@ class TongyiWholeEngineeringInstrumentation {
                     return TongyiPreparationRunner.Frame(width, height, rotation, rootBounds,
                         "${owner.pid}/${owner.uid}/${owner.startTicks}/" +
                             Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP), observed, pixelSha)
-                        .also { lastFrame = it }
+                        .also {
+                            writeJson("preparation-geometry-${++preparationGeometrySequence}.json", JSONObject()
+                                .put("width", it.width).put("height", it.height).put("rotation", it.rotation)
+                                .put("root_bounds", JSONArray(listOf(it.rootBounds.left, it.rootBounds.top,
+                                    it.rootBounds.right, it.rootBounds.bottom)))
+                                .put("owner", it.owner)
+                                .put("elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString()))
+                            lastFrame = it
+                        }
                 }
                 override fun clickCurrent(node: TongyiPreparationRunner.Node): Boolean {
                     val menu = node.bounds == TongyiPreparationRunner.Bounds(56,193,156,293) && node.className == "android.widget.FrameLayout"

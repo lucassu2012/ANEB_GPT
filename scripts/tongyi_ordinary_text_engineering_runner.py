@@ -309,6 +309,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 TEST_PACKAGE + "/androidx.test.runner.AndroidJUnitRunner",
             ], "whole-" + network, timeout=220 if preparation else 310, cancel_file=output_root / "CANCEL", on_cancel=cancel_native)
             dest = output_root / run_id / "originals"
+            dest.parent.mkdir(parents=True, exist_ok=False)
             pull_rc, _, _ = command(["pull", remote, str(dest)], "originals-" + network)
             if dest.is_dir(): # Preserve and pin partial originals even when the transfer fails.
                 attempt["artifacts"] = [_pin(path, output_root) for path in sorted(dest.rglob("*")) if path.is_file()]
