@@ -48,6 +48,17 @@
 | D-36 | 2026-07-16 | **ANEB App 的正式测试只执行自建节点可控仿真，第三方 AI 真实 API 不进入 Profile、主测量或评分；AI 真实业务行为建模拆为独立工程并行推进。** App 负责按冻结 Profile 生成/接收确定性的上传、处理阶段、Token/音频事件并测量网络影响；独立 `aneb-ai-behavior-model` 负责从获准观测数据或显式假设拟合业务行为、生成版本化模型/金轨迹/候选 Profile。两者以模型 id、版本、哈希连接。Kimi/DeepSeek/千问仅可作业务原型标签；未经校准必须标 `hypothesis`，不得声称厂商真实性能。现有真实 API 探针不参与新 Profile 或评分，其正式产品入口去留另行裁定。 | Product Owner 明确“ANEB APP 是模拟 Kimi 等 AI 应用行为，不是真实 API；另做模型和算法模拟真实业务行为，与 App 分开并行”；`PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md` |
 | D-37 | 2026-07-16 | **批准 Profile Contract v2 的 provisional v1 质量目标、95% 达标口径、三套独立评分权重与门控作为实验性实施基线；批准真实 API 探针退出正式产品入口。** ①Token、AI 实时交互、网络综合性能各自独立出分，禁止与既有 AQS 或彼此混分；目标来源固定标 `aneb_product_provisional_v1`，后续改数值必须升 target/score policy 版本并追加决策；②必需指标缺失不重分权、分数为 null，invalid 保留原始证据但抑制聚合；③100MiB 视频使用独立 stress Profile；④正式 App 入口只展示自建节点仿真，现有真实 API 探针代码保留为开发诊断能力但不在正式导航/设置中出现、不进入 Profile 或评分。 | Product Owner 回复“按推荐方案”；D-36；`PROFILE_CONTRACT_V2_PROPOSAL_2026-07-16.md` |
 
+### D-38 — 私有 debug 通义当前界面资格观察（2026-10-13）
+
+这是 Product Owner 已批准自主推进与外部界面测试范围内的工程操作决定，不是新测量、评分、证据合同或公开 claim 决定。
+
+- 新增独立显式 `UI_REFERENCE_QUALIFICATION` 模式和 `UI_REFERENCE_QUALIFICATION_RESULT.json`；既有 `COLLECTION`、`PREPARATION` 路径与旧几何门禁不放宽。
+- 只观察 `HOME → DRAWER → NEW_EMPTY → EDITOR_EMPTY → OWN_DRAFT → OWN_CLEARED`：通过当轮、同一自有会话的公开节点定位进入新空会话，写入固定测试草稿、完整读回，再仅清除本轮草稿；`send_calls=0`，不发送消息、不启动录屏/VPN/网络整形，不清除来源不明的会话或草稿。
+- 每阶段保留原始 Native 节点、原始 XML、单次 PNG 及前后所有者/几何观察和文件校验值。不同 API 的先后观察不声明为原子同帧；保留失败与 UNKNOWN，不以退出码或截图代替原件闭合。
+- 即使整条操作路径与自有清场闭合，结果仍为候选资格观察、`reference_accepted=false`，指标为 null、正式结果数为 0；不能直接解锁普通采集、网络归因或复用为已验收界面参考。
+- 实施按整链行为 RED→最小 GREEN；固定整项候选后只运行一次完整质量门/CI/APK，再按 AGENTS 的在线、Launcher、后台冲突/VPN 检查和自有清场规则执行新 P40 资格观察。已消耗的 r5/r6 机会不重用、不回填。
+- 本决定不改变冻结 workload、RPI、evidence schema、测量时钟、M6 矩阵、上传关闭、生产签名及既有发布，也不授权 E-01/Aliyun 改动。
+
 ### G0 binding decision packet — DN-1A through DN-5A (2026-08-28)
 
 | Binding ID | Approved outcome | Source |
