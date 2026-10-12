@@ -146,13 +146,15 @@ class TongyiPreparationRunner(private val android: Android, private val clock: T
         fun event(name: String) = clock.nowNanos().also { events.add(name to it) }
         val deadline = event("preparation_only_started") + TongyiEngineeringRunner.PREP_NANOS
         var owner: String? = null
-        fun frame(pixels: Boolean = false): Frame {
+        fun frame(pixels: Boolean = false, viewportRequired: (Frame) -> Boolean = { true }): Frame {
             check(clock.nowNanos() < deadline && !File(directory, "CANCEL").exists()) { "PREPARATION_EXPIRED_OR_CANCELLED" }
             return android.currentFrame(pixels).also {
                 check(it.owner.isNotEmpty() && (owner == null || it.owner == owner)) { "CURRENT_OWNER_CHANGED" }
                 owner = it.owner
-                check(it.width == 1200 && it.height == 2640 && it.rotation == 0 &&
-                    it.rootBounds == Bounds(0, 0, 1200, 2486)) { "CURRENT_VIEWPORT_MISMATCH" }
+                if (viewportRequired(it)) {
+                    check(it.width == 1200 && it.height == 2640 && it.rotation == 0 &&
+                        it.rootBounds == Bounds(0, 0, 1200, 2486)) { "CURRENT_VIEWPORT_MISMATCH" }
+                }
             }
         }
         fun currentNodes(value: Frame) = value.nodes.filter { it.visible && it.packageName == TongyiEngineeringRunner.PACKAGE }
@@ -201,10 +203,16 @@ class TongyiPreparationRunner(private val android: Android, private val clock: T
             check(if (text == null) android.clickCurrent(node) else android.setTextCurrent(node, text)) { "PUBLIC_ACTION_REFUSED" }
             check(clock.nowNanos() - started <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_FIVE_SECOND_LIMIT" }
         }
-        fun await(budgetNanos: Long = TongyiEngineeringRunner.READY_NANOS, predicate: (Frame) -> Boolean): Frame {
+        fun await(budgetNanos: Long = TongyiEngineeringRunner.READY_NANOS, initialHomeWait: Boolean = false,
+            predicate: (Frame) -> Boolean): Frame {
             val ready = minOf(deadline, clock.nowNanos() + budgetNanos)
             while (true) {
-                val observed = frame()
+                if (initialHomeWait) check(clock.nowNanos() < ready) { "EXPECTED_CURRENT_STATE_NOT_OBSERVED" }
+                val observed = if (initialHomeWait) frame(viewportRequired = predicate) else frame()
+                if (initialHomeWait) check(clock.nowNanos() < ready) { "EXPECTED_CURRENT_STATE_NOT_OBSERVED" }
+                if (initialHomeWait) check(clock.nowNanos() < deadline && !File(directory, "CANCEL").exists()) {
+                    "PREPARATION_EXPIRED_OR_CANCELLED"
+                }
                 if (predicate(observed)) return observed
                 check(clock.nowNanos() < ready) { "EXPECTED_CURRENT_STATE_NOT_OBSERVED" }
                 android.sleepMillis(50)
@@ -215,7 +223,7 @@ class TongyiPreparationRunner(private val android: Android, private val clock: T
         var cleaned: Boolean
         try {
             android.launchOwned(deadline)
-            await(predicate = ::home)
+            await(initialHomeWait = true, predicate = ::home)
             val initial = frame(pixels = true)
             action(menu(initial), menuPixels = true)
             val drawer = await { currentNodes(it).count { node -> node.text == "新建对话" &&
