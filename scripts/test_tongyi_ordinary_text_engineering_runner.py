@@ -10,6 +10,20 @@ import unittest
 from scripts.tongyi_ordinary_text_engineering_runner import run_pair
 
 
+# Structural API31 vendor dialect only. No actual SSID/address/activity contents.
+CURRENT_WIFI = b"""Active default network: 367
+Current Networks:
+  NetworkAgentInfo{network{367} handle{HOST_ONLY} ni{WIFI CONNECTED extra: REDACTED} Score(60) everValidated lastValidated lp{ *** } nc{[ Transports: WIFI Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VPN&VALIDATED]}}
+    Requests: REQUEST:1 LISTEN:1 BACKGROUND_REQUEST:0 total:2
+      NetworkRequest [ LISTEN id=43, [ Transports: CELLULAR|WIFI Capabilities: NOT_VPN] ]
+
+Status for known UIDs:
+  HOST_ONLY_REDACTED
+Network Requests:
+"""
+VPN_LISTENER = b"  activeRequest: null ... LISTEN id=48 ... Transports: VPN ... RequestorPkg: com.huawei.systemserver\n"
+
+
 class ExternalPhone:
     """The OS/ADB boundary, not a substitute for our runner or its cleanup."""
 
@@ -26,6 +40,9 @@ class ExternalPhone:
         self.active_vpn = False
         self.partial_pull_failure = False
         self.cancel_during_capture = False
+        self.vendor_admission = False
+        self.current_network_override = None
+        self.preparation_unexpected_send = False
 
     def run(self, argv, timeout, *, cancel_file=None, on_cancel=None):
         self.commands.append(list(argv))
@@ -42,9 +59,18 @@ class ExternalPhone:
                 return 0, b"mLastPausedActivity: com.huawei.android.launcher/.unihome.UniHomeLauncher\nmResumedActivity: com.example.unknown/.Main\n", b""
             return 0, b"mResumedActivity: com.huawei.android.launcher/.unihome.UniHomeLauncher\n", b""
         if args == ["shell", "dumpsys", "window", "windows"]:
+            if self.vendor_admission:
+                return 0, b"WINDOW MANAGER WINDOWS\n  Window #0: HOST_ONLY_REDACTED\n", b""
+            return 0, b"mCurrentFocus=Window{abc u0 com.huawei.android.launcher/com.huawei.android.launcher.unihome.UniHomeLauncher}\n", b""
+        if args == ["shell", "dumpsys", "window"]:
             return 0, b"mCurrentFocus=Window{abc u0 com.huawei.android.launcher/com.huawei.android.launcher.unihome.UniHomeLauncher}\n", b""
         if args == ["shell", "dumpsys", "connectivity"]:
-            return 0, b"Transports: VPN\n" if self.active_vpn else b"Transports: WIFI\n", b""
+            if self.current_network_override is not None:
+                return 0, self.current_network_override, b""
+            if self.active_vpn:
+                vpn = b"  NetworkAgentInfo{network{900} handle{HOST_ONLY} ni{VPN CONNECTED extra: REDACTED} lp{ *** } nc{[ Transports: VPN Capabilities: INTERNET&VALIDATED]}}\n"
+                return 0, CURRENT_WIFI.replace(b"    Requests:", vpn + b"    Requests:", 1), b""
+            return 0, CURRENT_WIFI + (VPN_LISTENER if self.vendor_admission else b""), b""
         if args == ["shell", "ps", "-A"]:
             raw = b"USER PID NAME\nu0_a1 99 com.huawei.android.launcher\n"
             if self.instrument_alive:
@@ -81,10 +107,16 @@ class ExternalPhone:
             if self.require_native_abi:
                 json.loads(base64.b64decode(args[args.index("ui_contract_b64") + 1]))
             run_id = args[args.index("run_id") + 1]
-            network = args[args.index("network_condition") + 1]
+            network = args[args.index("network_condition") + 1] if "network_condition" in args else None
             terminal = {"state": "OBSERVATION_CLOSED", "run_id": run_id,
                         "network_condition": network, "send_calls": 1,
                         "owned_cleanup": True, "backend_session": "UNKNOWN"}
+            preparation = "execution_mode" in args and args[args.index("execution_mode") + 1] == "PREPARATION_ONLY"
+            if preparation:
+                terminal.update(state="PREPARATION_CLOSED", execution_mode="PREPARATION_ONLY",
+                    claim_scope="preparation_inspection_only", send_calls=0, capture="NOT_STARTED", send_selector="UNKNOWN")
+                if self.preparation_unexpected_send:
+                    terminal["send_calls"] = 1
             if self.unknown_send:
                 terminal.update(state="OBSERVATION_UNKNOWN", send_calls="UNKNOWN")
             if self.cancel_during_capture:
@@ -98,6 +130,8 @@ class ExternalPhone:
                 "screen.png": b"HOST_ONLY_PNG",
                 "video.mp4": b"HOST_ONLY_MP4",
             }
+            if preparation:
+                del self.files[root]["video.mp4"]
             if self.require_native_abi:
                 self.instrument_alive = True
                 self.files[root]["OWNED_INSTRUMENTATION.json"] = json.dumps({"package":"com.aneb.probe.codex",
@@ -123,6 +157,58 @@ class ExternalPhone:
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_preparation_scope_violation_retains_observed_send_instead_of_relabelling_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="PREPARATION_ONLY", ui_contract={})
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.preparation_unexpected_send = True
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PREPARATION_STOPPED",result["state"])
+            self.assertEqual(1,result["attempts"][0]["send_calls"])
+            self.assertEqual(1,result["send_calls"])
+            self.assertEqual(1,sum("instrument" in argv for argv in phone.commands))
+
+    def test_public_whole_entry_prepares_once_without_send_selector_or_network_change_and_restores_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="PREPARATION_ONLY", ui_contract={
+                "binding_scope": "root_current_807_ui_frame",
+                "menu_argb_sha256": "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f",
+                "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.old_apk = old.read_bytes()
+            phone.installed_debug = phone.old_apk
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PREPARATION_CLOSED", result["state"])
+            self.assertEqual([0], [row["send_calls"] for row in result["attempts"]])
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertEqual(1, sum("instrument" in argv for argv in phone.commands))
+            self.assertFalse(any("svc" in argv or "clear" in argv for argv in phone.commands))
+            self.assertFalse(any("uninstall" in argv and "com.aneb.probe.codex" in argv for argv in phone.commands))
+            self.assertFalse(any(pin["path"].endswith("video.mp4") for pin in result["attempts"][0]["artifacts"]))
+            self.assertEqual(result, json.loads((root / "actual" / "PREPARATION_RESULT.json").read_text()))
+
+    def test_real_vendor_admission_dialect_collects_and_closes_complete_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            phone = ExternalPhone()
+            phone.vendor_admission = True
+            phone.require_native_abi = True
+            result = run_pair(self.release(root), root / "actual", system=phone)
+            self.assertEqual("PAIR_OBSERVATION_CLOSED", result["state"])
+            self.assertEqual([1, 1], [row["send_calls"] for row in result["attempts"]])
+            self.assertTrue(all(row["owned_cleanup"] for row in result["attempts"]))
+            self.assertFalse(phone.instrument_alive)
+
     def release(self, root):
         app, test = root / "debug.apk", root / "android-test.apk"
         app.write_bytes(b"HOST_ONLY_DEBUG_APK")
@@ -224,6 +310,25 @@ class WholeEngineeringHostTest(unittest.TestCase):
                 root = Path(directory)
                 phone = ExternalPhone()
                 setattr(phone, field, True)
+                result = run_pair(self.release(root), root / "actual", system=phone)
+                self.assertEqual("PAIR_STOPPED", result["state"])
+                self.assertFalse(any("install" in argv or "instrument" in argv for argv in phone.commands))
+
+    def test_unknown_current_agents_or_default_refuse_all_install_and_input(self):
+        unknown = {
+            "empty": b"",
+            "no_default": CURRENT_WIFI.replace(b"Active default network: 367\n", b""),
+            "no_agents": b"Active default network: 367\nCurrent Networks:\nNetwork Requests:\n" + VPN_LISTENER,
+            "unknown_transport": CURRENT_WIFI.replace(b"Transports: WIFI Capabilities:", b"Transports: UNKNOWN Capabilities:"),
+            "default_not_current": CURRENT_WIFI.replace(b"Active default network: 367", b"Active default network: 999"),
+            "unknown_agent_structure": CURRENT_WIFI.replace(b"\nStatus for known UIDs:", b"\nUnknownCurrentAgent\nStatus for known UIDs:"),
+        }
+        for name, reply in unknown.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                phone = ExternalPhone()
+                phone.vendor_admission = True
+                phone.current_network_override = reply
                 result = run_pair(self.release(root), root / "actual", system=phone)
                 self.assertEqual("PAIR_STOPPED", result["state"])
                 self.assertFalse(any("install" in argv or "instrument" in argv for argv in phone.commands))
