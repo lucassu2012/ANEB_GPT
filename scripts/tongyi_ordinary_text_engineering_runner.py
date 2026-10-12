@@ -114,12 +114,17 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
     """One explicit whole transaction; preparation never enters the W1/C1 loop."""
     output_root.mkdir(parents=True, exist_ok=False)
     preparation = release.get("execution_mode") == "PREPARATION_ONLY"
-    stopped_state = "PREPARATION_STOPPED" if preparation else "PAIR_STOPPED"
-    result_file = "PREPARATION_RESULT.json" if preparation else "PAIR_RESULT.json"
-    networks = ("PREPARATION_ONLY",) if preparation else ("W1", "C1")
+    qualification = release.get("execution_mode") == "UI_REFERENCE_QUALIFICATION"
+    input_only = preparation or qualification
+    stopped_state = "UI_REFERENCE_QUALIFICATION_STOPPED" if qualification else "PREPARATION_STOPPED" if preparation else "PAIR_STOPPED"
+    closed_state = "UI_REFERENCE_QUALIFICATION_CLOSED" if qualification else "PREPARATION_CLOSED" if preparation else "PAIR_OBSERVATION_CLOSED"
+    result_file = "UI_REFERENCE_QUALIFICATION_RESULT.json" if qualification else "PREPARATION_RESULT.json" if preparation else "PAIR_RESULT.json"
+    networks = ("UI_REFERENCE_QUALIFICATION",) if qualification else ("PREPARATION_ONLY",) if preparation else ("W1", "C1")
+    def identity(network):
+        return release["pair_id"] + ("-UIQ" if qualification else "-PREP" if preparation else "-" + network)
     result = {
         "state": stopped_state,
-        "claim_scope": "preparation_inspection_only" if preparation else "private_engineering_observation",
+        "claim_scope": "ui_reference_qualification_only" if qualification else "preparation_inspection_only" if preparation else "private_engineering_observation",
         "formal_new_slots": 0,
         "attempts": [],
         "rpi": "not_computed",
@@ -128,13 +133,15 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
         result["reason"] = "EXPLICIT_NEW_FEATURE_RELEASE_REQUIRED"
         _json(output_root / result_file, result)
         return result
-    if release.get("execution_mode", "COLLECTION") not in ("COLLECTION", "PREPARATION_ONLY") or (
-            preparation and release.get("network_transition_authorized") is True):
+    if release.get("execution_mode", "COLLECTION") not in ("COLLECTION", "PREPARATION_ONLY", "UI_REFERENCE_QUALIFICATION") or (
+            input_only and release.get("network_transition_authorized") is True):
         result["reason"] = "UNKNOWN_MODE_OR_PREPARATION_NETWORK_CHANGE_FORBIDDEN"
         _json(output_root / result_file, result)
         return result
     if preparation:
         result.update(execution_mode="PREPARATION_ONLY", send_calls=0, capture="NOT_STARTED", metrics=None, send_selector="UNKNOWN")
+    if qualification:
+        result.update(execution_mode="UI_REFERENCE_QUALIFICATION", send_calls=0, capture="NOT_STARTED", metrics=None, reference_accepted=False)
     for key in ("serial", "pair_id"):
         if not isinstance(release.get(key), str) or not SAFE_ID.fullmatch(release[key]):
             raise ValueError("invalid_release_identity")
@@ -233,6 +240,55 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
         check_rc, after, _ = command(["shell", "pidof", DEBUG_PACKAGE], "own-instrument-absent")
         return stop_rc == 0 and check_rc in (0, 1) and not after.strip()
 
+    def validate_qualification_originals(terminal, dest):
+        if (terminal.get("execution_mode") != "UI_REFERENCE_QUALIFICATION" or type(terminal.get("send_calls")) is not int
+                or terminal["send_calls"] != 0 or terminal.get("capture") != "NOT_STARTED"
+                or terminal.get("claim_scope") != "ui_reference_qualification_only"
+                or terminal.get("metrics", "MISSING") is not None or terminal.get("formal_new_slots") != 0
+                or terminal.get("reference_accepted") is not False or terminal.get("feature_release") != "tongyi-engineering-807"
+                or terminal.get("payload_sha256") != PAYLOAD_SHA256 or terminal.get("ui_contract") != release["ui_contract"]
+                or any(path.name in ("SEND_INTENT.json", "OWNED_CAPTURE.json") or path.suffix == ".mp4" for path in dest.rglob("*"))):
+            raise RuntimeError("QUALIFICATION_TERMINAL_SCOPE_OR_IDENTITY_MISMATCH")
+        records = terminal.get("retained_stages")
+        stages = ["HOME", "DRAWER", "NEW_EMPTY", "EDITOR_EMPTY", "OWN_DRAFT", "OWN_CLEARED"]
+        if not isinstance(records, list) or len(records) != 6 or [record.get("stage") for record in records if isinstance(record, dict)] != stages:
+            raise RuntimeError("QUALIFICATION_SIX_ORDERED_ORIGINALS_REQUIRED")
+        observed_ids, owners = set(), set()
+        for record in records:
+            observation, owner = record.get("observation_id"), record.get("owner_before")
+            if (not isinstance(observation, str) or not observation or observation in observed_ids
+                    or not isinstance(owner, str) or not owner or owner != record.get("owner_after")
+                    or record.get("sampling_order") != ["NATIVE_BEFORE", "RAW_XML", "PNG", "NATIVE_AFTER"]
+                    or record.get("atomic_same_frame") is not False or record.get("reference_accepted") is not False):
+                raise RuntimeError("QUALIFICATION_OBSERVATION_BINDING_UNKNOWN")
+            observed_ids.add(observation)
+            owners.add(owner)
+            display, bounds = record.get("display"), record.get("root_bounds")
+            if (not isinstance(display, list) or len(display) != 3 or not all(type(value) is int for value in display)
+                    or display[0] <= 0 or display[1] <= 0 or display[2] not in (0, 1, 2, 3)
+                    or not isinstance(bounds, list) or len(bounds) != 4 or not all(type(value) is int for value in bounds)
+                    or not (0 <= bounds[0] < bounds[2] <= display[0] and 0 <= bounds[1] < bounds[3] <= display[1])):
+                raise RuntimeError("QUALIFICATION_RAW_GEOMETRY_UNKNOWN")
+            pins = record.get("artifacts")
+            prefix = record["stage"].lower() + "-"
+            expected_names = {prefix + suffix for suffix in ("native-before.json", "hierarchy.xml", "screen.png", "native-after.json")}
+            if not isinstance(pins, list) or len(pins) != 4 or {pin.get("path") for pin in pins if isinstance(pin, dict)} != expected_names:
+                raise RuntimeError("QUALIFICATION_STAGE_FILES_UNBOUND")
+            for pin in pins:
+                actual = dest / pin["path"]
+                if actual.is_symlink() or not actual.is_file():
+                    raise RuntimeError("QUALIFICATION_STAGE_ORIGINAL_MISSING")
+                raw = actual.read_bytes()
+                if not raw or type(pin.get("bytes")) is not int or len(raw) != pin["bytes"] or hashlib.sha256(raw).hexdigest() != pin.get("sha256"):
+                    raise RuntimeError("QUALIFICATION_STAGE_ORIGINAL_PIN_MISMATCH")
+            for suffix in ("native-before.json", "native-after.json"):
+                native = json.loads((dest / (prefix + suffix)).read_text(encoding="utf-8"))
+                if (native.get("observation_id") != observation or native.get("stage") != record["stage"]
+                        or native.get("owner") != owner or native.get("display") != display or native.get("root_bounds") != bounds):
+                    raise RuntimeError("QUALIFICATION_NATIVE_SOURCE_BINDING_MISMATCH")
+        if len(owners) != 1:
+            raise RuntimeError("QUALIFICATION_SESSION_OWNER_CHANGED")
+
     try:
         approved_cert = release["approved_debug_certificate_sha256"].lower()
         if not re.fullmatch(r"[0-9a-f]{64}", approved_cert):
@@ -269,6 +325,8 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 raise RuntimeError("DATA_PRESERVING_CERTIFICATE_MISMATCH")
             verify_installed_reader(release["original_debug_apk_sha256"], "reader-before")
             reader_updated = True
+        if qualification and not reader_updated:
+            raise RuntimeError("QUALIFICATION_ATTRIBUTABLE_EXISTING_READER_REQUIRED")
         for package, key in ((DEBUG_PACKAGE, "debug_apk"), (TEST_PACKAGE, "test_apk")):
             flags = ["-r", "-d", "-t"] if package == DEBUG_PACKAGE and reader_updated else ["-t"]
             rc, raw, _ = command(["install", *flags, release[key]], "install")
@@ -286,17 +344,17 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 wifi_rc, _, _ = command(["shell", "svc", "wifi", "enable" if network == "W1" else "disable"], "network-" + network)
                 if wifi_rc != 0:
                     raise RuntimeError("APPROVED_WIFI_TRANSITION_FAILED")
-            run_id = release["pair_id"] + ("-PREP" if preparation else "-" + network)
-            attempt = {"run_id": run_id, "network_condition": None if preparation else network,
-                       "send_calls": 0 if preparation else "UNKNOWN", "owned_cleanup": False, "artifacts": [],
+            run_id = identity(network)
+            attempt = {"run_id": run_id, "network_condition": None if input_only else network,
+                       "send_calls": 0 if input_only else "UNKNOWN", "owned_cleanup": False, "artifacts": [],
                        "state": "INVOKED_OUTCOME_UNKNOWN"}
             result["attempts"].append(attempt)
-            if preparation:
+            if input_only:
                 attempt["send_calls"] = "UNKNOWN"
                 result["send_calls"] = "UNKNOWN"
             preserve_debug_originals = True
-            _json(output_root / (run_id + ("-PREPARATION_CONSUMED.json" if preparation else "-OPPORTUNITY_CONSUMED.json")),
-                  {"run_id": run_id, "retry_allowed": False, "actual_send_calls": 0 if preparation else "UNKNOWN"})
+            _json(output_root / (run_id + ("-QUALIFICATION_CONSUMED.json" if qualification else "-PREPARATION_CONSUMED.json" if preparation else "-OPPORTUNITY_CONSUMED.json")),
+                  {"run_id": run_id, "retry_allowed": False, "actual_send_calls": 0 if input_only else "UNKNOWN"})
             remote = "/sdcard/Android/data/" + DEBUG_PACKAGE + "/files/tongyi-engineering/" + run_id
             def cancel_native():
                 command(["shell", "touch", remote + "/CANCEL"], "request-native-cancel", timeout=5)
@@ -304,10 +362,10 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 "shell", "am", "instrument", "-w", "-r", "-e", "class", INSTRUMENTATION_CLASS,
                 "-e", "feature_release", "tongyi-engineering-807", "-e", "payload_sha256", PAYLOAD_SHA256,
                 "-e", "run_id", run_id,
-                *( ["-e", "execution_mode", "PREPARATION_ONLY"] if preparation else ["-e", "network_condition", network] ),
+                *( ["-e", "execution_mode", "UI_REFERENCE_QUALIFICATION" if qualification else "PREPARATION_ONLY"] if input_only else ["-e", "network_condition", network] ),
                 "-e", "ui_contract_b64", base64.b64encode(json.dumps(release["ui_contract"], ensure_ascii=False).encode("utf-8")).decode("ascii"),
                 TEST_PACKAGE + "/androidx.test.runner.AndroidJUnitRunner",
-            ], "whole-" + network, timeout=220 if preparation else 310, cancel_file=output_root / "CANCEL", on_cancel=cancel_native)
+            ], "whole-" + network, timeout=220 if input_only else 310, cancel_file=output_root / "CANCEL", on_cancel=cancel_native)
             dest = output_root / run_id / "originals"
             dest.parent.mkdir(parents=True, exist_ok=False)
             pull_rc, _, _ = command(["pull", remote, str(dest)], "originals-" + network)
@@ -315,7 +373,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 attempt["artifacts"] = [_pin(path, output_root) for path in sorted(dest.rglob("*")) if path.is_file()]
             host_owned_stop = stop_owned_instrumentation(dest, run_id)
             terminal = json.loads((dest / "TERMINAL.json").read_text(encoding="utf-8"))
-            if terminal.get("run_id") != run_id or terminal.get("network_condition") != (None if preparation else network):
+            if terminal.get("run_id") != run_id or terminal.get("network_condition") != (None if input_only else network):
                 raise RuntimeError("NATIVE_TERMINAL_IDENTITY_MISMATCH")
             attempt["send_calls"] = terminal.get("send_calls", "UNKNOWN")
             if preparation:
@@ -324,19 +382,26 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                     terminal.get("capture") != "NOT_STARTED" or terminal.get("claim_scope") != "preparation_inspection_only" or
                     any(pin["path"].endswith(("SEND_INTENT.json", "video.mp4", "OWNED_CAPTURE.json")) for pin in attempt["artifacts"])):
                 raise RuntimeError("PREPARATION_SEND_CAPTURE_SCOPE_MISMATCH")
+            if qualification:
+                attempt["state"] = terminal.get("state", "UNKNOWN")
+                attempt["native_reason"] = terminal.get("reason")
+                attempt["native_owned_cleanup"] = terminal.get("owned_cleanup", "UNKNOWN")
+                result["observed_native_send_calls"] = attempt["send_calls"]
+                validate_qualification_originals(terminal, dest)
+                result["send_calls"] = attempt["send_calls"]
             if pull_rc == 0:
                 preserve_debug_originals = False
             attempt["owned_cleanup"] = terminal.get("owned_cleanup") is True and host_owned_stop and clean_current("after-" + network)
             attempt["state"] = terminal.get("state", "UNKNOWN")
-            if rc != 0 or pull_rc != 0 or attempt["state"] != ("PREPARATION_CLOSED" if preparation else "OBSERVATION_CLOSED") or not attempt["owned_cleanup"] or (output_root / "CANCEL").exists():
+            if rc != 0 or pull_rc != 0 or attempt["state"] != ("UI_REFERENCE_QUALIFICATION_CLOSED" if qualification else "PREPARATION_CLOSED" if preparation else "OBSERVATION_CLOSED") or not attempt["owned_cleanup"] or (output_root / "CANCEL").exists():
                 raise RuntimeError("ATTEMPT_NOT_CLOSED_SECOND_NOT_RUN")
-        result["state"] = "PREPARATION_CLOSED" if preparation else "PAIR_OBSERVATION_CLOSED"
+        result["state"] = closed_state
     except Exception as error:
         result["reason"] = str(error)
         for network in networks:
-            if not any(row["network_condition"] == (None if preparation else network) for row in result["attempts"]):
-                result["attempts"].append({"run_id": release["pair_id"] + ("-PREP" if preparation else "-" + network),
-                    "network_condition": None if preparation else network, "state": "NOT_RUN", "send_calls": 0,
+            if not any(row["network_condition"] == (None if input_only else network) for row in result["attempts"]):
+                result["attempts"].append({"run_id": identity(network),
+                    "network_condition": None if input_only else network, "state": "NOT_RUN", "send_calls": 0,
                     "owned_cleanup": False, "artifacts": [], "reason": "PRECEDING_ADMISSION_OR_CLOSURE_FAILED"})
     finally:
         cleanup = []
@@ -389,16 +454,20 @@ def main():
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--execute-new-feature-release", action="store_true")
-    parser.add_argument("--preparation-only", action="store_true")
+    mode_flags = parser.add_mutually_exclusive_group()
+    mode_flags.add_argument("--preparation-only", action="store_true")
+    mode_flags.add_argument("--ui-reference-qualification", action="store_true")
     args = parser.parse_args()
     release = json.loads(args.release.read_text(encoding="utf-8"))
     if args.preparation_only != (release.get("execution_mode") == "PREPARATION_ONLY"):
         parser.error("explicit --preparation-only must match fixed release execution_mode")
+    if args.ui_reference_qualification != (release.get("execution_mode") == "UI_REFERENCE_QUALIFICATION"):
+        parser.error("explicit --ui-reference-qualification must match fixed release execution_mode")
     if not args.execute_new_feature_release:
         release["live_release_authorized"] = False
     result = run_pair(release, args.output)
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["state"] in ("PAIR_OBSERVATION_CLOSED", "PREPARATION_CLOSED") else 2
+    return 0 if result["state"] in ("PAIR_OBSERVATION_CLOSED", "PREPARATION_CLOSED", "UI_REFERENCE_QUALIFICATION_CLOSED") else 2
 
 
 if __name__ == "__main__":

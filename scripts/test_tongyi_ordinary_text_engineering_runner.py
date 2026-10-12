@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.tongyi_ordinary_text_engineering_runner import run_pair
+from scripts.tongyi_ordinary_text_engineering_runner import PAYLOAD, PAYLOAD_SHA256, run_pair
 
 
 # Structural API31 vendor dialect only. No actual SSID/address/activity contents.
@@ -45,6 +45,41 @@ class ExternalPhone:
         self.preparation_unexpected_send = False
         self.install_stdout = b"Success\n"
         self.preparation_unknown_reason = None
+        self.companion_installed = False
+
+    def qualification_originals(self, terminal):
+        """Synthetic external Native output, not XML/PNG equivalence or device evidence."""
+        files = {}
+        records = []
+        for index, stage in enumerate(("HOME", "DRAWER", "NEW_EMPTY", "EDITOR_EMPTY", "OWN_DRAFT", "OWN_CLEARED")):
+            observation = "HOST_ONLY_" + terminal["run_id"] + "_" + stage
+            owner = "HOST_ONLY_OWNED_TARGET_SESSION"
+            text = PAYLOAD if stage == "OWN_DRAFT" else ""
+            native = {"source": "HOST_ONLY_EXTERNAL_NATIVE", "observation_id": observation,
+                      "stage": stage, "owner": owner, "display": [1200, 2640, 0],
+                      "root_bounds": [0, 0, 1200, 2640],
+                      "nodes": [{"id": "HOST_ONLY_EDITOR", "parent": "HOST_ONLY_ROOT",
+                                 "package": "com.aliyun.tongyi", "editable": True,
+                                 "bounds": [50, 2320, 1150, 2520], "text": text}]}
+            prefix = stage.lower() + "-"
+            stage_files = {
+                prefix + "native-before.json": json.dumps({**native, "epoch": index * 4}, ensure_ascii=False).encode(),
+                prefix + "hierarchy.xml": ("<hierarchy source='HOST_ONLY_RAW_XML' observation='" + observation
+                    + "'><node package='com.aliyun.tongyi' text='" + text + "'/></hierarchy>\n").encode(),
+                prefix + "screen.png": ("HOST_ONLY_NOT_A_REAL_PNG_" + observation).encode(),
+                prefix + "native-after.json": json.dumps({**native, "epoch": index * 4 + 3}, ensure_ascii=False).encode(),
+            }
+            records.append({"stage": stage, "observation_id": observation,
+                "owner_before": owner, "owner_after": owner, "display": [1200, 2640, 0],
+                "root_bounds": [0, 0, 1200, 2640], "source": "HOST_ONLY_EXTERNAL_OS",
+                "sampling_order": ["NATIVE_BEFORE", "RAW_XML", "PNG", "NATIVE_AFTER"],
+                "atomic_same_frame": False, "reference_accepted": False,
+                "artifacts": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                              for name, raw in stage_files.items()]})
+            files.update(stage_files)
+        terminal.update(retained_stages=records)
+        files["TERMINAL.json"] = json.dumps(terminal, ensure_ascii=False).encode()
+        return files
 
     def run(self, argv, timeout, *, cancel_file=None, on_cancel=None):
         self.commands.append(list(argv))
@@ -102,6 +137,8 @@ class ExternalPhone:
         if args[0] == "install":
             if "android-test" not in args[-1]:
                 self.installed_debug = Path(args[-1]).read_bytes()
+            else:
+                self.companion_installed = True
             return 0, self.install_stdout, b""
         if args[:3] == ["shell", "am", "instrument"]:
             if self.require_native_abi and ("feature_release" not in args or "payload_sha256" not in args or "ui_contract_b64" not in args):
@@ -114,6 +151,7 @@ class ExternalPhone:
                         "network_condition": network, "send_calls": 1,
                         "owned_cleanup": True, "backend_session": "UNKNOWN"}
             preparation = "execution_mode" in args and args[args.index("execution_mode") + 1] == "PREPARATION_ONLY"
+            qualification = "execution_mode" in args and args[args.index("execution_mode") + 1] == "UI_REFERENCE_QUALIFICATION"
             if preparation:
                 terminal.update(state="PREPARATION_CLOSED", execution_mode="PREPARATION_ONLY",
                     claim_scope="preparation_inspection_only", send_calls=0, capture="NOT_STARTED", send_selector="UNKNOWN")
@@ -139,6 +177,14 @@ class ExternalPhone:
                 if self.preparation_unknown_reason is not None:
                     del self.files[root]["context.xml"]
                     del self.files[root]["screen.png"]
+            if qualification:
+                terminal.update(state="UI_REFERENCE_QUALIFICATION_CLOSED", execution_mode="UI_REFERENCE_QUALIFICATION",
+                    claim_scope="ui_reference_qualification_only", send_calls=0, capture="NOT_STARTED",
+                    metrics=None, formal_new_slots=0, reference_accepted=False,
+                    feature_release=args[args.index("feature_release") + 1],
+                    payload_sha256=args[args.index("payload_sha256") + 1],
+                    ui_contract=json.loads(base64.b64decode(args[args.index("ui_contract_b64") + 1])))
+                self.files[root] = self.qualification_originals(terminal)
             if self.require_native_abi:
                 self.instrument_alive = True
                 self.files[root]["OWNED_INSTRUMENTATION.json"] = json.dumps({"package":"com.aneb.probe.codex",
@@ -161,11 +207,115 @@ class ExternalPhone:
                 return 1, b"partial originals pulled\n", b"HOST_ONLY transfer failure\n"
             return 0, b"4 files pulled\n", b""
         if args[0] == "uninstall":
+            if args[-1] == "com.aneb.probe.codex.test":
+                self.companion_installed = False
             return 0, b"Success\n", b""
         return 0, b"", b""
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_public_ui_reference_qualification_closes_one_input_only_transaction_and_seals_originals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="UI_REFERENCE_QUALIFICATION", network_transition_authorized=False,
+                ui_contract={"binding_scope": "root_current_807_ui_frame", "menu_argb_sha256": "18accc02a3df6f28b92d60d6a8f345328fbc6feea04dbe3fd1e3e8fc43e8c89f",
+                             "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.old_apk = old.read_bytes()
+            phone.installed_debug = phone.old_apk
+            output = root / "actual"
+
+            result = run_pair(release, output, system=phone)
+
+            self.assertEqual("UI_REFERENCE_QUALIFICATION_CLOSED", result["state"], json.dumps(result, sort_keys=True))
+            self.assertEqual(result, json.loads((output / "UI_REFERENCE_QUALIFICATION_RESULT.json").read_text(encoding="utf-8")))
+            self.assertFalse((output / "PAIR_RESULT.json").exists())
+            self.assertFalse((output / "PREPARATION_RESULT.json").exists())
+            self.assertEqual("UI_REFERENCE_QUALIFICATION", result["execution_mode"])
+            self.assertEqual(0, result["send_calls"])
+            self.assertEqual("NOT_STARTED", result["capture"])
+            self.assertIsNone(result["metrics"])
+            self.assertEqual(0, result["formal_new_slots"])
+            self.assertFalse(result["reference_accepted"])
+            self.assertEqual(1, len(result["attempts"]))
+            attempt = result["attempts"][0]
+            self.assertEqual("UI_REFERENCE_QUALIFICATION_CLOSED", attempt["state"])
+            self.assertIsNone(attempt["network_condition"])
+            self.assertEqual(0, attempt["send_calls"])
+            self.assertTrue(attempt["owned_cleanup"])
+            originals = output / attempt["run_id"] / "originals"
+            terminal = json.loads((originals / "TERMINAL.json").read_text(encoding="utf-8"))
+            self.assertEqual(attempt["run_id"], terminal["run_id"])
+            self.assertEqual(result["execution_mode"], terminal["execution_mode"])
+            self.assertEqual("tongyi-engineering-807", terminal["feature_release"])
+            self.assertEqual(PAYLOAD_SHA256, terminal["payload_sha256"])
+            self.assertEqual(release["ui_contract"], terminal["ui_contract"])
+            self.assertEqual(0, terminal["send_calls"])
+            self.assertEqual("NOT_STARTED", terminal["capture"])
+            self.assertTrue(terminal["owned_cleanup"])
+            self.assertFalse(terminal["reference_accepted"])
+            records = terminal["retained_stages"]
+            self.assertEqual(["HOME", "DRAWER", "NEW_EMPTY", "EDITOR_EMPTY", "OWN_DRAFT", "OWN_CLEARED"],
+                             [record["stage"] for record in records])
+            self.assertEqual(6, len({record["observation_id"] for record in records}))
+            retained = {pin["path"]: pin for pin in attempt["artifacts"]}
+            self.assertEqual({str(path.relative_to(output)).replace("\\", "/") for path in originals.iterdir()}, set(retained))
+            for record in records:
+                self.assertEqual("HOST_ONLY_EXTERNAL_OS", record["source"])
+                self.assertEqual(record["owner_before"], record["owner_after"])
+                self.assertEqual([1200, 2640, 0], record["display"])
+                self.assertEqual([0, 0, 1200, 2640], record["root_bounds"])
+                self.assertEqual(["NATIVE_BEFORE", "RAW_XML", "PNG", "NATIVE_AFTER"], record["sampling_order"])
+                self.assertFalse(record["atomic_same_frame"])
+                self.assertFalse(record["reference_accepted"])
+                self.assertEqual(4, len(record["artifacts"]))
+                for stage_pin in record["artifacts"]:
+                    actual_path = originals / stage_pin["path"]
+                    raw = actual_path.read_bytes()
+                    key = str(actual_path.relative_to(output)).replace("\\", "/")
+                    self.assertEqual(len(raw), stage_pin["bytes"])
+                    self.assertEqual(hashlib.sha256(raw).hexdigest(), stage_pin["sha256"])
+                    self.assertEqual(stage_pin["bytes"], retained[key]["bytes"])
+                    self.assertEqual(stage_pin["sha256"], retained[key]["sha256"])
+            for artifact_pin in retained.values():
+                raw = (output / artifact_pin["path"]).read_bytes()
+                self.assertEqual(len(raw), artifact_pin["bytes"])
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), artifact_pin["sha256"])
+            own_draft = json.loads((originals / "own_draft-native-before.json").read_text(encoding="utf-8"))
+            own_cleared = json.loads((originals / "own_cleared-native-after.json").read_text(encoding="utf-8"))
+            self.assertEqual(239, len(own_draft["nodes"][0]["text"].encode()))
+            self.assertEqual(PAYLOAD, own_draft["nodes"][0]["text"])
+            self.assertEqual("", own_cleared["nodes"][0]["text"])
+            invocations = [argv for argv in phone.commands if "instrument" in argv]
+            self.assertEqual(1, len(invocations))
+            invocation = invocations[0]
+            self.assertEqual("UI_REFERENCE_QUALIFICATION", invocation[invocation.index("execution_mode") + 1])
+            self.assertEqual(attempt["run_id"], invocation[invocation.index("run_id") + 1])
+            self.assertEqual("tongyi-engineering-807", invocation[invocation.index("feature_release") + 1])
+            self.assertEqual(PAYLOAD_SHA256, invocation[invocation.index("payload_sha256") + 1])
+            self.assertEqual(release["ui_contract"], json.loads(base64.b64decode(invocation[invocation.index("ui_contract_b64") + 1])))
+            self.assertNotIn("network_condition", invocation)
+            self.assertFalse(any("svc" in argv or "screenrecord" in argv or "clear" in argv for argv in phone.commands))
+            self.assertFalse(any("uninstall" in argv and "com.aneb.probe.codex" in argv for argv in phone.commands))
+            self.assertFalse(any(path.suffix == ".mp4" or path.name in ("SEND_INTENT.json", "OWNED_CAPTURE.json")
+                                 for path in originals.iterdir()))
+            self.assertFalse(phone.instrument_alive)
+            self.assertFalse(phone.companion_installed)
+            self.assertIn({"package": "com.aneb.probe.codex.test", "absent": True}, result["package_cleanup"])
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertEqual(phone.old_apk, (output / "reader-restored.apk").read_bytes())
+            self.assertEqual(release["original_debug_apk_sha256"], hashlib.sha256((output / "reader-restored.apk").read_bytes()).hexdigest())
+            executed = len(phone.commands)
+            with self.assertRaises(FileExistsError):
+                run_pair(release, output, system=phone)
+            self.assertEqual(executed, len(phone.commands))
+
     def test_public_preparation_materializes_native_unknown_without_fabricating_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
