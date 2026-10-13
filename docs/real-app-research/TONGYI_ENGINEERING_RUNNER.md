@@ -12,6 +12,14 @@
 
 ［KNOWN｜HIGH］source 模式每个已取得原件在后续检查前保存；缺原件、不可读、过期、owner/结构漂移或两幅 digest 不同，均保存实际完整或 partial 原件并停止为 UNKNOWN/STOPPED，不重试、不会改旧18ac常量。HOST原件pin失败也保留已拉回的全部文件，不把未知发送归零。实际 source identity、两套原件和当前手机资格仍由 Root 独立检查；只有另行记录的 Root 决策才能接受 versioned current FRAME 并同步常量/直接受影响夹具/卡。本功能本身不授权手机、不接纳参考、不放行输入。
 
+### Source-only 拒绝定位与留存
+
+［KNOWN｜HIGH］Source 的 `source_rejection` 使用独立 `SourcePhase`/source label，区分 initial readiness、source acquisition、captured-source validation、second readiness 和 pair validation，不增加 UIQ Stage。只绑定该次实际返回的不可变 Frame；每次新 query/acquisition 前清除旧绑定。获取本身抛错时不拿最后一份 readiness/capture 冒充该次 rejected input。
+
+［KNOWN｜HIGH］新增 `retainRejectedSourceObservation` metadata 边界是自然行为 RED 后的 scaffold，默认委托既有 `retainRejectedObservation`，不是用缺符号编译当 RED。Native readiness 只缓存原来返回的 Node/display/root/owner 值与原观察 nanos；拒绝留存只序列化对应 exact Frame 的缓存，绝不再次查询 Node/owner、截图、XML、capture 或 UI。readiness-only 诊断是一个 `source-home-N-rejected-native.json` Node 原件及 create-once/flush/readback/SHA 绑定的 `source-rejected-observation-retention.json`，不是第二套 Native/XML/PNG 原件、source2 或 accepted stage。
+
+［KNOWN｜HIGH］诊断沿用该 phase 原 deadline 和 PREP180，不加时、不重试；过期/cancel/磁盘或缓存绑定失败只记 `NOT_RETAINED`/独立 `retention_failure`，不能替换主拒绝 reason、已保留 source 数、SEND0/referencefalse 或 owned cleanup 状态。HOST 仍先 whole-directory pull 和逐文件 pin 再验证 terminal，故完整或 partial 诊断都被保留；不完整 source pair 仍停止，Native reason/SEND 与顶层 HOST UNKNOWN 分开。这个修正不能补造旧手机未保存的 Frame，不能把旧 UNKNOWN 升级成参考或源资格，也不放行新手机身份。
+
 ［KNOWN｜HIGH］这是现有 `:probe` 的 Debug/test-only 功能，不是第二个产品、Windows GUI 的替代工具、生产发布或 M6 样本入口。正式新增槽为 0。它不计算 TTFR/TTFC/Completion/Stall/RPI，也不判断回复正确性或网络性能；原视频语义覆盖和后台模型/会话身份保留 UNKNOWN。
 
 ## 整件入口

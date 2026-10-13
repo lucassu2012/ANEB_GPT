@@ -78,8 +78,15 @@ class TongyiWholeEngineeringInstrumentation {
                 .put("rejected_observation_retention", backend.qualificationRejectionRetention() ?: JSONObject.NULL)
                 .put("sampling_claim", "sequential_public_sources_not_atomic_not_equivalent_not_accepted_reference")
                 .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only").put("boot_id", backend.bootId)
-            if (sourceInspectionOnly) terminal.put("retained_sources", backend.sourceInspectionRecords())
-                .put("accepted_stages", JSONArray())
+            if (sourceInspectionOnly) {
+                terminal.put("retained_sources", backend.sourceInspectionRecords()).put("accepted_stages", JSONArray())
+                terminal.put("source_rejection", result.sourceRejection?.let { rejected ->
+                    JSONObject().put("phase", rejected.phase.name).put("source_label", rejected.sourceLabel)
+                        .put("returned_frame", rejected.frame != null).put("retention_attempted", rejected.retentionAttempted)
+                        .put("diagnostic_retained", rejected.retained)
+                        .put("retention_failure", rejected.retentionFailure ?: JSONObject.NULL)
+                } ?: JSONObject.NULL)
+            }
             backend.sealQualificationTerminal(terminal)
             instrumentation.sendStatus(0, Bundle().apply { putString("aneb_terminal", terminal.toString()) })
             return
@@ -533,6 +540,7 @@ class TongyiWholeEngineeringInstrumentation {
                 val files: Map<String, ByteArray>, val xmlFile: File, val xmlNanos: Long, val pngNanos: Long,
                 val sourceLabel: String? = null)
             var captured: Capture? = null
+            var sourceReadinessProjection: Projection? = null
             var sourceSequence = 0
             var retainedFrame: TongyiPreparationRunner.Frame? = null
             var writeAttempted = false
@@ -622,7 +630,9 @@ class TongyiWholeEngineeringInstrumentation {
                 else !node.hint.isNullOrEmpty() && (node.text.isEmpty() || node.text == node.hint)
             return object : TongyiUiReferenceQualificationRunner.Android {
                 override fun launchOwned(deadlineNanos: Long) = this@NativePhone.launchOwned(deadlineNanos)
-                override fun currentState(deadlineNanos: Long) = project(deadlineNanos).frame
+                override fun currentState(deadlineNanos: Long) = project(deadlineNanos).also {
+                    if (sourceInspectionOnly) sourceReadinessProjection = it.copy(handles = emptyList())
+                }.frame
                 override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
                     gate(preparationDeadline)
                     val sourceLabel = if (sourceInspectionOnly) {
@@ -687,6 +697,72 @@ class TongyiWholeEngineeringInstrumentation {
                         prefix + "native-after.json" to afterBytes), xmlFile, xmlNanos, pngNanos, sourceLabel)
                     gate(preparationDeadline)
                     return frame
+                }
+                override fun retainRejectedSourceObservation(phase: TongyiUiReferenceQualificationRunner.SourcePhase,
+                    sourceLabel: String, observed: TongyiPreparationRunner.Frame, reason: String, deadlineNanos: Long): Boolean {
+                    check(sourceInspectionOnly) { "SOURCE_REJECTION_MODE_REQUIRED" }
+                    if (qualificationRejectionRecord != null) return false
+                    val pins = JSONArray()
+                    val report = JSONObject().put("status", "NOT_RETAINED").put("reason", reason)
+                        .put("phase", phase.name).put("source_label", sourceLabel)
+                        .put("diagnostic_only", true).put("accepted_stage", false).put("accepted_source", false)
+                        .put("reference_accepted", false).put("deadline_nanos", minOf(deadlineNanos, preparationDeadline).toString())
+                        .put("artifacts", pins)
+                    qualificationRejectionRecord = report
+                    return try {
+                        gate(deadlineNanos)
+                        val readiness = phase == TongyiUiReferenceQualificationRunner.SourcePhase.INITIAL_READINESS ||
+                            phase == TongyiUiReferenceQualificationRunner.SourcePhase.SECOND_READINESS
+                        val projection = if (readiness) {
+                            check(sourceLabel == "source-home-${sourceSequence + 1}") { "SOURCE_REJECTED_READINESS_LABEL_CHANGED" }
+                            checkNotNull(sourceReadinessProjection) { "SOURCE_REJECTED_READINESS_NOT_CACHED" }
+                        } else {
+                            check(phase == TongyiUiReferenceQualificationRunner.SourcePhase.SOURCE_VALIDATION ||
+                                phase == TongyiUiReferenceQualificationRunner.SourcePhase.PAIR_VALIDATION) { "SOURCE_REJECTED_RETURNED_PHASE_REQUIRED" }
+                            val bundle = checkNotNull(captured) { "SOURCE_REJECTED_CAPTURE_NOT_CACHED" }
+                            check(bundle.frame === observed && bundle.sourceLabel == sourceLabel) { "SOURCE_REJECTED_CAPTURE_BINDING_CHANGED" }
+                            Projection(observed, emptyList(), bundle.before.nanos)
+                        }
+                        check(projection.frame === observed) { "SOURCE_REJECTED_EXACT_RETURNED_FRAME_REQUIRED" }
+                        // Only immutable cached values and their original observation clock. No project/owner/node/XML/PNG call.
+                        val observation = root.name + "-" + sourceLabel + "-" + phase.name + "-" + projection.nanos
+                        val value = JSONObject(String(nativeBytes(projection, TongyiUiReferenceQualificationRunner.Stage.HOME,
+                            observation, sourceLabel), Charsets.UTF_8))
+                            .put("phase", phase.name).put("diagnostic_only", true).put("accepted_stage", false)
+                            .put("accepted_source", false).put("reference_accepted", false)
+                            .put("projection_source", if (readiness) "cached_returned_readiness_native_values_only" else "cached_returned_source_native_values_only")
+                        val raw = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+                        report.put("observation_id", observation).put("owner", observed.owner)
+                            .put("display", JSONArray(listOf(observed.width, observed.height, observed.rotation)))
+                            .put("root_bounds", boundsJson(observed)).put("elapsed_realtime_nanos", projection.nanos.toString())
+                            .put("sampling_claim", "one_cached_native_projection_no_new_query_no_xml_no_png_not_a_source_pair")
+                            .put("readiness_only", readiness)
+                        gate(deadlineNanos)
+                        val file = File(root, sourceLabel + "-rejected-native.json")
+                        check(file.createNewFile()) { "SOURCE_REJECTED_NATIVE_ALREADY_EXISTS_NO_RETRY" }
+                        FileOutputStream(file).use { it.write(raw); it.fd.sync() }
+                        gate(deadlineNanos)
+                        val actual = file.readBytes()
+                        check(actual.contentEquals(raw)) { "SOURCE_REJECTED_NATIVE_READBACK_FAILED" }
+                        pins.put(JSONObject().put("path", file.name).put("bytes", actual.size).put("sha256", sha(actual)))
+                        gate(deadlineNanos)
+                        val receipt = JSONObject(report.toString()).apply { remove("status"); put("originals_readback_complete", true) }
+                        val receiptRaw = (receipt.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+                        val receiptFile = File(root, "source-rejected-observation-retention.json")
+                        check(receiptFile.createNewFile()) { "SOURCE_REJECTED_RECEIPT_ALREADY_EXISTS_NO_RETRY" }
+                        FileOutputStream(receiptFile).use { it.write(receiptRaw); it.fd.sync() }
+                        gate(deadlineNanos)
+                        val receiptActual = receiptFile.readBytes()
+                        check(receiptActual.contentEquals(receiptRaw)) { "SOURCE_REJECTED_RECEIPT_READBACK_FAILED" }
+                        gate(deadlineNanos)
+                        report.put("receipt", JSONObject().put("path", receiptFile.name).put("bytes", receiptActual.size).put("sha256", sha(receiptActual)))
+                            .put("status", "RETAINED")
+                        true
+                    } catch (failure: Exception) {
+                        report.put("status", "NOT_RETAINED")
+                            .put("retention_failure", failure.javaClass.simpleName + ":" + (failure.message ?: "UNKNOWN"))
+                        false
+                    }
                 }
                 override fun retainRejectedObservation(stage: TongyiUiReferenceQualificationRunner.Stage,
                     observed: TongyiPreparationRunner.Frame, reason: String, deadlineNanos: Long): Boolean {

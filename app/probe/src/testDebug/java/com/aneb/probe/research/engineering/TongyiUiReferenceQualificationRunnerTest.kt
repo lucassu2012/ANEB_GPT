@@ -6,11 +6,14 @@ import com.aneb.probe.research.engineering.TongyiPreparationRunner.Node
 import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner.NamedClick
 import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner.Stage
 import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner.StageObservation
+import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner.SourcePhase
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.FileOutputStream
+import java.util.IdentityHashMap
 
 class TongyiUiReferenceQualificationRunnerTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -28,6 +31,7 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertEquals("0", result.sendCalls)
         assertTrue(result.ownedCleanup && android.cleaned)
         assertFalse(result.referenceAccepted)
+        assertNull(result.sourceRejection)
         assertTrue(result.retainedStages.isEmpty())
         assertEquals(listOf("source-home-1", "source-home-2"), result.retainedSources.map { it.sourceLabel })
         assertEquals(2, android.acquired.size)
@@ -70,16 +74,123 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertTrue(result.ownedCleanup && android.cleaned)
         assertEquals(8, android.originals.size)
         android.originals.forEach { (name, raw) -> assertArrayEquals(raw, File(directory, name).readBytes()) }
+        assertEquals(SourcePhase.PAIR_VALIDATION, result.sourceRejection?.phase)
+        assertEquals("source-home-2", result.sourceRejection?.sourceLabel)
+        assertSame(android.acquired.last(), result.sourceRejection?.frame)
+    }
+
+    @Test fun retainsExactRejectedSecondReadinessSourceFrameWithoutReplacingPrimaryUnknown() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        // Explicit synthetic counterexample. This is not the phone's absent second readiness Frame.
+        val rejected = home.copy(nodes = home.nodes + node("HOST_ONLY_UNKNOWN_CONVERSATION", "home-root",
+            "android.widget.TextView", Bounds(80,480,1120,720), text = "PURE_SYNTHETIC_UNKNOWN_CONVERSATION"))
+        val directory = File(temporary.root, "source-second-readiness-rejected")
+        val android = SourceAndroid(listOf(home, home.copy()), directory, readinessSamples = listOf(home, rejected))
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-second-readiness-rejected", directory)
+
+        assertEquals("UI_SOURCE_INSPECTION_UNKNOWN", result.state)
+        assertEquals("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(1, android.acquired.size)
+        assertEquals(2, android.readinessFrames.size)
+        assertEquals(0, android.businessActions)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertSame("the actually returned rejected readiness Frame must reach the existing diagnostic boundary",
+            android.readinessFrames.last(), android.rejectedFrame)
+        assertEquals("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", android.rejectedReason)
+        assertEquals(1, android.rejectionRetentionCalls)
+        assertTrue(File(directory, "HOST_ONLY-rejected-native-projection.raw").readText().contains("PURE_SYNTHETIC_UNKNOWN_CONVERSATION"))
+        assertEquals(SourcePhase.SECOND_READINESS, result.sourceRejection?.phase)
+        assertEquals("source-home-2", result.sourceRejection?.sourceLabel)
+        assertSame(android.readinessFrames.last(), result.sourceRejection?.frame)
+        assertTrue(result.sourceRejection!!.retentionAttempted && result.sourceRejection!!.retained)
+        assertNull(result.sourceRejection?.retentionFailure)
+    }
+
+    @Test fun retainsActualCapturedSourceRejectionNotItsEarlierReadinessFrame() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        val rejectedCapture = home.copy(nodes = home.nodes + node("HOST_ONLY_CAPTURE_UNKNOWN_CONVERSATION", "home-root",
+            "android.widget.TextView", Bounds(80,480,1120,720), text = "PURE_SYNTHETIC_CAPTURE_UNKNOWN_CONVERSATION"))
+        val directory = File(temporary.root, "source-captured-rejected")
+        val android = SourceAndroid(listOf(rejectedCapture, home), directory, readinessSamples = listOf(home, home))
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-captured-rejected", directory)
+
+        assertEquals("UI_SOURCE_INSPECTION_UNKNOWN", result.state)
+        assertEquals("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(1, android.acquired.size)
+        assertEquals(1, android.readinessFrames.size)
+        assertEquals(0, android.businessActions)
+        assertEquals(SourcePhase.SOURCE_VALIDATION, result.sourceRejection?.phase)
+        assertEquals("source-home-1", result.sourceRejection?.sourceLabel)
+        assertSame(android.acquired.single(), android.rejectedFrame)
+        assertNotSame(android.readinessFrames.single(), android.rejectedFrame)
+        assertSame(android.acquired.single(), result.sourceRejection?.frame)
+        assertTrue(result.sourceRejection!!.retained)
+        assertNull(result.sourceRejection?.retentionFailure)
+        assertEquals(4, android.originals.size)
+    }
+
+    @Test fun failedSourceRejectionFileRetentionCannotReplacePrimaryReasonSourceCountOrCleanup() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        val rejected = home.copy(nodes = home.nodes + node("HOST_ONLY_REJECTED_RETENTION_CONVERSATION", "home-root",
+            "android.widget.TextView", Bounds(80,480,1120,720), text = "PURE_SYNTHETIC_RETENTION_FAILURE_CONVERSATION"))
+        val directory = File(temporary.root, "source-rejected-retention-failed")
+        val missingParentPath = "HOST_ONLY-missing-parent/rejected-native-projection.raw"
+        val android = SourceAndroid(listOf(home, home.copy()), directory, readinessSamples = listOf(home, rejected),
+            rejectionPath = missingParentPath) // Real external File.createNewFile IOException; no validator mock.
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-rejected-retention-failed", directory)
+
+        assertEquals("UI_SOURCE_INSPECTION_UNKNOWN", result.state)
+        assertEquals("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(1, android.acquired.size)
+        assertEquals(0, android.businessActions)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertEquals(SourcePhase.SECOND_READINESS, result.sourceRejection?.phase)
+        assertSame(android.readinessFrames.last(), result.sourceRejection?.frame)
+        assertTrue(result.sourceRejection!!.retentionAttempted)
+        assertFalse(result.sourceRejection!!.retained)
+        assertTrue(result.sourceRejection?.retentionFailure?.startsWith("IOException:") == true)
+        assertEquals(1, android.rejectionRetentionCalls)
+        assertFalse(File(directory, missingParentPath).exists())
+        assertEquals(4, android.originals.size)
     }
 
     /** Synthetic Android/time/file boundary only; real core decides source stability and action policy. */
-    private class SourceAndroid(private val samples: List<Frame>, private val directory: File) : TongyiUiReferenceQualificationRunner.Android {
+    private class SourceAndroid(private val samples: List<Frame>, private val directory: File,
+        private val readinessSamples: List<Frame> = samples,
+        private val rejectionPath: String = "HOST_ONLY-rejected-native-projection.raw") : TongyiUiReferenceQualificationRunner.Android {
         val acquired = mutableListOf<Frame>()
+        val readinessFrames = mutableListOf<Frame>()
         val originals = linkedMapOf<String, ByteArray>()
+        private val cachedProjections = IdentityHashMap<Frame, ByteArray>()
+        var rejectedFrame: Frame? = null
+        var rejectedReason: String? = null
+        var rejectionRetentionCalls = 0
         var businessActions = 0
         var cleaned = false
         override fun launchOwned(deadlineNanos: Long) { check(System.nanoTime() < deadlineNanos) }
-        override fun currentState(deadlineNanos: Long): Frame = samples.getOrElse(acquired.size) { samples.last() }.copy(menuArgbSha256 = null)
+        override fun currentState(deadlineNanos: Long): Frame = readinessSamples.getOrElse(acquired.size) { readinessSamples.last() }
+            .copy(menuArgbSha256 = null).also {
+                readinessFrames.add(it)
+                cachedProjections[it] = ("HOST_ONLY_OPAQUE_NATIVE_PROJECTION_NO_SDK:" + it).toByteArray(Charsets.UTF_8)
+            }
         override fun currentFrame(menuPixels: Boolean): Frame {
             check(menuPixels && acquired.size < 2)
             val observed = samples[acquired.size].copy()
@@ -93,11 +204,23 @@ class TongyiUiReferenceQualificationRunnerTest {
                 File(directory, name).writeBytes(raw)
             }
             acquired.add(observed)
+            cachedProjections[observed] = ("HOST_ONLY_OPAQUE_NATIVE_PROJECTION_NO_SDK:" + observed).toByteArray(Charsets.UTF_8)
             return observed
         }
         override fun retainSource(sourceLabel: String, observed: Frame): Boolean {
             check(observed === acquired.last() && sourceLabel == "source-home-${acquired.size}")
             return originals.filterKeys { it.startsWith("$sourceLabel-") }.all { (name, raw) -> File(directory, name).readBytes().contentEquals(raw) }
+        }
+        override fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean {
+            check(stage == Stage.HOME && System.nanoTime() < deadlineNanos)
+            rejectionRetentionCalls++
+            val cached = checkNotNull(cachedProjections[observed])
+            rejectedFrame = observed
+            rejectedReason = reason
+            val file = File(directory, rejectionPath)
+            check(file.createNewFile())
+            FileOutputStream(file).use { it.write(cached); it.fd.sync() }
+            return file.readBytes().contentEquals(cached)
         }
         override fun retainStage(stage: Stage, observed: Frame): Boolean { businessActions++; return false }
         override fun clickNamedCurrent(role: NamedClick, observed: Frame, node: Node): Boolean { businessActions++; return false }

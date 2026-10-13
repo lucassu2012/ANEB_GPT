@@ -353,6 +353,84 @@ class WholeEngineeringHostTest(unittest.TestCase):
             self.assertEqual(phone.old_apk, phone.installed_debug)
             self.assertFalse(phone.instrument_alive or phone.companion_installed)
 
+    def test_public_source_rejection_diagnostic_is_pinned_without_becoming_a_second_source(self):
+        class RejectedReadinessPhone(ExternalPhone):
+            def source_originals(self, terminal):
+                files = super().source_originals(terminal)
+                terminal.update(state="UI_SOURCE_INSPECTION_UNKNOWN", reason="UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED",
+                    retained_sources=terminal["retained_sources"][:1],
+                    source_rejection={"phase": "SECOND_READINESS", "source_label": "source-home-2",
+                                      "returned_frame": True, "retention_attempted": True, "diagnostic_retained": True,
+                                      "retention_failure": None})
+                for name in list(files):
+                    if name.startswith("source-home-2-"):
+                        del files[name]
+                # Synthetic external Native/file output only, not the absent phone readiness Frame or SDK evidence.
+                native_name = "source-home-2-rejected-native.json"
+                native_raw = json.dumps({"kind": "HOST_ONLY_SYNTHETIC_CACHED_PROJECTION_NOT_NATIVE_SDK",
+                    "phase": "SECOND_READINESS", "source_label": "source-home-2", "diagnostic_only": True,
+                    "accepted_stage": False, "accepted_source": False, "reference_accepted": False,
+                    "nodes": [{"id": "HOST_ONLY_UNKNOWN_CONVERSATION", "text": "PURE_SYNTHETIC_UNKNOWN_CONVERSATION"}]}).encode()
+                native_pin = {"path": native_name, "bytes": len(native_raw), "sha256": hashlib.sha256(native_raw).hexdigest()}
+                receipt_name = "source-rejected-observation-retention.json"
+                receipt_raw = json.dumps({"phase": "SECOND_READINESS", "source_label": "source-home-2",
+                    "diagnostic_only": True, "originals_readback_complete": True,
+                    "sampling_claim": "HOST_ONLY_ONE_CACHED_NATIVE_NO_XML_NO_PNG_NOT_A_SOURCE_PAIR",
+                    "artifacts": [native_pin]}).encode()
+                terminal["rejected_observation_retention"] = {"status": "RETAINED", "phase": "SECOND_READINESS",
+                    "source_label": "source-home-2", "diagnostic_only": True, "accepted_stage": False,
+                    "accepted_source": False, "reference_accepted": False, "artifacts": [native_pin],
+                    "receipt": {"path": receipt_name, "bytes": len(receipt_raw), "sha256": hashlib.sha256(receipt_raw).hexdigest()}}
+                files.update({native_name: native_raw, receipt_name: receipt_raw,
+                              "TERMINAL.json": json.dumps(terminal).encode()})
+                return files
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="UI_SOURCE_INSPECTION", network_transition_authorized=False,
+                ui_contract={"binding_scope": "root_current_807_ui_frame", "menu_argb_sha256": "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f",
+                             "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = RejectedReadinessPhone()
+            phone.require_native_abi = True
+            phone.old_apk = phone.installed_debug = old.read_bytes()
+            output = root / "actual"
+
+            result = run_pair(release, output, system=phone)
+
+            self.assertEqual("UI_SOURCE_INSPECTION_STOPPED", result["state"])
+            self.assertEqual("QUALIFICATION_SIX_ORDERED_ORIGINALS_REQUIRED", result["reason"])
+            self.assertEqual("UNKNOWN", result["send_calls"])
+            self.assertEqual(0, result["observed_native_send_calls"])
+            self.assertFalse(result["reference_accepted"])
+            self.assertEqual([], result["accepted_stages"])
+            self.assertEqual(1, len(result["attempts"]))
+            attempt = result["attempts"][0]
+            self.assertEqual("UI_SOURCE_INSPECTION_UNKNOWN", attempt["state"])
+            self.assertEqual("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", attempt["native_reason"])
+            self.assertTrue(attempt["native_owned_cleanup"])
+            originals = output / attempt["run_id"] / "originals"
+            terminal = json.loads((originals / "TERMINAL.json").read_text(encoding="utf-8"))
+            self.assertEqual(["source-home-1"], [record["source_label"] for record in terminal["retained_sources"]])
+            self.assertEqual([], terminal["retained_stages"])
+            for suffix in ("native-before.json", "hierarchy.xml", "screen.png", "native-after.json"):
+                self.assertFalse((originals / ("source-home-2-" + suffix)).exists())
+            pins = {pin["path"]: pin for pin in attempt["artifacts"]}
+            for name in ("source-home-2-rejected-native.json", "source-rejected-observation-retention.json"):
+                actual = originals / name
+                key = actual.relative_to(output).as_posix()
+                raw = actual.read_bytes()
+                self.assertEqual(len(raw), pins[key]["bytes"])
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), pins[key]["sha256"])
+            self.assertEqual(1, len([argv for argv in phone.commands if "instrument" in argv]))
+            self.assertFalse(any("svc" in argv or "screenrecord" in argv or "clear" in argv for argv in phone.commands))
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertFalse(phone.instrument_alive or phone.companion_installed)
+
     def test_public_ui_reference_qualification_closes_one_input_only_transaction_and_seals_originals(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
