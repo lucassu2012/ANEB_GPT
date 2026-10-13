@@ -42,10 +42,11 @@ class TongyiWholeEngineeringInstrumentation {
         check(sha(TongyiEngineeringRunner.PAYLOAD.toByteArray(Charsets.UTF_8)) == PAYLOAD_SHA)
         val runId = checkNotNull(args.getString("run_id"))
         val mode = args.getString("execution_mode") ?: "COLLECTION"
-        check(mode == "COLLECTION" || mode == "PREPARATION_ONLY" || mode == "UI_REFERENCE_QUALIFICATION") { "UNKNOWN_EXECUTION_MODE" }
+        check(mode == "COLLECTION" || mode == "PREPARATION_ONLY" || mode == "UI_REFERENCE_QUALIFICATION" || mode == "UI_SOURCE_INSPECTION") { "UNKNOWN_EXECUTION_MODE" }
         val preparationOnly = mode == "PREPARATION_ONLY"
         val qualificationOnly = mode == "UI_REFERENCE_QUALIFICATION"
-        val condition = if (qualificationOnly) "UI_REFERENCE_QUALIFICATION" else if (preparationOnly) "PREPARATION_ONLY" else checkNotNull(args.getString("network_condition"))
+        val sourceInspectionOnly = mode == "UI_SOURCE_INSPECTION"
+        val condition = if (sourceInspectionOnly) "UI_SOURCE_INSPECTION" else if (qualificationOnly) "UI_REFERENCE_QUALIFICATION" else if (preparationOnly) "PREPARATION_ONLY" else checkNotNull(args.getString("network_condition"))
         val ui = JSONObject(String(Base64.decode(checkNotNull(args.getString("ui_contract_b64")), Base64.DEFAULT), Charsets.UTF_8))
         val parent = File(instrumentation.targetContext.getExternalFilesDir(null), "tongyi-engineering")
         check(parent.exists() || parent.mkdirs())
@@ -57,23 +58,28 @@ class TongyiWholeEngineeringInstrumentation {
                 "ACCEPTED_NEW_SESSION_TEXT_ONLY_CONTRACT_REQUIRED"
             }
         }
-        val backend = NativePhone(root, condition, ui, preparationOnly, qualificationOnly)
-        if (qualificationOnly) {
+        if (sourceInspectionOnly) {
+            check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
+        }
+        val backend = NativePhone(root, condition, ui, preparationOnly, qualificationOnly, sourceInspectionOnly)
+        if (qualificationOnly || sourceInspectionOnly) {
             check(args.getString("network_condition") == null) { "QUALIFICATION_NETWORK_TRANSITION_FORBIDDEN" }
             // The frozen qualifier, not this entry point, exclusively creates the consumed root.
-            val result = TongyiUiReferenceQualificationRunner(backend.qualificationAndroid(), SystemClock::elapsedRealtimeNanos)
-                .runOnce(runId, root)
+            val runner = TongyiUiReferenceQualificationRunner(backend.qualificationAndroid(), SystemClock::elapsedRealtimeNanos)
+            val result = if (sourceInspectionOnly) runner.runSourceInspectionOnce(runId, root) else runner.runOnce(runId, root)
             val terminal = JSONObject().put("run_id", runId).put("network_condition", JSONObject.NULL)
                 .put("execution_mode", mode).put("feature_release", "tongyi-engineering-807")
                 .put("payload_sha256", PAYLOAD_SHA).put("ui_contract", ui)
                 .put("state", result.state).put("reason", result.reason ?: JSONObject.NULL)
                 .put("send_calls", 0).put("capture", "NOT_STARTED").put("owned_cleanup", result.ownedCleanup)
-                .put("claim_scope", "ui_reference_qualification_only").put("metrics", JSONObject.NULL)
+                .put("claim_scope", if (sourceInspectionOnly) "ui_source_inspection_only" else "ui_reference_qualification_only").put("metrics", JSONObject.NULL)
                 .put("formal_new_slots", 0).put("reference_accepted", false)
                 .put("retained_stages", backend.qualificationRecords())
                 .put("rejected_observation_retention", backend.qualificationRejectionRetention() ?: JSONObject.NULL)
                 .put("sampling_claim", "sequential_public_sources_not_atomic_not_equivalent_not_accepted_reference")
                 .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only").put("boot_id", backend.bootId)
+            if (sourceInspectionOnly) terminal.put("retained_sources", backend.sourceInspectionRecords())
+                .put("accepted_stages", JSONArray())
             backend.sealQualificationTerminal(terminal)
             instrumentation.sendStatus(0, Bundle().apply { putString("aneb_terminal", terminal.toString()) })
             return
@@ -123,6 +129,7 @@ class TongyiWholeEngineeringInstrumentation {
         private val ui: JSONObject,
         private val preparationOnly: Boolean = false,
         private val qualificationOnly: Boolean = false,
+        private val sourceInspectionOnly: Boolean = false,
     ) : TongyiEngineeringRunner.Phone {
         private val instrumentation = InstrumentationRegistry.getInstrumentation()
         private val automation = instrumentation.uiAutomation
@@ -162,6 +169,7 @@ class TongyiWholeEngineeringInstrumentation {
         private var preparationRejectionPinFailure: String? = null
         private var preparationRejectionPersistenceAttempted = false
         private val qualificationStageRecords = JSONArray()
+        private val sourceInspectionRecords = JSONArray()
         private var qualificationRejectionRecord: JSONObject? = null
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
@@ -503,6 +511,7 @@ class TongyiWholeEngineeringInstrumentation {
             else !node.hintText.isNullOrEmpty() && (node.text.isNullOrEmpty() || node.text?.toString() == node.hintText?.toString())
 
         fun qualificationRecords() = JSONArray(qualificationStageRecords.toString())
+        fun sourceInspectionRecords() = JSONArray(sourceInspectionRecords.toString())
 
         fun qualificationRejectionRetention() = qualificationRejectionRecord?.let { JSONObject(it.toString()) }
 
@@ -516,13 +525,15 @@ class TongyiWholeEngineeringInstrumentation {
 
         /** Separate input-only authority acquisition. Never enters legacy preparation/collection actions. */
         fun qualificationAndroid(): TongyiUiReferenceQualificationRunner.Android {
-            check(qualificationOnly && !preparationOnly)
+            check((qualificationOnly || sourceInspectionOnly) && !preparationOnly)
             data class Projection(val frame: TongyiPreparationRunner.Frame,
                 val handles: List<AccessibilityNodeInfo>, val nanos: Long)
             data class Capture(val frame: TongyiPreparationRunner.Frame, val stage: TongyiUiReferenceQualificationRunner.Stage,
                 val observationId: String, val before: Projection, val after: Projection,
-                val files: Map<String, ByteArray>, val xmlFile: File, val xmlNanos: Long, val pngNanos: Long)
+                val files: Map<String, ByteArray>, val xmlFile: File, val xmlNanos: Long, val pngNanos: Long,
+                val sourceLabel: String? = null)
             var captured: Capture? = null
+            var sourceSequence = 0
             var retainedFrame: TongyiPreparationRunner.Frame? = null
             var writeAttempted = false
             var ownDraft: TongyiPreparationRunner.Node? = null
@@ -578,13 +589,22 @@ class TongyiWholeEngineeringInstrumentation {
             }
             fun boundsJson(frame: TongyiPreparationRunner.Frame) = JSONArray(listOf(frame.rootBounds.left,
                 frame.rootBounds.top, frame.rootBounds.right, frame.rootBounds.bottom))
-            fun nativeBytes(value: Projection, stage: TongyiUiReferenceQualificationRunner.Stage, observation: String) =
+            fun nativeBytes(value: Projection, stage: TongyiUiReferenceQualificationRunner.Stage, observation: String,
+                sourceLabel: String? = null) =
                 (JSONObject(String(preparationNodeProjection(value.frame), Charsets.UTF_8))
                     .put("kind", "public_accessibility_immutable_native_node_values_not_raw_xml")
                     .put("source", "public_Android_Native").put("observation_id", observation).put("stage", stage.name)
                     .put("owner", value.frame.owner).put("display", JSONArray(listOf(value.frame.width, value.frame.height, value.frame.rotation)))
                     .put("root_bounds", boundsJson(value.frame)).put("elapsed_realtime_nanos", value.nanos.toString())
+                    .apply { if (sourceLabel != null) put("source_label", sourceLabel) }
                     .toString(2) + "\n").toByteArray(Charsets.UTF_8)
+            fun preserveAcquired(name: String, bytes: ByteArray) {
+                gate(preparationDeadline)
+                val file = File(root, name)
+                check(file.createNewFile()) { "SOURCE_ORIGINAL_ALREADY_EXISTS_NO_RETRY" }
+                FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
+                check(file.readBytes().contentEquals(bytes)) { "SOURCE_ORIGINAL_READBACK_FAILED" }
+            }
             fun freshBinding(observed: TongyiPreparationRunner.Frame, node: TongyiPreparationRunner.Node, deadline: Long): Projection {
                 check(captured?.frame === observed && retainedFrame === observed &&
                     observed.nodes.singleOrNull { it.id == node.id } == node) { "EXACT_RETAINED_FRAME_NODE_REQUIRED" }
@@ -605,14 +625,23 @@ class TongyiWholeEngineeringInstrumentation {
                 override fun currentState(deadlineNanos: Long) = project(deadlineNanos).frame
                 override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
                     gate(preparationDeadline)
-                    val stage = TongyiUiReferenceQualificationRunner.Stage.values().getOrNull(qualificationStageRecords.length())
-                        ?: error("QUALIFICATION_ALL_STAGES_ALREADY_RETAINED")
-                    check(menuPixels == (stage == TongyiUiReferenceQualificationRunner.Stage.HOME)) { "QUALIFICATION_CAPTURE_ORDER_CHANGED" }
+                    val sourceLabel = if (sourceInspectionOnly) {
+                        check(sourceSequence < 2) { "SOURCE_TWO_ACQUISITIONS_ALREADY_CONSUMED" }
+                        "source-home-${++sourceSequence}"
+                    } else null
+                    val stage = if (sourceInspectionOnly) TongyiUiReferenceQualificationRunner.Stage.HOME else
+                        TongyiUiReferenceQualificationRunner.Stage.values().getOrNull(qualificationStageRecords.length())
+                            ?: error("QUALIFICATION_ALL_STAGES_ALREADY_RETAINED")
+                    check(menuPixels == (sourceInspectionOnly || stage == TongyiUiReferenceQualificationRunner.Stage.HOME)) { "QUALIFICATION_CAPTURE_ORDER_CHANGED" }
                     val before = project(preparationDeadline)
-                    val prefix = stage.name.lowercase() + "-"
+                    val prefix = (sourceLabel ?: stage.name.lowercase()) + "-"
+                    val observation = root.name + "-" + (sourceLabel ?: stage.name) + "-" + before.nanos
+                    val beforeBytes = nativeBytes(before, stage, observation, sourceLabel)
+                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-before.json", beforeBytes)
                     val xmlFile = File(root, prefix + "hierarchy.xml")
                     check(xmlFile.createNewFile()) { "QUALIFICATION_XML_ALREADY_EXISTS_NO_RETRY" }
                     device.dumpWindowHierarchy(xmlFile) // Exactly one raw XML acquisition, at this capture only.
+                    if (sourceInspectionOnly) FileOutputStream(xmlFile, true).use { it.fd.sync() }
                     val xml = xmlFile.readBytes().also { check(it.isNotEmpty()) { "QUALIFICATION_XML_EMPTY" } }
                     val xmlNanos = SystemClock.elapsedRealtimeNanos()
                     requireOwner(preparationDeadline)
@@ -623,6 +652,12 @@ class TongyiWholeEngineeringInstrumentation {
                     var menuSha: String? = null
                     val png = try {
                         check(bitmap.width == before.frame.width && bitmap.height == before.frame.height) { "QUALIFICATION_PNG_GEOMETRY_CHANGED" }
+                        // Source-only writes each acquired original before later validation can fail.
+                        // Still exactly one screenshot, software Bitmap and PNG encoding per observation.
+                        val acquiredPng = if (sourceInspectionOnly) ByteArrayOutputStream().use { output ->
+                            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "QUALIFICATION_PNG_ENCODING_FAILED" }
+                            output.toByteArray().also { preserveAcquired(prefix + "screen.png", it) }
+                        } else null
                         if (menuPixels) {
                             val pixels = IntArray(10000)
                             bitmap.getPixels(pixels, 0, 100, 56, 193, 100, 100)
@@ -635,20 +670,21 @@ class TongyiWholeEngineeringInstrumentation {
                             }
                             menuSha = sha(canonical) // The same single Bitmap, never a second image.
                         }
-                        ByteArrayOutputStream().use { output ->
+                        acquiredPng ?: ByteArrayOutputStream().use { output ->
                             check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "QUALIFICATION_PNG_ENCODING_FAILED" }
                             output.toByteArray()
                         }
                     } finally { bitmap.recycle() }
                     val pngNanos = SystemClock.elapsedRealtimeNanos()
                     val after = project(preparationDeadline)
-                    check(after.frame == before.frame) { "QUALIFICATION_NATIVE_CHANGED_DURING_SEQUENTIAL_CAPTURE" }
-                    val observation = root.name + "-" + stage.name + "-" + before.nanos
+                    val afterBytes = nativeBytes(after, stage, observation, sourceLabel)
+                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-after.json", afterBytes)
+                    else check(after.frame == before.frame) { "QUALIFICATION_NATIVE_CHANGED_DURING_SEQUENTIAL_CAPTURE" }
                     val frame = before.frame.copy(menuArgbSha256 = menuSha)
                     captured = Capture(frame, stage, observation, before, after, mapOf(
-                        prefix + "native-before.json" to nativeBytes(before, stage, observation),
+                        prefix + "native-before.json" to beforeBytes,
                         prefix + "hierarchy.xml" to xml, prefix + "screen.png" to png,
-                        prefix + "native-after.json" to nativeBytes(after, stage, observation)), xmlFile, xmlNanos, pngNanos)
+                        prefix + "native-after.json" to afterBytes), xmlFile, xmlNanos, pngNanos, sourceLabel)
                     gate(preparationDeadline)
                     return frame
                 }
@@ -713,6 +749,7 @@ class TongyiWholeEngineeringInstrumentation {
                     }
                 }
                 override fun retainStage(stage: TongyiUiReferenceQualificationRunner.Stage, observed: TongyiPreparationRunner.Frame): Boolean {
+                    check(!sourceInspectionOnly) { "SOURCE_UIQ_RETENTION_FORBIDDEN" }
                     val bundle = checkNotNull(captured)
                     check(bundle.frame === observed && bundle.stage == stage &&
                         stage.ordinal == qualificationStageRecords.length()) { "QUALIFICATION_EXACT_CAPTURE_NOT_CACHED" }
@@ -741,8 +778,37 @@ class TongyiWholeEngineeringInstrumentation {
                     retainedFrame = observed
                     return true
                 }
+                override fun retainSource(sourceLabel: String, observed: TongyiPreparationRunner.Frame): Boolean {
+                    check(sourceInspectionOnly && qualificationStageRecords.length() == 0) { "SOURCE_MODE_REQUIRED" }
+                    val bundle = checkNotNull(captured)
+                    check(bundle.frame === observed && bundle.sourceLabel == sourceLabel &&
+                        sourceLabel == "source-home-${sourceInspectionRecords.length() + 1}" && bundle.files.size == 4) {
+                        "SOURCE_EXACT_CAPTURE_NOT_CACHED"
+                    }
+                    val pins = JSONArray()
+                    bundle.files.forEach { (name, bytes) ->
+                        gate(preparationDeadline)
+                        val actual = File(root, name).readBytes()
+                        check(actual.isNotEmpty() && actual.contentEquals(bytes)) { "SOURCE_ORIGINAL_READBACK_FAILED" }
+                        pins.put(JSONObject().put("path", name).put("bytes", actual.size).put("sha256", sha(actual)))
+                    }
+                    sourceInspectionRecords.put(JSONObject().put("stage", "HOME").put("source_label", sourceLabel)
+                        .put("observation_id", bundle.observationId)
+                        .put("owner_before", bundle.before.frame.owner).put("owner_after", bundle.after.frame.owner)
+                        .put("display", JSONArray(listOf(observed.width, observed.height, observed.rotation)))
+                        .put("root_bounds", boundsJson(observed)).put("source", "public_Android_Native_XML_PNG_sequential")
+                        .put("sampling_order", JSONArray(listOf("NATIVE_BEFORE", "RAW_XML", "PNG", "NATIVE_AFTER")))
+                        .put("native_before_nanos", bundle.before.nanos.toString()).put("xml_nanos", bundle.xmlNanos.toString())
+                        .put("png_nanos", bundle.pngNanos.toString()).put("native_after_nanos", bundle.after.nanos.toString())
+                        .put("atomic_same_frame", false).put("reference_accepted", false)
+                        .put("menu_argb_sha256", observed.menuArgbSha256 ?: JSONObject.NULL).put("artifacts", pins))
+                    check(bundle.before.frame == bundle.after.frame) { "SOURCE_NATIVE_CHANGED_DURING_SEQUENTIAL_CAPTURE" }
+                    gate(preparationDeadline)
+                    return true
+                }
                 override fun clickNamedCurrent(role: TongyiUiReferenceQualificationRunner.NamedClick,
                     observed: TongyiPreparationRunner.Frame, node: TongyiPreparationRunner.Node): Boolean {
+                    check(!sourceInspectionOnly) { "SOURCE_CLICK_FORBIDDEN" }
                     val deadline = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                     check(node.clickable && node.enabled && node.visible && node.packageName == TARGET) { "QUALIFICATION_CLICK_NOT_ALLOWED" }
                     when (role) {
@@ -775,6 +841,7 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 override fun setTextCurrent(observed: TongyiPreparationRunner.Frame,
                     editor: TongyiPreparationRunner.Node, text: String): Boolean {
+                    check(!sourceInspectionOnly) { "SOURCE_TEXT_FORBIDDEN" }
                     val deadline = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                     check(text == TongyiEngineeringRunner.PAYLOAD || text.isEmpty()) { "QUALIFICATION_TEXT_CAPABILITY_NOT_ALLOWED" }
                     check(editor.editable && editor.focused && editor.setTextAvailable) { "QUALIFICATION_EDITOR_NOT_CURRENT" }

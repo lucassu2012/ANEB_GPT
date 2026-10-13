@@ -81,6 +81,37 @@ class ExternalPhone:
         files["TERMINAL.json"] = json.dumps(terminal, ensure_ascii=False).encode()
         return files
 
+    def source_originals(self, terminal):
+        """Two opaque external OS acquisitions, not real Native/XML/PNG/device evidence."""
+        files, records = {}, []
+        for index in (1, 2):
+            label = "source-home-" + str(index)
+            observation = "HOST_ONLY_" + terminal["run_id"] + "_" + label
+            owner = "HOST_ONLY_OWNED_TARGET_SESSION"
+            native = {"source": "HOST_ONLY_EXTERNAL_NATIVE", "observation_id": observation,
+                "stage": "HOME", "source_label": label, "owner": owner, "display": [1200, 2640, 0],
+                "root_bounds": [0, 0, 1200, 2640],
+                "nodes": [{"id": "HOST_ONLY_ROOT", "parent": None, "package": "com.aliyun.tongyi"}]}
+            stage_files = {
+                label + "-native-before.json": json.dumps({**native, "elapsed_realtime_nanos": str(index * 10)}).encode(),
+                label + "-hierarchy.xml": ("<hierarchy source='HOST_ONLY_RAW_XML' observation='" + observation + "'/>\n").encode(),
+                label + "-screen.png": ("HOST_ONLY_NOT_A_REAL_PNG_" + observation).encode(),
+                label + "-native-after.json": json.dumps({**native, "elapsed_realtime_nanos": str(index * 10 + 3)}).encode(),
+            }
+            records.append({"stage": "HOME", "source_label": label, "observation_id": observation,
+                "owner_before": owner, "owner_after": owner, "display": [1200, 2640, 0], "root_bounds": [0, 0, 1200, 2640],
+                "source": "HOST_ONLY_EXTERNAL_OS", "atomic_same_frame": False, "reference_accepted": False,
+                "sampling_order": ["NATIVE_BEFORE", "RAW_XML", "PNG", "NATIVE_AFTER"],
+                "native_before_nanos": str(index * 10), "xml_nanos": str(index * 10 + 1),
+                "png_nanos": str(index * 10 + 2), "native_after_nanos": str(index * 10 + 3),
+                "menu_argb_sha256": "f" * 64,
+                "artifacts": [{"path": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                              for name, raw in stage_files.items()]})
+            files.update(stage_files)
+        terminal.update(retained_sources=records, retained_stages=[], accepted_stages=[])
+        files["TERMINAL.json"] = json.dumps(terminal).encode()
+        return files
+
     def run(self, argv, timeout, *, cancel_file=None, on_cancel=None):
         self.commands.append(list(argv))
         if "--print-certs" in argv:
@@ -152,6 +183,7 @@ class ExternalPhone:
                         "owned_cleanup": True, "backend_session": "UNKNOWN"}
             preparation = "execution_mode" in args and args[args.index("execution_mode") + 1] == "PREPARATION_ONLY"
             qualification = "execution_mode" in args and args[args.index("execution_mode") + 1] == "UI_REFERENCE_QUALIFICATION"
+            source_inspection = "execution_mode" in args and args[args.index("execution_mode") + 1] == "UI_SOURCE_INSPECTION"
             if preparation:
                 terminal.update(state="PREPARATION_CLOSED", execution_mode="PREPARATION_ONLY",
                     claim_scope="preparation_inspection_only", send_calls=0, capture="NOT_STARTED", send_selector="UNKNOWN")
@@ -185,6 +217,14 @@ class ExternalPhone:
                     payload_sha256=args[args.index("payload_sha256") + 1],
                     ui_contract=json.loads(base64.b64decode(args[args.index("ui_contract_b64") + 1])))
                 self.files[root] = self.qualification_originals(terminal)
+            if source_inspection:
+                terminal.update(state="UI_SOURCE_INSPECTION_CLOSED", execution_mode="UI_SOURCE_INSPECTION",
+                    claim_scope="ui_source_inspection_only", send_calls=0, capture="NOT_STARTED",
+                    metrics=None, formal_new_slots=0, reference_accepted=False,
+                    feature_release=args[args.index("feature_release") + 1],
+                    payload_sha256=args[args.index("payload_sha256") + 1],
+                    ui_contract=json.loads(base64.b64decode(args[args.index("ui_contract_b64") + 1])))
+                self.files[root] = self.source_originals(terminal)
             if self.require_native_abi:
                 self.instrument_alive = True
                 self.files[root]["OWNED_INSTRUMENTATION.json"] = json.dumps({"package":"com.aneb.probe.codex",
@@ -214,6 +254,105 @@ class ExternalPhone:
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_public_source_inspection_closes_two_read_only_home_sources_without_accepting_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="UI_SOURCE_INSPECTION", network_transition_authorized=False,
+                ui_contract={"binding_scope": "root_current_807_ui_frame", "menu_argb_sha256": "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f",
+                             "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = ExternalPhone()
+            phone.require_native_abi = True
+            phone.old_apk = phone.installed_debug = old.read_bytes()
+            output = root / "actual"
+
+            result = run_pair(release, output, system=phone)
+
+            self.assertEqual("UI_SOURCE_INSPECTION_CLOSED", result["state"], json.dumps(result, sort_keys=True))
+            self.assertEqual(result, json.loads((output / "UI_SOURCE_INSPECTION_RESULT.json").read_text(encoding="utf-8")))
+            self.assertEqual(0, result["send_calls"])
+            self.assertEqual("NOT_STARTED", result["capture"])
+            self.assertIsNone(result["metrics"])
+            self.assertFalse(result["reference_accepted"])
+            self.assertEqual([], result["accepted_stages"])
+            self.assertEqual(0, result["formal_new_slots"])
+            self.assertEqual(1, len(result["attempts"]))
+            attempt = result["attempts"][0]
+            originals = output / attempt["run_id"] / "originals"
+            terminal = json.loads((originals / "TERMINAL.json").read_text(encoding="utf-8"))
+            records = terminal["retained_sources"]
+            self.assertEqual(["source-home-1", "source-home-2"], [record["source_label"] for record in records])
+            self.assertEqual(2, len({record["observation_id"] for record in records}))
+            self.assertEqual(records[0]["menu_argb_sha256"], records[1]["menu_argb_sha256"])
+            self.assertNotEqual(release["ui_contract"]["menu_argb_sha256"], records[0]["menu_argb_sha256"])
+            for record in records:
+                self.assertEqual(4, len(record["artifacts"]))
+                for pin in record["artifacts"]:
+                    raw = (originals / pin["path"]).read_bytes()
+                    self.assertEqual(len(raw), pin["bytes"])
+                    self.assertEqual(hashlib.sha256(raw).hexdigest(), pin["sha256"])
+            invocation, = [argv for argv in phone.commands if "instrument" in argv]
+            self.assertEqual("UI_SOURCE_INSPECTION", invocation[invocation.index("execution_mode") + 1])
+            self.assertNotIn("network_condition", invocation)
+            self.assertFalse(any("svc" in argv or "screenrecord" in argv or "clear" in argv for argv in phone.commands))
+            self.assertFalse(any("uninstall" in argv and "com.aneb.probe.codex" in argv for argv in phone.commands))
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertFalse(phone.instrument_alive or phone.companion_installed)
+            self.assertTrue((output / (attempt["run_id"] + "-SOURCE_CONSUMED.json")).is_file())
+            executed = len(phone.commands)
+            with self.assertRaises(FileExistsError):
+                run_pair(release, output, system=phone)
+            self.assertEqual(executed, len(phone.commands))
+
+    def test_public_source_missing_original_stops_and_preserves_partial_sources_and_reader_data(self):
+        class MissingSourceOriginal(ExternalPhone):
+            def source_originals(self, terminal):
+                files = super().source_originals(terminal)
+                del files["source-home-2-screen.png"]  # External file/transfer failure, not a mocked validator.
+                return files
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(execution_mode="UI_SOURCE_INSPECTION", network_transition_authorized=False,
+                ui_contract={"binding_scope": "root_current_807_ui_frame", "menu_argb_sha256": "18accc0d7ec5ea76e5add0fec6ce6898809bbf73fb4760604ac30f2ca25da89f",
+                             "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True})
+            old = root / "old-reader.apk"
+            old.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(original_debug_apk=str(old), original_debug_apk_sha256=hashlib.sha256(old.read_bytes()).hexdigest())
+            phone = MissingSourceOriginal()
+            phone.require_native_abi = True
+            phone.old_apk = phone.installed_debug = old.read_bytes()
+            output = root / "actual"
+
+            result = run_pair(release, output, system=phone)
+
+            self.assertEqual("UI_SOURCE_INSPECTION_STOPPED", result["state"])
+            self.assertEqual("QUALIFICATION_STAGE_ORIGINAL_MISSING", result["reason"])
+            self.assertEqual(0, result["observed_native_send_calls"])
+            self.assertEqual("UNKNOWN", result["send_calls"])
+            self.assertFalse(result["reference_accepted"])
+            self.assertEqual([], result["accepted_stages"])
+            self.assertEqual(1, len(result["attempts"]))
+            attempt = result["attempts"][0]
+            originals = output / attempt["run_id"] / "originals"
+            self.assertFalse((originals / "source-home-2-screen.png").exists())
+            self.assertTrue((originals / "source-home-1-screen.png").is_file())
+            self.assertEqual(7, len([path for path in originals.iterdir() if path.name.startswith("source-home-")]))
+            for pin in attempt["artifacts"]:
+                raw = (output / pin["path"]).read_bytes()
+                self.assertEqual(len(raw), pin["bytes"])
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), pin["sha256"])
+            self.assertEqual(1, len([argv for argv in phone.commands if "instrument" in argv]))
+            self.assertFalse(any("svc" in argv or "screenrecord" in argv or "clear" in argv for argv in phone.commands))
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertFalse(phone.instrument_alive or phone.companion_installed)
+
     def test_public_ui_reference_qualification_closes_one_input_only_transaction_and_seals_originals(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

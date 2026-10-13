@@ -13,6 +13,8 @@ class TongyiUiReferenceQualificationRunner(
     enum class Stage { HOME, DRAWER, NEW_EMPTY, EDITOR_EMPTY, OWN_DRAFT, OWN_CLEARED }
     enum class NamedClick { MENU, NEW_SESSION, COMPOSER_FOCUS }
     data class StageObservation(val stage: Stage, val frame: TongyiPreparationRunner.Frame)
+    /** Acquisition namespace only; these are not accepted UIQ stages or reusable references. */
+    data class SourceObservation(val sourceLabel: String, val frame: Frame)
     data class Result(
         val state: String,
         val sendCalls: String,
@@ -20,6 +22,7 @@ class TongyiUiReferenceQualificationRunner(
         val reason: String?,
         val retainedStages: List<StageObservation>,
         val referenceAccepted: Boolean = false,
+        val retainedSources: List<SourceObservation> = emptyList(),
     )
 
     /** Only this external Android/UI/OS boundary may be substituted in HOST tests. */
@@ -31,6 +34,8 @@ class TongyiUiReferenceQualificationRunner(
         fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame
         /** True requires this exact returned Frame's complete owned raw stage bundle to be retained. */
         fun retainStage(stage: Stage, observed: TongyiPreparationRunner.Frame): Boolean
+        /** Exact current HOME originals under an independent source label, never action authority. */
+        fun retainSource(sourceLabel: String, observed: Frame): Boolean = false
         /** Best-effort cached originals only; rejection diagnostics never grant an accepted action binding. */
         fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean = false
         /** Only three roles; fresh owner/Node revalidation performs no extra PNG or diagnostic capture. */
@@ -43,11 +48,17 @@ class TongyiUiReferenceQualificationRunner(
         fun cleanupOwned(): Boolean
     }
 
-    fun runOnce(runId: String, directory: File): Result {
+    fun runOnce(runId: String, directory: File): Result = run(runId, directory, sourceInspection = false)
+
+    /** Explicit read-only route through the same private core and public Android boundary. */
+    fun runSourceInspectionOnce(runId: String, directory: File): Result = run(runId, directory, sourceInspection = true)
+
+    private fun run(runId: String, directory: File, sourceInspection: Boolean): Result {
         require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
         check(directory.mkdir()) { "QUALIFICATION_ALREADY_CONSUMED_NO_RETRY" }
         val deadline = clock.nowNanos() + TongyiEngineeringRunner.PREP_NANOS
         val retained = ArrayList<StageObservation>()
+        val sources = ArrayList<SourceObservation>()
         var owner: String? = null
         var reason: String? = null
         var completed = false
@@ -315,8 +326,9 @@ class TongyiUiReferenceQualificationRunner(
             directParent(value, "新建对话", "com.aliyun.tongyi:id/tv_new_session", "android.widget.LinearLayout")
             return true
         }
-        fun menu(value: Frame): Node {
-            check(home(value) && value.menuArgbSha256 == TongyiPreparationRunner.MENU_SHA256) {
+        fun menu(value: Frame, requireReference: Boolean = true): Node {
+            check(home(value) && (if (requireReference) value.menuArgbSha256 == TongyiPreparationRunner.MENU_SHA256
+                else value.menuArgbSha256?.matches(Regex("[0-9a-f]{64}")) == true)) {
                 "CURRENT_MENU_PIXELS_MISMATCH"
             }
             val current = nodes(value)
@@ -433,6 +445,27 @@ class TongyiUiReferenceQualificationRunner(
             gate()
             val homeUntil = limit(TongyiEngineeringRunner.READY_NANOS)
             await(homeUntil, ::home)
+            if (sourceInspection) {
+                repeat(2) { index ->
+                    val until = if (index == 0) homeUntil else limit(TongyiEngineeringRunner.READY_NANOS)
+                    if (index > 0) await(until, ::home)
+                    gate(until)
+                    val observed = android.currentFrame(menuPixels = true)
+                    val label = "source-home-${index + 1}"
+                    // Preserve the returned originals even when later source validation rejects them.
+                    check(android.retainSource(label, observed)) { "SOURCE_ORIGINALS_NOT_RETAINED" }
+                    sources.add(SourceObservation(label, observed))
+                    gate(until)
+                    validate(observed)
+                    menu(observed, requireReference = false)
+                    if (index > 0) {
+                        check(observed == sources.first().frame) { "SOURCE_HOME_PAIR_UNSTABLE" }
+                        check(observed !== sources.first().frame) { "SOURCE_HOME_REUSED_FRAME" }
+                    }
+                }
+                gate()
+                completed = true
+            } else {
             val initial = capture(Stage.HOME, homeUntil) { menu(it); true }
             click(NamedClick.MENU, initial, menu(initial), limit(TongyiEngineeringRunner.INPUT_NANOS))
             val drawerUntil = limit(TongyiEngineeringRunner.READY_NANOS)
@@ -461,6 +494,7 @@ class TongyiUiReferenceQualificationRunner(
             capture(Stage.OWN_CLEARED, clearUntil) { editorReady(it, Stage.OWN_CLEARED) }
             gate()
             completed = true
+            }
         } catch (failure: Exception) {
             reason = failure.message ?: failure.javaClass.simpleName
         } finally {
@@ -471,7 +505,9 @@ class TongyiUiReferenceQualificationRunner(
                 reason = failure.message ?: failure.javaClass.simpleName
             }
         }
-        return Result(if (completed && cleaned) "UI_REFERENCE_QUALIFICATION_CLOSED" else "UI_REFERENCE_QUALIFICATION_UNKNOWN",
-            "0", cleaned, reason ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null, retained.toList())
+        val mode = if (sourceInspection) "UI_SOURCE_INSPECTION" else "UI_REFERENCE_QUALIFICATION"
+        return Result(if (completed && cleaned) "${mode}_CLOSED" else "${mode}_UNKNOWN",
+            "0", cleaned, reason ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null, retained.toList(),
+            retainedSources = sources.toList())
     }
 }
