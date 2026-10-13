@@ -34,6 +34,8 @@ class TongyiUiReferenceQualificationRunner(
         fun launchOwned(deadlineNanos: Long)
         /** Node/display/root/owner projection only: no PNG, XML, canonical, retention or scene change. */
         fun currentState(deadlineNanos: Long): Frame
+        /** Narrow owned HOME graphics precondition under the caller's unchanged readiness deadline. */
+        fun awaitOwnedHomeGraphics(deadlineNanos: Long): Unit = error("QUALIFICATION_GRAPHICS_UNSUPPORTED")
         /** One complete live observation/PNG; menuPixels requests canonical bytes from that same PNG. */
         fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame
         /** True requires this exact returned Frame's complete owned raw stage bundle to be retained. */
@@ -306,6 +308,19 @@ class TongyiUiReferenceQualificationRunner(
                 }
                 return accepted
             }
+            // Only after the positive HOME/ownership context: classify one exact inert root-direct leaf.
+            val currentRoot = all.singleOrNull { it.parent == null }
+            requireEmpty(currentRoot != null)
+            val rootId = currentRoot!!.id
+            val rootLeaves = visible.filter { node ->
+                node.parent == rootId && node.className == "android.view.View" && node.bounds == value.rootBounds &&
+                    node.packageName == TongyiEngineeringRunner.PACKAGE && node.enabled && node.text.isEmpty() &&
+                    node.resourceId.isEmpty() && node.description.isEmpty() && node.hint == null &&
+                    !node.clickable && !node.editable && !node.focused && !node.setTextAvailable && !node.showingHint &&
+                    children(node).isEmpty()
+            }
+            requireEmpty(rootLeaves.size <= 1)
+            rootLeaves.forEach { classified.add(it.id) } // Keep every original node/ID/parent/value/order in the Frame.
             val remaining = visible.filter { it.id !in classified }
             remaining.filter { it.parent in classified }.forEach { requireEmpty(decoration(it)) }
             requireEmpty(visible.all { it.id in classified })
@@ -422,6 +437,13 @@ class TongyiUiReferenceQualificationRunner(
                 gate(until)
             }
         }
+        fun awaitHomeGraphics(until: Long) {
+            if (sourceInspection) sourceFrame = null // Graphics has not returned a semantic Frame.
+            gate(until)
+            android.awaitOwnedHomeGraphics(until)
+            gate(until)
+            check(home(state(until))) { "CURRENT_HOME_CHANGED_AFTER_GRAPHICS" }
+        }
         fun capture(stage: Stage, until: Long, predicate: (Frame) -> Boolean): Frame {
             gate(until)
             check(retained.none { it.stage == stage }) { "QUALIFICATION_STAGE_ALREADY_CONSUMED" }
@@ -474,6 +496,7 @@ class TongyiUiReferenceQualificationRunner(
                         sourceContext(SourcePhase.SECOND_READINESS, label, until)
                         await(until, ::home)
                     }
+                    awaitHomeGraphics(until)
                     sourceContext(SourcePhase.SOURCE_ACQUISITION, label, until)
                     gate(until)
                     val observed = android.currentFrame(menuPixels = true)
@@ -493,6 +516,7 @@ class TongyiUiReferenceQualificationRunner(
                 gate()
                 completed = true
             } else {
+            awaitHomeGraphics(homeUntil)
             val initial = capture(Stage.HOME, homeUntil) { menu(it); true }
             click(NamedClick.MENU, initial, menu(initial), limit(TongyiEngineeringRunner.INPUT_NANOS))
             val drawerUntil = limit(TongyiEngineeringRunner.READY_NANOS)

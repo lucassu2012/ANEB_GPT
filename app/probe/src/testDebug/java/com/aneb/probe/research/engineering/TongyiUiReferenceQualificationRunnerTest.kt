@@ -18,6 +18,155 @@ import java.util.IdentityHashMap
 class TongyiUiReferenceQualificationRunnerTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun inspectsTwoEqualEmptyHomeSourcesWithOneInertDirectRootViewLeafWithoutActions() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        // Synthetic observed shape only: no private phone data, physical pixel stability or accepted reference.
+        val leaf = Node("HOST_ONLY_INERT_DIRECT_ROOT_VIEW", "home-root", TongyiEngineeringRunner.PACKAGE,
+            "android.view.View", FULL_ROOT, true, true, false, "", "", null, false, false, false, false, "")
+        val withLeaf = home.copy(nodes = listOf(home.nodes.first(), leaf) + home.nodes.drop(1))
+        val second = withLeaf.copy() // Distinct synthetic capture with every complete Frame field equal.
+        val directory = File(temporary.root, "source-inert-root-leaf")
+        val android = SourceAndroid(listOf(withLeaf, second), directory,
+            readinessSamples = listOf(home, home.copy())) // Positive synthetic readiness; inspect complete captures.
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-inert-root-leaf", directory)
+
+        println("SYNTHETIC_ROOT_LEAF_PUBLIC_RESULT state=${result.state} reason=${result.reason} " +
+            "phase=${result.sourceRejection?.phase} sourceLabel=${result.sourceRejection?.sourceLabel} " +
+            "captures=${android.acquired.size} retainedSources=${result.retainedSources.size} " +
+            "actions=${android.businessActions} send=${result.sendCalls} reference=${result.referenceAccepted}")
+        assertEquals("0", result.sendCalls)
+        assertEquals(0, android.businessActions)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("complete empty HOME sources remain compatible with one fully inert root-direct leaf",
+            "UI_SOURCE_INSPECTION_CLOSED", result.state)
+        assertNull(result.reason)
+        assertNull(result.sourceRejection)
+        assertEquals(listOf("source-home-1", "source-home-2"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(2, android.acquired.size)
+        assertNotSame(android.acquired[0], android.acquired[1])
+        assertEquals(android.acquired[0], android.acquired[1])
+        result.retainedSources.zip(android.acquired).forEach { (retained, acquired) ->
+            assertSame(acquired, retained.frame)
+            assertEquals(withLeaf, retained.frame)
+            assertSame(leaf, retained.frame.nodes.single { it.id == leaf.id })
+        }
+        assertEquals(8, android.originals.size)
+        android.originals.forEach { (name, raw) -> assertArrayEquals(raw, File(directory, name).readBytes()) }
+    }
+
+    @Test fun rejectsTwoDistinctEligibleDirectRootViewLeavesWithoutActingOrAcceptingReference() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        // Both leaves are synthetic, strictly eligible shapes; distinct IDs cannot trigger identity rejection.
+        val first = Node("HOST_ONLY_INERT_ROOT_VIEW_A", "home-root", TongyiEngineeringRunner.PACKAGE,
+            "android.view.View", FULL_ROOT, true, true, false, "", "", null, false, false, false, false, "")
+        val second = first.copy(id = "HOST_ONLY_INERT_ROOT_VIEW_B")
+        val withTwo = home.copy(nodes = listOf(home.nodes.first(), first, second) + home.nodes.drop(1))
+        assertEquals(withTwo.nodes.size, withTwo.nodes.map { it.id }.distinct().size)
+        assertEquals(home.nodes.single { it.parent == null }.id, first.parent)
+        assertEquals(home.rootBounds, first.bounds)
+        val directory = File(temporary.root, "source-duplicate-inert-root-leaves")
+        val android = SourceAndroid(listOf(withTwo, withTwo.copy()), directory,
+            readinessSamples = listOf(home, home.copy())) // Positive readiness isolates the complete returned capture.
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-duplicate-inert-root-leaves", directory)
+
+        println("SYNTHETIC_DUPLICATE_ROOT_LEAF_RESULT state=${result.state} reason=${result.reason} " +
+            "phase=${result.sourceRejection?.phase} sourceLabel=${result.sourceRejection?.sourceLabel} " +
+            "captures=${android.acquired.size} retainedSources=${result.retainedSources.size} " +
+            "actions=${android.businessActions} send=${result.sendCalls} reference=${result.referenceAccepted}")
+        assertEquals("UI_SOURCE_INSPECTION_UNKNOWN", result.state)
+        assertEquals("UNKNOWN_EXISTING_CONVERSATION_NOT_TOUCHED", result.reason)
+        assertEquals(SourcePhase.SOURCE_VALIDATION, result.sourceRejection?.phase)
+        assertEquals("source-home-1", result.sourceRejection?.sourceLabel)
+        assertEquals("0", result.sendCalls)
+        assertEquals(0, android.businessActions)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(1, android.acquired.size)
+        val captured = android.acquired.single()
+        assertEquals(withTwo, captured)
+        assertSame(captured, result.retainedSources.single().frame)
+        assertSame(captured, result.sourceRejection?.frame)
+        assertSame(captured, android.rejectedFrame)
+        assertSame(first, captured.nodes.single { it.id == first.id })
+        assertSame(second, captured.nodes.single { it.id == second.id })
+        assertEquals(1, android.rejectionRetentionCalls)
+        assertEquals(4, android.originals.size)
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+    }
+
+    @Test fun waitsForOwnedHomeGraphicsBeforeIndependentSourceAcquisitionWithoutActions() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        // Immutable synthetic external startup observations, not GPU reproduction or real phone/reference data.
+        val startup = listOf(home.copy(), home.copy(menuArgbSha256 = "e".repeat(64)))
+        val completed = listOf(home.copy(), home.copy())
+        val readinessDeadlines = linkedMapOf<Int, Long>()
+        val waitedDeadlines = mutableListOf<Long>()
+        val protocol = mutableListOf<String>()
+        var nextGraphicsComplete = false
+        val supplied = object : AbstractList<Frame>() {
+            override val size = 2
+            override fun get(index: Int): Frame = (if (nextGraphicsComplete) completed else startup)[index]
+        }
+        val directory = File(temporary.root, "source-graphics-startup")
+        val external = SourceAndroid(supplied, directory, readinessSamples = listOf(home, home.copy()))
+        val android = object : TongyiUiReferenceQualificationRunner.Android by external {
+            override fun currentState(deadlineNanos: Long): Frame {
+                readinessDeadlines[external.acquired.size + 1] = deadlineNanos
+                return external.currentState(deadlineNanos)
+            }
+            override fun awaitOwnedHomeGraphics(deadlineNanos: Long) {
+                val source = external.acquired.size + 1
+                check(System.nanoTime() < deadlineNanos && readinessDeadlines[source] == deadlineNanos) {
+                    "SYNTHETIC_GRAPHICS_REQUIRES_ORIGINAL_SOURCE_DEADLINE"
+                }
+                waitedDeadlines.add(deadlineNanos)
+                protocol.add("graphics-$source")
+                nextGraphicsComplete = true // External protocol progress only; no supplied Frame is rewritten.
+            }
+            override fun currentFrame(menuPixels: Boolean): Frame = external.currentFrame(menuPixels).also {
+                protocol.add("capture-${external.acquired.size}")
+                nextGraphicsComplete = false // Each independent acquisition needs its own graphics precondition.
+            }
+        }
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-graphics-startup", directory)
+
+        println("SYNTHETIC_GRAPHICS_PROTOCOL_RESULT state=${result.state} reason=${result.reason} " +
+            "phase=${result.sourceRejection?.phase} sourceLabel=${result.sourceRejection?.sourceLabel} " +
+            "captures=${external.acquired.size} retainedSources=${result.retainedSources.size} " +
+            "graphicsWaits=${waitedDeadlines.size} actions=${external.businessActions} " +
+            "send=${result.sendCalls} reference=${result.referenceAccepted} protocol=$protocol")
+        assertEquals("0", result.sendCalls)
+        assertEquals(0, external.businessActions)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertTrue(result.ownedCleanup && external.cleaned)
+        assertEquals("the complete independent HOME acquisitions must follow owned graphics readiness",
+            "UI_SOURCE_INSPECTION_CLOSED", result.state)
+        assertNull(result.reason)
+        assertNull(result.sourceRejection)
+        assertEquals(listOf("graphics-1", "capture-1", "graphics-2", "capture-2"), protocol)
+        assertEquals(listOf(readinessDeadlines.getValue(1), readinessDeadlines.getValue(2)), waitedDeadlines)
+        assertEquals(2, external.acquired.size)
+        assertNotSame(external.acquired[0], external.acquired[1])
+        assertEquals(completed, external.acquired)
+        assertEquals(listOf("source-home-1", "source-home-2"), result.retainedSources.map { it.sourceLabel })
+        result.retainedSources.zip(external.acquired).forEach { (retained, acquired) -> assertSame(acquired, retained.frame) }
+        assertEquals(8, external.originals.size)
+        external.originals.forEach { (name, raw) -> assertArrayEquals(raw, File(directory, name).readBytes()) }
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+    }
+
     @Test fun inspectsTwoIndependentHomeSourcesWithoutActionsOrAcceptingAnyUiqStage() {
         val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
         val directory = File(temporary.root, "source-one")
@@ -97,7 +246,7 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertTrue(result.retainedStages.isEmpty())
         assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
         assertEquals(1, android.acquired.size)
-        assertEquals(2, android.readinessFrames.size)
+        assertEquals(3, android.readinessFrames.size)
         assertEquals(0, android.businessActions)
         assertTrue(result.ownedCleanup && android.cleaned)
         assertSame("the actually returned rejected readiness Frame must reach the existing diagnostic boundary",
@@ -129,12 +278,12 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertTrue(result.ownedCleanup && android.cleaned)
         assertEquals(listOf("source-home-1"), result.retainedSources.map { it.sourceLabel })
         assertEquals(1, android.acquired.size)
-        assertEquals(1, android.readinessFrames.size)
+        assertEquals(2, android.readinessFrames.size)
         assertEquals(0, android.businessActions)
         assertEquals(SourcePhase.SOURCE_VALIDATION, result.sourceRejection?.phase)
         assertEquals("source-home-1", result.sourceRejection?.sourceLabel)
         assertSame(android.acquired.single(), android.rejectedFrame)
-        assertNotSame(android.readinessFrames.single(), android.rejectedFrame)
+        assertNotSame(android.readinessFrames.last(), android.rejectedFrame)
         assertSame(android.acquired.single(), result.sourceRejection?.frame)
         assertTrue(result.sourceRejection!!.retained)
         assertNull(result.sourceRejection?.retentionFailure)
@@ -186,6 +335,8 @@ class TongyiUiReferenceQualificationRunnerTest {
         var businessActions = 0
         var cleaned = false
         override fun launchOwned(deadlineNanos: Long) { check(System.nanoTime() < deadlineNanos) }
+        // Explicit successful synthetic external graphics boundary, not Native support or a production default.
+        override fun awaitOwnedHomeGraphics(deadlineNanos: Long) { check(System.nanoTime() < deadlineNanos) }
         override fun currentState(deadlineNanos: Long): Frame = readinessSamples.getOrElse(acquired.size) { readinessSamples.last() }
             .copy(menuArgbSha256 = null).also {
                 readinessFrames.add(it)
@@ -436,6 +587,10 @@ class TongyiUiReferenceQualificationRunnerTest {
         override fun currentState(deadlineNanos: Long): Frame {
             check(launched && !cleaned && System.nanoTime() < deadlineNanos)
             return scenes.getValue(scene).copy(menuArgbSha256 = null)
+        }
+        // Synthetic external HOME progress only; the unchanged public tracer supplies its own protocol.
+        override fun awaitOwnedHomeGraphics(deadlineNanos: Long) {
+            check(launched && !cleaned && scene == Stage.HOME && System.nanoTime() < deadlineNanos)
         }
         override fun currentFrame(menuPixels: Boolean): Frame {
             check(launched && !cleaned)

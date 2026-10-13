@@ -7,9 +7,11 @@ import android.media.MediaExtractor
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
+import android.view.FrameStats
 import android.view.accessibility.AccessibilityNodeInfo
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
@@ -534,13 +536,19 @@ class TongyiWholeEngineeringInstrumentation {
         fun qualificationAndroid(): TongyiUiReferenceQualificationRunner.Android {
             check((qualificationOnly || sourceInspectionOnly) && !preparationOnly)
             data class Projection(val frame: TongyiPreparationRunner.Frame,
-                val handles: List<AccessibilityNodeInfo>, val nanos: Long)
+                val handles: List<AccessibilityNodeInfo>, val nanos: Long, val windowId: Int)
+            data class GraphicsBinding(val owner: OwnedProcessLifecycle.Owner, val windowId: Int,
+                val width: Int, val height: Int, val rotation: Int, val rootBounds: TongyiPreparationRunner.Bounds,
+                val windowBounds: TongyiPreparationRunner.Bounds)
+            data class GraphicsQualification(val binding: GraphicsBinding, val until: Long)
+            data class GraphicsRecord(val refreshPeriodNanos: Long, val frames: List<List<Long>>)
             data class Capture(val frame: TongyiPreparationRunner.Frame, val stage: TongyiUiReferenceQualificationRunner.Stage,
                 val observationId: String, val before: Projection, val after: Projection,
                 val files: Map<String, ByteArray>, val xmlFile: File, val xmlNanos: Long, val pngNanos: Long,
                 val sourceLabel: String? = null)
             var captured: Capture? = null
             var sourceReadinessProjection: Projection? = null
+            var homeGraphics: GraphicsQualification? = null
             var sourceSequence = 0
             var retainedFrame: TongyiPreparationRunner.Frame? = null
             var writeAttempted = false
@@ -588,12 +596,41 @@ class TongyiWholeEngineeringInstrumentation {
                         node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }, node.contentDescription?.toString().orEmpty()))
                     for (index in 0 until node.childCount) node.getChild(index)?.let { walk(it, id) }
                 }
-                walk(checkNotNull(automation.rootInActiveWindow), null)
+                val projectedRoot = checkNotNull(automation.rootInActiveWindow)
+                val windowId = projectedRoot.windowId // The same root handle whose immutable values are walked.
+                walk(projectedRoot, null)
                 val frame = TongyiPreparationRunner.Frame(device.displayWidth, device.displayHeight, device.displayRotation,
                     values.first().bounds, "${owner.pid}/${owner.uid}/${owner.startTicks}/" +
                         Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP), values.toList(), null)
                 requireOwner(deadline, cleanup)
-                return Projection(frame, handles, SystemClock.elapsedRealtimeNanos())
+                return Projection(frame, handles, SystemClock.elapsedRealtimeNanos(), windowId)
+            }
+            fun graphicsBinding(value: Projection, deadline: Long): GraphicsBinding {
+                gate(deadline)
+                val owner = requireOwner(deadline)
+                val projectedRoot = value.handles.first()
+                check(value.windowId >= 0 && projectedRoot.windowId == value.windowId) {
+                    "QUALIFICATION_GRAPHICS_UNSUPPORTED_WINDOW_ID"
+                }
+                val window = checkNotNull(projectedRoot.window) { "QUALIFICATION_GRAPHICS_UNSUPPORTED_WINDOW" }
+                val windowRoot = checkNotNull(window.root) { "QUALIFICATION_GRAPHICS_UNSUPPORTED_WINDOW_ROOT" }
+                check(window.isActive && window.id == value.windowId && windowRoot.windowId == value.windowId &&
+                    windowRoot.packageName?.toString() == TARGET && nodeBounds(windowRoot) == value.frame.rootBounds) {
+                    "QUALIFICATION_GRAPHICS_ACTIVE_WINDOW_CHANGED"
+                }
+                val rect = Rect()
+                window.getBoundsInScreen(rect)
+                check(rect.width() > 0 && rect.height() > 0) { "QUALIFICATION_GRAPHICS_UNSUPPORTED_WINDOW_BOUNDS" }
+                requireOwner(deadline)
+                gate(deadline)
+                return GraphicsBinding(owner, value.windowId, value.frame.width, value.frame.height,
+                    value.frame.rotation, value.frame.rootBounds,
+                    TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom))
+            }
+            fun requireGraphicsBinding(value: Projection, qualification: GraphicsQualification?, deadline: Long) {
+                if (qualification != null) check(deadline == qualification.until &&
+                    graphicsBinding(value, deadline) == qualification.binding) { "QUALIFICATION_GRAPHICS_CAPTURE_BINDING_CHANGED" }
+                gate(deadline)
             }
             fun boundsJson(frame: TongyiPreparationRunner.Frame) = JSONArray(listOf(frame.rootBounds.left,
                 frame.rootBounds.top, frame.rootBounds.right, frame.rootBounds.bottom))
@@ -606,12 +643,13 @@ class TongyiWholeEngineeringInstrumentation {
                     .put("root_bounds", boundsJson(value.frame)).put("elapsed_realtime_nanos", value.nanos.toString())
                     .apply { if (sourceLabel != null) put("source_label", sourceLabel) }
                     .toString(2) + "\n").toByteArray(Charsets.UTF_8)
-            fun preserveAcquired(name: String, bytes: ByteArray) {
-                gate(preparationDeadline)
+            fun preserveAcquired(name: String, bytes: ByteArray, deadline: Long = preparationDeadline) {
+                gate(deadline)
                 val file = File(root, name)
                 check(file.createNewFile()) { "SOURCE_ORIGINAL_ALREADY_EXISTS_NO_RETRY" }
                 FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
                 check(file.readBytes().contentEquals(bytes)) { "SOURCE_ORIGINAL_READBACK_FAILED" }
+                gate(deadline)
             }
             fun freshBinding(observed: TongyiPreparationRunner.Frame, node: TongyiPreparationRunner.Node, deadline: Long): Projection {
                 check(captured?.frame === observed && retainedFrame === observed &&
@@ -629,12 +667,63 @@ class TongyiWholeEngineeringInstrumentation {
             fun empty(node: TongyiPreparationRunner.Node) = if (!node.showingHint) node.text.isEmpty()
                 else !node.hint.isNullOrEmpty() && (node.text.isEmpty() || node.text == node.hint)
             return object : TongyiUiReferenceQualificationRunner.Android {
-                override fun launchOwned(deadlineNanos: Long) = this@NativePhone.launchOwned(deadlineNanos)
-                override fun currentState(deadlineNanos: Long) = project(deadlineNanos).also {
-                    if (sourceInspectionOnly) sourceReadinessProjection = it.copy(handles = emptyList())
-                }.frame
+                override fun launchOwned(deadlineNanos: Long) {
+                    homeGraphics = null
+                    this@NativePhone.launchOwned(deadlineNanos)
+                }
+                override fun currentState(deadlineNanos: Long): TongyiPreparationRunner.Frame = try {
+                    project(deadlineNanos).also {
+                        if (sourceInspectionOnly) sourceReadinessProjection = it.copy(handles = emptyList())
+                    }.frame
+                } catch (failure: Exception) { homeGraphics = null; throw failure }
+                override fun awaitOwnedHomeGraphics(deadlineNanos: Long) {
+                    homeGraphics = null
+                    gate(deadlineNanos)
+                    check(Build.VERSION.SDK_INT >= 21) { "QUALIFICATION_GRAPHICS_UNSUPPORTED_API" }
+                    val binding = graphicsBinding(project(deadlineNanos), deadlineNanos)
+                    var previous: GraphicsRecord? = null
+                    while (true) {
+                        check(graphicsBinding(project(deadlineNanos), deadlineNanos) == binding) {
+                            "QUALIFICATION_GRAPHICS_WINDOW_BINDING_CHANGED"
+                        }
+                        gate(deadlineNanos)
+                        val stats = checkNotNull(automation.getWindowContentFrameStats(binding.windowId)) {
+                            "QUALIFICATION_GRAPHICS_UNSUPPORTED_STATS"
+                        }
+                        gate(deadlineNanos) // A synchronous Binder getter has no forcibly enforced timeout argument.
+                        val count = stats.frameCount
+                        check(count in 1..2048 && stats.refreshPeriodNano > 0) {
+                            "QUALIFICATION_GRAPHICS_UNSUPPORTED_EMPTY_OR_UNBOUNDED_STATS"
+                        }
+                        val rows = (0 until count).map { index -> listOf(stats.getFramePostedTimeNano(index),
+                            stats.getFrameReadyTimeNano(index), stats.getFramePresentedTimeNano(index)) }
+                        val record = GraphicsRecord(stats.refreshPeriodNano, rows) // Full original order, no tail/filter.
+                        check(graphicsBinding(project(deadlineNanos), deadlineNanos) == binding) {
+                            "QUALIFICATION_GRAPHICS_WINDOW_BINDING_CHANGED"
+                        }
+                        // No public stable row ID/drop-vs-pending discriminator: never correlate or forget an unresolved row.
+                        // Fail this entire boundary immediately; history rollover cannot later manufacture READY.
+                        check(rows.all { row -> row.all { it != FrameStats.UNDEFINED_TIME_NANO && it >= 0 } }) {
+                            "QUALIFICATION_GRAPHICS_PENDING_HISTORY_UNKNOWN"
+                        }
+                        gate(deadlineNanos)
+                        if (previous == record) {
+                            homeGraphics = GraphicsQualification(binding, deadlineNanos)
+                            return
+                        }
+                        previous = record
+                        gate(deadlineNanos)
+                        SystemClock.sleep(50)
+                        gate(deadlineNanos)
+                    }
+                }
                 override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
-                    gate(preparationDeadline)
+                    val qualification = if (menuPixels) checkNotNull(homeGraphics) {
+                        "QUALIFICATION_GRAPHICS_PRECONDITION_REQUIRED"
+                    } else null
+                    homeGraphics = null // Consume once, including every failure during this acquisition.
+                    val captureDeadline = qualification?.until ?: preparationDeadline
+                    gate(captureDeadline)
                     val sourceLabel = if (sourceInspectionOnly) {
                         check(sourceSequence < 2) { "SOURCE_TWO_ACQUISITIONS_ALREADY_CONSUMED" }
                         "source-home-${++sourceSequence}"
@@ -643,18 +732,20 @@ class TongyiWholeEngineeringInstrumentation {
                         TongyiUiReferenceQualificationRunner.Stage.values().getOrNull(qualificationStageRecords.length())
                             ?: error("QUALIFICATION_ALL_STAGES_ALREADY_RETAINED")
                     check(menuPixels == (sourceInspectionOnly || stage == TongyiUiReferenceQualificationRunner.Stage.HOME)) { "QUALIFICATION_CAPTURE_ORDER_CHANGED" }
-                    val before = project(preparationDeadline)
+                    val before = project(captureDeadline)
+                    requireGraphicsBinding(before, qualification, captureDeadline)
                     val prefix = (sourceLabel ?: stage.name.lowercase()) + "-"
                     val observation = root.name + "-" + (sourceLabel ?: stage.name) + "-" + before.nanos
                     val beforeBytes = nativeBytes(before, stage, observation, sourceLabel)
-                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-before.json", beforeBytes)
+                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-before.json", beforeBytes, captureDeadline)
                     val xmlFile = File(root, prefix + "hierarchy.xml")
                     check(xmlFile.createNewFile()) { "QUALIFICATION_XML_ALREADY_EXISTS_NO_RETRY" }
                     device.dumpWindowHierarchy(xmlFile) // Exactly one raw XML acquisition, at this capture only.
                     if (sourceInspectionOnly) FileOutputStream(xmlFile, true).use { it.fd.sync() }
                     val xml = xmlFile.readBytes().also { check(it.isNotEmpty()) { "QUALIFICATION_XML_EMPTY" } }
                     val xmlNanos = SystemClock.elapsedRealtimeNanos()
-                    requireOwner(preparationDeadline)
+                    requireOwner(captureDeadline)
+                    if (qualification != null) requireGraphicsBinding(project(captureDeadline), qualification, captureDeadline)
                     val screenshot = checkNotNull(automation.takeScreenshot()) { "QUALIFICATION_PNG_UNAVAILABLE" }
                     val bitmap = try { checkNotNull(screenshot.copy(Bitmap.Config.ARGB_8888, false)) {
                         "QUALIFICATION_ARGB_UNAVAILABLE"
@@ -666,8 +757,9 @@ class TongyiWholeEngineeringInstrumentation {
                         // Still exactly one screenshot, software Bitmap and PNG encoding per observation.
                         val acquiredPng = if (sourceInspectionOnly) ByteArrayOutputStream().use { output ->
                             check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "QUALIFICATION_PNG_ENCODING_FAILED" }
-                            output.toByteArray().also { preserveAcquired(prefix + "screen.png", it) }
+                            output.toByteArray().also { preserveAcquired(prefix + "screen.png", it, captureDeadline) }
                         } else null
+                        if (qualification != null) requireGraphicsBinding(project(captureDeadline), qualification, captureDeadline)
                         if (menuPixels) {
                             val pixels = IntArray(10000)
                             bitmap.getPixels(pixels, 0, 100, 56, 193, 100, 100)
@@ -686,16 +778,17 @@ class TongyiWholeEngineeringInstrumentation {
                         }
                     } finally { bitmap.recycle() }
                     val pngNanos = SystemClock.elapsedRealtimeNanos()
-                    val after = project(preparationDeadline)
+                    val after = project(captureDeadline)
                     val afterBytes = nativeBytes(after, stage, observation, sourceLabel)
-                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-after.json", afterBytes)
-                    else check(after.frame == before.frame) { "QUALIFICATION_NATIVE_CHANGED_DURING_SEQUENTIAL_CAPTURE" }
+                    if (sourceInspectionOnly) preserveAcquired(prefix + "native-after.json", afterBytes, captureDeadline)
+                    requireGraphicsBinding(after, qualification, captureDeadline)
+                    if (!sourceInspectionOnly) check(after.frame == before.frame) { "QUALIFICATION_NATIVE_CHANGED_DURING_SEQUENTIAL_CAPTURE" }
                     val frame = before.frame.copy(menuArgbSha256 = menuSha)
                     captured = Capture(frame, stage, observation, before, after, mapOf(
                         prefix + "native-before.json" to beforeBytes,
                         prefix + "hierarchy.xml" to xml, prefix + "screen.png" to png,
                         prefix + "native-after.json" to afterBytes), xmlFile, xmlNanos, pngNanos, sourceLabel)
-                    gate(preparationDeadline)
+                    gate(captureDeadline)
                     return frame
                 }
                 override fun retainRejectedSourceObservation(phase: TongyiUiReferenceQualificationRunner.SourcePhase,
@@ -721,7 +814,7 @@ class TongyiWholeEngineeringInstrumentation {
                                 phase == TongyiUiReferenceQualificationRunner.SourcePhase.PAIR_VALIDATION) { "SOURCE_REJECTED_RETURNED_PHASE_REQUIRED" }
                             val bundle = checkNotNull(captured) { "SOURCE_REJECTED_CAPTURE_NOT_CACHED" }
                             check(bundle.frame === observed && bundle.sourceLabel == sourceLabel) { "SOURCE_REJECTED_CAPTURE_BINDING_CHANGED" }
-                            Projection(observed, emptyList(), bundle.before.nanos)
+                            Projection(observed, emptyList(), bundle.before.nanos, bundle.before.windowId)
                         }
                         check(projection.frame === observed) { "SOURCE_REJECTED_EXACT_RETURNED_FRAME_REQUIRED" }
                         // Only immutable cached values and their original observation clock. No project/owner/node/XML/PNG call.
@@ -952,6 +1045,7 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
                 override fun cleanupOwned(): Boolean {
+                    homeGraphics = null
                     // No recorder call and no collection draft branch. Process closure is attempted even if input cleanup fails.
                     val deadline = SystemClock.elapsedRealtimeNanos() + 20_000_000_000L
                     var draftSafe = !writeAttempted || ownCleared
