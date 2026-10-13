@@ -19,6 +19,8 @@ import androidx.test.runner.AndroidJUnit4
 import androidx.test.uiautomator.UiDevice
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
+import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
+import com.aneb.probe.research.engineering.QualificationOwnerShellTransport
 import com.aneb.probe.research.engineering.TongyiEngineeringRunner
 import com.aneb.probe.research.engineering.TongyiPreparationRunner
 import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner
@@ -561,6 +563,66 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 if (!cleanup) check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
             }
+            var ownerPipeSequence = 0
+            val ownerScope = QualificationOwnerProbeScope(QualificationOwnerShellTransport(scriptTransport,
+                object : QualificationOwnerShellTransport.OsPipe {
+                    override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
+                    override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
+                    override fun executeOwnedScript(apiCommand: String, pid: String, nonce: String,
+                        deadlineNanos: Long): QualificationOwnerShellTransport.Acquisition {
+                        val started = SystemClock.elapsedRealtimeNanos()
+                        val bytes = ByteArrayOutputStream()
+                        val failure = AtomicReference<Throwable?>(null)
+                        val actualEof = java.util.concurrent.atomic.AtomicBoolean(false)
+                        var descriptor: ParcelFileDescriptor? = null
+                        var reader: Thread? = null
+                        try {
+                            check(started < deadlineNanos) { "QUALIFICATION_OWNER_PIPE_DEADLINE" }
+                            val acquired = automation.executeShellCommand(apiCommand)
+                            descriptor = acquired
+                            reader = Thread {
+                                try {
+                                    ParcelFileDescriptor.AutoCloseInputStream(acquired).use { input ->
+                                        val buffer = ByteArray(4096)
+                                        while (true) {
+                                            val count = input.read(buffer)
+                                            if (count < 0) { actualEof.set(true); break }
+                                            if (count > 0) synchronized(bytes) { bytes.write(buffer, 0, count) }
+                                        }
+                                    }
+                                } catch (error: Exception) { failure.compareAndSet(null, error) }
+                            }.also { it.start() }
+                            val remainingMillis = (deadlineNanos - SystemClock.elapsedRealtimeNanos()) / 1_000_000L
+                            if (remainingMillis > 0) reader.join(remainingMillis)
+                        } catch (error: Exception) { failure.compareAndSet(null, error) }
+                        val eof = actualEof.get() && reader?.isAlive == false && failure.get() == null
+                        if (!eof) runCatching { descriptor?.close() }.exceptionOrNull()?.let {
+                            failure.compareAndSet(null, it)
+                        }
+                        val raw = synchronized(bytes) { bytes.toByteArray() }
+                        val error = failure.get()?.toString() ?: if (!eof) "QUALIFICATION_OWNER_PIPE_TIMEOUT_OR_INCOMPLETE" else ""
+                        val observedNanos = SystemClock.elapsedRealtimeNanos()
+                        writeJson("qualification-owner-pipe-${++ownerPipeSequence}.json", JSONObject()
+                            .put("kind", "one_owned_public_shell_byte_acquisition_not_identity_or_os_exit_proof")
+                            .put("public_api_command", apiCommand).put("script_path", apiCommand.removePrefix("sh "))
+                            .put("pid", pid).put("nonce", nonce)
+                            .put("deadline_elapsed_realtime_nanos", deadlineNanos.toString())
+                            .put("started_elapsed_realtime_nanos", started.toString())
+                            .put("snapshot_elapsed_realtime_nanos", observedNanos.toString())
+                            .put("descriptor_acquired", descriptor != null).put("actual_descriptor_eof", eof)
+                            .put("reader_alive_at_snapshot", reader?.isAlive ?: JSONObject.NULL)
+                            .put("raw_state", if (eof) "EOF_COMPLETED_BYTES" else if (raw.isNotEmpty())
+                                "PARTIAL_BYTES_AT_SNAPSHOT" else "NO_BYTES_OBSERVED_AT_SNAPSHOT")
+                            .put("raw_stdout_b64", if (descriptor != null) Base64.encodeToString(raw, Base64.NO_WRAP) else JSONObject.NULL)
+                            .put("raw_bytes", if (descriptor != null) raw.size else JSONObject.NULL)
+                            .put("raw_sha256", if (descriptor != null) sha(raw) else JSONObject.NULL)
+                            .put("error", error).put("native_os_direct_exit", "UNOBSERVED")
+                            .put("per_command_status_kind", "encoded_script_status_not_native_os_direct_exit")
+                            .put("completion_semantics", "five_results_share_one_descriptor_eof_marker_is_not_eof"))
+                        // Producer checks this same until after submission AND this receipt's fsync cost.
+                        return QualificationOwnerShellTransport.Acquisition(raw, eof, error)
+                    }
+                }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos)
             fun requireOwner(deadline: Long, cleanup: Boolean = false): OwnedProcessLifecycle.Owner {
                 gate(deadline, cleanup)
                 val owner = checkNotNull(targetOwner) { "QUALIFICATION_OWNER_UNKNOWN" }
@@ -570,7 +632,8 @@ class TongyiWholeEngineeringInstrumentation {
                 check(device.currentPackageName == TARGET && shell("pidof $TARGET").trim() == owner.pid) {
                     "QUALIFICATION_TARGET_NOT_CURRENT"
                 }
-                processes.requireAlive(owner, readDeadline(deadline))
+                if (cleanup) processes.requireAlive(owner, readDeadline(deadline))
+                else ownerScope.requireAlive(owner, readDeadline(deadline))
                 check(automation.rootInActiveWindow?.packageName?.toString() == TARGET) { "QUALIFICATION_ROOT_NOT_OWNED" }
                 gate(deadline, cleanup)
                 return owner
