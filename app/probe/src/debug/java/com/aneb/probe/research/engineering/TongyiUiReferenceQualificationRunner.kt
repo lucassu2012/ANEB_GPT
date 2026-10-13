@@ -15,6 +15,9 @@ class TongyiUiReferenceQualificationRunner(
     data class StageObservation(val stage: Stage, val frame: TongyiPreparationRunner.Frame)
     /** Acquisition namespace only; these are not accepted UIQ stages or reusable references. */
     data class SourceObservation(val sourceLabel: String, val frame: Frame)
+    enum class SourcePhase { OWNED_LAUNCH, INITIAL_READINESS, SOURCE_ACQUISITION, SOURCE_VALIDATION, SECOND_READINESS, PAIR_VALIDATION }
+    data class SourceRejection(val phase: SourcePhase, val sourceLabel: String, val frame: Frame?,
+        val retentionAttempted: Boolean, val retained: Boolean, val retentionFailure: String?)
     data class Result(
         val state: String,
         val sendCalls: String,
@@ -23,6 +26,7 @@ class TongyiUiReferenceQualificationRunner(
         val retainedStages: List<StageObservation>,
         val referenceAccepted: Boolean = false,
         val retainedSources: List<SourceObservation> = emptyList(),
+        val sourceRejection: SourceRejection? = null,
     )
 
     /** Only this external Android/UI/OS boundary may be substituted in HOST tests. */
@@ -38,6 +42,9 @@ class TongyiUiReferenceQualificationRunner(
         fun retainSource(sourceLabel: String, observed: Frame): Boolean = false
         /** Best-effort cached originals only; rejection diagnostics never grant an accepted action binding. */
         fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean = false
+        /** Source metadata scaffold; default preserves the existing best-effort rejection seam. No fresh acquisition. */
+        fun retainRejectedSourceObservation(phase: SourcePhase, sourceLabel: String, observed: Frame,
+            reason: String, deadlineNanos: Long): Boolean = retainRejectedObservation(Stage.HOME, observed, reason, deadlineNanos)
         /** Only three roles; fresh owner/Node revalidation performs no extra PNG or diagnostic capture. */
         fun clickNamedCurrent(role: NamedClick, observed: TongyiPreparationRunner.Frame,
             node: TongyiPreparationRunner.Node): Boolean
@@ -63,6 +70,17 @@ class TongyiUiReferenceQualificationRunner(
         var reason: String? = null
         var completed = false
         var cleaned = false
+        var sourcePhase = SourcePhase.OWNED_LAUNCH
+        var sourceLabel = "source-home-1"
+        var sourceUntil = deadline
+        var sourceFrame: Frame? = null
+        var sourceRejection: SourceRejection? = null
+        fun sourceContext(phase: SourcePhase, label: String, until: Long, observed: Frame? = null) {
+            sourcePhase = phase
+            sourceLabel = label
+            sourceUntil = until
+            sourceFrame = observed
+        }
         fun gate(limit: Long = deadline) {
             check(clock.nowNanos() < minOf(deadline, limit) && !File(directory, "CANCEL").exists()) {
                 "QUALIFICATION_EXPIRED_OR_CANCELLED"
@@ -388,8 +406,10 @@ class TongyiUiReferenceQualificationRunner(
             }
         }
         fun state(until: Long): Frame {
+            if (sourceInspection) sourceFrame = null // A failing query must not relabel the previous Frame as current.
             gate(until)
             val value = android.currentState(until)
+            if (sourceInspection) sourceFrame = value
             gate(until)
             check(value.menuArgbSha256 == null) { "READINESS_MUST_NOT_ACQUIRE_CANONICAL_PIXELS" }
             return validate(value)
@@ -444,14 +464,20 @@ class TongyiUiReferenceQualificationRunner(
             android.launchOwned(deadline)
             gate()
             val homeUntil = limit(TongyiEngineeringRunner.READY_NANOS)
+            if (sourceInspection) sourceContext(SourcePhase.INITIAL_READINESS, "source-home-1", homeUntil)
             await(homeUntil, ::home)
             if (sourceInspection) {
                 repeat(2) { index ->
                     val until = if (index == 0) homeUntil else limit(TongyiEngineeringRunner.READY_NANOS)
-                    if (index > 0) await(until, ::home)
+                    val label = "source-home-${index + 1}"
+                    if (index > 0) {
+                        sourceContext(SourcePhase.SECOND_READINESS, label, until)
+                        await(until, ::home)
+                    }
+                    sourceContext(SourcePhase.SOURCE_ACQUISITION, label, until)
                     gate(until)
                     val observed = android.currentFrame(menuPixels = true)
-                    val label = "source-home-${index + 1}"
+                    sourceContext(SourcePhase.SOURCE_VALIDATION, label, until, observed)
                     // Preserve the returned originals even when later source validation rejects them.
                     check(android.retainSource(label, observed)) { "SOURCE_ORIGINALS_NOT_RETAINED" }
                     sources.add(SourceObservation(label, observed))
@@ -459,6 +485,7 @@ class TongyiUiReferenceQualificationRunner(
                     validate(observed)
                     menu(observed, requireReference = false)
                     if (index > 0) {
+                        sourceContext(SourcePhase.PAIR_VALIDATION, label, until, observed)
                         check(observed == sources.first().frame) { "SOURCE_HOME_PAIR_UNSTABLE" }
                         check(observed !== sources.first().frame) { "SOURCE_HOME_REUSED_FRAME" }
                     }
@@ -497,6 +524,20 @@ class TongyiUiReferenceQualificationRunner(
             }
         } catch (failure: Exception) {
             reason = failure.message ?: failure.javaClass.simpleName
+            if (sourceInspection) {
+                val returned = sourceFrame
+                var saved = false
+                var retentionFailure: String? = null
+                if (returned != null) try {
+                    saved = android.retainRejectedSourceObservation(sourcePhase, sourceLabel, returned,
+                        checkNotNull(reason), minOf(deadline, sourceUntil))
+                    if (!saved) retentionFailure = "REJECTION_DIAGNOSTIC_NOT_RETAINED"
+                } catch (retention: Exception) {
+                    retentionFailure = retention.javaClass.simpleName + ":" + (retention.message ?: "UNKNOWN")
+                }
+                // Diagnostic failure never replaces the primary rejection or changes accepted-source/cleanup facts.
+                sourceRejection = SourceRejection(sourcePhase, sourceLabel, returned, returned != null, saved, retentionFailure)
+            }
         } finally {
             // Owned closure is still attempted on expiry/cancel; it cannot rescue an incomplete path.
             cleaned = try { android.cleanupOwned() } catch (_: Exception) { false }
@@ -508,6 +549,6 @@ class TongyiUiReferenceQualificationRunner(
         val mode = if (sourceInspection) "UI_SOURCE_INSPECTION" else "UI_REFERENCE_QUALIFICATION"
         return Result(if (completed && cleaned) "${mode}_CLOSED" else "${mode}_UNKNOWN",
             "0", cleaned, reason ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null, retained.toList(),
-            retainedSources = sources.toList())
+            retainedSources = sources.toList(), sourceRejection = sourceRejection)
     }
 }
