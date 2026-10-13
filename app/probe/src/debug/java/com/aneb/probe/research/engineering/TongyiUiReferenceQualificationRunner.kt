@@ -31,6 +31,8 @@ class TongyiUiReferenceQualificationRunner(
         fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame
         /** True requires this exact returned Frame's complete owned raw stage bundle to be retained. */
         fun retainStage(stage: Stage, observed: TongyiPreparationRunner.Frame): Boolean
+        /** Best-effort cached originals only; rejection diagnostics never grant an accepted action binding. */
+        fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean = false
         /** Only three roles; fresh owner/Node revalidation performs no extra PNG or diagnostic capture. */
         fun clickNamedCurrent(role: NamedClick, observed: TongyiPreparationRunner.Frame,
             node: TongyiPreparationRunner.Node): Boolean
@@ -393,8 +395,17 @@ class TongyiUiReferenceQualificationRunner(
             check(retained.none { it.stage == stage }) { "QUALIFICATION_STAGE_ALREADY_CONSUMED" }
             val observed = android.currentFrame(stage == Stage.HOME)
             gate(until)
-            validate(observed)
-            check(predicate(observed)) { "CURRENT_STAGE_CHANGED_DURING_ACQUISITION" }
+            try {
+                validate(observed)
+                check(predicate(observed)) { "CURRENT_STAGE_CHANGED_DURING_ACQUISITION" }
+            } catch (failure: Exception) {
+                // Acquisition has returned a complete Frame. Retention must not replace its original failure.
+                runCatching {
+                    android.retainRejectedObservation(stage, observed,
+                        failure.message ?: failure.javaClass.simpleName, minOf(deadline, until))
+                }
+                throw failure
+            }
             check(android.retainStage(stage, observed)) { "STAGE_ORIGINALS_NOT_RETAINED" }
             gate(until)
             retained.add(StageObservation(stage, observed))
