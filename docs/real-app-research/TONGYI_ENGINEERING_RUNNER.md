@@ -1,5 +1,17 @@
 # 通义普通文本私有工程采集器
 
+## 显式只读 UI_SOURCE_INSPECTION
+
+［KNOWN｜HIGH］`--ui-source-inspection` 必须与固定 release 的 `execution_mode=UI_SOURCE_INSPECTION` 同时出现，并仍需 `--execute-new-feature-release`。这是同一 HOST/Native/private-core 的一次新 create-once 事务，不是 W1/C1 采集、input-only UIQ 重试或新工具。`pair_id-SOURCE` 和 `-SOURCE_CONSUMED.json` 独立消费，`retry_allowed=false`；旧 r2 的 UNKNOWN 及其原件不改变。
+
+［KNOWN｜HIGH］该路径通过既有 `run_pair` → `TongyiWholeEngineeringInstrumentation` → `TongyiUiReferenceQualificationRunner.runSourceInspectionOnce`。后者及 Android `retainSource` 是明确新增的公开边界，不把缺符号/编译错误冒称既有 API 的自然 RED。软件测试只替换外部 Android/OS/time/file 边界；不能证明实际设备资格。
+
+［KNOWN｜HIGH］只观察两个独立当前 HOME，分别标记 `source-home-1`、`source-home-2`，不加入原 UIQ 六个 Stage。每次仍为 Native-before → 原始 UiAutomator XML → 公开 UiAutomation 截图 → Native-after；恰好一张截图/一份 software Bitmap，同一 Bitmap 生成 PNG 和原封不动的 `ANEB807_MENU_ARGB_V1` canonical digest。保存并逐字节读回四份真实原件及 bytes/SHA；两个不同 observation ID、顺序时钟、owner、显示/root 和完整当前结构绑定必须闭合。两个 menu digest 必须存在且完全相等；不要求它等于旧离线 MENU_SHA256，不做 normalization、容差、遮罩或自动 repin。
+
+［KNOWN｜HIGH］这是 source acquisition/retention/owned cleanup 闭合，绝非 reference 接受：`reference_accepted=false`、`accepted_stages=[]`、`retained_stages=[]`、SEND0、capture `NOT_STARTED`、metrics `null`、formal0、RPI `not_computed`。不点击菜单/新会话/输入框，不 TYPE/清草稿/SEND/IME/Enter，不录像或切网络。原 PREP180/READY20/input5/HOST220 限制及 reader 原数据保留的 update/restore/companion 清场不变。
+
+［KNOWN｜HIGH］source 模式每个已取得原件在后续检查前保存；缺原件、不可读、过期、owner/结构漂移或两幅 digest 不同，均保存实际完整或 partial 原件并停止为 UNKNOWN/STOPPED，不重试、不会改旧18ac常量。HOST原件pin失败也保留已拉回的全部文件，不把未知发送归零。实际 source identity、两套原件和当前手机资格仍由 Root 独立检查；只有另行记录的 Root 决策才能接受 versioned current FRAME 并同步常量/直接受影响夹具/卡。本功能本身不授权手机、不接纳参考、不放行输入。
+
 ［KNOWN｜HIGH］这是现有 `:probe` 的 Debug/test-only 功能，不是第二个产品、Windows GUI 的替代工具、生产发布或 M6 样本入口。正式新增槽为 0。它不计算 TTFR/TTFC/Completion/Stall/RPI，也不判断回复正确性或网络性能；原视频语义覆盖和后台模型/会话身份保留 UNKNOWN。
 
 ## 整件入口

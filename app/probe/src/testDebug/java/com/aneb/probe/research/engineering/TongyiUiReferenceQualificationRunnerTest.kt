@@ -15,6 +15,97 @@ import java.io.File
 class TongyiUiReferenceQualificationRunnerTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun inspectsTwoIndependentHomeSourcesWithoutActionsOrAcceptingAnyUiqStage() {
+        val home = homeFrame("home").copy(menuArgbSha256 = "f".repeat(64))
+        val directory = File(temporary.root, "source-one")
+        val android = SourceAndroid(listOf(home, home.copy()), directory)
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-one", directory)
+
+        assertEquals("UI_SOURCE_INSPECTION_CLOSED", result.state)
+        assertNull(result.reason)
+        assertEquals("0", result.sendCalls)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertEquals(listOf("source-home-1", "source-home-2"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(2, android.acquired.size)
+        assertNotSame(android.acquired[0], android.acquired[1])
+        assertEquals(android.acquired, result.retainedSources.map { it.frame })
+        result.retainedSources.zip(android.acquired).forEach { (retained, acquired) -> assertSame(acquired, retained.frame) }
+        assertEquals(listOf("f".repeat(64), "f".repeat(64)), result.retainedSources.map { it.frame.menuArgbSha256 })
+        assertEquals(0, android.businessActions)
+        assertEquals(8, android.originals.size)
+        android.originals.forEach { (name, raw) -> assertArrayEquals(raw, File(directory, name).readBytes()) }
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals(listOf(Stage.HOME, Stage.DRAWER, Stage.NEW_EMPTY, Stage.EDITOR_EMPTY, Stage.OWN_DRAFT, Stage.OWN_CLEARED), Stage.values().toList())
+        try {
+            TongyiUiReferenceQualificationRunner(android, System::nanoTime).runSourceInspectionOnce("source-one", directory)
+            fail("consumed source transaction must not replay")
+        } catch (expected: IllegalStateException) {
+            assertEquals("QUALIFICATION_ALREADY_CONSUMED_NO_RETRY", expected.message)
+        }
+        assertEquals(2, android.acquired.size)
+    }
+
+    @Test fun unequalIndependentHomePixelsStopUnknownAndRetainBothActualSourcesWithoutActions() {
+        val home = homeFrame("home")
+        val directory = File(temporary.root, "source-unstable")
+        val android = SourceAndroid(listOf(home.copy(menuArgbSha256 = "f".repeat(64)),
+            home.copy(menuArgbSha256 = "e".repeat(64))), directory)
+
+        val result = TongyiUiReferenceQualificationRunner(android, System::nanoTime)
+            .runSourceInspectionOnce("source-unstable", directory)
+
+        assertEquals("UI_SOURCE_INSPECTION_UNKNOWN", result.state)
+        assertEquals("SOURCE_HOME_PAIR_UNSTABLE", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertFalse(result.referenceAccepted)
+        assertTrue(result.retainedStages.isEmpty())
+        assertEquals(listOf("source-home-1", "source-home-2"), result.retainedSources.map { it.sourceLabel })
+        assertEquals(listOf("f".repeat(64), "e".repeat(64)), result.retainedSources.map { it.frame.menuArgbSha256 })
+        assertEquals(2, android.acquired.size)
+        assertEquals(0, android.businessActions)
+        assertTrue(result.ownedCleanup && android.cleaned)
+        assertEquals(8, android.originals.size)
+        android.originals.forEach { (name, raw) -> assertArrayEquals(raw, File(directory, name).readBytes()) }
+    }
+
+    /** Synthetic Android/time/file boundary only; real core decides source stability and action policy. */
+    private class SourceAndroid(private val samples: List<Frame>, private val directory: File) : TongyiUiReferenceQualificationRunner.Android {
+        val acquired = mutableListOf<Frame>()
+        val originals = linkedMapOf<String, ByteArray>()
+        var businessActions = 0
+        var cleaned = false
+        override fun launchOwned(deadlineNanos: Long) { check(System.nanoTime() < deadlineNanos) }
+        override fun currentState(deadlineNanos: Long): Frame = samples.getOrElse(acquired.size) { samples.last() }.copy(menuArgbSha256 = null)
+        override fun currentFrame(menuPixels: Boolean): Frame {
+            check(menuPixels && acquired.size < 2)
+            val observed = samples[acquired.size].copy()
+            val label = "source-home-${acquired.size + 1}"
+            // These opaque fixture bytes are acquired at the external boundary, not measured Native/PNG/XML.
+            for (suffix in listOf("native-before.json", "hierarchy.xml", "screen.png", "native-after.json")) {
+                val name = "$label-$suffix"
+                val raw = "HOST_ONLY_OPAQUE_EXTERNAL_$name".toByteArray(Charsets.UTF_8)
+                originals[name] = raw
+                check(File(directory, name).createNewFile())
+                File(directory, name).writeBytes(raw)
+            }
+            acquired.add(observed)
+            return observed
+        }
+        override fun retainSource(sourceLabel: String, observed: Frame): Boolean {
+            check(observed === acquired.last() && sourceLabel == "source-home-${acquired.size}")
+            return originals.filterKeys { it.startsWith("$sourceLabel-") }.all { (name, raw) -> File(directory, name).readBytes().contentEquals(raw) }
+        }
+        override fun retainStage(stage: Stage, observed: Frame): Boolean { businessActions++; return false }
+        override fun clickNamedCurrent(role: NamedClick, observed: Frame, node: Node): Boolean { businessActions++; return false }
+        override fun setTextCurrent(observed: Frame, editor: Node, text: String): Boolean { businessActions++; return false }
+        override fun sleepMillis(milliseconds: Long) {}
+        override fun cleanupOwned(): Boolean { cleaned = true; return true }
+    }
+
     @Test fun qualifiesWholeCurrentUiPathWithoutPromotingReferenceOrRelaxingOrdinaryPreparation() {
         val home = homeFrame("home")
         val newEmpty = homeFrame("new")
