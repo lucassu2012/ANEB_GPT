@@ -2,8 +2,107 @@ package com.aneb.probe.research.engineering
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.FileOutputStream
+import java.nio.file.Files
 
 class QualificationOwnerProbeScopeTest {
+    @Test fun retainsPackageMismatchWithoutExecutingShortCircuitedPidofOrReplacingPrimary() {
+        // Synthetic external package/file boundary; PID42 is not a saved physical observation.
+        val scope = targetCurrentScope()
+        val diagnostic = Files.createTempDirectory("target-current-package-null-").resolve("rejected.txt").toFile()
+        var pidofCalls = 0
+        var retained: QualificationOwnerProbeScope.TargetCurrentRejection? = null
+        val failure = runCatching {
+            scope.requireTargetCurrent("synthetic.target", "42", null,
+                readPidof = { pidofCalls++; error("short-circuited pidof must not run") },
+                retainRejection = { snapshot ->
+                    check(diagnostic.createNewFile())
+                    val raw = snapshot.toString().toByteArray(Charsets.UTF_8)
+                    FileOutputStream(diagnostic).use { it.write(raw); it.fd.sync() }
+                    assertArrayEquals(raw, diagnostic.readBytes())
+                    retained = snapshot
+                })
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertEquals("QUALIFICATION_TARGET_NOT_CURRENT", failure?.message)
+        assertEquals(0, pidofCalls)
+        assertTrue("the same-call rejected package observation must be retained create-once", diagnostic.isFile)
+        val snapshot = requireNotNull(retained)
+        assertEquals("synthetic.target", snapshot.expectedPackage)
+        assertEquals("42", snapshot.expectedPid)
+        assertNull(snapshot.currentPackage)
+        assertFalse(snapshot.pidofAttempted)
+        assertNull(snapshot.rawPidof)
+    }
+
+    @Test fun retainsExactRawPidofMismatchFromOnlyOriginalQuery() {
+        val scope = targetCurrentScope()
+        val diagnostic = Files.createTempDirectory("target-current-pidof-").resolve("rejected.txt").toFile()
+        val rawPidof = "43\n"
+        var pidofCalls = 0
+        var retained: QualificationOwnerProbeScope.TargetCurrentRejection? = null
+        val failure = runCatching {
+            scope.requireTargetCurrent("synthetic.target", "42", "synthetic.target",
+                readPidof = { pidofCalls++; rawPidof },
+                retainRejection = { snapshot ->
+                    check(diagnostic.createNewFile())
+                    val raw = snapshot.toString().toByteArray(Charsets.UTF_8)
+                    FileOutputStream(diagnostic).use { it.write(raw); it.fd.sync() }
+                    assertArrayEquals(raw, diagnostic.readBytes())
+                    retained = snapshot
+                })
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertEquals("QUALIFICATION_TARGET_NOT_CURRENT", failure?.message)
+        assertEquals(1, pidofCalls)
+        assertTrue("the same-call rejected pidof output must be retained untrimmed", diagnostic.isFile)
+        val snapshot = requireNotNull(retained)
+        assertEquals("synthetic.target", snapshot.expectedPackage)
+        assertEquals("42", snapshot.expectedPid)
+        assertEquals("synthetic.target", snapshot.currentPackage)
+        assertTrue(snapshot.pidofAttempted)
+        assertEquals(rawPidof, snapshot.rawPidof)
+    }
+
+    @Test fun acceptsMatchingPackageAndOriginalPidofWithoutFailureDiagnostic() {
+        val scope = targetCurrentScope()
+        var pidofCalls = 0
+        var diagnostics = 0
+        val failure = runCatching {
+            scope.requireTargetCurrent("synthetic.target", "42", "synthetic.target",
+                readPidof = { pidofCalls++; "42\n" },
+                retainRejection = { diagnostics++ })
+        }.exceptionOrNull()
+        assertNull("the original matching target-current guard must still accept", failure)
+        assertEquals(1, pidofCalls)
+        assertEquals(0, diagnostics)
+    }
+
+    @Test fun preservesTargetCurrentPrimaryWhenDiagnosticSinkFails() {
+        val scope = targetCurrentScope()
+        val storageFailure = java.io.IOException("synthetic external diagnostic storage failure")
+        var pidofCalls = 0
+        var diagnostics = 0
+        val failure = runCatching {
+            scope.requireTargetCurrent("synthetic.target", "42", null,
+                readPidof = { pidofCalls++; error("short-circuited pidof must not run") },
+                retainRejection = { diagnostics++; throw storageFailure })
+        }.exceptionOrNull()
+        assertEquals(0, pidofCalls)
+        assertEquals(1, diagnostics)
+        assertTrue("the original target-current rejection must survive diagnostic sink failure",
+            failure is IllegalStateException)
+        assertEquals("QUALIFICATION_TARGET_NOT_CURRENT", failure?.message)
+        assertNotSame(storageFailure, failure)
+    }
+
+    private fun targetCurrentScope() = QualificationOwnerProbeScope(
+        object : QualificationOwnerProbeScope.Transport {
+            override fun execute(command: String, deadlineNanos: Long): OwnedProcessLifecycle.ShellResult =
+                error("unexpected external owner query: $command")
+            override fun sleepMillis(milliseconds: Long) = error("unexpected external wait")
+        }, SyntheticClock(100_000_000_000L))
+
     @Test fun closesExactOwnedIdentityWithinCallerInputBudgetUsingCapableGroupedOsTransport() {
         val clock = SyntheticClock(100_000_000_000L)
         val rawCommand = TongyiEngineeringRunner.PACKAGE + "\u0000\u0000\u0000\u0000"

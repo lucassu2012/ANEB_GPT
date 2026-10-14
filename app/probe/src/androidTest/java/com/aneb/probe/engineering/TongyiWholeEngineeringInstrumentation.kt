@@ -84,6 +84,9 @@ class TongyiWholeEngineeringInstrumentation {
                 .put("rejected_observation_retention", backend.qualificationRejectionRetention() ?: JSONObject.NULL)
                 .put("sampling_claim", "sequential_public_sources_not_atomic_not_equivalent_not_accepted_reference")
                 .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only").put("boot_id", backend.bootId)
+            if (qualificationOnly) backend.qualificationTargetCurrentDiagnostic()?.let {
+                terminal.put("target_current_rejection_diagnostic", it)
+            }
             if (sourceInspectionOnly) {
                 terminal.put("retained_sources", backend.sourceInspectionRecords()).put("accepted_stages", JSONArray())
                 terminal.put("source_rejection", result.sourceRejection?.let { rejected ->
@@ -184,6 +187,7 @@ class TongyiWholeEngineeringInstrumentation {
         private val qualificationStageRecords = JSONArray()
         private val sourceInspectionRecords = JSONArray()
         private var qualificationRejectionRecord: JSONObject? = null
+        private var qualificationTargetCurrentRejectionRecord: JSONObject? = null
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
@@ -527,6 +531,7 @@ class TongyiWholeEngineeringInstrumentation {
         fun sourceInspectionRecords() = JSONArray(sourceInspectionRecords.toString())
 
         fun qualificationRejectionRetention() = qualificationRejectionRecord?.let { JSONObject(it.toString()) }
+        fun qualificationTargetCurrentDiagnostic() = qualificationTargetCurrentRejectionRecord?.let { JSONObject(it.toString()) }
 
         fun sealQualificationTerminal(value: JSONObject) {
             val raw = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
@@ -636,6 +641,14 @@ class TongyiWholeEngineeringInstrumentation {
                         return QualificationOwnerShellTransport.Acquisition(raw, eof, error)
                     }
                 }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos)
+            fun preserveAcquired(name: String, bytes: ByteArray, deadline: Long = preparationDeadline) {
+                gate(deadline)
+                val file = File(root, name)
+                check(file.createNewFile()) { "SOURCE_ORIGINAL_ALREADY_EXISTS_NO_RETRY" }
+                FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
+                check(file.readBytes().contentEquals(bytes)) { "SOURCE_ORIGINAL_READBACK_FAILED" }
+                gate(deadline)
+            }
             fun requireOwner(deadline: Long, cleanup: Boolean = false): OwnedProcessLifecycle.Owner {
                 gate(deadline, cleanup)
                 val owner = checkNotNull(targetOwner) { "QUALIFICATION_OWNER_UNKNOWN" }
@@ -644,7 +657,41 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 val currentPackage = if (qualificationOnly && !cleanup)
                     idleTimeoutScope.run { device.currentPackageName } else device.currentPackageName
-                check(currentPackage == TARGET && shell("pidof $TARGET").trim() == owner.pid) {
+                if (qualificationOnly && !cleanup) ownerScope.requireTargetCurrent(TARGET, owner.pid, currentPackage,
+                    readPidof = { shell("pidof $TARGET") },
+                    retainRejection = { snapshot ->
+                        check(qualificationTargetCurrentRejectionRecord == null) { "TARGET_CURRENT_DIAGNOSTIC_ALREADY_ATTEMPTED" }
+                        val until = minOf(deadline, preparationDeadline)
+                        val report = JSONObject().put("kind", "qualification_target_current_same_call_scalar_diagnostic")
+                            .put("status", "NOT_RETAINED").put("reason", "QUALIFICATION_TARGET_NOT_CURRENT")
+                            .put("diagnostic_only", true).put("accepted_stage", false).put("reference_accepted", false)
+                            .put("draft_cleanup_authority", false).put("owner_guard_deadline_nanos", deadline.toString())
+                            .put("preparation_until_nanos", preparationDeadline.toString())
+                            .put("diagnostic_until_nanos", until.toString())
+                            .put("deadline_role", "existing_bound_not_observation_timestamp").put("write_attempted", false)
+                        qualificationTargetCurrentRejectionRecord = report
+                        try {
+                            gate(until)
+                            report.put("expected_package", snapshot.expectedPackage).put("expected_pid", snapshot.expectedPid)
+                                .put("expected_uid", owner.uid).put("expected_start_ticks", owner.startTicks)
+                                .put("current_package", snapshot.currentPackage ?: JSONObject.NULL)
+                                .put("pidof_attempted", snapshot.pidofAttempted).put("raw_pidof", snapshot.rawPidof ?: JSONObject.NULL)
+                                .put("pidof_result_kind", if (snapshot.pidofAttempted) "RETURNED_STRING_NO_OS_RC_OR_EOF" else "NOT_INVOKED")
+                                .put("sampling_claim", "same_call_cached_scalar_values_no_new_query_no_frame_no_xml_no_png")
+                                .put("write_attempted", true)
+                            val value = JSONObject(report.toString()).apply { remove("status") }
+                            val raw = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+                            val name = "target-current-rejected-observation.json"
+                            preserveAcquired(name, raw, until)
+                            report.put("artifact", JSONObject().put("path", name).put("bytes", raw.size).put("sha256", sha(raw)))
+                            gate(until)
+                            report.put("status", "RETAINED")
+                        } catch (secondary: Throwable) {
+                            report.put("retention_failure", secondary.javaClass.simpleName + ":" + (secondary.message ?: "UNKNOWN"))
+                            throw secondary // Public guard keeps this secondary; the original mismatch stays primary.
+                        }
+                    })
+                else check(currentPackage == TARGET && shell("pidof $TARGET").trim() == owner.pid) {
                     "QUALIFICATION_TARGET_NOT_CURRENT"
                 }
                 if (cleanup) processes.requireAlive(owner, readDeadline(deadline))
@@ -722,14 +769,6 @@ class TongyiWholeEngineeringInstrumentation {
                     .put("root_bounds", boundsJson(value.frame)).put("elapsed_realtime_nanos", value.nanos.toString())
                     .apply { if (sourceLabel != null) put("source_label", sourceLabel) }
                     .toString(2) + "\n").toByteArray(Charsets.UTF_8)
-            fun preserveAcquired(name: String, bytes: ByteArray, deadline: Long = preparationDeadline) {
-                gate(deadline)
-                val file = File(root, name)
-                check(file.createNewFile()) { "SOURCE_ORIGINAL_ALREADY_EXISTS_NO_RETRY" }
-                FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
-                check(file.readBytes().contentEquals(bytes)) { "SOURCE_ORIGINAL_READBACK_FAILED" }
-                gate(deadline)
-            }
             fun freshBinding(observed: TongyiPreparationRunner.Frame, node: TongyiPreparationRunner.Node, deadline: Long): Projection {
                 check(captured?.frame === observed && retainedFrame === observed &&
                     observed.nodes.singleOrNull { it.id == node.id } == node) { "EXACT_RETAINED_FRAME_NODE_REQUIRED" }
