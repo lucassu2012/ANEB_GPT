@@ -16,9 +16,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.AndroidJUnit4
+import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
+import com.aneb.probe.research.engineering.PublicUiIdleTimeoutScope
 import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
 import com.aneb.probe.research.engineering.QualificationOwnerShellTransport
 import com.aneb.probe.research.engineering.TongyiEngineeringRunner
@@ -537,6 +539,13 @@ class TongyiWholeEngineeringInstrumentation {
         /** Separate input-only authority acquisition. Never enters legacy preparation/collection actions. */
         fun qualificationAndroid(): TongyiUiReferenceQualificationRunner.Android {
             check((qualificationOnly || sourceInspectionOnly) && !preparationOnly)
+            val idleTimeoutScope = PublicUiIdleTimeoutScope(
+                readTimeoutMillis = { Configurator.getInstance().getWaitForIdleTimeout() },
+                writeTimeoutMillis = { value ->
+                    Configurator.getInstance().setWaitForIdleTimeout(value)
+                    Unit
+                },
+            )
             data class Projection(val frame: TongyiPreparationRunner.Frame,
                 val handles: List<AccessibilityNodeInfo>, val nanos: Long, val windowId: Int)
             data class GraphicsBinding(val owner: OwnedProcessLifecycle.Owner, val windowId: Int,
@@ -633,7 +642,9 @@ class TongyiWholeEngineeringInstrumentation {
                 check(targetPid == owner.pid && owner.uid == targetUid && owner.commandLine == listOf(TARGET)) {
                     "QUALIFICATION_OWNER_CHANGED"
                 }
-                check(device.currentPackageName == TARGET && shell("pidof $TARGET").trim() == owner.pid) {
+                val currentPackage = if (qualificationOnly && !cleanup)
+                    idleTimeoutScope.run { device.currentPackageName } else device.currentPackageName
+                check(currentPackage == TARGET && shell("pidof $TARGET").trim() == owner.pid) {
                     "QUALIFICATION_TARGET_NOT_CURRENT"
                 }
                 if (cleanup) processes.requireAlive(owner, readDeadline(deadline))
@@ -811,7 +822,9 @@ class TongyiWholeEngineeringInstrumentation {
                     if (sourceInspectionOnly) preserveAcquired(prefix + "native-before.json", beforeBytes, captureDeadline)
                     val xmlFile = File(root, prefix + "hierarchy.xml")
                     check(xmlFile.createNewFile()) { "QUALIFICATION_XML_ALREADY_EXISTS_NO_RETRY" }
-                    device.dumpWindowHierarchy(xmlFile) // Exactly one raw XML acquisition, at this capture only.
+                    // The same single raw XML acquisition; SOURCE keeps its original SDK policy.
+                    if (qualificationOnly) idleTimeoutScope.run { device.dumpWindowHierarchy(xmlFile) }
+                    else device.dumpWindowHierarchy(xmlFile)
                     if (sourceInspectionOnly) FileOutputStream(xmlFile, true).use { it.fd.sync() }
                     val xml = xmlFile.readBytes().also { check(it.isNotEmpty()) { "QUALIFICATION_XML_EMPTY" } }
                     val xmlNanos = SystemClock.elapsedRealtimeNanos()
