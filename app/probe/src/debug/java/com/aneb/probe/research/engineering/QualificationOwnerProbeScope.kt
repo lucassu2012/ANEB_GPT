@@ -11,6 +11,38 @@ class QualificationOwnerProbeScope(
         fun executeOwnerGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult>? = null
     }
 
+    /** Same-call scalar diagnostic only; no Frame, stage, or draft ownership authority. */
+    data class TargetCurrentRejection(
+        val expectedPackage: String,
+        val expectedPid: String,
+        val currentPackage: String?,
+        val pidofAttempted: Boolean,
+        val rawPidof: String?,
+    )
+
+    /** Debug-only guard over the already-returned package and original short-circuited pidof query. */
+    fun requireTargetCurrent(
+        expectedPackage: String,
+        expectedPid: String,
+        currentPackage: String?,
+        readPidof: () -> String,
+        retainRejection: (TargetCurrentRejection) -> Unit,
+    ) {
+        var rawPidof: String? = null
+        val matches = currentPackage == expectedPackage &&
+            readPidof().also { rawPidof = it }.trim() == expectedPid
+        if (!matches) {
+            val primary = IllegalStateException("QUALIFICATION_TARGET_NOT_CURRENT")
+            try {
+                retainRejection(TargetCurrentRejection(expectedPackage, expectedPid, currentPackage,
+                    currentPackage == expectedPackage, rawPidof))
+            } catch (secondary: Throwable) {
+                if (secondary !== primary) primary.addSuppressed(secondary)
+            }
+            throw primary
+        }
+    }
+
     fun requireAlive(owner: OwnedProcessLifecycle.Owner, deadlineNanos: Long) {
         check(owner.pid.matches(Regex("[1-9][0-9]*")) && clock.nowNanos() < deadlineNanos) {
             "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED"
