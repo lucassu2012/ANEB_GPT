@@ -380,6 +380,94 @@ class TongyiUiReferenceQualificationRunnerTest {
         override fun cleanupOwned(): Boolean { cleaned = true; return true }
     }
 
+    @Test fun retainsExactFailedInputAfterTypeRejectionWithoutGrantingDraftOrReplacingPrimaryUnknown() {
+        val started = System.nanoTime()
+        val clock = TongyiEngineeringRunner.MonotonicClock { started } // Synthetic external time, not a production waiver.
+        val inputUntil = started + TongyiEngineeringRunner.INPUT_NANOS
+        val editorEmpty = editorFrame("", showingHint = true)
+        // One synthetic rejected readback, not a reconstruction of the missing physical phone Frame or its cause.
+        val supplied = editorFrame(TongyiEngineeringRunner.PAYLOAD, showingHint = false)
+        val failed = supplied.copy(nodes = supplied.nodes.map { if (it.editable) it.copy(focused = false) else it })
+        val directory = File(temporary.root, "failed-input-one")
+        val diagnostic = File(directory, "HOST_ONLY_failed-input.cached")
+        val diagnosticBytes = failed.toString().toByteArray(Charsets.UTF_8) // HOST-only storage, not Native JSON originals.
+        val boundary = CurrentUiAndroid(linkedMapOf(
+            Stage.HOME to homeFrame("home"),
+            Stage.DRAWER to frame(listOf(
+                node("drawer-root", null, "android.widget.FrameLayout", FULL_ROOT),
+                node("drawer-new-parent", "drawer-root", "android.widget.LinearLayout", Bounds(242,2339,813,2502), clickable = true),
+                node("drawer-new-text", "drawer-new-parent", "android.widget.TextView", Bounds(320,2385,736,2456),
+                    text = "新建对话", resource = "com.aliyun.tongyi:id/tv_new_session"),
+            )),
+            Stage.NEW_EMPTY to homeFrame("new"), Stage.EDITOR_EMPTY to editorEmpty,
+            Stage.OWN_DRAFT to supplied, Stage.OWN_CLEARED to editorFrame("", showingHint = true),
+        ))
+        val attemptedTexts = mutableListOf<String>()
+        var attemptedFrame: Frame? = null
+        var attemptedEditor: Node? = null
+        var cachedFailedInput: Frame? = null
+        var retainedFailedInput: Frame? = null
+        var retainedExpectedFrame: Frame? = null
+        var retainedExpectedEditor: Node? = null
+        var retainedReason: String? = null
+        var retainedUntil: Long? = null
+        val android = object : TongyiUiReferenceQualificationRunner.Android by boundary {
+            override fun setTextCurrent(observed: Frame, editor: Node, text: String): Boolean {
+                check(boundary.scene == Stage.EDITOR_EMPTY && boundary.retained.last().frame === observed)
+                check(observed.nodes.singleOrNull { it.id == editor.id } == editor)
+                check(editor.editable && editor.focused && editor.setTextAvailable && editor.text.isEmpty())
+                check(text == TongyiEngineeringRunner.PAYLOAD)
+                attemptedTexts.add(text) // Simulated external ACTION_SET_TEXT attempt succeeded, then readback refused.
+                attemptedFrame = observed
+                attemptedEditor = editor
+                cachedFailedInput = failed
+                error("QUALIFICATION_READBACK_BINDING_CHANGED")
+            }
+            override fun retainFailedInputObservation(observed: Frame, editor: Node, reason: String,
+                deadlineNanos: Long): Boolean {
+                check(observed === attemptedFrame && editor === attemptedEditor && deadlineNanos == inputUntil)
+                check(reason == "QUALIFICATION_READBACK_BINDING_CHANGED" && !boundary.cleanupAttempted)
+                val cached = checkNotNull(cachedFailedInput)
+                check(cached === failed && observed !== cached)
+                check(diagnostic.createNewFile())
+                FileOutputStream(diagnostic).use { it.write(diagnosticBytes); it.fd.sync() }
+                check(diagnostic.readBytes().contentEquals(diagnosticBytes))
+                retainedFailedInput = cached
+                retainedExpectedFrame = observed
+                retainedExpectedEditor = editor
+                retainedReason = reason
+                retainedUntil = deadlineNanos
+                return true // Only the external cached diagnostic, never OWN_DRAFT/cleanup/reference authority.
+            }
+        }
+        val result = TongyiUiReferenceQualificationRunner(android, clock).runOnce("failed-input-one", directory)
+        println("SYNTHETIC_FAILED_INPUT_PUBLIC_RESULT state=${result.state} reason=${result.reason} " +
+            "send=${result.sendCalls} typeAttempts=${attemptedTexts.size} stages=${result.retainedStages.map { it.stage }} " +
+            "cleanupAttempted=${boundary.cleanupAttempted} ownedCleanup=${result.ownedCleanup} " +
+            "referenceAccepted=${result.referenceAccepted} failedInputCached=${cachedFailedInput === failed} " +
+            "diagnosticRetained=${retainedFailedInput === failed} callerUntil=$inputUntil")
+        assertTrue(directory.isDirectory)
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("UI_REFERENCE_QUALIFICATION_UNKNOWN", result.state)
+        assertEquals("QUALIFICATION_READBACK_BINDING_CHANGED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertEquals(listOf(TongyiEngineeringRunner.PAYLOAD), attemptedTexts)
+        assertEquals(listOf(Stage.HOME, Stage.DRAWER, Stage.NEW_EMPTY, Stage.EDITOR_EMPTY), result.retainedStages.map { it.stage })
+        assertEquals(result.retainedStages.map { it.stage }, boundary.captured)
+        assertTrue(boundary.cleanupAttempted)
+        assertFalse(result.ownedCleanup)
+        assertFalse(result.referenceAccepted)
+        assertSame(failed, cachedFailedInput)
+        assertNotSame(attemptedFrame, cachedFailedInput)
+        assertFalse(failed.nodes.single { it.editable }.focused)
+        assertSame("the exact already-returned failed input must survive the TYPE rejection", failed, retainedFailedInput)
+        assertSame(attemptedFrame, retainedExpectedFrame)
+        assertSame(attemptedEditor, retainedExpectedEditor)
+        assertEquals(result.reason, retainedReason)
+        assertEquals(inputUntil, retainedUntil)
+        assertArrayEquals(diagnosticBytes, diagnostic.readBytes())
+    }
+
     @Test fun qualifiesWholeCurrentUiPathWithoutPromotingReferenceOrRelaxingOrdinaryPreparation() {
         val home = homeFrame("home")
         val newEmpty = homeFrame("new")
