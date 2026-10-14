@@ -548,7 +548,11 @@ class TongyiWholeEngineeringInstrumentation {
                 val observationId: String, val before: Projection, val after: Projection,
                 val files: Map<String, ByteArray>, val xmlFile: File, val xmlNanos: Long, val pngNanos: Long,
                 val sourceLabel: String? = null)
+            data class FailedInput(val expected: TongyiPreparationRunner.Frame, val editor: TongyiPreparationRunner.Node,
+                val actual: TongyiPreparationRunner.Frame, val input: TongyiPreparationRunner.Node,
+                val observationNanos: Long, val nativeUntil: Long, val operation: String)
             var captured: Capture? = null
+            var failedInput: FailedInput? = null
             var sourceReadinessProjection: Projection? = null
             var homeGraphics: GraphicsQualification? = null
             var sourceSequence = 0
@@ -644,6 +648,7 @@ class TongyiWholeEngineeringInstrumentation {
                 return TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom)
             }
             fun project(deadline: Long, cleanup: Boolean = false): Projection {
+                failedInput = null // A new acquisition cannot reuse an earlier attempt's rejected readback.
                 val owner = requireOwner(deadline, cleanup)
                 val handles = ArrayList<AccessibilityNodeInfo>()
                 val values = ArrayList<TongyiPreparationRunner.Node>()
@@ -731,6 +736,7 @@ class TongyiWholeEngineeringInstrumentation {
                 else !node.hint.isNullOrEmpty() && (node.text.isEmpty() || node.text == node.hint)
             return object : TongyiUiReferenceQualificationRunner.Android {
                 override fun launchOwned(deadlineNanos: Long) {
+                    failedInput = null
                     homeGraphics = null
                     this@NativePhone.launchOwned(deadlineNanos)
                 }
@@ -740,6 +746,7 @@ class TongyiWholeEngineeringInstrumentation {
                     }.frame
                 } catch (failure: Exception) { homeGraphics = null; throw failure }
                 override fun awaitOwnedHomeGraphics(deadlineNanos: Long) {
+                    failedInput = null
                     homeGraphics = null
                     gate(deadlineNanos)
                     check(Build.VERSION.SDK_INT >= 21) { "QUALIFICATION_GRAPHICS_UNSUPPORTED_API" }
@@ -781,6 +788,7 @@ class TongyiWholeEngineeringInstrumentation {
                     }
                 }
                 override fun currentFrame(menuPixels: Boolean): TongyiPreparationRunner.Frame {
+                    failedInput = null
                     val qualification = if (menuPixels) checkNotNull(homeGraphics) {
                         "QUALIFICATION_GRAPHICS_PRECONDITION_REQUIRED"
                     } else null
@@ -1040,6 +1048,7 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 override fun clickNamedCurrent(role: TongyiUiReferenceQualificationRunner.NamedClick,
                     observed: TongyiPreparationRunner.Frame, node: TongyiPreparationRunner.Node): Boolean {
+                    failedInput = null
                     check(!sourceInspectionOnly) { "SOURCE_CLICK_FORBIDDEN" }
                     val deadline = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                     check(node.clickable && node.enabled && node.visible && node.packageName == TARGET) { "QUALIFICATION_CLICK_NOT_ALLOWED" }
@@ -1073,6 +1082,7 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 override fun setTextCurrent(observed: TongyiPreparationRunner.Frame,
                     editor: TongyiPreparationRunner.Node, text: String): Boolean {
+                    failedInput = null // Also clear on every aborted/pre-action failure, before any new attempt.
                     check(!sourceInspectionOnly) { "SOURCE_TEXT_FORBIDDEN" }
                     val deadline = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                     check(text == TongyiEngineeringRunner.PAYLOAD || text.isEmpty()) { "QUALIFICATION_TEXT_CAPABILITY_NOT_ALLOWED" }
@@ -1090,7 +1100,12 @@ class TongyiWholeEngineeringInstrumentation {
                         val input = readback.frame.nodes.singleOrNull { it.visible && it.editable && it.packageName == TARGET }
                             ?: error("QUALIFICATION_READBACK_EDITOR_UNKNOWN")
                         check(input.id == editor.id && input.parent == editor.parent && input.className == editor.className &&
-                            input.bounds == editor.bounds && input.focused && input.setTextAvailable) { "QUALIFICATION_READBACK_BINDING_CHANGED" }
+                            input.bounds == editor.bounds && input.focused && input.setTextAvailable) {
+                            // Only this actual returned immutable readback, at this unchanged predicate's refusal.
+                            failedInput = FailedInput(observed, editor, readback.frame, input, readback.nanos,
+                                deadline, if (text.isEmpty()) "CLEAR" else "TYPE")
+                            "QUALIFICATION_READBACK_BINDING_CHANGED"
+                        }
                         if (text.isNotEmpty() && !input.showingHint && input.text == text && input.text.toByteArray(Charsets.UTF_8).size == 239) {
                             ownDraft = input
                             ownDraftOwner = readback.frame.owner
@@ -1106,8 +1121,72 @@ class TongyiWholeEngineeringInstrumentation {
                     gate(deadline)
                     return true
                 }
+                override fun retainFailedInputObservation(observed: TongyiPreparationRunner.Frame,
+                    editor: TongyiPreparationRunner.Node, reason: String, deadlineNanos: Long): Boolean {
+                    val cached = failedInput
+                    failedInput = null // Consume identity once, including mismatched/expired/failed retention.
+                    if (reason != "QUALIFICATION_READBACK_BINDING_CHANGED") return false
+                    if (qualificationRejectionRecord != null) return false // Never overwrite an earlier diagnostic.
+                    val pins = JSONArray()
+                    val report = JSONObject().put("kind", "cached_failed_input_native_diagnostic_only")
+                        .put("status", "NOT_RETAINED").put("reason", reason).put("artifacts", pins)
+                        .put("diagnostic_only", true).put("accepted_stage", false).put("reference_accepted", false)
+                        .put("draft_cleanup_authority", false).put("core_caller_until_nanos", deadlineNanos.toString())
+                        .put("persistence_attempt_nanos", SystemClock.elapsedRealtimeNanos().toString())
+                    qualificationRejectionRecord = report
+                    if (cached == null) {
+                        report.put("retention_failure", "NO_MATCHING_RETURNED_FAILED_INPUT")
+                        return false
+                    }
+                    val until = minOf(deadlineNanos, cached.nativeUntil, preparationDeadline)
+                    report.put("native_input_until_nanos", cached.nativeUntil.toString())
+                        .put("preparation_until_nanos", preparationDeadline.toString())
+                        .put("diagnostic_until_nanos", until.toString())
+                        .put("observation_elapsed_realtime_nanos", cached.observationNanos.toString())
+                        .put("operation", cached.operation)
+                    return try {
+                        check(observed === cached.expected && editor === cached.editor &&
+                            cached.expected.nodes.singleOrNull { it.id == editor.id } === editor &&
+                            cached.actual.nodes.singleOrNull { it.visible && it.editable && it.packageName == TARGET } === cached.input) {
+                            "FAILED_INPUT_CACHE_BINDING_MISMATCH"
+                        }
+                        gate(until)
+                        // Pure immutable-value serialization only. No project/owner/handles/XML/PNG or UI action.
+                        val expected = JSONObject(String(preparationNodeProjection(cached.expected), Charsets.UTF_8))
+                        val actual = JSONObject(String(preparationNodeProjection(cached.actual), Charsets.UTF_8))
+                        val value = JSONObject().put("kind", "public_Android_Native_cached_failed_input_unaccepted")
+                            .put("diagnostic_only", true).put("accepted_stage", false).put("reference_accepted", false)
+                            .put("draft_cleanup_authority", false).put("reason", reason).put("operation", cached.operation)
+                            .put("observation_elapsed_realtime_nanos", cached.observationNanos.toString())
+                            .put("core_caller_until_nanos", deadlineNanos.toString())
+                            .put("native_input_until_nanos", cached.nativeUntil.toString())
+                            .put("diagnostic_until_nanos", until.toString())
+                            .put("actual_native_values", actual).put("expected_native_values", expected)
+                            .put("actual_input", actual.getJSONArray("nodes").getJSONObject(cached.actual.nodes.indexOf(cached.input)))
+                            .put("expected_editor", expected.getJSONArray("nodes").getJSONObject(cached.expected.nodes.indexOf(cached.editor)))
+                            .put("sampling_claim", "already_returned_failed_readback_no_new_query_no_xml_no_png_not_accepted_stage")
+                        val raw = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+                        report.put("native_write_attempted", true).put("native_path", "failed-input-native.json")
+                        preserveAcquired("failed-input-native.json", raw, until)
+                        pins.put(JSONObject().put("path", "failed-input-native.json").put("bytes", raw.size).put("sha256", sha(raw)))
+                        val receipt = JSONObject(report.toString()).apply {
+                            remove("status")
+                            put("native_original_readback_complete", true)
+                        }
+                        val receiptRaw = (receipt.toString(2) + "\n").toByteArray(Charsets.UTF_8)
+                        report.put("receipt_write_attempted", true).put("receipt_path", "failed-input-retention.json")
+                        preserveAcquired("failed-input-retention.json", receiptRaw, until)
+                        report.put("receipt", JSONObject().put("path", "failed-input-retention.json")
+                            .put("bytes", receiptRaw.size).put("sha256", sha(receiptRaw))).put("status", "RETAINED")
+                        true
+                    } catch (failure: Exception) {
+                        report.put("retention_failure", failure.javaClass.simpleName + ":" + (failure.message ?: "UNKNOWN"))
+                        false
+                    }
+                }
                 override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
                 override fun cleanupOwned(): Boolean {
+                    failedInput = null
                     homeGraphics = null
                     // No recorder call and no collection draft branch. Process closure is attempted even if input cleanup fails.
                     val deadline = SystemClock.elapsedRealtimeNanos() + 20_000_000_000L

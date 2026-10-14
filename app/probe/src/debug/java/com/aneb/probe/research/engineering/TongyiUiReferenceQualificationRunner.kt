@@ -53,6 +53,9 @@ class TongyiUiReferenceQualificationRunner(
         /** Only the fixed PAYLOAD or an empty string for a positively attributed own draft. */
         fun setTextCurrent(observed: TongyiPreparationRunner.Frame,
             editor: TongyiPreparationRunner.Node, text: String): Boolean
+        /** Failed-input diagnostic scaffold: only an already returned cached readback, never action/cleanup authority. */
+        fun retainFailedInputObservation(observed: Frame, editor: Node, reason: String,
+            deadlineNanos: Long): Boolean = false
         fun sleepMillis(milliseconds: Long)
         fun cleanupOwned(): Boolean
     }
@@ -478,7 +481,15 @@ class TongyiUiReferenceQualificationRunner(
                 "RETAINED_EDITOR_BINDING_REQUIRED"
             }
             actionNode(observed, node)
-            check(android.setTextCurrent(observed, node, value)) { "PUBLIC_ACTION_REFUSED" }
+            try {
+                check(android.setTextCurrent(observed, node, value)) { "PUBLIC_ACTION_REFUSED" }
+            } catch (primary: Exception) {
+                runCatching {
+                    android.retainFailedInputObservation(observed, node,
+                        primary.message ?: primary.javaClass.simpleName, until)
+                } // Best-effort diagnostic failure can never replace the original action rejection.
+                throw primary
+            }
             gate(until)
         }
         try {
