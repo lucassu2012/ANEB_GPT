@@ -98,6 +98,21 @@ class TongyiWholeEngineeringInstrumentation {
             }
             backend.sealQualificationTerminal(terminal)
             instrumentation.sendStatus(0, Bundle().apply { putString("aneb_terminal", terminal.toString()) })
+            if (qualificationOnly) runCatching {
+                backend.takeQualificationControlFailure()?.let { observation ->
+                    val diagnostic = JSONObject().put("diagnostic_only", true).put("reference_accepted", false)
+                        .put("formal_new_slots", 0).put("now_nanos", observation.nowNanos.toString())
+                        .put("preparation_deadline_nanos", observation.preparationDeadlineNanos.toString())
+                        .put("local_deadline_nanos", observation.localDeadlineNanos.toString())
+                        .put("cancel_observed", observation.cancelObserved ?: JSONObject.NULL)
+                        .put("core_retained_stages", JSONArray(observation.retainedStages.map { it.name }))
+                        .put("original_stack", observation.originalStack)
+                    instrumentation.sendStatus(0, Bundle().apply {
+                        putString("stream", "ANEB807 operational diagnostic only; not accepted evidence/reference/new slots\n" +
+                            diagnostic.toString() + "\n")
+                    })
+                }
+            }
             return
         }
         val result = if (preparationOnly) TongyiPreparationRunner(backend.preparationAndroid(), SystemClock::elapsedRealtimeNanos)
@@ -188,6 +203,7 @@ class TongyiWholeEngineeringInstrumentation {
         private val sourceInspectionRecords = JSONArray()
         private var qualificationRejectionRecord: JSONObject? = null
         private var qualificationTargetCurrentRejectionRecord: JSONObject? = null
+        private var qualificationControlFailure: TongyiUiReferenceQualificationRunner.GateFailureObservation? = null
         private val scriptTransport = OwnedShellScriptTransport(root)
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
@@ -532,6 +548,12 @@ class TongyiWholeEngineeringInstrumentation {
 
         fun qualificationRejectionRetention() = qualificationRejectionRecord?.let { JSONObject(it.toString()) }
         fun qualificationTargetCurrentDiagnostic() = qualificationTargetCurrentRejectionRecord?.let { JSONObject(it.toString()) }
+
+        fun takeQualificationControlFailure(): TongyiUiReferenceQualificationRunner.GateFailureObservation? {
+            val observation = qualificationControlFailure
+            qualificationControlFailure = null
+            return observation
+        }
 
         fun sealQualificationTerminal(value: JSONObject) {
             val raw = (value.toString(2) + "\n").toByteArray(Charsets.UTF_8)
@@ -1254,6 +1276,9 @@ class TongyiWholeEngineeringInstrumentation {
                         report.put("retention_failure", failure.javaClass.simpleName + ":" + (failure.message ?: "UNKNOWN"))
                         false
                     }
+                }
+                override fun observeControlFailure(observation: TongyiUiReferenceQualificationRunner.GateFailureObservation) {
+                    if (qualificationControlFailure == null) qualificationControlFailure = observation
                 }
                 override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
                 override fun cleanupOwned(): Boolean {

@@ -18,6 +18,26 @@ class TongyiUiReferenceQualificationRunner(
     enum class SourcePhase { OWNED_LAUNCH, INITIAL_READINESS, SOURCE_ACQUISITION, SOURCE_VALIDATION, SECOND_READINESS, PAIR_VALIDATION }
     data class SourceRejection(val phase: SourcePhase, val sourceLabel: String, val frame: Frame?,
         val retentionAttempted: Boolean, val retained: Boolean, val retentionFailure: String?)
+    /** Bounded immutable operational failure snapshot; never a Result or accepted evidence field. */
+    class GateFailureObservation(
+        val nowNanos: Long,
+        val preparationDeadlineNanos: Long,
+        val localDeadlineNanos: Long,
+        val cancelObserved: Boolean?,
+        retainedStages: List<Stage>,
+        val originalStack: String,
+    ) {
+        val retainedStages: List<Stage> = java.util.Collections.unmodifiableList(ArrayList(retainedStages))
+
+        init {
+            require(retainedStages.size <= Stage.values().size)
+            require(originalStack.length <= MAX_STACK_CHARS)
+        }
+
+        companion object {
+            const val MAX_STACK_CHARS = 16_384
+        }
+    }
     data class Result(
         val state: String,
         val sendCalls: String,
@@ -58,6 +78,8 @@ class TongyiUiReferenceQualificationRunner(
             deadlineNanos: Long): Boolean = false
         fun sleepMillis(milliseconds: Long)
         fun cleanupOwned(): Boolean
+        /** Best-effort post-finally operational observation, never Result or accepted evidence. */
+        fun observeControlFailure(observation: GateFailureObservation) {}
     }
 
     fun runOnce(runId: String, directory: File): Result = run(runId, directory, sourceInspection = false)
@@ -73,6 +95,11 @@ class TongyiUiReferenceQualificationRunner(
         val sources = ArrayList<SourceObservation>()
         var owner: String? = null
         var reason: String? = null
+        var primaryFailure: Exception? = null
+        var failedGate: IllegalStateException? = null
+        var failedGateNow = 0L
+        var failedGateLimit = 0L
+        var failedGateCancelObserved: Boolean? = null
         var completed = false
         var cleaned = false
         var sourcePhase = SourcePhase.OWNED_LAUNCH
@@ -87,8 +114,17 @@ class TongyiUiReferenceQualificationRunner(
             sourceFrame = observed
         }
         fun gate(limit: Long = deadline) {
-            check(clock.nowNanos() < minOf(deadline, limit) && !File(directory, "CANCEL").exists()) {
-                "QUALIFICATION_EXPIRED_OR_CANCELLED"
+            val now = clock.nowNanos()
+            val beforeDeadline = now < minOf(deadline, limit)
+            val cancelObserved = if (beforeDeadline) File(directory, "CANCEL").exists() else null
+            try {
+                check(beforeDeadline && cancelObserved == false) { "QUALIFICATION_EXPIRED_OR_CANCELLED" }
+            } catch (failure: IllegalStateException) {
+                failedGateNow = now
+                failedGateLimit = limit
+                failedGateCancelObserved = cancelObserved
+                failedGate = failure
+                throw failure
             }
         }
         fun limit(budget: Long) = minOf(deadline, clock.nowNanos() + budget)
@@ -558,6 +594,7 @@ class TongyiUiReferenceQualificationRunner(
             completed = true
             }
         } catch (failure: Exception) {
+            primaryFailure = failure
             reason = failure.message ?: failure.javaClass.simpleName
             if (sourceInspection) {
                 val returned = sourceFrame
@@ -578,8 +615,20 @@ class TongyiUiReferenceQualificationRunner(
             cleaned = try { android.cleanupOwned() } catch (_: Exception) { false }
             if (completed) try { gate() } catch (failure: Exception) {
                 completed = false
+                primaryFailure = failure
                 reason = failure.message ?: failure.javaClass.simpleName
             }
+        }
+        val failure = primaryFailure
+        if (!sourceInspection && failure != null && failure === failedGate) runCatching {
+            android.observeControlFailure(GateFailureObservation(
+                nowNanos = failedGateNow,
+                preparationDeadlineNanos = deadline,
+                localDeadlineNanos = failedGateLimit,
+                cancelObserved = failedGateCancelObserved,
+                retainedStages = retained.map { it.stage },
+                originalStack = failure.stackTraceToString().take(GateFailureObservation.MAX_STACK_CHARS),
+            ))
         }
         val mode = if (sourceInspection) "UI_SOURCE_INSPECTION" else "UI_REFERENCE_QUALIFICATION"
         return Result(if (completed && cleaned) "${mode}_CLOSED" else "${mode}_UNKNOWN",
