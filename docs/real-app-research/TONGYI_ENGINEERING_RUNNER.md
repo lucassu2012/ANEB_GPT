@@ -34,6 +34,10 @@ HOST 顺序执行 W1→C1。仅 W1 原件封存、原生终端及自有清场都
 
 有限HOST回归通过真实 `run_pair` 仅替换外部ADB边界，使用脱敏结构正文验证完整W1→C1收口；没有私有SSID/地址或旧聊天进入Git。旧foreground/真VPN/归属拒绝和有限未知当前网络负例保留。HOST通过不回填旧Android门/CI/APK，也不算只读诊断已消费采集机会。
 
+［KNOWN｜HIGH］当前已兼容现场实际出现的 `ni{MOBILE[NR] CONNECTED ...}`，同时保留原 `MOBILE`/`MOBILE(...)` 表示。只新增明确的 `[NR]` 字面形式，不猜测其它方括号值；CELLULAR transport、完整当前 agent/default 绑定、INTERNET/VALIDATED/NOT_VPN 及非default真VPN拒绝门均不放宽。公共HOST回归实际执行W1→C1控制流、模拟外部当前NR网络及Reader恢复；CI显式运行这套HOST测试。它不是新的手机成对采集或网络性能证明。
+
+［KNOWN｜HIGH］`network_settings_restored` 仍仅表示本轮原WiFi/mobile/stayon三项值核对相等，不单独表示默认网络已回WiFi或SSID已恢复。本次格式修复不增加等待预算、不更改W1→C1编排、Native时钟或终端字段；若另一次外壳恢复检查仍处于过渡状态，保留原HOLD，后续实际恢复证明另列，不回填原轮成功。
+
 ## 构建与检查
 
 在 `app/` 目录：

@@ -100,7 +100,7 @@ def _current_agents_non_vpn(raw):
         # Only these physical transports are understood for this fixed W1/C1 feature.
         # Any current VPN agent, including a non-default one, or unknown transport holds.
         expected = b"WIFI CONNECTED" if transports == [b"WIFI"] else None
-        mobile = transports == [b"CELLULAR"] and re.fullmatch(rb"MOBILE(?:\([^()]*\))? CONNECTED", info.split(b" extra:", 1)[0])
+        mobile = transports == [b"CELLULAR"] and re.fullmatch(rb"MOBILE(?:\([^()]*\)|\[NR\])? CONNECTED", info.split(b" extra:", 1)[0])
         if (expected is None and not mobile) or (expected is not None and info.split(b" extra:", 1)[0] != expected):
             return False
         if b"NOT_VPN" not in capabilities or net_id in agents:
