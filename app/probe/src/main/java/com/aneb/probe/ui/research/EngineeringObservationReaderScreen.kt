@@ -281,29 +281,67 @@ private fun EngineeringOriginalText(file: File) {
 @Composable
 private fun EngineeringCapturePlayback(file: File) {
     val lifecycle = LocalLifecycleOwner.current
-    var video by remember(file) { mutableStateOf<VideoView?>(null) }
+    var playback by remember(file) { mutableStateOf<EngineeringCapturePlaybackSession?>(null) }
     var notice by remember(file) { mutableStateOf("正在打开本机采屏；尚未确认画面渲染。") }
     DisposableEffect(lifecycle, file) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) { video?.stopPlayback(); notice = "已随页面后台停止播放器；重新选择录像可再次播放。" }
-        }
-        lifecycle.lifecycle.addObserver(observer)
-        onDispose { lifecycle.lifecycle.removeObserver(observer); video?.stopPlayback(); video = null }
+        onDispose { playback?.close(); playback = null }
     }
     Text("本次聊天采屏回看，不是目标视频播放体验；播放器进度不用于研究计时。", style = MaterialTheme.typography.bodySmall)
     Text(notice, style = MaterialTheme.typography.bodySmall)
     AndroidView(modifier = Modifier.fillMaxWidth().height(360.dp), factory = { context ->
         VideoView(context).also { view ->
-            video = view
-            view.setMediaController(MediaController(context).apply { setAnchorView(view) })
-            view.setOnPreparedListener { view.start() }
-            view.setOnInfoListener { _, what, _ ->
-                if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) notice = "播放器报告首画面已渲染；不表示整段覆盖或研究验收。"
-                false
-            }
-            view.setOnCompletionListener { notice = "本机播放器到达结尾；这不是原始观察完整性或性能结论。" }
-            view.setOnErrorListener { _, _, _ -> notice = "设备无法播放此原件；文件保留，未显示旧录像。"; view.stopPlayback(); true }
-            view.setVideoPath(file.path)
+            playback = EngineeringCapturePlaybackSession(view, file, lifecycle.lifecycle) { notice = it }
         }
     })
+}
+
+/** One explicitly selected local clip. Kept separate so queued platform callbacks can be exercised. */
+internal class EngineeringCapturePlaybackSession(
+    private val view: VideoView,
+    file: File,
+    private val lifecycle: Lifecycle,
+    private val notice: (String) -> Unit,
+) : AutoCloseable {
+    private var retired = false
+    private val observer = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_STOP && !retired) {
+            retire()
+            notice("已随页面后台停止播放器；重新选择录像可再次播放。")
+        }
+    }
+
+    init {
+        lifecycle.addObserver(observer)
+        view.setMediaController(MediaController(view.context).apply { setAnchorView(view) })
+        view.setOnPreparedListener {
+            if (!retired && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) view.start()
+        }
+        view.setOnInfoListener { _, what, _ ->
+            if (!retired && what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) notice("播放器报告首画面已渲染；不表示整段覆盖或研究验收。")
+            false
+        }
+        view.setOnCompletionListener { if (!retired) notice("本机播放器到达结尾；这不是原始观察完整性或性能结论。") }
+        view.setOnErrorListener { _, _, _ ->
+            if (!retired) { notice("设备无法播放此原件；文件保留，未显示旧录像。"); retire() }
+            true
+        }
+        view.setVideoPath(file.path)
+    }
+
+    override fun close() {
+        lifecycle.removeObserver(observer)
+        retire()
+    }
+
+    private fun retire() {
+        if (retired) return
+        // Revoke queued callbacks before releasing the player and its reopenable source.
+        retired = true
+        view.setOnPreparedListener(null)
+        view.setOnInfoListener(null)
+        view.setOnCompletionListener(null)
+        view.setOnErrorListener(null)
+        view.stopPlayback()
+        view.setVideoURI(null)
+    }
 }
