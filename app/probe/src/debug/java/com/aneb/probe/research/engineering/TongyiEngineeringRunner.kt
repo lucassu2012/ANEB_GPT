@@ -326,30 +326,43 @@ class OwnedProcessLifecycle(
         return fields[19]
     }
 
+    private fun readOwner(pid: String, deadlineNanos: Long): Owner {
+        val start = ticks(pid, read("cat /proc/$pid/stat", deadlineNanos))
+        val uidLine = read("cat /proc/$pid/status", deadlineNanos).lines().filter { it.startsWith("Uid:") }.single()
+        val uids = uidLine.substringAfter(':').trim().split(Regex("\\s+"))
+        check(uids.size == 4 && uids.all { it.matches(Regex("[0-9]+")) }) { "PROCESS_UID_UNKNOWN" }
+        val rawCommand = read("cat /proc/$pid/cmdline", deadlineNanos)
+        check(rawCommand.endsWith('\u0000')) { "PROCESS_COMMAND_UNKNOWN" }
+        // Keep exact raw bytes in ownership; trailing /proc argv storage padding is not a new argument.
+        val command = rawCommand.trimEnd('\u0000').split('\u0000')
+        check(command.isNotEmpty() && command.all { it.isNotEmpty() }) { "PROCESS_COMMAND_UNKNOWN" }
+        check(ticks(pid, read("cat /proc/$pid/stat", deadlineNanos)) == start) { "PROCESS_IDENTITY_CHANGED_DURING_READ" }
+        return Owner(pid, uids.first().toInt(), start, command, rawCommand)
+    }
+
     fun observe(pid: String, deadlineNanos: Long): Observation = try {
         check(pid.matches(Regex("[1-9][0-9]*"))) { "INVALID_PROCESS_ID" }
         val lines = read("ps -A -o PID", deadlineNanos).trim().lines().map(String::trim)
         check(lines.size >= 2 && lines.first() == "PID" &&
             lines.drop(1).all { it.matches(Regex("[1-9][0-9]*")) }) { "PROCESS_LIST_UNKNOWN" }
-        if (pid !in lines.drop(1)) Observation.Absent else {
-            val start = ticks(pid, read("cat /proc/$pid/stat", deadlineNanos))
-            val uidLine = read("cat /proc/$pid/status", deadlineNanos).lines().filter { it.startsWith("Uid:") }.single()
-            val uids = uidLine.substringAfter(':').trim().split(Regex("\\s+"))
-            check(uids.size == 4 && uids.all { it.matches(Regex("[0-9]+")) }) { "PROCESS_UID_UNKNOWN" }
-            val rawCommand = read("cat /proc/$pid/cmdline", deadlineNanos)
-            check(rawCommand.endsWith('\u0000')) { "PROCESS_COMMAND_UNKNOWN" }
-            // Keep exact raw bytes in ownership; trailing /proc argv storage padding is not a new argument.
-            val command = rawCommand.trimEnd('\u0000').split('\u0000')
-            check(command.isNotEmpty() && command.all { it.isNotEmpty() }) { "PROCESS_COMMAND_UNKNOWN" }
-            check(ticks(pid, read("cat /proc/$pid/stat", deadlineNanos)) == start) { "PROCESS_IDENTITY_CHANGED_DURING_READ" }
-            Observation.Alive(Owner(pid, uids.first().toInt(), start, command, rawCommand))
-        }
+        if (pid !in lines.drop(1)) Observation.Absent else Observation.Alive(readOwner(pid, deadlineNanos))
     } catch (failure: Exception) { Observation.Unknown(failure.message ?: "PROCESS_OBSERVATION_UNKNOWN") }
 
     fun requireAlive(owner: Owner, deadlineNanos: Long) {
         check((observe(owner.pid, deadlineNanos) as? Observation.Alive)?.owner == owner) {
             "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED"
         }
+    }
+
+    /** Positive evidence for this exact known owner only; never absence or whole-list authority. */
+    fun requireOwnedPidAlive(owner: Owner, deadlineNanos: Long) {
+        val observed = try {
+            check(owner.pid.matches(Regex("[1-9][0-9]*"))) { "INVALID_PROCESS_ID" }
+            val lines = read("ps -p ${owner.pid} -o PID", deadlineNanos).trim().lines().map(String::trim)
+            check(lines == listOf("PID", owner.pid)) { "PROCESS_LIST_UNKNOWN" }
+            readOwner(owner.pid, deadlineNanos)
+        } catch (_: Exception) { null }
+        check(observed == owner) { "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED" }
     }
 
     /** A successful complete shell process list, not pidof's empty/nonzero response. */
@@ -389,7 +402,16 @@ class OwnedProcessLifecycle(
         while (true) {
             when (val observed = observe(owner.pid, deadlineNanos)) {
                 Observation.Absent -> return true
-                is Observation.Unknown -> error("OWN_PROCESS_EXIT_UNKNOWN_${observed.reason}")
+                is Observation.Unknown -> {
+                    val absent = try {
+                        val lines = read("ps -A -o PID", deadlineNanos).trim().lines().map(String::trim)
+                        lines.size >= 2 && lines.first() == "PID" &&
+                            lines.drop(1).all { it.matches(Regex("[1-9][0-9]*")) } &&
+                            owner.pid !in lines.drop(1) && clock.nowNanos() <= deadlineNanos
+                    } catch (_: Exception) { false }
+                    if (absent) return true
+                    error("OWN_PROCESS_EXIT_UNKNOWN_${observed.reason}")
+                }
                 is Observation.Alive -> check(observed.owner == owner) { "OWN_PROCESS_REPLACEMENT_NOT_STOPPED" }
             }
             check(clock.nowNanos() < deadlineNanos) { "OWN_PROCESS_EXIT_DEADLINE" }
