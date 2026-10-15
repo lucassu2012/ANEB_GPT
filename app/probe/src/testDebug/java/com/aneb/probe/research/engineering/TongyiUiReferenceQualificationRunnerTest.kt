@@ -468,6 +468,157 @@ class TongyiUiReferenceQualificationRunnerTest {
         assertArrayEquals(diagnosticBytes, diagnostic.readBytes())
     }
 
+    @Test fun observesOwnDraftRetentionExpiryOnlyAfterCleanupWithoutPromotingFifthStage() {
+        var now = 0L
+        val clock = TongyiEngineeringRunner.MonotonicClock { now }
+        val inputUntil = TongyiEngineeringRunner.INPUT_NANOS
+        val coreStages = listOf(Stage.HOME, Stage.DRAWER, Stage.NEW_EMPTY, Stage.EDITOR_EMPTY)
+        val boundary = CurrentUiAndroid(linkedMapOf(
+            Stage.HOME to homeFrame("home"),
+            Stage.DRAWER to frame(listOf(
+                node("drawer-root", null, "android.widget.FrameLayout", FULL_ROOT),
+                node("drawer-new-parent", "drawer-root", "android.widget.LinearLayout", Bounds(242,2339,813,2502), clickable = true),
+                node("drawer-new-text", "drawer-new-parent", "android.widget.TextView", Bounds(320,2385,736,2456),
+                    text = "新建对话", resource = "com.aliyun.tongyi:id/tv_new_session"),
+            )),
+            Stage.NEW_EMPTY to homeFrame("new"),
+            Stage.EDITOR_EMPTY to editorFrame("", showingHint = true),
+            Stage.OWN_DRAFT to editorFrame(TongyiEngineeringRunner.PAYLOAD, showingHint = false),
+            Stage.OWN_CLEARED to editorFrame("", showingHint = true),
+        ), clock = clock)
+        var cleanupReturned = false
+        val deliveries = mutableListOf<Pair<TongyiUiReferenceQualificationRunner.GateFailureObservation, Boolean>>()
+        val android = object : TongyiUiReferenceQualificationRunner.Android by boundary {
+            override fun retainStage(stage: Stage, observed: Frame): Boolean {
+                val retained = boundary.retainStage(stage, observed)
+                // Deterministic external boundary timing, not measured Huawei cost or an inferred old gate.
+                if (stage == Stage.OWN_DRAFT) now = inputUntil
+                return retained
+            }
+            override fun cleanupOwned(): Boolean {
+                val result = boundary.cleanupOwned()
+                cleanupReturned = true
+                return result
+            }
+            override fun observeControlFailure(observation: TongyiUiReferenceQualificationRunner.GateFailureObservation) {
+                deliveries.add(observation to cleanupReturned)
+            }
+        }
+        val directory = File(temporary.root, "own-draft-retention-expiry")
+        val result = TongyiUiReferenceQualificationRunner(android, clock)
+            .runOnce("own-draft-retention-expiry", directory)
+
+        assertTrue(directory.isDirectory)
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("UI_REFERENCE_QUALIFICATION_UNKNOWN", result.state)
+        assertEquals("QUALIFICATION_EXPIRED_OR_CANCELLED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertEquals(coreStages, result.retainedStages.map { it.stage })
+        assertEquals(coreStages + Stage.OWN_DRAFT, boundary.retained.map { it.stage })
+        assertEquals(coreStages + Stage.OWN_DRAFT, boundary.captured)
+        assertEquals(listOf(TongyiEngineeringRunner.PAYLOAD), boundary.enteredTexts)
+        assertTrue(boundary.cleanupAttempted && cleanupReturned)
+        assertFalse(result.ownedCleanup)
+        assertFalse(result.referenceAccepted)
+        assertEquals(
+            "one original expired-gate observation must arrive only after cleanup has returned",
+            listOf(true),
+            deliveries.map { (observation, afterCleanup) ->
+                afterCleanup && observation.nowNanos == inputUntil &&
+                    observation.preparationDeadlineNanos == TongyiEngineeringRunner.PREP_NANOS &&
+                    observation.localDeadlineNanos == inputUntil && observation.cancelObserved == null &&
+                    observation.retainedStages == coreStages &&
+                    observation.originalStack.contains("QUALIFICATION_EXPIRED_OR_CANCELLED")
+            },
+        )
+    }
+
+    @Test fun observesCancellationAfterCleanupWithoutObserverFailureChangingOriginalResult() {
+        val clock = TongyiEngineeringRunner.MonotonicClock { 0L }
+        val boundary = CurrentUiAndroid(qualificationScenes(), clock = clock)
+        val directory = File(temporary.root, "own-draft-retention-cancel")
+        val coreStages = listOf(Stage.HOME, Stage.DRAWER, Stage.NEW_EMPTY, Stage.EDITOR_EMPTY)
+        var cleanupReturned = false
+        val deliveries = mutableListOf<Pair<TongyiUiReferenceQualificationRunner.GateFailureObservation, Boolean>>()
+        val android = object : TongyiUiReferenceQualificationRunner.Android by boundary {
+            override fun retainStage(stage: Stage, observed: Frame): Boolean {
+                val retained = boundary.retainStage(stage, observed)
+                if (stage == Stage.OWN_DRAFT) check(File(directory, "CANCEL").createNewFile())
+                return retained
+            }
+            override fun cleanupOwned(): Boolean {
+                val result = boundary.cleanupOwned()
+                cleanupReturned = true
+                return result
+            }
+            override fun observeControlFailure(observation: TongyiUiReferenceQualificationRunner.GateFailureObservation) {
+                deliveries.add(observation to cleanupReturned)
+                error("SYNTHETIC_OBSERVER_FAILURE")
+            }
+        }
+        val result = TongyiUiReferenceQualificationRunner(android, clock)
+            .runOnce("own-draft-retention-cancel", directory)
+
+        assertTrue(File(directory, "CANCEL").isFile)
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("UI_REFERENCE_QUALIFICATION_UNKNOWN", result.state)
+        assertEquals("QUALIFICATION_EXPIRED_OR_CANCELLED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertEquals(coreStages, result.retainedStages.map { it.stage })
+        assertEquals(coreStages + Stage.OWN_DRAFT, boundary.retained.map { it.stage })
+        assertEquals(listOf(TongyiEngineeringRunner.PAYLOAD), boundary.enteredTexts)
+        assertTrue(boundary.cleanupAttempted && cleanupReturned)
+        assertFalse(result.ownedCleanup)
+        assertFalse(result.referenceAccepted)
+        assertEquals(listOf(true), deliveries.map { (observation, afterCleanup) ->
+            afterCleanup && observation.nowNanos == 0L &&
+                observation.preparationDeadlineNanos == TongyiEngineeringRunner.PREP_NANOS &&
+                observation.localDeadlineNanos == TongyiEngineeringRunner.INPUT_NANOS &&
+                observation.cancelObserved == true && observation.retainedStages == coreStages &&
+                observation.originalStack.contains("QUALIFICATION_EXPIRED_OR_CANCELLED")
+        })
+    }
+
+    @Test fun observesFinalPreparationExpiryAfterSixStagesAndCompletedCleanup() {
+        var now = 0L
+        val clock = TongyiEngineeringRunner.MonotonicClock { now }
+        val boundary = CurrentUiAndroid(qualificationScenes(), clock = clock)
+        var cleanupReturned = false
+        val deliveries = mutableListOf<Pair<TongyiUiReferenceQualificationRunner.GateFailureObservation, Boolean>>()
+        val android = object : TongyiUiReferenceQualificationRunner.Android by boundary {
+            override fun cleanupOwned(): Boolean {
+                val result = boundary.cleanupOwned()
+                now = TongyiEngineeringRunner.PREP_NANOS
+                cleanupReturned = true
+                return result
+            }
+            override fun observeControlFailure(observation: TongyiUiReferenceQualificationRunner.GateFailureObservation) {
+                deliveries.add(observation to cleanupReturned)
+            }
+        }
+        val directory = File(temporary.root, "post-cleanup-preparation-expiry")
+        val result = TongyiUiReferenceQualificationRunner(android, clock)
+            .runOnce("post-cleanup-preparation-expiry", directory)
+
+        assertFalse(File(directory, "SEND_INTENT.json").exists())
+        assertEquals("UI_REFERENCE_QUALIFICATION_UNKNOWN", result.state)
+        assertEquals("QUALIFICATION_EXPIRED_OR_CANCELLED", result.reason)
+        assertEquals("0", result.sendCalls)
+        assertEquals(Stage.values().toList(), result.retainedStages.map { it.stage })
+        assertEquals(Stage.values().toList(), boundary.retained.map { it.stage })
+        assertEquals(Stage.values().toList(), boundary.captured)
+        assertEquals(listOf(TongyiEngineeringRunner.PAYLOAD, ""), boundary.enteredTexts)
+        assertTrue(boundary.cleanupAttempted && boundary.cleaned && cleanupReturned && result.ownedCleanup)
+        assertFalse(result.referenceAccepted)
+        assertEquals(listOf(true), deliveries.map { (observation, afterCleanup) ->
+            afterCleanup && observation.nowNanos == TongyiEngineeringRunner.PREP_NANOS &&
+                observation.preparationDeadlineNanos == TongyiEngineeringRunner.PREP_NANOS &&
+                observation.localDeadlineNanos == TongyiEngineeringRunner.PREP_NANOS &&
+                observation.cancelObserved == null && observation.retainedStages == Stage.values().toList() &&
+                observation.originalStack.contains("QUALIFICATION_EXPIRED_OR_CANCELLED")
+        })
+    }
+
     @Test fun qualifiesWholeCurrentUiPathWithoutPromotingReferenceOrRelaxingOrdinaryPreparation() {
         val home = homeFrame("home")
         val newEmpty = homeFrame("new")
@@ -645,11 +796,26 @@ class TongyiUiReferenceQualificationRunnerTest {
     }
 
     /** External Android substitute; optional opaque originals are HOST-only and never SDK acquisition proof. */
+    private fun qualificationScenes() = linkedMapOf(
+        Stage.HOME to homeFrame("home"),
+        Stage.DRAWER to frame(listOf(
+            node("drawer-root", null, "android.widget.FrameLayout", FULL_ROOT),
+            node("drawer-new-parent", "drawer-root", "android.widget.LinearLayout", Bounds(242,2339,813,2502), clickable = true),
+            node("drawer-new-text", "drawer-new-parent", "android.widget.TextView", Bounds(320,2385,736,2456),
+                text = "新建对话", resource = "com.aliyun.tongyi:id/tv_new_session"),
+        )),
+        Stage.NEW_EMPTY to homeFrame("new"),
+        Stage.EDITOR_EMPTY to editorFrame("", showingHint = true),
+        Stage.OWN_DRAFT to editorFrame(TongyiEngineeringRunner.PAYLOAD, showingHint = false),
+        Stage.OWN_CLEARED to editorFrame("", showingHint = true),
+    )
+
     private class CurrentUiAndroid(
         private val scenes: Map<Stage, Frame>,
         private val homeMenuArgbSha256: String = TongyiPreparationRunner.MENU_SHA256,
         private val rejectedOriginalsDirectory: File? = null,
         private val captureOriginals: Map<String, ByteArray> = emptyMap(),
+        private val clock: TongyiEngineeringRunner.MonotonicClock = TongyiEngineeringRunner.MonotonicClock(System::nanoTime),
     ) : TongyiUiReferenceQualificationRunner.Android {
         var scene = Stage.HOME
         var launched = false
@@ -669,16 +835,16 @@ class TongyiUiReferenceQualificationRunnerTest {
         private var capturedOriginalBytes: Map<String, ByteArray>? = null
 
         override fun launchOwned(deadlineNanos: Long) {
-            check(!launched && System.nanoTime() < deadlineNanos)
+            check(!launched && clock.nowNanos() < deadlineNanos)
             launched = true
         }
         override fun currentState(deadlineNanos: Long): Frame {
-            check(launched && !cleaned && System.nanoTime() < deadlineNanos)
+            check(launched && !cleaned && clock.nowNanos() < deadlineNanos)
             return scenes.getValue(scene).copy(menuArgbSha256 = null)
         }
         // Synthetic external HOME progress only; the unchanged public tracer supplies its own protocol.
         override fun awaitOwnedHomeGraphics(deadlineNanos: Long) {
-            check(launched && !cleaned && scene == Stage.HOME && System.nanoTime() < deadlineNanos)
+            check(launched && !cleaned && scene == Stage.HOME && clock.nowNanos() < deadlineNanos)
         }
         override fun currentFrame(menuPixels: Boolean): Frame {
             check(launched && !cleaned)
@@ -698,20 +864,20 @@ class TongyiUiReferenceQualificationRunnerTest {
         }
         // The external diagnostic port retains only the already acquired HOST-only bundle.
         override fun retainRejectedObservation(stage: Stage, observed: Frame, reason: String, deadlineNanos: Long): Boolean {
-            check(launched && !cleaned && System.nanoTime() < deadlineNanos)
+            check(launched && !cleaned && clock.nowNanos() < deadlineNanos)
             check(stage == scene && observed === latest && observed === completeCapturedFrame)
             check(retained.none { it.frame === observed })
             val originals = checkNotNull(capturedOriginalBytes)
             val directory = checkNotNull(rejectedOriginalsDirectory)
             check(!directory.exists() && directory.mkdir())
             originals.forEach { (name, bytes) ->
-                check(System.nanoTime() < deadlineNanos)
+                check(clock.nowNanos() < deadlineNanos)
                 val file = File(directory, name)
                 check(file.createNewFile())
                 file.writeBytes(bytes)
                 check(file.readBytes().contentEquals(bytes))
             }
-            check(System.nanoTime() < deadlineNanos)
+            check(clock.nowNanos() < deadlineNanos)
             rejectedOriginalFrame = observed
             rejectedOriginalReason = reason
             return true
