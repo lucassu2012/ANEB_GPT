@@ -725,7 +725,8 @@ class TongyiWholeEngineeringInstrumentation {
                 val projectedRoot = checkNotNull(automation.rootInActiveWindow)
                 val windowId = projectedRoot.windowId // The same root handle whose immutable values are walked.
                 walk(projectedRoot, null)
-                val frame = TongyiPreparationRunner.Frame(device.displayWidth, device.displayHeight, device.displayRotation,
+                val frame = TongyiPreparationRunner.Frame(device.displayWidth, device.displayHeight,
+                    if (qualificationOnly && !cleanup) idleTimeoutScope.run { device.displayRotation } else device.displayRotation,
                     values.first().bounds, "${owner.pid}/${owner.uid}/${owner.startTicks}/" +
                         Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP), values.toList(), null)
                 requireOwner(deadline, cleanup)
