@@ -22,6 +22,13 @@ Status for known UIDs:
 Network Requests:
 """
 VPN_LISTENER = b"  activeRequest: null ... LISTEN id=48 ... Transports: VPN ... RequestorPkg: com.huawei.systemserver\n"
+# Sanitized structural replay of the actual P40 MOBILE[NR] dialect (R17/R18).
+# No device identifiers, SSID, address or subscriber information is retained here.
+CURRENT_CELLULAR_NR = (CURRENT_WIFI
+    .replace(b"Active default network: 367", b"Active default network: 368")
+    .replace(b"network{367}", b"network{368}")
+    .replace(b"ni{WIFI CONNECTED", b"ni{MOBILE[NR] CONNECTED")
+    .replace(b"Transports: WIFI Capabilities:", b"Transports: CELLULAR Capabilities:"))
 
 
 class ExternalPhone:
@@ -745,6 +752,38 @@ class WholeEngineeringHostTest(unittest.TestCase):
             self.assertEqual(["enable", "disable", "enable"], wifi)
             self.assertTrue(result["network_settings_restored"])
 
+    def test_public_pair_accepts_current_NR_cellular_after_wifi_transition_and_restores_reader(self):
+        class NRCellularPhone(ExternalPhone):
+            def run(self, argv, timeout, **kwargs):
+                if list(argv)[3:] == ["shell", "dumpsys", "connectivity"] and self.wifi_on == "0":
+                    self.commands.append(list(argv))
+                    return 0, CURRENT_CELLULAR_NR, b""
+                return super().run(argv, timeout, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            original = root / "old-reader.apk"
+            original.write_bytes(b"HOST_ONLY_ORIGINAL_READER_APK")
+            release.update(network_transition_authorized=True,
+                original_debug_apk=str(original),
+                original_debug_apk_sha256=hashlib.sha256(original.read_bytes()).hexdigest())
+            phone = NRCellularPhone()
+            phone.require_native_abi = True
+            phone.old_apk = phone.installed_debug = original.read_bytes()
+
+            result = run_pair(release, root / "actual", system=phone)
+
+            self.assertEqual("PAIR_OBSERVATION_CLOSED", result["state"], json.dumps(result, sort_keys=True))
+            self.assertEqual(["W1", "C1"], [row["network_condition"] for row in result["attempts"]])
+            self.assertTrue(all(row["owned_cleanup"] for row in result["attempts"]))
+            self.assertEqual([1, 1], [row["send_calls"] for row in result["attempts"]])
+            self.assertTrue(result["network_settings_restored"])
+            self.assertTrue(result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertFalse(phone.instrument_alive or phone.companion_installed)
+            self.assertEqual(result, json.loads((root / "actual" / "PAIR_RESULT.json").read_text()))
+
     def test_unknown_foreground_or_active_vpn_refuses_all_install_and_input(self):
         for field in ("foreground_unknown", "active_vpn"):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
@@ -753,6 +792,26 @@ class WholeEngineeringHostTest(unittest.TestCase):
                 setattr(phone, field, True)
                 result = run_pair(self.release(root), root / "actual", system=phone)
                 self.assertEqual("PAIR_STOPPED", result["state"])
+                self.assertFalse(any("install" in argv or "instrument" in argv for argv in phone.commands))
+
+    def test_NR_representation_does_not_admit_unsafe_or_unknown_current_networks(self):
+        vpn = b"  NetworkAgentInfo{network{900} handle{HOST_ONLY} ni{VPN CONNECTED extra: REDACTED} lp{ *** } nc{[ Transports: VPN Capabilities: INTERNET&VALIDATED]}}\n"
+        unsafe = {
+            "not_validated": CURRENT_CELLULAR_NR.replace(b"&VALIDATED", b""),
+            "missing_not_vpn": CURRENT_CELLULAR_NR.replace(b"&NOT_VPN", b""),
+            "not_connected": CURRENT_CELLULAR_NR.replace(b"MOBILE[NR] CONNECTED", b"MOBILE[NR] DISCONNECTED"),
+            "unknown_square_dialect": CURRENT_CELLULAR_NR.replace(b"MOBILE[NR]", b"MOBILE[NR_FAKE]"),
+            "wrong_default": CURRENT_CELLULAR_NR.replace(b"Active default network: 368", b"Active default network: 999"),
+            "nondefault_vpn": CURRENT_CELLULAR_NR.replace(b"    Requests:", vpn + b"    Requests:", 1),
+        }
+        for name, current in unsafe.items():
+            with self.subTest(network=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                phone = ExternalPhone()
+                phone.current_network_override = current
+                result = run_pair(self.release(root), root / "actual", system=phone)
+                self.assertEqual("PAIR_STOPPED", result["state"])
+                self.assertEqual("PHONE_NOT_ADMITTED", result["reason"])
                 self.assertFalse(any("install" in argv or "instrument" in argv for argv in phone.commands))
 
     def test_unknown_current_agents_or_default_refuse_all_install_and_input(self):
