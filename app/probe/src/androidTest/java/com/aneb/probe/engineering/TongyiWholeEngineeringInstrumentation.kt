@@ -22,6 +22,8 @@ import androidx.test.runner.AndroidJUnit4
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
+import com.aneb.probe.research.engineering.EngineeringTarget
+import com.aneb.probe.research.engineering.DeepSeekUiAdapter
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
 import com.aneb.probe.research.engineering.PublicUiIdleTimeoutScope
 import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
@@ -53,6 +55,9 @@ class TongyiWholeEngineeringInstrumentation {
         val runId = checkNotNull(args.getString("run_id"))
         val mode = args.getString("execution_mode") ?: "COLLECTION"
         check(mode == "COLLECTION" || mode == "PREPARATION_ONLY" || mode == "UI_REFERENCE_QUALIFICATION" || mode == "UI_SOURCE_INSPECTION") { "UNKNOWN_EXECUTION_MODE" }
+        val target = EngineeringTarget.fromId(args.getString("target_profile") ?: "tongyi")
+        check(args.getString("target_package")?.let { it == target.packageName } != false) { "TARGET_PROFILE_PACKAGE_MISMATCH" }
+        check(target == EngineeringTarget.TONGYI || mode == "COLLECTION") { "TARGET_MODE_UNSUPPORTED" }
         val preparationOnly = mode == "PREPARATION_ONLY"
         val qualificationOnly = mode == "UI_REFERENCE_QUALIFICATION"
         val sourceInspectionOnly = mode == "UI_SOURCE_INSPECTION"
@@ -71,7 +76,7 @@ class TongyiWholeEngineeringInstrumentation {
         if (sourceInspectionOnly) {
             check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
         }
-        val backend = NativePhone(root, condition, ui, preparationOnly, qualificationOnly, sourceInspectionOnly)
+        val backend = NativePhone(root, condition, ui, preparationOnly, qualificationOnly, sourceInspectionOnly, target)
         if (qualificationOnly || sourceInspectionOnly) {
             check(args.getString("network_condition") == null) { "QUALIFICATION_NETWORK_TRANSITION_FORBIDDEN" }
             // The frozen qualifier, not this entry point, exclusively creates the consumed root.
@@ -120,7 +125,7 @@ class TongyiWholeEngineeringInstrumentation {
             return
         }
         val result = if (preparationOnly) TongyiPreparationRunner(backend.preparationAndroid(), SystemClock::elapsedRealtimeNanos)
-            .runOnce(runId, root) else TongyiEngineeringRunner(backend, SystemClock::elapsedRealtimeNanos).runOnce(runId, condition, root)
+            .runOnce(runId, root) else TongyiEngineeringRunner(backend, SystemClock::elapsedRealtimeNanos, target).runOnce(runId, condition, root)
         if (preparationOnly) {
             val retention = runCatching { backend.persistRejectedPreparationObservation() }
             val report = retention.getOrNull() ?: retention.exceptionOrNull()?.let {
@@ -132,6 +137,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
         val terminal = JSONObject()
             .put("run_id", runId).put("network_condition", if (preparationOnly) JSONObject.NULL else condition)
+            .put("target_profile", target.id).put("target_package", target.packageName)
             .put("state", result.state).put("send_calls", when (result.sendCalls) {
                 "0" -> 0; "1" -> 1; else -> "UNKNOWN"
             })
@@ -160,8 +166,9 @@ class TongyiWholeEngineeringInstrumentation {
     }
 
     /** Compile-only access to the real ordinary adapter; no preparation or capability substitution. */
-    internal fun ordinaryPhoneForPreparationTracer(root: File, condition: String, ui: JSONObject): TongyiEngineeringRunner.Phone =
-        NativePhone(root, condition, ui, preparationOnly = false, qualificationOnly = false, sourceInspectionOnly = false)
+    internal fun ordinaryPhoneForPreparationTracer(root: File, condition: String, ui: JSONObject,
+        target: EngineeringTarget = EngineeringTarget.TONGYI): TongyiEngineeringRunner.Phone =
+        NativePhone(root, condition, ui, preparationOnly = false, qualificationOnly = false, sourceInspectionOnly = false, target = target)
 
     private class NativePhone(
         private val root: File,
@@ -170,7 +177,9 @@ class TongyiWholeEngineeringInstrumentation {
         private val preparationOnly: Boolean = false,
         private val qualificationOnly: Boolean = false,
         private val sourceInspectionOnly: Boolean = false,
+        private val target: EngineeringTarget = EngineeringTarget.TONGYI,
     ) : TongyiEngineeringRunner.Phone {
+        private val TARGET = target.packageName
         private val instrumentation = InstrumentationRegistry.getInstrumentation()
         private val automation = instrumentation.uiAutomation
         private val device = UiDevice.getInstance(instrumentation)
@@ -247,7 +256,7 @@ class TongyiWholeEngineeringInstrumentation {
         private val processes = OwnedProcessLifecycle(object : OwnedProcessLifecycle.Shell {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
-        }, SystemClock::elapsedRealtimeNanos)
+        }, SystemClock::elapsedRealtimeNanos, target)
         private val clearPackageIdleScope = PublicUiIdleTimeoutScope(
             readTimeoutMillis = { Configurator.getInstance().getWaitForIdleTimeout() },
             writeTimeoutMillis = { value ->
@@ -327,6 +336,7 @@ class TongyiWholeEngineeringInstrumentation {
         override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
             ordinaryPreInputPreparation = !preparationOnly && !qualificationOnly && !sourceInspectionOnly
             try {
+                if (target == EngineeringTarget.DEEPSEEK) return prepareDeepSeek(deadlineNanos)
                 check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
                 check(ui.getString("menu_argb_sha256").lowercase() == TongyiPreparationRunner.MENU_SHA256) { "FIXED_MENU_PIN_REQUIRED" }
                 check(ui.getJSONObject("menu").length() == 0 && ui.getJSONObject("focus_hint").length() == 0) {
@@ -427,6 +437,88 @@ class TongyiWholeEngineeringInstrumentation {
             }
         }
 
+        private fun prepareDeepSeek(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+            check(!preparationOnly && !qualificationOnly && !sourceInspectionOnly &&
+                ui.getString("binding_scope") == "current_owned_deepseek_ui") { "DEEPSEEK_CURRENT_FRAME_CONTRACT_REQUIRED" }
+            val contract = ui.getJSONObject("deepseek_contract")
+            check(contract.length() == 3 && contract.getString("visible_modes") == "thinking_off_search_off" &&
+                contract.get("invocation_authorized") is Boolean &&
+                contract.getString("send_description").let { it.isNotBlank() && it.length <= 128 } &&
+                !ui.has("send_role_binding") && !ui.has("menu_argb_sha256") && !ui.has("send")) { "DEEPSEEK_TARGET_CONTRACT_REQUIRED" }
+            check(ui.get("capture_backend") == "android_media_projection_v1") { "DEEPSEEK_EXPLICIT_PROJECTION_BACKEND_REQUIRED" }
+            prepareProjectionCapture(deadlineNanos)
+            launchOwned(deadlineNanos)
+            deepSeekAdapter().prepare()
+            freshEmpty = true
+            saveOriginals("new-empty")
+            ordinaryPreInputPreparation = false
+            return snapshot()
+        }
+
+        /** Immutable values from this actual tree; indices are acquisition-local handles, never selectors. */
+        private fun deepSeekNodeValues(handles: List<AccessibilityNodeInfo>) = handles.mapIndexed { index, node ->
+            val rect = Rect().also(node::getBoundsInScreen)
+            DeepSeekUiAdapter.Node(index.toString(), handles.indexOf(node.parent).takeIf { it >= 0 }?.toString(),
+                TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                node.text?.toString().orEmpty(), node.contentDescription?.toString().orEmpty(), node.hintText?.toString(),
+                node.isShowingHintText, visible(node), node.isEnabled, node.isClickable, node.isCheckable, node.isChecked,
+                node.isEditable, node.isFocused, node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT },
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK },
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_FOCUS }, node.windowId, node.packageName?.toString().orEmpty(),
+                node.className?.toString().orEmpty())
+        }
+
+        private fun deepSeekFrame(): Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>> {
+            val (base, handles) = ordinaryPreparationFrame(deadlineNanos = preparationDeadline)
+            val rootNode = handles.first()
+            val window = checkNotNull(rootNode.window) { "DEEPSEEK_PUBLIC_WINDOW_REQUIRED" }
+            check(rootNode.windowId >= 0 && window.isActive && window.id == rootNode.windowId && window.root == rootNode) {
+                "DEEPSEEK_CURRENT_WINDOW_CHANGED"
+            }
+            return DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId, base.width, base.height, base.rotation,
+                "0", deepSeekNodeValues(handles)) to handles
+        }
+
+        private fun deepSeekAdapter() = DeepSeekUiAdapter(object : DeepSeekUiAdapter.Android {
+            override fun nowNanos() = SystemClock.elapsedRealtimeNanos()
+            override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
+            override fun read() = deepSeekFrame().first
+            override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, kind: DeepSeekUiAdapter.Action) {
+                action {
+                    val (fresh, handles) = deepSeekFrame()
+                    check(fresh == frame && fresh.nodes.singleOrNull { it.id == node.id } == node) { "DEEPSEEK_ACTION_FRAME_CHANGED" }
+                    val actual = handles[node.id.toInt()]
+                    val actionId = when (kind) {
+                        DeepSeekUiAdapter.Action.CLICK -> AccessibilityNodeInfo.ACTION_CLICK
+                        DeepSeekUiAdapter.Action.FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
+                    }
+                    check(actual.refresh() && deepSeekNodeValues(handles) == frame.nodes &&
+                        actual.actionList.any { it.id == actionId }) { "DEEPSEEK_PUBLIC_ACTION_CHANGED" }
+                    requireOwnedCurrent()
+                    check(actual.performAction(actionId)) { "DEEPSEEK_PUBLIC_ACTION_REFUSED" }
+                }
+            }
+        }, preparationDeadline)
+
+        private fun currentDeepSeekSendRole(input: AccessibilityNodeInfo, empty: Boolean,
+            acquisition: Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>>): AccessibilityNodeInfo? {
+            if (empty) return null
+            val (frame, handles) = acquisition
+            val owner = checkNotNull(targetOwner)
+            check(ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft && input.parent == ordinaryOwnDraftParent &&
+                input.windowId == ordinaryOwnDraftWindow && input.windowId == frame.windowId && input.isEnabled && input.isFocused &&
+                !input.isShowingHintText && input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) { "DEEPSEEK_OWNED_DRAFT_REQUIRED" }
+            val editor = frame.nodes.singleOrNull { it.visible && it.editable } ?: error("DEEPSEEK_EDITOR_NOT_UNIQUE")
+            check(handles[editor.id.toInt()] == input) { "DEEPSEEK_EDITOR_BINDING_CHANGED" }
+            val candidate = deepSeekAdapter().sendCandidate(frame, ui.getJSONObject("deepseek_contract").getString("send_description"))
+                ?: return null
+            val actual = handles[candidate.id.toInt()]
+            check(input.refresh() && actual.refresh() && deepSeekNodeValues(handles) == frame.nodes &&
+                targetOwner == owner && input == ordinaryOwnDraft && input.parent == ordinaryOwnDraftParent &&
+                input.windowId == ordinaryOwnDraftWindow) { "DEEPSEEK_SEND_BINDING_CHANGED" }
+            return actual
+        }
+
         override fun enterExact(text: String) {
             check(text == TongyiEngineeringRunner.PAYLOAD)
             val owner = checkNotNull(targetOwner)
@@ -481,9 +573,12 @@ class TongyiWholeEngineeringInstrumentation {
                 "ATTACHMENT_ABSENCE_CONTRACT_REQUIRED"
             }
             val empty = currentEmpty(input)
-            return TongyiEngineeringRunner.Snapshot(TARGET, true, matching("ordinary_mode").size == 1,
+            val deepSeek = if (target == EngineeringTarget.DEEPSEEK) deepSeekFrame() else null
+            return TongyiEngineeringRunner.Snapshot(TARGET, true, if (deepSeek != null) deepSeekAdapter().modesOff(deepSeek.first)
+                else matching("ordinary_mode").size == 1,
                 noAttachments, freshEmpty && empty, if (empty) "" else input.text?.toString().orEmpty(),
-                input.isFocused, if (ui.has("send_role_binding")) currentPrivateSendRole(input, empty) != null
+                input.isFocused, if (deepSeek != null) currentDeepSeekSendRole(input, empty, deepSeek) != null
+                else if (ui.has("send_role_binding")) currentPrivateSendRole(input, empty) != null
                 else if (!ui.has("send")) false else matching("send").singleOrNull()?.let { it.isEnabled && it.isClickable } == true,
                 actual, noVpn)
         }
@@ -684,7 +779,21 @@ class TongyiWholeEngineeringInstrumentation {
             check(!preparationOnly) { "PREPARATION_SEND_UNREACHABLE" }
             requireOwnedCurrent()
             check(editNode().text?.toString() == TongyiEngineeringRunner.PAYLOAD)
-            if (ui.has("send_role_binding")) {
+            if (target == EngineeringTarget.DEEPSEEK) {
+                action {
+                    val session = projectionSession
+                    session?.requireRecordingActive()
+                    val authorized = ui.getJSONObject("deepseek_contract").get("invocation_authorized")
+                    check(authorized is Boolean && authorized) { "DEEPSEEK_SEND_INVOCATION_NOT_AUTHORIZED" }
+                    val input = editNode()
+                    val candidate = checkNotNull(currentDeepSeekSendRole(input, currentEmpty(input), deepSeekFrame())) {
+                        "DEEPSEEK_CURRENT_SEND_ROLE_REQUIRED"
+                    }
+                    check(projectionSession === session) { "CURRENT_CAPTURE_SESSION_CHANGED" }
+                    session?.requireRecordingActive()
+                    check(candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "DEEPSEEK_SEND_CLICK_REFUSED" }
+                }
+            } else if (ui.has("send_role_binding")) {
                 action {
                     val session = projectionSession
                     session?.requireRecordingActive()
@@ -2441,7 +2550,6 @@ class TongyiWholeEngineeringInstrumentation {
     }
 
     companion object {
-        private const val TARGET = "com.aliyun.tongyi"
         private const val PAYLOAD_SHA = "f1e312c9123478fcf64c9ad056a436a493f6bd5dde09af029fc8ad62186efac5"
         private fun sha(raw: ByteArray) = MessageDigest.getInstance("SHA-256").digest(raw)
             .joinToString("") { "%02x".format(it.toInt() and 255) }

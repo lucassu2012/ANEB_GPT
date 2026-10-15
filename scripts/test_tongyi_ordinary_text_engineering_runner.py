@@ -261,6 +261,72 @@ class ExternalPhone:
 
 
 class WholeEngineeringHostTest(unittest.TestCase):
+    def test_deepseek_profile_cannot_admit_a_legacy_or_missing_target_ui_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            phone = ExternalPhone()
+            release = self.release(root)
+            release.update(target_profile="deepseek", target_package="com.deepseek.chat")
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual([], phone.commands, "a target/profile mismatch must refuse before any OS/installation/input")
+            self.assertEqual("DEEPSEEK_TARGET_UI_CONTRACT_REQUIRED", result["reason"])
+
+    def test_unsupported_or_mismatched_target_has_zero_external_actions(self):
+        for target in ({"target_profile": "arbitrary"},
+                       {"target_profile": "deepseek", "target_package": "com.aliyun.tongyi"}):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                phone = ExternalPhone()
+                release = self.release(root)
+                release.update(target)
+                result = run_pair(release, root / "actual", system=phone)
+                self.assertEqual("PAIR_STOPPED", result["state"])
+                self.assertIn(result["reason"], ("UNSUPPORTED_TARGET_PROFILE", "TARGET_PROFILE_PACKAGE_OR_MODE_MISMATCH"))
+                self.assertEqual([], phone.commands)
+
+    def test_whole_deepseek_target_routes_two_conditions_and_preserves_target_identity(self):
+        class DeepSeekOs(ExternalPhone):
+            def run(self, argv, timeout, **kwargs):
+                args = list(argv)[3:]
+                if args[:3] == ["shell", "am", "instrument"]:
+                    if ("target_profile" not in args or args[args.index("target_profile") + 1] != "deepseek"
+                            or "target_package" not in args or args[args.index("target_package") + 1] != "com.deepseek.chat"):
+                        self.commands.append(list(argv))
+                        return 1, b"INSTRUMENTATION_FAILED: TARGET_PROFILE_REQUIRED\n", b""
+                rc, raw, error = super().run(argv, timeout, **kwargs)
+                if args[:3] == ["shell", "am", "instrument"]:
+                    run = args[args.index("run_id") + 1]
+                    remote = "/sdcard/Android/data/com.aneb.probe.codex/files/tongyi-engineering/" + run
+                    terminal = json.loads(self.files[remote]["TERMINAL.json"])
+                    terminal.update(target_profile="deepseek", target_package="com.deepseek.chat")
+                    self.files[remote]["TERMINAL.json"] = json.dumps(terminal).encode()
+                if args == ["shell", "dumpsys", "connectivity"] and self.wifi_on == "0":
+                    return 0, CURRENT_CELLULAR_NR, b""
+                return rc, raw, error
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            release.update(target_profile="deepseek", target_package="com.deepseek.chat", network_transition_authorized=True)
+            release["ui_contract"] = {"binding_scope": "current_owned_deepseek_ui",
+                "capture_backend": "android_media_projection_v1",
+                "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True,
+                "deepseek_contract": {"visible_modes": "thinking_off_search_off",
+                    "send_description": "EXTERNAL_FIXTURE_NOT_A_REAL_SEND_QUALIFICATION", "invocation_authorized": True}}
+            phone = DeepSeekOs()
+            phone.require_native_abi = True
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PAIR_OBSERVATION_CLOSED", result["state"], result)
+            self.assertEqual(["W1", "C1"], [row["network_condition"] for row in result["attempts"]])
+            self.assertEqual([1, 1], [row["send_calls"] for row in result["attempts"]])
+            self.assertTrue(all(row["owned_cleanup"] for row in result["attempts"]))
+            self.assertTrue(result["network_settings_restored"])
+            for attempt in result["attempts"]:
+                terminal = json.loads((root / "actual" / attempt["run_id"] / "originals" / "TERMINAL.json").read_bytes())
+                self.assertEqual("com.deepseek.chat", terminal["target_package"])
+                self.assertTrue(all(hashlib.sha256((root / "actual" / p["path"]).read_bytes()).hexdigest() == p["sha256"]
+                                    for p in attempt["artifacts"]))
+
     def test_public_source_inspection_closes_two_read_only_home_sources_without_accepting_reference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

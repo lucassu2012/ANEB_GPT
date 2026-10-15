@@ -143,3 +143,67 @@ Android 只结束自己启动且 PID/UID/start-ticks仍匹配的通义与 screen
 只切换获准 WiFi，原 mobile_data/stayon 只读不改；结束恢复本轮 WiFi 原值并核三设置。此工程设置值恢复不单独证明原 SSID、全部后台或网络路由恢复；Root 最后仍按 AGENTS 做现场前置/后置，未知会话不结束，不能凭 Launcher 就宣称全局 clean。
 
 若原件传输、native terminal、录像/目标归属、自有进程退出、设置恢复或原 APK 恢复任一不明，PAIR_STOPPED，C1 NOT_RUN（如尚未开始），原输出保留。不能换目录/runId补旧失败，不把独立之后清场回填原轮成功。
+
+## 同引擎 DeepSeek 私有方法迁移
+
+同一 `run_pair` / `collectOnePrivateEngineeringObservation` 支持封闭的
+`target_profile`：缺省 `tongyi` → `com.aliyun.tongyi`；显式 `deepseek` →
+`com.deepseek.chat`。`target_package` 如给出必须与封闭选择一致。HOST 传入两字段，
+Native、Core、进程身份观察及 force-stop 使用同一选择；DeepSeek terminal 必须回传相同
+身份才可封存为该 target 的闭合结果。不能把 DeepSeek 原件写成 Tongyi。已有 Reader 的
+private engineering pair 原件格式不变，不新增正式 schema、评分、转换器或第二 collector。
+名称中的 `tongyi-engineering-807` feature release、instrumentation class 与私有输出目录
+是共享协议入口，不是目标身份。旧 Tongyi preparation/UIQ/source-inspection 模式仍仅支持
+Tongyi，不能把这些模式的 Tongyi 像素或 snapshot 冒充 DeepSeek 资格。
+
+DeepSeek `COLLECTION` release 的 `ui_contract` 必须由 Root 新鲜批准，形状如下；这不是
+可执行授权示例，`send_description` 的占位文字绝不能当已证实 SEND 语义：
+
+```json
+{
+  "binding_scope": "current_owned_deepseek_ui",
+  "capture_backend": "android_media_projection_v1",
+  "new_session_text_only_attachment_contract": true,
+  "attachment_resource_ids": [],
+  "deepseek_contract": {
+    "visible_modes": "thinking_off_search_off",
+    "send_description": "ROOT_MUST_BIND_THE_CURRENT_SUPPORTED_PUBLIC_SEND_DESCRIPTION",
+    "invocation_authorized": false
+  }
+}
+```
+
+同一 Native 使用真实当前树的“开启新对话”语义对象或其支持 ACTION_CLICK 的直接父，
+再确认“新对话”及“今天有什么可以帮到你？”的新空态。进入前已有 editable 必须明确为空；
+没有 editable 不等于空：必须是当前 TextView 提示“发消息或按住说话”、唯一直接
+ViewFactoryHolder，以及与两个 checked 模式控件同属的非全屏 composer。缺证明零新会话
+动作，未知草稿不触碰。模式标签本身可以是零 bounds，但只能对实际当前 enabled、
+checkable、clickable 且支持公开点击的直接父操作；ON 时至多切一次并 fresh 读回 OFF。
+这只证明可见深度思考 OFF/智能搜索 OFF，不证明 backend 工具、模型或会话身份。
+
+聚焦只使用当前对象/直接父真实支持的 ACTION_FOCUS 或 ACTION_CLICK。若新会话没有
+实际可编辑、focused、支持 ACTION_SET_TEXT 的唯一 Android EditText，安全拒绝；保存的
+Home PNG/XML 不证明该 API。不得猜坐标、发送盲键或沿用 Tongyi pixel/menu/RID/SEND
+拓扑。Root 必须另行在固定候选上验证这一实际资格缝隙，代码编译与外部 Android fixture
+不等于设备资格。239B 全量回读、同 handle/parent/window/owner、5秒 input/GO 门不变。
+
+SEND 描述必须来自新批准的当前公开语义资格；不默认猜“发送”或空白箭头。read-only
+snapshot 只在当前唯一语义对象/支持点击的直接父，与本轮完整239B composer、两模式控件、
+活动窗口及 owner 全部绑定后报告 uniqueSend。Root 的 Boolean invocation_authorized
+必须为 true，且真实 action 边界再次取得同样绑定，紧邻 ACTION_CLICK 确认同 Projection
+session active；Core 仍先 fsync SEND_INTENT 再一次调用。缺失、重名、替代、拒绝或不明
+均不重试，不借旧图片/历史 bounds/旧 handle 放行。
+
+媒体使用原共享 MediaProjection 正常 OS 授权/FGS/session/MP4/MediaExtractor 路径；不
+自动批准、不绕录屏、不重置180/20/5/90。清场使用原共享全进程身份观察和20秒预算：
+仅本轮 exact239B、同真实 editor/parent/window/owner 才可公开全选一次、DEL down/up
+一次、fresh 空读、正常 HOME，再确认 owned stop/全包 absent。缺 public selection 支持、
+未知替代内容或清场不明不能补删或报告成功；持久 cold-empty 仍需实际独立验收。
+
+HOST 保留原 W1 闭合后才 C1、310秒 supervisor/cooperative CANCEL、原件 pull/pins、
+THIS Reader 字节恢复及三设置恢复流程。这里不扩大默认网络恢复的证明范围。未来真实
+DeepSeek 必须新目录/新机会/新现场 admission、新目标版本和公开 API/模式/SEND 绑定、
+固定 APK/CI/payload/tool pins、普通测试 SEND/网络与正常 OS consent 授权，不复用旧
+DeepSeek03–06/C01/C02 或 Tongyi release。当前源码与本机外部边界测试不构成该实机放行。
+所有结果仍 private method-migration/formal0、metrics=null、RPI=not_computed；媒体域、
+Android clock、HOST clock 不混用，调用返回不证明 delivery/回复/完成或网络因果。
