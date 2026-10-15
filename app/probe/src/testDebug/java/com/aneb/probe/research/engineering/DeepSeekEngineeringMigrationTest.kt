@@ -17,6 +17,7 @@ class DeepSeekEngineeringMigrationTest {
         var duplicateSend = false
         var missingEmptyComposerProof = false
         var replaceDraftAfterNewEmptyRead = false
+        var focusSupported = true
         private var newEmptyReadReturned = false
         val invoked = mutableListOf<String>()
         private val bounds = TongyiPreparationRunner.Bounds(0, 0, 1200, 2486)
@@ -35,7 +36,7 @@ class DeepSeekEngineeringMigrationTest {
                 n("thinking-label", "thinking", "深度思考").copy(bounds = TongyiPreparationRunner.Bounds(0,0,0,0)),
                 n("search", "composer").copy(checkable = true, checked = search, clickable = true, clickAvailable = true),
                 n("search-label", "search", "智能搜索").copy(bounds = TongyiPreparationRunner.Bounds(0,0,0,0)),
-                n("input", "composer").copy(text = draft, editable = true, focused = focused, setTextAvailable = true, focusAvailable = true),
+                n("input", "composer").copy(text = draft, editable = true, focused = focused, setTextAvailable = true, focusAvailable = focusSupported),
                 n("send", "composer", description = "EXTERNAL_FIXTURE_SEND").copy(clickable = true, clickAvailable = true))
             if (duplicateSend) nodes += n("second-send", "composer", description = "EXTERNAL_FIXTURE_SEND").copy(clickable = true, clickAvailable = true)
             if (missingEmptyComposerProof) nodes.removeAll { it.id == "input" }
@@ -95,6 +96,82 @@ class DeepSeekEngineeringMigrationTest {
         assertFalse(directory.resolve("SEND_INTENT.json").exists())
     }
 
+    @Test fun noSendQualificationRequiresRealReadbackRetainsObservedDescriptionsAndClosesItsOwner() {
+        val directory = Files.createTempDirectory("deepseek-no-send-qualification").resolve("run").toFile()
+        val visible = VisibleAndroid()
+        val os = AndroidBoundary(directory)
+        val retained = mutableListOf<String>()
+        val observedDescriptions = mutableListOf<String>()
+        var inputCalls = 0
+        val android = object : DeepSeekDraftRoleQualification.Android {
+            override fun prepareEmpty(deadlineNanos: Long) = DeepSeekUiAdapter(visible, deadlineNanos).prepare()
+            override fun enterExactAndReadback(text: String): DeepSeekDraftRoleQualification.Readback {
+                val before = visible.read().nodes.single { it.editable }
+                check(before.focused && before.setTextAvailable && before.text.isEmpty())
+                inputCalls++
+                visible.draft = text // External Android ACTION_SET_TEXT boundary, not an internal validator mock.
+                val frame = visible.read()
+                val actual = frame.nodes.single { it.editable }
+                return DeepSeekDraftRoleQualification.Readback(actual.packageName, frame.owner, actual.windowId,
+                    frame.nodes.single { it.id == actual.parent }.windowId, actual.id == before.id && actual.parent == before.parent,
+                    actual.text, actual.showingHint, actual.focused)
+            }
+            override fun retainCurrent(label: String) {
+                retained += label
+                observedDescriptions += visible.read().nodes.map { it.description }.filter { it.isNotEmpty() }
+            }
+            override fun retainRejectedCached() = false
+            override fun cleanupOwned(): Boolean {
+                check(visible.draft == TongyiEngineeringRunner.PAYLOAD)
+                visible.draft = "" // External UI closure; real Native selection/DEL remains a separate runtime proof.
+                return os.cleanupOwned() // Real selected lifecycle; only external shell packets are fixtures.
+            }
+        }
+        val result = DeepSeekDraftRoleQualification(android, os).runOnce("DS_NO_SEND_QUALIFICATION", directory)
+        assertTrue("positive actual239B readback required: ${result.failure}", result.inputReadbackConfirmed)
+        assertEquals("DRAFT_ROLE_QUALIFICATION_CLOSED", result.state)
+        assertEquals(listOf("new-empty", "owned-draft"), retained)
+        assertEquals(retained, result.retainedStages)
+        assertTrue(observedDescriptions.contains("EXTERNAL_FIXTURE_SEND"))
+        assertEquals(1, inputCalls)
+        assertTrue(result.ownedCleanup)
+        assertEquals(1, os.stops)
+        assertEquals(0, os.sends)
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+    }
+
+    @Test fun noSendQualificationPreservesUnsupportedFocusAndFalseCleanupWithoutClaimingInput() {
+        val directory = Files.createTempDirectory("deepseek-no-send-refusal").resolve("run").toFile()
+        val visible = VisibleAndroid().apply { focusSupported = false }
+        val os = AndroidBoundary(directory).apply { refuseOwnedStop = true }
+        var cleanupReached = false
+        var rejectionAfterCleanup = false
+        val android = object : DeepSeekDraftRoleQualification.Android {
+            override fun prepareEmpty(deadlineNanos: Long) = DeepSeekUiAdapter(visible, deadlineNanos).prepare()
+            override fun enterExactAndReadback(text: String): DeepSeekDraftRoleQualification.Readback = error("INPUT_MUST_NOT_BE_REACHED")
+            override fun retainCurrent(label: String) = error("RETENTION_MUST_NOT_FABRICATE_PREPARATION_SUCCESS")
+            override fun cleanupOwned(): Boolean { cleanupReached = true; return os.cleanupOwned() }
+            override fun retainRejectedCached(): Boolean {
+                check(cleanupReached)
+                rejectionAfterCleanup = true
+                return true // External cached observation, never a new UI acquisition.
+            }
+        }
+        val result = DeepSeekDraftRoleQualification(android, object : TongyiEngineeringRunner.MonotonicClock {
+            override fun nowNanos() = visible.now
+        }).runOnce("DS_NO_SEND_REFUSAL", directory)
+        assertFalse(result.inputReadbackConfirmed)
+        assertEquals("DEEPSEEK_SUPPORTED_DIRECT_ACTION_REQUIRED", result.failure)
+        assertFalse(result.ownedCleanup)
+        assertTrue(cleanupReached && rejectionAfterCleanup && result.rejectedRetained)
+        assertTrue(result.retainedStages.isEmpty())
+        assertEquals("", visible.draft)
+        assertEquals(1, os.stops)
+        assertTrue(os.alive) // Actual external stop refusal; never turn it into claimed absence.
+        assertEquals(0, os.sends)
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+    }
+
     private class AndroidBoundary(val directory: File, val visibleUi: VisibleAndroid? = null) : TongyiEngineeringRunner.Phone,
         TongyiEngineeringRunner.MonotonicClock, OwnedProcessLifecycle.Shell {
         var now = 1_000_000_000L
@@ -102,6 +179,7 @@ class DeepSeekEngineeringMigrationTest {
         var alive = true
         var sends = 0
         var stops = 0
+        var refuseOwnedStop = false
         val commands = mutableListOf<String>()
         val saved = mutableListOf<String>()
         val lifecycle = OwnedProcessLifecycle(this, this, EngineeringTarget.DEEPSEEK)
@@ -140,7 +218,11 @@ class DeepSeekEngineeringMigrationTest {
                 "cat /proc/42/stat" -> "42 (deepseek) S " + "0 ".repeat(18) + "12345 0\n"
                 "cat /proc/42/status" -> "Uid:\t10241\t10241\t10241\t10241\n"
                 "cat /proc/42/cmdline" -> "com.deepseek.chat\u0000"
-                "am force-stop com.deepseek.chat" -> { stops++; alive = false; "" }
+                "am force-stop com.deepseek.chat" -> {
+                    stops++
+                    if (refuseOwnedStop) return OwnedProcessLifecycle.ShellResult(true, 1, "", "EXTERNAL_OS_STOP_REFUSED")
+                    alive = false; ""
+                }
                 else -> error("UNEXPECTED_OS_COMMAND_$command")
             }
             return OwnedProcessLifecycle.ShellResult(true, 0, raw)

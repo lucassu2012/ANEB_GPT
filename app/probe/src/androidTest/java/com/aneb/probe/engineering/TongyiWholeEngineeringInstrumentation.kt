@@ -24,6 +24,7 @@ import androidx.test.uiautomator.UiDevice
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.EngineeringTarget
 import com.aneb.probe.research.engineering.DeepSeekUiAdapter
+import com.aneb.probe.research.engineering.DeepSeekDraftRoleQualification
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
 import com.aneb.probe.research.engineering.PublicUiIdleTimeoutScope
 import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
@@ -170,6 +171,28 @@ class TongyiWholeEngineeringInstrumentation {
         target: EngineeringTarget = EngineeringTarget.TONGYI): TongyiEngineeringRunner.Phone =
         NativePhone(root, condition, ui, preparationOnly = false, qualificationOnly = false, sourceInspectionOnly = false, target = target)
 
+    /** Separate limited entry: never exposes Phone, accepts a SEND selector, or invokes COLLECTION. */
+    internal fun runDeepSeekDraftRoleQualificationOnce(runId: String, root: File, ui: JSONObject): DeepSeekDraftRoleQualification.Result {
+        check(sha(TongyiEngineeringRunner.PAYLOAD.toByteArray(Charsets.UTF_8)) == PAYLOAD_SHA)
+        check(ui.getString("binding_scope") == "current_owned_deepseek_ui" &&
+            listOf("capture_backend", "deepseek_contract", "send", "send_role_binding", "menu_argb_sha256").none(ui::has)) {
+            "DEEPSEEK_NO_SEND_QUALIFICATION_CONTRACT_REQUIRED"
+        }
+        val contract = ui.getJSONObject("deepseek_qualification")
+        check(contract.length() == 1 && contract.getString("visible_modes") == "thinking_off_search_off" &&
+            ui.getBoolean("new_session_text_only_attachment_contract") && ui.getJSONArray("attachment_resource_ids").length() == 0) {
+            "DEEPSEEK_NO_SEND_VISIBLE_TEXT_CONTRACT_REQUIRED"
+        }
+        val backend = NativePhone(root, "DEEPSEEK_DRAFT_ROLE_QUALIFICATION", ui, target = EngineeringTarget.DEEPSEEK)
+        val result = DeepSeekDraftRoleQualification(backend.deepSeekDraftQualificationAndroid(), SystemClock::elapsedRealtimeNanos)
+            .runOnce(runId, root)
+        try { backend.sealDeepSeekDraftQualification(result) }
+        catch (retention: Exception) {
+            throw IllegalStateException("DEEPSEEK_QUALIFICATION_REPORT_NOT_RETAINED_original_failure=${result.failure ?: "<NONE>"}", retention)
+        }
+        return result
+    }
+
     private class NativePhone(
         private val root: File,
         private val condition: String,
@@ -192,6 +215,14 @@ class TongyiWholeEngineeringInstrumentation {
         private var ordinaryOwnDraftParent: AccessibilityNodeInfo? = null
         private var ordinaryOwnDraftWindow = -1
         private var ordinaryOwnDraftOwner: OwnedProcessLifecycle.Owner? = null
+        private var draftQualificationActive = false
+        private var draftQualificationCachedNodes: ByteArray? = null
+        private var draftQualificationSelectionAdvertised: Boolean? = null
+        private var draftQualificationSelectionReturned: Boolean? = null
+        private var draftQualificationSelectionStart: Int? = null
+        private var draftQualificationSelectionEnd: Int? = null
+        private var draftQualificationFullSelectionConfirmed: Boolean? = null
+        private var draftQualificationEmptyConfirmed: Boolean? = null
         private data class OrdinaryGraphicsBinding(
             val owner: OwnedProcessLifecycle.Owner, val windowId: Int, val width: Int, val height: Int,
             val rotation: Int, val rootBounds: TongyiPreparationRunner.Bounds, val windowBounds: TongyiPreparationRunner.Bounds,
@@ -455,6 +486,115 @@ class TongyiWholeEngineeringInstrumentation {
             return snapshot()
         }
 
+        fun deepSeekDraftQualificationAndroid(): DeepSeekDraftRoleQualification.Android {
+            check(target == EngineeringTarget.DEEPSEEK && !preparationOnly && !qualificationOnly && !sourceInspectionOnly)
+            draftQualificationActive = true // Per-instance only; never enables a COLLECTION capability.
+            return object : DeepSeekDraftRoleQualification.Android {
+                override fun prepareEmpty(deadlineNanos: Long) {
+                    ordinaryPreInputPreparation = true
+                    try {
+                        launchOwned(deadlineNanos)
+                        deepSeekAdapter().prepare()
+                        freshEmpty = true
+                    } finally { ordinaryPreInputPreparation = false }
+                }
+                override fun enterExactAndReadback(text: String): DeepSeekDraftRoleQualification.Readback {
+                    this@NativePhone.enterExact(text) // Original SET_TEXT + fresh full same-handle/parent/window/owner assertions.
+                    val actual = checkNotNull(ordinaryOwnDraft)
+                    val parent = checkNotNull(ordinaryOwnDraftParent)
+                    val owner = checkNotNull(targetOwner)
+                    // Copy that successful original readback object; no refresh/tree/owner/UI acquisition.
+                    return DeepSeekDraftRoleQualification.Readback(actual.packageName?.toString().orEmpty(),
+                        "${owner.pid}/${owner.uid}/${owner.startTicks}", actual.windowId, parent.windowId,
+                        ordinaryOwnDraftOwner == owner && actual.windowId == ordinaryOwnDraftWindow,
+                        actual.text?.toString().orEmpty(), actual.isShowingHintText, actual.isFocused)
+                }
+                override fun retainCurrent(label: String) {
+                    check(label == "new-empty" || label == "owned-draft")
+                    val (frame, handles) = deepSeekFrame()
+                    check(deepSeekAdapter().modesOff(frame)) { "DEEPSEEK_VISIBLE_OFF_OFF_REQUIRED" }
+                    val editor = frame.nodes.singleOrNull { it.visible && it.editable } ?: error("DEEPSEEK_EDITOR_NOT_UNIQUE")
+                    check(editor.focused && editor.enabled && editor.setTextAvailable) { "DEEPSEEK_QUALIFICATION_FOCUSED_EDITOR_REQUIRED" }
+                    if (label == "new-empty") check(currentEmpty(handles[editor.id.toInt()])) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
+                    else {
+                        val actual = handles[editor.id.toInt()]
+                        val parent = handles.singleOrNull { it == ordinaryOwnDraftParent }
+                        check(actual == ordinaryOwnDraft && parent != null && editor.parent?.let { handles[it.toInt()] } == parent &&
+                            targetOwner == ordinaryOwnDraftOwner && frame.windowId == ordinaryOwnDraftWindow &&
+                            !editor.showingHint && editor.text == TongyiEngineeringRunner.PAYLOAD) { "DEEPSEEK_QUALIFIED_DRAFT_CHANGED" }
+                    }
+                    writeDraftQualificationNodes("$label-nodes.json")
+                    saveOriginals(label) // Existing sequential PNG/XML/owner sources, not an atomic frame.
+                }
+                override fun retainRejectedCached(): Boolean {
+                    if (draftQualificationCachedNodes == null) return false
+                    writeDraftQualificationNodes("rejected-current-nodes.json") // Cached pre-cleanup acquisition only; no resampling.
+                    return true
+                }
+                override fun cleanupOwned() = this@NativePhone.cleanupOwned()
+            }
+        }
+
+        private fun cacheDraftQualificationNodes(frame: DeepSeekUiAdapter.Frame, handles: List<AccessibilityNodeInfo>) {
+            val nodes = JSONArray()
+            frame.nodes.forEachIndexed { index, node ->
+                nodes.put(JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
+                    .put("package", node.packageName).put("class", node.className).put("window_id", node.windowId)
+                    .put("bounds", JSONArray(listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom)))
+                    .put("text", node.text).put("description", node.description).put("hint", node.hint ?: JSONObject.NULL)
+                    .put("showing_hint", node.showingHint).put("visible", node.visible).put("enabled", node.enabled)
+                    .put("clickable", node.clickable).put("checkable", node.checkable).put("checked", node.checked)
+                    .put("editable", node.editable).put("focused", node.focused)
+                    .put("action_ids", JSONArray(handles[index].actionList.map { it.id })))
+            }
+            draftQualificationCachedNodes = (JSONObject().put("kind", "private_current_public_objects_no_send_role_assignment")
+                .put("owner", frame.owner).put("window_id", frame.windowId).put("root_id", frame.rootId)
+                .put("display", JSONArray(listOf(frame.width, frame.height, frame.rotation)))
+                .put("editor_ids", JSONArray(frame.nodes.filter { it.visible && it.editable }.map { it.id }))
+                .put("described_node_ids", JSONArray(frame.nodes.filter { it.visible && it.description.isNotEmpty() }.map { it.id }))
+                .put("nodes", nodes).put("sampling_claim", "sequential_public_sources_not_atomic")
+                .put("failure_time_relation", "UNKNOWN_last_existing_acquisition_not_a_fresh_failure_snapshot")
+                .put("role_assignment", "UNKNOWN_no_description_is_promoted_to_SEND").put("reference_accepted", false)
+                .put("formal_new_slots", 0).toString(2) + "\n").toByteArray(Charsets.UTF_8)
+        }
+
+        private fun writeDraftQualificationNodes(name: String) {
+            check(!File(root, name).exists()) { "QUALIFICATION_OBSERVATION_ALREADY_RETAINED" }
+            FileOutputStream(File(root, name)).use {
+                it.write(checkNotNull(draftQualificationCachedNodes)); it.fd.sync()
+            }
+        }
+
+        fun sealDeepSeekDraftQualification(result: DeepSeekDraftRoleQualification.Result) {
+            val originals = JSONArray()
+            root.listFiles().orEmpty().filter { it.isFile && (it.name.startsWith("new-empty") ||
+                it.name.startsWith("owned-draft") || it.name == "rejected-current-nodes.json" || it.name.startsWith("OWNED_")) }
+                .sortedBy { it.name }.forEach { file ->
+                    val bytes = file.readBytes()
+                    originals.put(JSONObject().put("path", file.name).put("bytes", bytes.size).put("sha256", sha(bytes)))
+                }
+            writeJson("DEEPSEEK_DRAFT_ROLE_QUALIFICATION.json", JSONObject().put("kind", "private_no_send_draft_role_qualification")
+                .put("run_id", root.name).put("target_profile", target.id).put("target_package", TARGET)
+                .put("feature_release", "deepseek-no-send-qualification-811").put("payload_sha256", PAYLOAD_SHA)
+                .put("preparation_deadline_elapsed_realtime_nanos", if (preparationDeadline > 0) preparationDeadline.toString() else JSONObject.NULL)
+                .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only")
+                .put("state", result.state).put("input_readback_confirmed", result.inputReadbackConfirmed)
+                .put("retained_stages", JSONArray(result.retainedStages)).put("retained_originals", originals)
+                .put("failure", result.failure ?: JSONObject.NULL).put("original_stack", result.originalStack ?: JSONObject.NULL)
+                .put("owned_cleanup", result.ownedCleanup).put("rejected_cached_nodes_retained", result.rejectedRetained)
+                .put("rejected_retention_failure", result.rejectedRetentionFailure ?: JSONObject.NULL)
+                .put("selection_observation", JSONObject()
+                    .put("advertised", draftQualificationSelectionAdvertised ?: JSONObject.NULL)
+                    .put("original_action_returned", draftQualificationSelectionReturned ?: JSONObject.NULL)
+                    .put("actual_start", draftQualificationSelectionStart ?: JSONObject.NULL)
+                    .put("actual_end", draftQualificationSelectionEnd ?: JSONObject.NULL)
+                    .put("full_selection_confirmed", draftQualificationFullSelectionConfirmed ?: JSONObject.NULL)
+                    .put("empty_readback_confirmed", draftQualificationEmptyConfirmed ?: JSONObject.NULL))
+                .put("send_calls", 0).put("recording", "NOT_STARTED").put("network_transition", "NOT_STARTED")
+                .put("claim_scope", "private_method_migration_qualification_only").put("metrics", JSONObject.NULL)
+                .put("formal_new_slots", 0).put("reference_accepted", false).put("rpi", "not_computed"))
+        }
+
         /** Immutable values from this actual tree; indices are acquisition-local handles, never selectors. */
         private fun deepSeekNodeValues(handles: List<AccessibilityNodeInfo>) = handles.mapIndexed { index, node ->
             val rect = Rect().also(node::getBoundsInScreen)
@@ -475,8 +615,10 @@ class TongyiWholeEngineeringInstrumentation {
             check(rootNode.windowId >= 0 && window.isActive && window.id == rootNode.windowId && window.root == rootNode) {
                 "DEEPSEEK_CURRENT_WINDOW_CHANGED"
             }
-            return DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId, base.width, base.height, base.rotation,
-                "0", deepSeekNodeValues(handles)) to handles
+            val frame = DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId, base.width, base.height, base.rotation,
+                "0", deepSeekNodeValues(handles))
+            if (draftQualificationActive) cacheDraftQualificationNodes(frame, handles)
+            return frame to handles
         }
 
         private fun deepSeekAdapter() = DeepSeekUiAdapter(object : DeepSeekUiAdapter.Android {
@@ -1098,9 +1240,14 @@ class TongyiWholeEngineeringInstrumentation {
                 check(if (expected.isEmpty()) currentEmpty(current) else !current.isShowingHintText && current.text?.toString() == expected) {
                     "OWN_DRAFT_EXPECTED_PREFIX_CHANGED_NOT_TOUCHED"
                 }
-                if (fullSelectionRequired) check(expected == payload && current.textSelectionStart == 0 &&
-                    current.textSelectionEnd == payload.length) {
-                    "OWN_DRAFT_FULL_SELECTION_UNCONFIRMED"
+                if (fullSelectionRequired) {
+                    if (draftQualificationActive) draftQualificationFullSelectionConfirmed = false
+                    check(expected == payload && current.textSelectionStart.also {
+                        if (draftQualificationActive) draftQualificationSelectionStart = it
+                    } == 0 && current.textSelectionEnd.also {
+                        if (draftQualificationActive) draftQualificationSelectionEnd = it
+                    } == payload.length) { "OWN_DRAFT_FULL_SELECTION_UNCONFIRMED" }
+                    if (draftQualificationActive) draftQualificationFullSelectionConfirmed = true
                 }
                 withinClosure()
                 return current
@@ -1126,18 +1273,23 @@ class TongyiWholeEngineeringInstrumentation {
             }
             val selectionTarget = boundDraft(payload)
             cleanupPhase = "clear_select_all"
-            check(selectionTarget.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_SELECTION }) {
+            val selectionAdvertised = selectionTarget.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_SELECTION }
+            if (draftQualificationActive) draftQualificationSelectionAdvertised = selectionAdvertised
+            check(selectionAdvertised) {
                 "OWN_DRAFT_SELECTION_UNSUPPORTED"
             }
             withinClosure()
-            check(selectionTarget.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+            val selectionReturned = selectionTarget.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, payload.length)
-            })) { "OWN_DRAFT_SELECTION_REFUSED" }
+            })
+            if (draftQualificationActive) draftQualificationSelectionReturned = selectionReturned
+            check(selectionReturned) { "OWN_DRAFT_SELECTION_REFUSED" }
             withinClosure()
             boundDraft(payload, fullSelectionRequired = true)
             deletePair()
             boundDraft("") // Same owned editor/hint must actually be empty; no further deletion.
+            if (draftQualificationActive) draftQualificationEmptyConfirmed = true
             cleanupPhase = "clear_home_before_stop"
             withinClosure()
             check(device.pressHome()) { "OWN_DRAFT_HOME_REFUSED" }

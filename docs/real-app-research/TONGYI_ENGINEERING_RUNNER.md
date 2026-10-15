@@ -207,3 +207,56 @@ DeepSeek 必须新目录/新机会/新现场 admission、新目标版本和公�
 DeepSeek03–06/C01/C02 或 Tongyi release。当前源码与本机外部边界测试不构成该实机放行。
 所有结果仍 private method-migration/formal0、metrics=null、RPI=not_computed；媒体域、
 Android clock、HOST clock 不混用，调用返回不证明 delivery/回复/完成或网络因果。
+
+### DeepSeek 独立非 SEND 资格入口
+
+SEND 描述未知时，不填占位描述跑 COLLECTION。独立 instrumentation class 为
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation`，唯一方法
+`qualifyCurrentDraftAndPublicActionsWithoutSendOrRecording`。它不在 HOST 按整类选择的
+`TongyiWholeEngineeringInstrumentation` 中；HOST/COLLECTION 的原门不变。
+
+Root 新鲜批准的 direct instrumentation 参数是 `feature_release=deepseek-no-send-qualification-811`、
+`target_profile=deepseek`、`target_package=com.deepseek.chat`、唯一新 `run_id`、原固定
+`payload_sha256`、UTF-8 JSON 的 `ui_contract_b64`。不得传 `network_condition` 或
+`execution_mode`。合同如下（仅格式，不是实机授权）：
+
+```json
+{
+  "binding_scope": "current_owned_deepseek_ui",
+  "new_session_text_only_attachment_contract": true,
+  "attachment_resource_ids": [],
+  "deepseek_qualification": {"visible_modes": "thinking_off_search_off"}
+}
+```
+
+此入口拒绝 `capture_backend`、`deepseek_contract`、`send`、`send_role_binding` 及
+Tongyi 菜单像素字段；不请求 Projection/consent，不录屏、不切网络、不 SEND。
+能力接口仅有准备空态、输入及实际回读、观察留存、缓存拒绝留存和共享 own cleanup，
+不暴露通用 Phone。原 create-once 根和 PREP180/input5/cleanup20 不变；无 Core.runOnce、
+普通 snapshot、sendCandidate、startRecording 或 observeUntil 调用。
+
+真实 Native 仍复用 launchOwned / DeepSeekUiAdapter.prepare / enterExact / saveOriginals /
+cleanupOwned。正向通过必须是原 SET_TEXT 返回后同 owner/editor/parent/window 的完整239B
+实际回读；不支持聚焦/编辑/公开动作即失败，不把“正确的拒绝码”当输入资格 GREEN。
+完整 new-empty、owned-draft 阶段各有原 PNG/XML/owner 及当前节点 JSON；节点包括真实
+action IDs、文本/提示/描述、checked/focus、包/window、父子/边界关系，可供 Root 独立判断
+当前 composer 与动作。描述不自动成为 SEND，空白图标不改名。各源是顺序采样，非原子。
+
+清场仍只有原来的完整身份/自有239B全选一次、DEL一次、fresh空读、HOME/owned stop。
+仅在这些原动作/检查处内存复制 advertised、原 selection 返回值、原实际 selection start/end
+及空读确认；不多选、不多删、不加 UI read 或预算。未到达/未读字段为 null，不能把
+advertised 支持当实际清除成功，更不证明冷开持久为空。
+
+finally 共享清场结束后封存 `DEEPSEEK_DRAFT_ROLE_QUALIFICATION.json`：实际回读状态、
+阶段/原件 pins、原失败/栈、真实 cleanup、selection 观察、SEND0、recording NOT_STARTED、
+formal0/metrics null/reference false。失败可保留最后已取得节点的缓存；缓存可能早于
+失败，不是失败时重采或清场后的当前状态。清场/留存失败不升级为通过，部分原件保留。
+该文件不是正式 TERMINAL/PAIR，也不作为 Reader 的已闭合采集 bundle。Root 必须另发
+新现场前置/THIS Reader 备份、候选软件资格和一次机会卡；本机边界测试/编译不是设备
+API、角色、持久清场或后续 SEND 准入。后续真正 SEND 合同仍独立批准。
+
+Debug manifest 的显式 package queries 同时声明 Tongyi 与 DeepSeek，以供 targetContext
+PackageManager 的目标信息/启动 intent 路由使用；不增加 QUERY_ALL_PACKAGES、Release
+权限或 shell identity。此为必要的软件接线，不表示当前 P40 已实际发生包可见性失败，
+也不推定本轮设备 SDK。最终 merged Debug manifest/固定 APK 及真实目标可见性由 Root
+另核，不能把旧 APK 或本机编译外推为新现场通过。
