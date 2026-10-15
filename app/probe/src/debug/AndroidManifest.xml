@@ -2,9 +2,20 @@
 <!-- debug 变体专用清单：仅 debug 允许明文 HTTP（对模拟器宿主机 10.0.2.2:8443 联调）。
      release 不含 networkSecurityConfig，targetSdk>=28 默认禁明文（设计文档 §9.1）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <!-- Debug-only explicit target visibility for the private Android engineering executor. -->
     <queries>
         <package android:name="com.aliyun.tongyi" />
     </queries>
-    <application android:networkSecurityConfig="@xml/network_security_config" />
+    <application android:networkSecurityConfig="@xml/network_security_config">
+        <activity
+            android:name="com.aneb.probe.research.engineering.TongyiCaptureConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+        <service
+            android:name="com.aneb.probe.research.engineering.TongyiProjectionCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
 </manifest>
