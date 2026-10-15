@@ -12,6 +12,9 @@ import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
 import android.view.FrameStats
+import android.view.InputDevice
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
@@ -25,6 +28,7 @@ import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
 import com.aneb.probe.research.engineering.QualificationOwnerShellTransport
 import com.aneb.probe.research.engineering.TongyiEngineeringRunner
 import com.aneb.probe.research.engineering.TongyiPreparationRunner
+import com.aneb.probe.research.engineering.TongyiProjectionCaptureService
 import com.aneb.probe.research.engineering.TongyiUiReferenceQualificationRunner
 import org.json.JSONArray
 import org.json.JSONObject
@@ -152,6 +156,7 @@ class TongyiWholeEngineeringInstrumentation {
             it.fd.sync()
         }
         instrumentation.sendStatus(0, Bundle().apply { putString("aneb_terminal", terminal.toString()) })
+        runCatching { backend.persistOriginalPreparationFailure() }
     }
 
     /** Compile-only access to the real ordinary adapter; no preparation or capability substitution. */
@@ -188,12 +193,28 @@ class TongyiWholeEngineeringInstrumentation {
         private var ordinaryMenuObservation: OrdinaryMenuObservation? = null
         private var ordinaryMenuRejectionReason: String? = null
         private var ordinaryMenuPersistenceAttempted = false
+        private var originalPreparationFailure: Exception? = null
+        private var ordinaryPreInputPreparation = false
+        private var ordinaryPidRejectionIdentityAttempted = false
         private var capture: ParcelFileDescriptor? = null
         private var recorderOwner: OwnedProcessLifecycle.Owner? = null
         private var captureReader: Thread? = null
         private val captureReaderFailure = AtomicReference<Exception?>(null)
         private var captureReaderEof = false
         private var recordingClosureUnknown = false
+        private var projectionSession: TongyiProjectionCaptureService.Session? = null
+        private var instrumentationOwnershipWritten = false
+        private data class CleanupOriginalFailure(
+            val original: Throwable, val phase: String, val keyRequestIndex: Int?, val expectedRemainingLength: Int?,
+            val targetClosureDeadlineNanos: Long?, val lastDeadlineCheckNanos: Long?,
+        )
+        private var recordingCleanupFailure: CleanupOriginalFailure? = null
+        private var targetCleanupFailure: CleanupOriginalFailure? = null
+        private var cleanupPhase = "target_not_entered"
+        private var cleanupKeyRequestIndex: Int? = null
+        private var cleanupExpectedRemainingLength: Int? = null
+        private var cleanupLastDeadlineCheckNanos: Long? = null
+        private var cleanupFailurePersistenceAttempted = false
         private var preparationDeadline = 0L
         private var processShellSequence = 0
         private var preparationFrameSequence = 0
@@ -227,14 +248,19 @@ class TongyiWholeEngineeringInstrumentation {
             override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
         }, SystemClock::elapsedRealtimeNanos)
+        private val clearPackageIdleScope = PublicUiIdleTimeoutScope(
+            readTimeoutMillis = { Configurator.getInstance().getWaitForIdleTimeout() },
+            writeTimeoutMillis = { value ->
+                Configurator.getInstance().setWaitForIdleTimeout(value)
+                Unit
+            },
+        )
         val bootId: String? = runCatching { shell("cat /proc/sys/kernel/random/boot_id").trim() }.getOrNull()
         private val targetUid = context.packageManager.getApplicationInfo(TARGET, 0).uid
 
         private fun launchOwned(deadlineNanos: Long) {
             preparationDeadline = deadlineNanos
-            writeJson("OWNED_INSTRUMENTATION.json", JSONObject().put("package", context.packageName)
-                .put("pid", Process.myPid().toString()).put("uid", Process.myUid())
-                .put("start_ticks", processTicks(Process.myPid().toString())).put("run_id", root.name))
+            persistInstrumentationOwnership()
             processes.requirePackageAbsent(TARGET, readDeadline(preparationDeadline))
             check(device.currentPackageName == "com.huawei.android.launcher") { "LAUNCHER_NOT_CURRENT" }
             val launch = checkNotNull(context.packageManager.getLaunchIntentForPackage(TARGET))
@@ -257,97 +283,148 @@ class TongyiWholeEngineeringInstrumentation {
                     Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)))
         }
 
+        private fun persistInstrumentationOwnership() {
+            if (instrumentationOwnershipWritten) return
+            writeJson("OWNED_INSTRUMENTATION.json", JSONObject().put("package", context.packageName)
+                .put("pid", Process.myPid().toString()).put("uid", Process.myUid())
+                .put("start_ticks", processTicks(Process.myPid().toString())).put("run_id", root.name))
+            instrumentationOwnershipWritten = true
+        }
+
+        private fun prepareProjectionCapture(deadlineNanos: Long) {
+            check(!preparationOnly && !qualificationOnly && !sourceInspectionOnly) { "PROJECTION_ORDINARY_MODE_REQUIRED" }
+            check(ui.get("capture_backend") == "android_media_projection_v1") { "UNKNOWN_CAPTURE_BACKEND" }
+            preparationDeadline = deadlineNanos
+            persistInstrumentationOwnership() // Root can attribute/close this process even if consent fails.
+            check(device.currentPackageName == "com.huawei.android.launcher") { "LAUNCHER_NOT_CURRENT" }
+            val session = TongyiProjectionCaptureService.createSession(context, root, preparationDeadline)
+            projectionSession = session
+            writeJson("PROJECTION_CONSENT_PENDING.json", JSONObject().put("backend", "android_media_projection_v1")
+                .put("run_id", root.name).put("session_id", session.id)
+                .put("preparation_deadline_nanos", preparationDeadline.toString()))
+            session.launchConsent() // Normal OS dialog only; Source never approves it.
+            waitUntil(preparationDeadline) {
+                check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "PROJECTION_ORIGINAL_DEADLINE_EXPIRED" }
+                session.requireHealthy()
+                session.grantReady && session.activityClosed
+            }
+            val foreground = device.currentPackageName
+            check(foreground == context.packageName || foreground == "com.huawei.android.launcher") {
+                "PROJECTION_SETUP_FOREGROUND_NOT_OWNED"
+            }
+            if (foreground == context.packageName) check(device.pressHome()) { "PROJECTION_OWN_SETUP_HOME_REFUSED" }
+            waitUntil(preparationDeadline) {
+                check(SystemClock.elapsedRealtimeNanos() < preparationDeadline) { "PROJECTION_ORIGINAL_DEADLINE_EXPIRED" }
+                session.requireHealthy()
+                val current = device.currentPackageName
+                check(current == context.packageName || current == "com.huawei.android.launcher") {
+                    "PROJECTION_SETUP_FOREGROUND_NOT_OWNED"
+                }
+                current == "com.huawei.android.launcher"
+            }
+        }
+
         override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
-            check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
-            check(ui.getString("menu_argb_sha256").lowercase() == TongyiPreparationRunner.MENU_SHA256) { "FIXED_MENU_PIN_REQUIRED" }
-            check(ui.getJSONObject("menu").length() == 0 && ui.getJSONObject("focus_hint").length() == 0) {
-                "CURRENT_FRAME_UNBOUND_ROLE_CONTRACT_REQUIRED"
-            }
-            fun current(frame: TongyiPreparationRunner.Frame) = frame.nodes.filter { it.visible && it.packageName == TARGET }
-            fun inside(bounds: TongyiPreparationRunner.Bounds, container: TongyiPreparationRunner.Bounds) =
-                bounds.left >= container.left && bounds.top >= container.top && bounds.right <= container.right &&
-                    bounds.bottom <= container.bottom && bounds.right > bounds.left && bounds.bottom > bounds.top
-            fun directParent(frame: TongyiPreparationRunner.Frame, text: String, resource: String?, className: String): TongyiPreparationRunner.Node {
-                val visible = current(frame)
-                val witness = visible.singleOrNull { it.text == text && it.className == "android.widget.TextView" &&
-                    (resource == null || it.resourceId == resource) } ?: error("CURRENT_SEMANTIC_WITNESS_NOT_UNIQUE")
-                val parent = visible.singleOrNull { it.id == witness.parent && it.className == className && it.enabled && it.clickable }
-                    ?: error("EXACT_DIRECT_PARENT_REQUIRED")
-                check(witness.enabled && inside(witness.bounds, parent.bounds) && inside(parent.bounds, frame.rootBounds)) {
-                    "CURRENT_DIRECT_PARENT_BOUNDS_INVALID"
+            ordinaryPreInputPreparation = !preparationOnly && !qualificationOnly && !sourceInspectionOnly
+            try {
+                check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
+                check(ui.getString("menu_argb_sha256").lowercase() == TongyiPreparationRunner.MENU_SHA256) { "FIXED_MENU_PIN_REQUIRED" }
+                check(ui.getJSONObject("menu").length() == 0 && ui.getJSONObject("focus_hint").length() == 0) {
+                    "CURRENT_FRAME_UNBOUND_ROLE_CONTRACT_REQUIRED"
                 }
-                return parent
-            }
-            fun menu(frame: TongyiPreparationRunner.Frame): TongyiPreparationRunner.Node {
-                val visible = current(frame)
-                check(visible.count { it.text == "快速" } == 1 && visible.count { it.text == "发消息或按住说话..." } == 1 &&
-                    visible.none { it.editable } && frame.menuArgbSha256 == TongyiPreparationRunner.MENU_SHA256) {
-                    "CURRENT_MENU_PIXELS_MISMATCH"
-                }
-                val target = visible.singleOrNull { it.className == "android.widget.FrameLayout" &&
-                    it.bounds == TongyiPreparationRunner.Bounds(56,193,156,293) && it.enabled && it.clickable &&
-                    it.text.isEmpty() && it.description.isEmpty() && it.resourceId.isEmpty() && it.hint.isNullOrEmpty() }
-                    ?: error("CURRENT_IMAGE_NODE_NOT_UNIQUE")
-                val wrapper = visible.singleOrNull { it.id == target.parent && it.className == "android.widget.LinearLayout" &&
-                    it.enabled && !it.clickable && it.bounds == target.bounds } ?: error("CURRENT_MENU_PARENT_MISMATCH")
-                val toolbar = visible.singleOrNull { it.id == wrapper.parent && it.className == "android.widget.FrameLayout" &&
-                    it.enabled && it.bounds == TongyiPreparationRunner.Bounds(0,154,1200,333) } ?: error("CURRENT_TOOLBAR_MISMATCH")
-                check(visible.filter { it.parent == toolbar.id }.map { it.className } == List(3) { "android.widget.LinearLayout" } &&
-                    inside(target.bounds, frame.rootBounds) && inside(toolbar.bounds, frame.rootBounds)) { "CURRENT_TOOLBAR_STRUCTURE_MISMATCH" }
-                return target
-            }
-            fun clickBound(menuPixels: Boolean = false, select: (TongyiPreparationRunner.Frame) -> TongyiPreparationRunner.Node) {
-                if (menuPixels) ordinaryMenuObservation = null
-                val graphics = if (menuPixels) awaitOrdinaryHomeGraphics(minOf(preparationDeadline,
-                    SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) else null
-                try {
-                    action {
-                        val (observed, _) = ordinaryPreparationFrame(menuPixels, graphics)
-                        val target = select(observed)
-                        val (fresh, handles) = ordinaryPreparationFrame()
-                        check(fresh == observed.copy(menuArgbSha256 = null)) { "CURRENT_BINDING_FRAME_CHANGED" }
-                        val actual = handles[target.id.toInt()]
-                        check(actual.refresh() && preparationNodeValues(handles) == fresh.nodes) { "CURRENT_NODE_CHANGED" }
-                        requireOwnedCurrent()
-                        check(actual.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "PUBLIC_ACTION_REFUSED" }
+                fun current(frame: TongyiPreparationRunner.Frame) = frame.nodes.filter { it.visible && it.packageName == TARGET }
+                fun inside(bounds: TongyiPreparationRunner.Bounds, container: TongyiPreparationRunner.Bounds) =
+                    bounds.left >= container.left && bounds.top >= container.top && bounds.right <= container.right &&
+                        bounds.bottom <= container.bottom && bounds.right > bounds.left && bounds.bottom > bounds.top
+                fun directParent(frame: TongyiPreparationRunner.Frame, text: String, resource: String?, className: String): TongyiPreparationRunner.Node {
+                    val visible = current(frame)
+                    val witness = visible.singleOrNull { it.text == text && it.className == "android.widget.TextView" &&
+                        (resource == null || it.resourceId == resource) } ?: error("CURRENT_SEMANTIC_WITNESS_NOT_UNIQUE")
+                    val parent = visible.singleOrNull { it.id == witness.parent && it.className == className && it.enabled && it.clickable }
+                        ?: error("EXACT_DIRECT_PARENT_REQUIRED")
+                    check(witness.enabled && inside(witness.bounds, parent.bounds) && inside(parent.bounds, frame.rootBounds)) {
+                        "CURRENT_DIRECT_PARENT_BOUNDS_INVALID"
                     }
+                    return parent
+                }
+                fun menu(frame: TongyiPreparationRunner.Frame): TongyiPreparationRunner.Node {
+                    val visible = current(frame)
+                    check(visible.count { it.text == "快速" } == 1 && visible.count { it.text == "发消息或按住说话..." } == 1 &&
+                        visible.none { it.editable } && frame.menuArgbSha256 == TongyiPreparationRunner.MENU_SHA256) {
+                        "CURRENT_MENU_PIXELS_MISMATCH"
+                    }
+                    val target = visible.singleOrNull { it.className == "android.widget.FrameLayout" &&
+                        it.bounds == TongyiPreparationRunner.Bounds(56,193,156,293) && it.enabled && it.clickable &&
+                        it.text.isEmpty() && it.description.isEmpty() && it.resourceId.isEmpty() && it.hint.isNullOrEmpty() }
+                        ?: error("CURRENT_IMAGE_NODE_NOT_UNIQUE")
+                    val wrapper = visible.singleOrNull { it.id == target.parent && it.className == "android.widget.LinearLayout" &&
+                        it.enabled && !it.clickable && it.bounds == target.bounds } ?: error("CURRENT_MENU_PARENT_MISMATCH")
+                    val toolbar = visible.singleOrNull { it.id == wrapper.parent && it.className == "android.widget.FrameLayout" &&
+                        it.enabled && it.bounds == TongyiPreparationRunner.Bounds(0,154,1200,333) } ?: error("CURRENT_TOOLBAR_MISMATCH")
+                    check(visible.filter { it.parent == toolbar.id }.map { it.className } == List(3) { "android.widget.LinearLayout" } &&
+                        inside(target.bounds, frame.rootBounds) && inside(toolbar.bounds, frame.rootBounds)) { "CURRENT_TOOLBAR_STRUCTURE_MISMATCH" }
+                    return target
+                }
+                fun clickBound(menuPixels: Boolean = false, select: (TongyiPreparationRunner.Frame) -> TongyiPreparationRunner.Node) {
                     if (menuPixels) ordinaryMenuObservation = null
-                } catch (failure: Exception) {
-                    if (menuPixels && ordinaryMenuObservation != null) ordinaryMenuRejectionReason = failure.message ?: failure.javaClass.simpleName
-                    throw failure
+                    val graphics = if (menuPixels) awaitOrdinaryHomeGraphics(minOf(preparationDeadline,
+                        SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) else null
+                    try {
+                        action {
+                            val (observed, _) = ordinaryPreparationFrame(menuPixels, graphics)
+                            val target = select(observed)
+                            val (fresh, handles) = ordinaryPreparationFrame()
+                            check(fresh == observed.copy(menuArgbSha256 = null)) { "CURRENT_BINDING_FRAME_CHANGED" }
+                            val actual = handles[target.id.toInt()]
+                            check(actual.refresh() && preparationNodeValues(handles) == fresh.nodes) { "CURRENT_NODE_CHANGED" }
+                            requireOwnedCurrent()
+                            check(actual.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "PUBLIC_ACTION_REFUSED" }
+                        }
+                        if (menuPixels) ordinaryMenuObservation = null
+                    } catch (failure: Exception) {
+                        if (menuPixels && ordinaryMenuObservation != null) ordinaryMenuRejectionReason = failure.message ?: failure.javaClass.simpleName
+                        throw failure
+                    }
                 }
-            }
-            launchOwned(deadlineNanos)
-            // Only inspect the declared visible empty-state witnesses, not old chat content.
-            requireVisible("initial_empty")
-            val existing = editNodeOrNull()
-            check(existing == null || currentEmpty(existing)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
-            requireVisible("ordinary_mode")
-            clickBound(menuPixels = true, select = ::menu)
-            waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) {
-                matching("new_session").size == 1
-            }
-            check(ui.getJSONObject("new_session").getString("resource_id") == "com.aliyun.tongyi:id/layout_new_session_float") {
-                "CURRENT_NEW_SESSION_PARENT_CONTRACT_REQUIRED"
-            }
-            clickBound { frame ->
-                directParent(frame, "新建对话", "com.aliyun.tongyi:id/tv_new_session", "android.widget.LinearLayout").also {
-                    check(it.resourceId == "com.aliyun.tongyi:id/layout_new_session_float") { "CURRENT_NEW_SESSION_PARENT_REQUIRED" }
+                if (ui.has("capture_backend")) prepareProjectionCapture(deadlineNanos)
+                launchOwned(deadlineNanos)
+                // Only inspect the declared visible empty-state witnesses, not old chat content.
+                requireVisible("initial_empty")
+                val existing = editNodeOrNull()
+                check(existing == null || currentEmpty(existing)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
+                requireVisible("ordinary_mode")
+                clickBound(menuPixels = true, select = ::menu)
+                waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) {
+                    matching("new_session").size == 1
                 }
+                check(ui.getJSONObject("new_session").getString("resource_id") == "com.aliyun.tongyi:id/layout_new_session_float") {
+                    "CURRENT_NEW_SESSION_PARENT_CONTRACT_REQUIRED"
+                }
+                clickBound { frame ->
+                    directParent(frame, "新建对话", "com.aliyun.tongyi:id/tv_new_session", "android.widget.LinearLayout").also {
+                        check(it.resourceId == "com.aliyun.tongyi:id/layout_new_session_float") { "CURRENT_NEW_SESSION_PARENT_REQUIRED" }
+                    }
+                }
+                waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) {
+                    matching("new_empty").size == 1
+                }
+                requireVisible("new_empty")
+                requireVisible("ordinary_mode")
+                freshEmpty = true
+                saveOriginals("new-empty")
+                clickBound { frame -> directParent(frame, "发消息或按住说话...", null, "android.view.ViewGroup") }
+                waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)) {
+                    editNodeOrNull()?.isFocused == true
+                }
+                check(currentEmpty(editNode())) { "NEW_SESSION_DRAFT_NOT_EMPTY" }
+                ordinaryPreInputPreparation = false // The public snapshot guard is outside this diagnostic scope.
+                return snapshot()
+            } catch (failure: Exception) {
+                originalPreparationFailure = failure // Memory only: preserve this same exception and its original stack.
+                throw failure
+            } finally {
+                ordinaryPreInputPreparation = false
             }
-            waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.READY_NANOS)) {
-                matching("new_empty").size == 1
-            }
-            requireVisible("new_empty")
-            requireVisible("ordinary_mode")
-            freshEmpty = true
-            saveOriginals("new-empty")
-            clickBound { frame -> directParent(frame, "发消息或按住说话...", null, "android.view.ViewGroup") }
-            waitUntil(minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)) {
-                editNodeOrNull()?.isFocused == true
-            }
-            check(currentEmpty(editNode())) { "NEW_SESSION_DRAFT_NOT_EMPTY" }
-            return snapshot()
         }
 
         override fun enterExact(text: String) {
@@ -382,6 +459,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         override fun snapshot(): TongyiEngineeringRunner.Snapshot {
+            projectionSession?.requireHealthy()
             requireOwnedCurrent()
             val input = editNode()
             val network = context.getSystemService(ConnectivityManager::class.java)
@@ -405,8 +483,99 @@ class TongyiWholeEngineeringInstrumentation {
             val empty = currentEmpty(input)
             return TongyiEngineeringRunner.Snapshot(TARGET, true, matching("ordinary_mode").size == 1,
                 noAttachments, freshEmpty && empty, if (empty) "" else input.text?.toString().orEmpty(),
-                input.isFocused, if (!ui.has("send")) false else matching("send").singleOrNull()?.let { it.isEnabled && it.isClickable } == true,
+                input.isFocused, if (ui.has("send_role_binding")) currentPrivateSendRole(input, empty) != null
+                else if (!ui.has("send")) false else matching("send").singleOrNull()?.let { it.isEnabled && it.isClickable } == true,
                 actual, noVpn)
+        }
+
+        /** Read-only current-role binding; invocation separately requires explicit Boolean authorization inside action. */
+        private fun currentPrivateSendRole(input: AccessibilityNodeInfo, empty: Boolean): AccessibilityNodeInfo? {
+            val contract = ui.getJSONObject("send_role_binding")
+            check(!ui.has("send") && ui.getString("binding_scope") == "root_current_807_ui_frame" && contract.length() == 3 &&
+                contract.getString("scope") == "current_owned_239b_composer_frame" &&
+                contract.getString("role") == "unique_at_then_two_blank_actions_rightmost" &&
+                contract.get("invocation_authorized") is Boolean) { "CURRENT_PRIVATE_SEND_ROLE_CONTRACT_REQUIRED" }
+            if (empty) return null
+            val owner = checkNotNull(targetOwner)
+            val handles = nodes() // One fresh ordinary full-owner/current tree; no polling or screenshot.
+            val values = preparationNodeValues(handles)
+            val projected = handles.zip(values).toMap()
+            fun value(node: AccessibilityNodeInfo) = checkNotNull(projected[node]) { "CURRENT_PRIVATE_SEND_NODE_OUTSIDE_TREE" }
+            val current = handles.filter { value(it).visible && value(it).packageName == TARGET }
+            fun children(node: AccessibilityNodeInfo) = handles.filter { it.parent == node }
+            fun inside(child: AccessibilityNodeInfo, parent: AccessibilityNodeInfo): Boolean {
+                val a = value(child).bounds
+                val b = value(parent).bounds
+                return a.right > a.left && a.bottom > a.top && a.left >= b.left && a.top >= b.top &&
+                    a.right <= b.right && a.bottom <= b.bottom
+            }
+            fun blank(node: AccessibilityNodeInfo) = value(node).let {
+                it.text.isEmpty() && it.description.isEmpty() && it.resourceId.isEmpty() && it.hint.isNullOrEmpty() && !it.showingHint
+            }
+            val editor = current.singleOrNull { value(it).editable && value(it).className == "android.widget.EditText" }
+                ?: error("CURRENT_PRIVATE_SEND_EDITOR_NOT_UNIQUE")
+            val windowId = editor.windowId
+            check(windowId >= 0 && owner == ordinaryOwnDraftOwner && editor == input && editor == ordinaryOwnDraft &&
+                editor.parent == ordinaryOwnDraftParent && windowId == ordinaryOwnDraftWindow &&
+                value(editor).enabled && value(editor).focused && value(editor).setTextAvailable && !value(editor).showingHint &&
+                value(editor).text == TongyiEngineeringRunner.PAYLOAD && value(editor).text.toByteArray(Charsets.UTF_8).size == 239) {
+                "CURRENT_PRIVATE_SEND_OWNED_DRAFT_REQUIRED"
+            }
+            val rootNode = handles.first()
+            val window = checkNotNull(rootNode.window) { "CURRENT_PRIVATE_SEND_WINDOW_REQUIRED" }
+            check(rootNode.windowId == windowId && window.isActive && window.id == windowId && window.root == rootNode) {
+                "CURRENT_PRIVATE_SEND_WINDOW_CHANGED"
+            }
+            val ancestors = ArrayList<AccessibilityNodeInfo>()
+            var ancestor = editor.parent
+            var child = editor
+            while (ancestor != null) {
+                check(ancestors.size < handles.size && ancestor !in ancestors && ancestor in current &&
+                    ancestor.windowId == windowId && inside(child, ancestor)) { "CURRENT_PRIVATE_SEND_ANCESTRY_CHANGED" }
+                ancestors.add(ancestor)
+                child = ancestor
+                ancestor = ancestor.parent
+            }
+            check(ancestors.lastOrNull() == rootNode) { "CURRENT_PRIVATE_SEND_ROOT_CHANGED" }
+            val anchor = current.singleOrNull { value(it).description == "@" } ?: error("CURRENT_PRIVATE_SEND_AT_NOT_UNIQUE")
+            val row = checkNotNull(anchor.parent) { "CURRENT_PRIVATE_SEND_ROW_REQUIRED" }
+            val actionArea = checkNotNull(row.parent) { "CURRENT_PRIVATE_SEND_ACTION_AREA_REQUIRED" }
+            val composer = checkNotNull(actionArea.parent) { "CURRENT_PRIVATE_SEND_COMPOSER_REQUIRED" }
+            check(row in current && actionArea in current && composer in ancestors &&
+                value(row).className == "android.widget.LinearLayout" &&
+                value(actionArea).className == "android.view.ViewGroup" && value(composer).className == "android.view.ViewGroup" &&
+                value(row).enabled && value(actionArea).enabled && value(composer).enabled &&
+                row.windowId == windowId && actionArea.windowId == windowId && composer.windowId == windowId &&
+                inside(row, actionArea) && inside(actionArea, composer)) { "CURRENT_PRIVATE_SEND_COMPOSER_RELATION_REQUIRED" }
+            val actions = children(row)
+            check(actions.size == 3 && actions.distinct().size == 3 && actions.all {
+                it in current && value(it).className == "android.widget.FrameLayout" && value(it).enabled && value(it).clickable &&
+                    !value(it).editable && it.windowId == windowId && inside(it, row)
+            }) { "CURRENT_PRIVATE_SEND_ACTIONS_NOT_UNIQUE" }
+            check(anchor in actions && value(anchor).text.isEmpty() && value(anchor).resourceId.isEmpty() &&
+                value(anchor).hint.isNullOrEmpty() && !value(anchor).showingHint) { "CURRENT_PRIVATE_SEND_AT_ACTION_REQUIRED" }
+            val blanks = actions.filter { it != anchor && blank(it) }
+            check(blanks.size == 2) { "CURRENT_PRIVATE_SEND_BLANK_ACTIONS_REQUIRED" }
+            val images = actions.map { action ->
+                val image = children(action).singleOrNull() ?: error("CURRENT_PRIVATE_SEND_SINGLE_IMAGE_REQUIRED")
+                check(image in current && value(image).className == "android.widget.ImageView" && value(image).enabled && !value(image).clickable &&
+                    !value(image).editable && blank(image) && image.windowId == windowId && inside(image, action)) {
+                    "CURRENT_PRIVATE_SEND_IMAGE_CHANGED"
+                }
+                image
+            }
+            check(images.distinct().size == 3) { "CURRENT_PRIVATE_SEND_IMAGES_NOT_DISTINCT" }
+            val candidate = blanks.singleOrNull { right -> blanks.all { it == right || value(it).bounds.right <= value(right).bounds.left } }
+                ?: error("CURRENT_PRIVATE_SEND_RIGHT_ACTION_NOT_UNIQUE")
+            val middle = blanks.single { it != candidate }
+            check(value(anchor).bounds.right <= value(middle).bounds.left &&
+                actions.all { value(it).bounds.top == value(anchor).bounds.top && value(it).bounds.bottom == value(anchor).bounds.bottom }) {
+                "CURRENT_PRIVATE_SEND_ACTION_ORDER_CHANGED"
+            }
+            check(editor.refresh() && candidate.refresh() && preparationNodeValues(handles) == values && targetOwner == owner &&
+                editor == ordinaryOwnDraft && editor.parent == ordinaryOwnDraftParent && editor.windowId == windowId &&
+                rootNode.windowId == windowId) { "CURRENT_PRIVATE_SEND_BINDING_CHANGED" }
+            return candidate
         }
 
         override fun saveOriginals(label: String) {
@@ -421,6 +590,47 @@ class TongyiWholeEngineeringInstrumentation {
 
         override fun startRecording(readyDeadlineNanos: Long) {
             check(!preparationOnly) { "PREPARATION_CAPTURE_UNREACHABLE" }
+            if (ui.has("capture_backend")) {
+                check(ui.get("capture_backend") == "android_media_projection_v1") { "UNKNOWN_CAPTURE_BACKEND" }
+                check(projectionSession != null) { "PROJECTION_OWNED_SETUP_REQUIRED" }
+            }
+            projectionSession?.let { session ->
+                val width = device.displayWidth
+                val height = device.displayHeight
+                val density = context.resources.configuration.densityDpi
+                session.startRecording(width, height, density, readyDeadlineNanos)
+                val video = File(root, "video.mp4")
+                waitUntil(readyDeadlineNanos) {
+                    check(SystemClock.elapsedRealtimeNanos() < readyDeadlineNanos) { "PROJECTION_ORIGINAL_READY_EXPIRED" }
+                    session.requireHealthy()
+                    check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                    session.recordingStarted && video.isFile && video.length() >= 64 && runCatching {
+                        video.inputStream().use { input ->
+                            val header = ByteArray(12)
+                            input.read(header) == 12 && String(header, 4, 4, Charsets.US_ASCII) == "ftyp"
+                        }
+                    }.getOrDefault(false)
+                }
+                val previousLength = video.length()
+                waitUntil(readyDeadlineNanos) {
+                    check(SystemClock.elapsedRealtimeNanos() < readyDeadlineNanos) { "PROJECTION_ORIGINAL_READY_EXPIRED" }
+                    session.requireRecordingActive()
+                    check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                    video.length() > previousLength
+                }
+                check(SystemClock.elapsedRealtimeNanos() < readyDeadlineNanos) { "PROJECTION_ORIGINAL_READY_EXPIRED" }
+                session.requireRecordingActive()
+                writeJson("OWNED_PROJECTION_CAPTURE.json", JSONObject().put("backend", "android_media_projection_v1")
+                    .put("run_id", root.name).put("session_id", session.id).put("owner_package", context.packageName)
+                    .put("owner_instrumentation_pid", Process.myPid()).put("owner_uid", Process.myUid())
+                    .put("video", video.name).put("width", width).put("height", height).put("density_dpi", density)
+                    .put("budget_seconds", 90).put("ready_file_bytes", video.length())
+                    .put("ready_qualification", "operational_file_growth_not_frame_decoding"))
+                check(SystemClock.elapsedRealtimeNanos() < readyDeadlineNanos) { "PROJECTION_ORIGINAL_READY_EXPIRED" }
+                session.requireRecordingActive()
+                check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                return
+            }
             check(shell("pidof screenrecord").trim().isEmpty()) { "UNKNOWN_CAPTURE_NOT_TOUCHED" }
             val video = File(root, "video.mp4")
             val pidFile = File(root, "capture.pid")
@@ -474,12 +684,29 @@ class TongyiWholeEngineeringInstrumentation {
             check(!preparationOnly) { "PREPARATION_SEND_UNREACHABLE" }
             requireOwnedCurrent()
             check(editNode().text?.toString() == TongyiEngineeringRunner.PAYLOAD)
-            action { click("send") }
+            if (ui.has("send_role_binding")) {
+                action {
+                    val session = projectionSession
+                    session?.requireRecordingActive()
+                    val authorized = ui.getJSONObject("send_role_binding").get("invocation_authorized")
+                    check(authorized is Boolean && authorized) { "CURRENT_PRIVATE_SEND_INVOCATION_NOT_AUTHORIZED" }
+                    val input = editNode()
+                    val candidate = checkNotNull(currentPrivateSendRole(input, currentEmpty(input))) { "CURRENT_PRIVATE_SEND_ROLE_REQUIRED" }
+                    check(projectionSession === session) { "CURRENT_CAPTURE_SESSION_CHANGED" }
+                    session?.requireRecordingActive()
+                    check(candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "CURRENT_PRIVATE_SEND_CLICK_REFUSED" }
+                }
+            } else action {
+                val session = projectionSession
+                session?.requireRecordingActive()
+                click("send", session)
+            }
         }
 
         override fun observeUntil(deadlineNanos: Long) {
             saveOriginals("after-send")
             while (SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
+                projectionSession?.requireRecordingActive()
                 requireOwnedCurrent()
                 if (File(root, "CANCEL").exists()) error("CANCELLED_NO_RETRY")
                 SystemClock.sleep(100)
@@ -497,6 +724,22 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         private fun closeRecording() {
+            projectionSession?.let { session ->
+                val closureDeadline = SystemClock.elapsedRealtimeNanos() + 20_000_000_000L
+                session.close()
+                while (!session.isClosed()) {
+                    check(SystemClock.elapsedRealtimeNanos() < closureDeadline) { "PROJECTION_RESOURCE_CLOSURE_UNKNOWN" }
+                    SystemClock.sleep(50) // Cancellation cannot skip owned resource teardown.
+                }
+                check(SystemClock.elapsedRealtimeNanos() < closureDeadline) { "PROJECTION_RESOURCE_CLOSURE_UNKNOWN" }
+                if (session.mediaRequired) sealFinalMedia()
+                writeJson("PROJECTION_CAPTURE_CLOSED.json", JSONObject().put("backend", "android_media_projection_v1")
+                    .put("run_id", root.name).put("session_id", session.id).put("resources_closed", true)
+                    .put("encoder_start_returned", session.recordingStarted).put("media_required", session.mediaRequired))
+                session.releaseClosedSession()
+                projectionSession = null // Only confirmed resource/Service closure and required media seal release ownership.
+                return
+            }
             val owner = recorderOwner ?: run {
                 check(capture == null) { "CAPTURE_STARTED_WITHOUT_KNOWN_OWNER_NOT_CLOSED" }
                 return
@@ -512,6 +755,12 @@ class TongyiWholeEngineeringInstrumentation {
             check(processes.observe(owner.pid, readDeadline(closureDeadline)) == OwnedProcessLifecycle.Observation.Absent) {
                 "OWN_CAPTURE_PROCESS_EXIT_UNKNOWN"
             }
+            sealFinalMedia()
+            recorderOwner = null // Only actual shell exit, reader EOF and final media seal release ownership.
+            capture = null
+        }
+
+        private fun sealFinalMedia() {
             val extractor = MediaExtractor()
             try {
                 extractor.setDataSource(File(root, "video.mp4").absolutePath)
@@ -539,46 +788,58 @@ class TongyiWholeEngineeringInstrumentation {
                     .put("clock_domain", "original_MP4_MediaExtractor_presentation_microseconds")
                     .put("decoded_frames", "NOT_RUN").put("send_response_semantic_coverage", "UNKNOWN"))
             } finally { extractor.release() }
-            recorderOwner = null // Only actual shell exit, reader EOF and final media seal release ownership.
-            capture = null
         }
 
         override fun cleanupOwned(): Boolean {
+            val result = cleanupOwnedDecision() // Returns only after its original finally has completed.
+            runCatching { persistCleanupOriginalFailure(result) }
+            return result
+        }
+
+        private fun cleanupOwnedDecision(): Boolean {
             try {
-                var clean = preparationOnly || runCatching { stopOwnedRecording() }.isSuccess
+                var clean = preparationOnly || runCatching { stopOwnedRecording() }.onFailure { original ->
+                    if (recordingCleanupFailure == null) recordingCleanupFailure =
+                        CleanupOriginalFailure(original, "recording_close", null, null, null, null)
+                }.isSuccess
                 val owner = targetOwner
                 var targetClosed = owner == null && targetPid == null
                 if (owner != null) {
                     val closureDeadline = SystemClock.elapsedRealtimeNanos() + 20_000_000_000L
+                    cleanupKeyRequestIndex = null
+                    cleanupExpectedRemainingLength = null
+                    cleanupLastDeadlineCheckNanos = null
                     targetClosed = runCatching {
+                        cleanupPhase = "target_observe"
                         when (val observed = processes.observe(owner.pid, readDeadline(closureDeadline))) {
                             OwnedProcessLifecycle.Observation.Absent -> Unit
                             is OwnedProcessLifecycle.Observation.Unknown -> error("TARGET_CLOSURE_UNKNOWN_${observed.reason}")
                             is OwnedProcessLifecycle.Observation.Alive -> {
+                            cleanupPhase = "target_owner_uid_binding"
                             check(observed.owner == owner) { "TARGET_IDENTITY_DRIFT_NOT_TOUCHED" }
                             check(context.packageManager.getApplicationInfo(TARGET, 0).uid == targetUid)
+                            cleanupPhase = "target_current_package"
                             if (device.currentPackageName == TARGET) {
-                                val input = editNodeOrNull()
+                                cleanupPhase = "target_editor_read"
+                                val input = editNodeOrNull(closureDeadline)
+                                cleanupPhase = "target_draft_guard"
                                 if (preparationOnly) {
                                     check(input == null || currentEmpty(input)) { "PREPARATION_UNKNOWN_DRAFT_NOT_TOUCHED" }
                                 } else if (input != null && !input.isShowingHintText && input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) {
-                                    check(input.refresh() && ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft &&
-                                        input.parent == ordinaryOwnDraftParent && input.windowId == ordinaryOwnDraftWindow && !input.isShowingHintText &&
-                                        input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
-                                    check(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
-                                    })) { "OWN_DRAFT_CLEAR_FAILED" }
-                                    val cleared = editNode()
-                                    check(cleared == ordinaryOwnDraft && cleared.parent == ordinaryOwnDraftParent &&
-                                        cleared.windowId == ordinaryOwnDraftWindow && currentEmpty(cleared)) { "OWN_DRAFT_CLEAR_UNCONFIRMED" }
+                                    clearExactOwnedDraft(owner, closureDeadline)
                                 } else {
                                     check(input == null || currentEmpty(input)) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
                                 }
                             }
                             }
                         }
+                        cleanupPhase = "target_stop"
                         check(processes.stopAndConfirm(owner, OwnedProcessLifecycle.Stop.TARGET_FORCE_STOP, closureDeadline))
+                        cleanupPhase = "target_absence"
                         processes.requirePackageAbsent(TARGET, readDeadline(closureDeadline))
+                    }.onFailure { original ->
+                        if (targetCleanupFailure == null) targetCleanupFailure = CleanupOriginalFailure(original, cleanupPhase,
+                            cleanupKeyRequestIndex, cleanupExpectedRemainingLength, closureDeadline, cleanupLastDeadlineCheckNanos)
                     }.isSuccess
                     clean = targetClosed && clean
                     if (targetClosed) {
@@ -602,6 +863,181 @@ class TongyiWholeEngineeringInstrumentation {
                 // Cached failed-acquisition values only; no UI/owner/clock query and no effect on cleanup truth.
                 runCatching { persistRejectedOrdinaryMenuObservation() }
             }
+        }
+
+        private fun persistCleanupOriginalFailure(result: Boolean) {
+            val failures = listOfNotNull(recordingCleanupFailure, targetCleanupFailure)
+            if (failures.isEmpty() || cleanupFailurePersistenceAttempted) return
+            cleanupFailurePersistenceAttempted = true
+            val report = JSONObject().put("kind", "operational_native_cleanup_original_failure_not_formal_terminal")
+                .put("run_id", root.name).put("owned_cleanup_result", result)
+                .put("failures", JSONArray().apply {
+                    failures.forEach { observed ->
+                        put(JSONObject().put("original_exception_class", observed.original.javaClass.name)
+                            .put("original_message", observed.original.message ?: JSONObject.NULL)
+                            .put("original_stack", observed.original.stackTraceToString())
+                            .put("phase", observed.phase).put("key_request_index", observed.keyRequestIndex ?: JSONObject.NULL)
+                            .put("expected_remaining_length", observed.expectedRemainingLength ?: JSONObject.NULL)
+                            .put("target_closure_deadline_nanos", observed.targetClosureDeadlineNanos?.toString() ?: JSONObject.NULL)
+                            .put("last_existing_clear_deadline_check_nanos", observed.lastDeadlineCheckNanos?.toString() ?: JSONObject.NULL))
+                    }
+                })
+            val file = File(root, "native-cleanup-original-failure.json")
+            if (!file.createNewFile()) return
+            FileOutputStream(file).use {
+                it.write((report.toString(2) + "\n").toByteArray(Charsets.UTF_8))
+                it.fd.sync()
+            }
+        }
+
+        /** Same owned byte-acquisition boundary; the caller supplies only its receipt name. */
+        private fun ownerGroupOsPipe(nextReceiptName: () -> String): QualificationOwnerShellTransport.OsPipe =
+            object : QualificationOwnerShellTransport.OsPipe {
+                override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
+                override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
+                override fun executeOwnedScript(apiCommand: String, pid: String, nonce: String,
+                    deadlineNanos: Long): QualificationOwnerShellTransport.Acquisition {
+                    val started = SystemClock.elapsedRealtimeNanos()
+                    val bytes = ByteArrayOutputStream()
+                    val failure = AtomicReference<Throwable?>(null)
+                    val actualEof = java.util.concurrent.atomic.AtomicBoolean(false)
+                    var descriptor: ParcelFileDescriptor? = null
+                    var reader: Thread? = null
+                    try {
+                        check(started < deadlineNanos) { "QUALIFICATION_OWNER_PIPE_DEADLINE" }
+                        val acquired = automation.executeShellCommand(apiCommand)
+                        descriptor = acquired
+                        reader = Thread {
+                            try {
+                                ParcelFileDescriptor.AutoCloseInputStream(acquired).use { input ->
+                                    val buffer = ByteArray(4096)
+                                    while (true) {
+                                        val count = input.read(buffer)
+                                        if (count < 0) { actualEof.set(true); break }
+                                        if (count > 0) synchronized(bytes) { bytes.write(buffer, 0, count) }
+                                    }
+                                }
+                            } catch (error: Exception) { failure.compareAndSet(null, error) }
+                        }.also { it.start() }
+                        val remainingMillis = (deadlineNanos - SystemClock.elapsedRealtimeNanos()) / 1_000_000L
+                        if (remainingMillis > 0) reader.join(remainingMillis)
+                    } catch (error: Exception) { failure.compareAndSet(null, error) }
+                    val eof = actualEof.get() && reader?.isAlive == false && failure.get() == null
+                    if (!eof) runCatching { descriptor?.close() }.exceptionOrNull()?.let {
+                        failure.compareAndSet(null, it)
+                    }
+                    val raw = synchronized(bytes) { bytes.toByteArray() }
+                    val error = failure.get()?.toString() ?: if (!eof) "QUALIFICATION_OWNER_PIPE_TIMEOUT_OR_INCOMPLETE" else ""
+                    val observedNanos = SystemClock.elapsedRealtimeNanos()
+                    writeJson(nextReceiptName(), JSONObject()
+                        .put("kind", "one_owned_public_shell_byte_acquisition_not_identity_or_os_exit_proof")
+                        .put("public_api_command", apiCommand).put("script_path", apiCommand.removePrefix("sh "))
+                        .put("pid", pid).put("nonce", nonce)
+                        .put("deadline_elapsed_realtime_nanos", deadlineNanos.toString())
+                        .put("started_elapsed_realtime_nanos", started.toString())
+                        .put("snapshot_elapsed_realtime_nanos", observedNanos.toString())
+                        .put("descriptor_acquired", descriptor != null).put("actual_descriptor_eof", eof)
+                        .put("reader_alive_at_snapshot", reader?.isAlive ?: JSONObject.NULL)
+                        .put("raw_state", if (eof) "EOF_COMPLETED_BYTES" else if (raw.isNotEmpty())
+                            "PARTIAL_BYTES_AT_SNAPSHOT" else "NO_BYTES_OBSERVED_AT_SNAPSHOT")
+                        .put("raw_stdout_b64", if (descriptor != null) Base64.encodeToString(raw, Base64.NO_WRAP) else JSONObject.NULL)
+                        .put("raw_bytes", if (descriptor != null) raw.size else JSONObject.NULL)
+                        .put("raw_sha256", if (descriptor != null) sha(raw) else JSONObject.NULL)
+                        .put("error", error).put("native_os_direct_exit", "UNOBSERVED")
+                        .put("per_command_status_kind", "encoded_script_status_not_native_os_direct_exit")
+                        .put("completion_semantics", "five_results_share_one_descriptor_eof_marker_is_not_eof"))
+                    // Producer checks this same until after submission AND this receipt's fsync cost.
+                    return QualificationOwnerShellTransport.Acquisition(raw, eof, error)
+                }
+            }
+
+        private fun clearExactOwnedDraft(owner: OwnedProcessLifecycle.Owner, closureDeadline: Long) {
+            check(!preparationOnly && !qualificationOnly && !sourceInspectionOnly) { "ORDINARY_OWN_DRAFT_CLEAR_ONLY" }
+            val payload = TongyiEngineeringRunner.PAYLOAD
+            val bytes = payload.toByteArray(Charsets.UTF_8)
+            check(bytes.size == 239 && sha(bytes) == PAYLOAD_SHA && payload.length == 81 &&
+                payload.length == payload.codePointCount(0, payload.length)) {
+                "EXACT_FIXED_DRAFT_REQUIRED"
+            }
+            var clearOwnerPipeSequence = 0
+            val clearOwnerScope = QualificationOwnerProbeScope(QualificationOwnerShellTransport(scriptTransport,
+                ownerGroupOsPipe { "ordinary-clear-owner-pipe-${++clearOwnerPipeSequence}.json" },
+                SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos,
+                QualificationOwnerProbeScope.Presence.WHOLE_LIST)
+            fun withinClosure() {
+                val now = SystemClock.elapsedRealtimeNanos()
+                cleanupLastDeadlineCheckNanos = now // Reuse this same original read in the unchanged comparison.
+                check(now < closureDeadline) { "OWN_DRAFT_CLEAR_CLOSURE_EXPIRED" }
+            }
+            fun boundDraft(expected: String, fullSelectionRequired: Boolean = false): AccessibilityNodeInfo {
+                cleanupPhase = "clear_bound_read"
+                cleanupExpectedRemainingLength = expected.length
+                withinClosure()
+                val current = checkNotNull(editNodeOrNull(closureDeadline, clearOwnerScope)) { "OWN_DRAFT_CLEAR_EDITOR_MISSING" }
+                withinClosure()
+                check(current.refresh()) { "OWN_DRAFT_CLEAR_EDITOR_REFRESH_FAILED" }
+                withinClosure()
+                val parent = checkNotNull(current.parent) { "OWN_DRAFT_CLEAR_PARENT_MISSING" }
+                check(parent.refresh()) { "OWN_DRAFT_CLEAR_PARENT_REFRESH_FAILED" }
+                withinClosure()
+                cleanupPhase = "clear_bound_checks"
+                check(targetOwner == owner && ordinaryOwnDraftOwner == owner && current == ordinaryOwnDraft &&
+                    parent == ordinaryOwnDraftParent && current.windowId == ordinaryOwnDraftWindow &&
+                    parent.windowId == ordinaryOwnDraftWindow && current.packageName?.toString() == TARGET &&
+                    current.className?.toString() == "android.widget.EditText" && current.isEditable &&
+                    current.isEnabled && current.isFocused && visible(current)) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
+                check(if (expected.isEmpty()) currentEmpty(current) else !current.isShowingHintText && current.text?.toString() == expected) {
+                    "OWN_DRAFT_EXPECTED_PREFIX_CHANGED_NOT_TOUCHED"
+                }
+                if (fullSelectionRequired) check(expected == payload && current.textSelectionStart == 0 &&
+                    current.textSelectionEnd == payload.length) {
+                    "OWN_DRAFT_FULL_SELECTION_UNCONFIRMED"
+                }
+                withinClosure()
+                return current
+            }
+            fun deletePair() {
+                val keyCode = KeyEvent.KEYCODE_DEL
+                cleanupPhase = "clear_delete_pair"
+                cleanupKeyRequestIndex = (cleanupKeyRequestIndex ?: 0) + 1 // Single DEL request; not proof of clearing.
+                withinClosure()
+                val downTime = SystemClock.uptimeMillis() // Public KeyEvent time, not the Core event/metric clock.
+                val down = KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0, 0,
+                    KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)
+                try {
+                    check(automation.injectInputEvent(down, true)) { "OWN_DRAFT_KEY_DOWN_REFUSED" }
+                    withinClosure()
+                } finally {
+                    // Release this exact key even after a failed/ambiguous down or an expired deadline.
+                    val up = KeyEvent(downTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, keyCode, 0, 0,
+                        KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)
+                    check(automation.injectInputEvent(up, true)) { "OWN_DRAFT_KEY_UP_REFUSED" }
+                }
+                withinClosure()
+            }
+            val selectionTarget = boundDraft(payload)
+            cleanupPhase = "clear_select_all"
+            check(selectionTarget.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_SELECTION }) {
+                "OWN_DRAFT_SELECTION_UNSUPPORTED"
+            }
+            withinClosure()
+            check(selectionTarget.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, payload.length)
+            })) { "OWN_DRAFT_SELECTION_REFUSED" }
+            withinClosure()
+            boundDraft(payload, fullSelectionRequired = true)
+            deletePair()
+            boundDraft("") // Same owned editor/hint must actually be empty; no further deletion.
+            cleanupPhase = "clear_home_before_stop"
+            withinClosure()
+            check(device.pressHome()) { "OWN_DRAFT_HOME_REFUSED" }
+            withinClosure()
+            check(device.currentPackageName == "com.huawei.android.launcher" &&
+                automation.rootInActiveWindow?.packageName?.toString() == "com.huawei.android.launcher") {
+                "OWN_DRAFT_LAUNCHER_UNCONFIRMED"
+            }
+            withinClosure()
         }
 
         private fun readDeadline(outer: Long = Long.MAX_VALUE) = minOf(outer,
@@ -653,11 +1089,101 @@ class TongyiWholeEngineeringInstrumentation {
             }
         }
 
-        private fun requireOwnedCurrent(deadlineNanos: Long = Long.MAX_VALUE) {
-            check(device.currentPackageName == TARGET)
-            check(targetPid != null && shell("pidof $TARGET").trim() == targetPid)
-            processes.requireAlive(checkNotNull(targetOwner), readDeadline(deadlineNanos))
-            check(automation.rootInActiveWindow?.packageName?.toString() == TARGET)
+        private fun requireOwnedCurrent(deadlineNanos: Long = Long.MAX_VALUE,
+            clearOwnerScope: QualificationOwnerProbeScope? = null) {
+            val currentPackage = if (clearOwnerScope != null)
+                clearPackageIdleScope.run { device.currentPackageName } else device.currentPackageName
+            check(currentPackage == TARGET) { "CURRENT_TARGET_PACKAGE_MISMATCH_cached=${currentPackage ?: "<NULL>"}" }
+            val expectedPid = targetPid
+            var currentPid: String? = null
+            val pidMatches = expectedPid != null && shell("pidof $TARGET").trim().also { currentPid = it } == targetPid
+            if (!pidMatches) {
+                val original = IllegalStateException(
+                    "CURRENT_TARGET_PID_MISMATCH_expected=${expectedPid}_cached=${currentPid?.let { "'$it'" } ?: "<NOT_QUERIED>"}")
+                if (ordinaryPreInputPreparation) {
+                    try {
+                        retainOrdinaryPidRejectionIdentity(original, expectedPid, currentPid, minOf(deadlineNanos, preparationDeadline))
+                    } catch (diagnostic: Throwable) {
+                        if (diagnostic !== original) runCatching { original.addSuppressed(diagnostic) }
+                    }
+                }
+                throw original
+            }
+            if (clearOwnerScope == null) processes.requireAlive(checkNotNull(targetOwner), readDeadline(deadlineNanos))
+            else clearOwnerScope.requireAlive(checkNotNull(targetOwner), readDeadline(deadlineNanos))
+            val currentRootPackage = automation.rootInActiveWindow?.packageName?.toString()
+            check(currentRootPackage == TARGET) { "CURRENT_ROOT_PACKAGE_MISMATCH_cached=${currentRootPackage ?: "<NULL>"}" }
+        }
+
+        private fun retainOrdinaryPidRejectionIdentity(original: IllegalStateException, expectedPid: String?,
+            cachedPidof: String?, deadlineNanos: Long) {
+            if (ordinaryPidRejectionIdentityAttempted) return
+            ordinaryPidRejectionIdentityAttempted = true
+            val results = JSONArray()
+            val report = JSONObject().put("kind", "operational_ordinary_preinput_pid_rejection_identity_not_admission")
+                .put("run_id", root.name).put("expected_pid", expectedPid ?: JSONObject.NULL)
+                .put("cached_pidof", cachedPidof ?: JSONObject.NULL)
+                .put("original_exception_class", original.javaClass.name).put("original_message", original.message)
+                .put("absolute_deadline_nanos", deadlineNanos.toString())
+                .put("preparation_absolute_deadline_nanos", preparationDeadline.toString())
+                .put("identity_at_original_pidof", "UNKNOWN_LATER_ACQUISITIONS_CANNOT_BACKFILL")
+                .put("identity_verdict", "UNKNOWN_DIAGNOSTIC_ONLY_ORIGINAL_REJECTION_UNCHANGED")
+                .put("native_os_direct_exit", "UNOBSERVED_ENCODED_SCRIPT_STATUS_ONLY")
+                .put("results", results)
+            try {
+                val pids = cachedPidof?.trim()?.split(Regex("\\s+")).orEmpty()
+                check(pids.size == 2 && pids.distinct().size == 2 && pids.all { it.matches(Regex("[1-9][0-9]*")) }) {
+                    "PID_DIAGNOSTIC_REQUIRES_EXACTLY_TWO_UNIQUE_POSITIVE_TOKENS"
+                }
+                check(preparationDeadline > 0 && deadlineNanos <= preparationDeadline) { "PID_DIAGNOSTIC_PREPARATION_DEADLINE_REQUIRED" }
+                report.put("pid_tokens", JSONArray(pids))
+                val commands = listOf("ps -A -o PID,NAME") + pids.flatMap { pid ->
+                    listOf("cat /proc/$pid/stat", "cat /proc/$pid/status", "cat /proc/$pid/cmdline", "cat /proc/$pid/stat")
+                }
+                for (command in commands) {
+                    val entry = JSONObject().put("command", command)
+                    results.put(entry)
+                    val started = SystemClock.elapsedRealtimeNanos()
+                    entry.put("started_elapsed_realtime_nanos", started.toString())
+                    if (started >= deadlineNanos) {
+                        entry.put("state", "NOT_ATTEMPTED_DEADLINE_EXPIRED")
+                        continue
+                    }
+                    try {
+                        val sequence = processShellSequence
+                        val reply = processShell(command, deadlineNanos)
+                        check(processShellSequence == sequence + 1) { "PID_DIAGNOSTIC_RECEIPT_SEQUENCE_UNKNOWN" }
+                        val name = "process-shell-" + processShellSequence + ".json"
+                        val receiptBytes = File(root, name).readBytes()
+                        val metadata = JSONObject(receiptBytes.toString(Charsets.UTF_8))
+                        check(metadata.getString("command") == command &&
+                            metadata.getString("deadline_elapsed_realtime_nanos") == deadlineNanos.toString()) {
+                            "PID_DIAGNOSTIC_RECEIPT_BINDING_UNKNOWN"
+                        }
+                        entry.put("receipt", JSONObject().put("path", name).put("bytes", receiptBytes.size).put("sha256", sha(receiptBytes)))
+                            .put("completed", reply.completed).put("encoded_exit_code", reply.exitCode ?: JSONObject.NULL)
+                            .put("stdout_eof", metadata.getBoolean("stdout_eof")).put("error", reply.stderr)
+                            .put("raw_byte_source", "unmodified referenced receipt raw_stdout_b64 including NUL and original marker")
+                        val finished = SystemClock.elapsedRealtimeNanos()
+                        entry.put("finished_elapsed_realtime_nanos", finished.toString())
+                            .put("state", if (reply.completed && reply.exitCode == 0 && reply.stderr.isEmpty() &&
+                                metadata.getBoolean("stdout_eof") && finished <= deadlineNanos)
+                                "COMPLETE_SCRIPT_RESULT_NOT_OWNER_PROOF" else "UNKNOWN_OR_INCOMPLETE")
+                    } catch (diagnostic: Throwable) {
+                        entry.put("state", "UNKNOWN_OR_INCOMPLETE").put("diagnostic_error", diagnostic.toString())
+                    }
+                }
+            } catch (diagnostic: Throwable) {
+                report.put("diagnostic_error", diagnostic.toString())
+            }
+            val persistenceStarted = SystemClock.elapsedRealtimeNanos()
+            report.put("persistence_started_elapsed_realtime_nanos", persistenceStarted.toString())
+                .put("io_may_delay_original_finally", true)
+            check(persistenceStarted < deadlineNanos) { "PID_DIAGNOSTIC_DEADLINE_BEFORE_SIDECAR" }
+            val file = File(root, "ordinary-pid-rejection-identity.json")
+            check(file.createNewFile()) { "PID_DIAGNOSTIC_SIDECAR_ALREADY_EXISTS_NO_RETRY" }
+            FileOutputStream(file).use { it.write((report.toString(2) + "\n").toByteArray(Charsets.UTF_8)); it.fd.sync() }
+            check(SystemClock.elapsedRealtimeNanos() <= deadlineNanos) { "PID_DIAGNOSTIC_PERSISTENCE_EXCEEDED_DEADLINE" }
         }
 
         private fun currentEmpty(node: AccessibilityNodeInfo): Boolean = if (!node.isShowingHintText) node.text.isNullOrEmpty()
@@ -810,6 +1336,15 @@ class TongyiWholeEngineeringInstrumentation {
                 .put("canonical_argb", canonical).put("immutable_frame", projection).toString(2) + "\n").toByteArray(Charsets.UTF_8))
         }
 
+        /** Called after the original Core finally and terminal/status, using only the original exception. */
+        fun persistOriginalPreparationFailure() {
+            val failure = originalPreparationFailure ?: return
+            writeJson("ordinary-preparation-original-failure.json", JSONObject()
+                .put("kind", "operational_original_prepare_exception_not_formal_terminal")
+                .put("reason", failure.message ?: failure.javaClass.simpleName)
+                .put("exception_class", failure.javaClass.name).put("original_stack", failure.stackTraceToString()))
+        }
+
         fun qualificationRecords() = JSONArray(qualificationStageRecords.toString())
         fun sourceInspectionRecords() = JSONArray(sourceInspectionRecords.toString())
 
@@ -872,64 +1407,7 @@ class TongyiWholeEngineeringInstrumentation {
             }
             var ownerPipeSequence = 0
             val ownerScope = QualificationOwnerProbeScope(QualificationOwnerShellTransport(scriptTransport,
-                object : QualificationOwnerShellTransport.OsPipe {
-                    override fun execute(command: String, deadlineNanos: Long) = processShell(command, deadlineNanos)
-                    override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
-                    override fun executeOwnedScript(apiCommand: String, pid: String, nonce: String,
-                        deadlineNanos: Long): QualificationOwnerShellTransport.Acquisition {
-                        val started = SystemClock.elapsedRealtimeNanos()
-                        val bytes = ByteArrayOutputStream()
-                        val failure = AtomicReference<Throwable?>(null)
-                        val actualEof = java.util.concurrent.atomic.AtomicBoolean(false)
-                        var descriptor: ParcelFileDescriptor? = null
-                        var reader: Thread? = null
-                        try {
-                            check(started < deadlineNanos) { "QUALIFICATION_OWNER_PIPE_DEADLINE" }
-                            val acquired = automation.executeShellCommand(apiCommand)
-                            descriptor = acquired
-                            reader = Thread {
-                                try {
-                                    ParcelFileDescriptor.AutoCloseInputStream(acquired).use { input ->
-                                        val buffer = ByteArray(4096)
-                                        while (true) {
-                                            val count = input.read(buffer)
-                                            if (count < 0) { actualEof.set(true); break }
-                                            if (count > 0) synchronized(bytes) { bytes.write(buffer, 0, count) }
-                                        }
-                                    }
-                                } catch (error: Exception) { failure.compareAndSet(null, error) }
-                            }.also { it.start() }
-                            val remainingMillis = (deadlineNanos - SystemClock.elapsedRealtimeNanos()) / 1_000_000L
-                            if (remainingMillis > 0) reader.join(remainingMillis)
-                        } catch (error: Exception) { failure.compareAndSet(null, error) }
-                        val eof = actualEof.get() && reader?.isAlive == false && failure.get() == null
-                        if (!eof) runCatching { descriptor?.close() }.exceptionOrNull()?.let {
-                            failure.compareAndSet(null, it)
-                        }
-                        val raw = synchronized(bytes) { bytes.toByteArray() }
-                        val error = failure.get()?.toString() ?: if (!eof) "QUALIFICATION_OWNER_PIPE_TIMEOUT_OR_INCOMPLETE" else ""
-                        val observedNanos = SystemClock.elapsedRealtimeNanos()
-                        writeJson("qualification-owner-pipe-${++ownerPipeSequence}.json", JSONObject()
-                            .put("kind", "one_owned_public_shell_byte_acquisition_not_identity_or_os_exit_proof")
-                            .put("public_api_command", apiCommand).put("script_path", apiCommand.removePrefix("sh "))
-                            .put("pid", pid).put("nonce", nonce)
-                            .put("deadline_elapsed_realtime_nanos", deadlineNanos.toString())
-                            .put("started_elapsed_realtime_nanos", started.toString())
-                            .put("snapshot_elapsed_realtime_nanos", observedNanos.toString())
-                            .put("descriptor_acquired", descriptor != null).put("actual_descriptor_eof", eof)
-                            .put("reader_alive_at_snapshot", reader?.isAlive ?: JSONObject.NULL)
-                            .put("raw_state", if (eof) "EOF_COMPLETED_BYTES" else if (raw.isNotEmpty())
-                                "PARTIAL_BYTES_AT_SNAPSHOT" else "NO_BYTES_OBSERVED_AT_SNAPSHOT")
-                            .put("raw_stdout_b64", if (descriptor != null) Base64.encodeToString(raw, Base64.NO_WRAP) else JSONObject.NULL)
-                            .put("raw_bytes", if (descriptor != null) raw.size else JSONObject.NULL)
-                            .put("raw_sha256", if (descriptor != null) sha(raw) else JSONObject.NULL)
-                            .put("error", error).put("native_os_direct_exit", "UNOBSERVED")
-                            .put("per_command_status_kind", "encoded_script_status_not_native_os_direct_exit")
-                            .put("completion_semantics", "five_results_share_one_descriptor_eof_marker_is_not_eof"))
-                        // Producer checks this same until after submission AND this receipt's fsync cost.
-                        return QualificationOwnerShellTransport.Acquisition(raw, eof, error)
-                    }
-                }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos,
+                ownerGroupOsPipe { "qualification-owner-pipe-${++ownerPipeSequence}.json" }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos,
                 if (qualificationOnly) QualificationOwnerProbeScope.Presence.OWNED_PID_POSITIVE
                 else QualificationOwnerProbeScope.Presence.WHOLE_LIST)
             fun preserveAcquired(name: String, bytes: ByteArray, deadline: Long = preparationDeadline) {
@@ -1883,8 +2361,9 @@ class TongyiWholeEngineeringInstrumentation {
             return report.toString()
         }
 
-        private fun nodes(deadlineNanos: Long = Long.MAX_VALUE): List<AccessibilityNodeInfo> {
-            requireOwnedCurrent(deadlineNanos)
+        private fun nodes(deadlineNanos: Long = Long.MAX_VALUE,
+            clearOwnerScope: QualificationOwnerProbeScope? = null): List<AccessibilityNodeInfo> {
+            requireOwnedCurrent(deadlineNanos, clearOwnerScope)
             val output = ArrayList<AccessibilityNodeInfo>()
             fun walk(node: AccessibilityNodeInfo) {
                 check(output.size < 2048) { "CURRENT_TREE_UNBOUNDED" }
@@ -1921,13 +2400,19 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         private fun requireVisible(name: String) { check(matching(name).size == 1) { "CURRENT_WITNESS_NOT_UNIQUE_$name" } }
-        private fun click(name: String) {
+        private fun click(name: String, expectedProjection: TongyiProjectionCaptureService.Session? = null) {
             val node = checkNotNull(matching(name).singleOrNull()) { "CURRENT_TARGET_NOT_UNIQUE_$name" }
-            check(node.isEnabled && node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            check(node.isEnabled && node.isClickable) { "ANDROID_CLICK_REFUSED_$name" }
+            if (name == "send") {
+                check(projectionSession === expectedProjection) { "CURRENT_CAPTURE_SESSION_CHANGED" }
+                expectedProjection?.requireRecordingActive()
+            }
+            check(node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                 "ANDROID_CLICK_REFUSED_$name"
             }
         }
-        private fun editNodeOrNull(): AccessibilityNodeInfo? = nodes().filter {
+        private fun editNodeOrNull(deadlineNanos: Long = Long.MAX_VALUE,
+            clearOwnerScope: QualificationOwnerProbeScope? = null): AccessibilityNodeInfo? = nodes(deadlineNanos, clearOwnerScope).filter {
             visible(it) && it.className?.toString() == "android.widget.EditText" && it.isEditable
         }.let { check(it.size <= 1) { "EDITOR_NOT_UNIQUE" }; it.singleOrNull() }
         private fun editNode() = checkNotNull(editNodeOrNull()) { "CURRENT_EDITOR_UNAVAILABLE" }
