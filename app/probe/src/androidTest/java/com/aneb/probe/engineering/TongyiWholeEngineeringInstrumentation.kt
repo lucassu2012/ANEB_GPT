@@ -1144,17 +1144,35 @@ class TongyiWholeEngineeringInstrumentation {
                         !editor.showingHint && editor.text == TongyiEngineeringRunner.PAYLOAD) { "QUALIFICATION_ATTRIBUTED_OWN_DRAFT_REQUIRED" }
                     else check(!writeAttempted && empty(editor) && text.toByteArray(Charsets.UTF_8).size == 239) { "QUALIFICATION_EMPTY_EDITOR_REQUIRED" }
                     val fresh = freshBinding(observed, editor, deadline)
+                    val actionEditor = fresh.handles[editor.id.toInt()]
+                    val actionParent = checkNotNull(editor.parent?.toIntOrNull()?.let { fresh.handles.getOrNull(it) }) {
+                        "QUALIFICATION_CURRENT_NODE_CHANGED"
+                    }
+                    val actionWindowId = fresh.windowId
+                    check(actionWindowId >= 0 && actionEditor.windowId == actionWindowId && actionParent.windowId == actionWindowId) {
+                        "QUALIFICATION_CURRENT_NODE_CHANGED"
+                    }
                     if (text.isNotEmpty()) writeAttempted = true
-                    check(fresh.handles[editor.id.toInt()].performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    check(actionEditor.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
                     })) { "QUALIFICATION_SET_TEXT_REFUSED" }
                     while (true) {
                         val readback = project(deadline)
                         val input = readback.frame.nodes.singleOrNull { it.visible && it.editable && it.packageName == TARGET }
                             ?: error("QUALIFICATION_READBACK_EDITOR_UNKNOWN")
+                        val inputEditor = input.id.toIntOrNull()?.let { readback.handles.getOrNull(it) }
+                        val inputParent = input.parent?.toIntOrNull()?.let { readback.handles.getOrNull(it) }
+                        val bounds = input.bounds
+                        val rootBounds = fresh.frame.rootBounds
                         check(input.id == editor.id && input.parent == editor.parent && input.className == editor.className &&
-                            input.bounds == editor.bounds && input.focused && input.setTextAvailable) {
-                            // Only this actual returned immutable readback, at this unchanged predicate's refusal.
+                            inputEditor != null && inputParent != null && inputEditor == actionEditor && inputParent == actionParent &&
+                            readback.windowId == actionWindowId && inputEditor.windowId == actionWindowId && inputParent.windowId == actionWindowId &&
+                            readback.frame.owner == fresh.frame.owner && readback.frame.width == fresh.frame.width &&
+                            readback.frame.height == fresh.frame.height && readback.frame.rotation == fresh.frame.rotation &&
+                            readback.frame.rootBounds == rootBounds && bounds.left >= rootBounds.left && bounds.top >= rootBounds.top &&
+                            bounds.right <= rootBounds.right && bounds.bottom <= rootBounds.bottom &&
+                            bounds.right > bounds.left && bounds.bottom > bounds.top && input.enabled && input.focused && input.setTextAvailable) {
+                            // Preserve the actual returned readback; native editor/parent identity permits TYPE/CLEAR geometry changes.
                             failedInput = FailedInput(observed, editor, readback.frame, input, readback.nanos,
                                 deadline, if (text.isEmpty()) "CLEAR" else "TYPE")
                             "QUALIFICATION_READBACK_BINDING_CHANGED"
