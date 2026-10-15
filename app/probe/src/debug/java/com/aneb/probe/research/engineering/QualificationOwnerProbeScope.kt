@@ -4,11 +4,16 @@ package com.aneb.probe.research.engineering
 class QualificationOwnerProbeScope(
     private val transport: Transport,
     private val clock: TongyiEngineeringRunner.MonotonicClock,
+    private val presence: Presence = Presence.WHOLE_LIST,
 ) {
+    enum class Presence { WHOLE_LIST, OWNED_PID_POSITIVE }
+
     /** External OS/time boundary only. No Native glue or identity cache across calls. */
     interface Transport : OwnedProcessLifecycle.Shell {
         /** Null means capability absent only; failed supported groups must return failure or throw. */
         fun executeOwnerGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult>? = null
+        /** A distinct positive-known-PID query; never relabeled as whole-list evidence. */
+        fun executeOwnedPidPositiveGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult>? = null
     }
 
     /** Same-call scalar diagnostic only; no Frame, stage, or draft ownership authority. */
@@ -47,12 +52,19 @@ class QualificationOwnerProbeScope(
         check(owner.pid.matches(Regex("[1-9][0-9]*")) && clock.nowNanos() < deadlineNanos) {
             "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED"
         }
-        val group = transport.executeOwnerGroup(owner.pid, deadlineNanos)?.toList()
+        val positive = presence == Presence.OWNED_PID_POSITIVE
+        val group = if (positive) try {
+            transport.executeOwnedPidPositiveGroup(owner.pid, deadlineNanos)?.toList()
+        } catch (failure: Exception) {
+            throw IllegalStateException("OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED", failure)
+        } else transport.executeOwnerGroup(owner.pid, deadlineNanos)?.toList()
         if (group == null) {
+            check(!positive) { "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED" }
             OwnedProcessLifecycle(transport, clock).requireAlive(owner, deadlineNanos)
             return // Only absent capability retains serial; supported failures never fall back.
         }
-        val commands = listOf("ps -A -o PID", "cat /proc/${owner.pid}/stat", "cat /proc/${owner.pid}/status",
+        val presenceCommand = if (positive) "ps -p ${owner.pid} -o PID" else "ps -A -o PID"
+        val commands = listOf(presenceCommand, "cat /proc/${owner.pid}/stat", "cat /proc/${owner.pid}/status",
             "cat /proc/${owner.pid}/cmdline", "cat /proc/${owner.pid}/stat")
         check(clock.nowNanos() < deadlineNanos && group.size == commands.size &&
             group.all { it.completed && it.exitCode == 0 && it.stderr.isEmpty() }) {
@@ -67,7 +79,8 @@ class QualificationOwnerProbeScope(
             }
             override fun sleepMillis(milliseconds: Long) = error("OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED")
         }
-        OwnedProcessLifecycle(acquired, clock).requireAlive(owner, deadlineNanos)
+        val lifecycle = OwnedProcessLifecycle(acquired, clock)
+        if (positive) lifecycle.requireOwnedPidAlive(owner, deadlineNanos) else lifecycle.requireAlive(owner, deadlineNanos)
         check(next == commands.size && clock.nowNanos() <= deadlineNanos) {
             "OWN_PROCESS_IDENTITY_UNKNOWN_OR_CHANGED"
         }

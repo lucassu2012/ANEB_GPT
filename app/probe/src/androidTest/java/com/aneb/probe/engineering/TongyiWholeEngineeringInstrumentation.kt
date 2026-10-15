@@ -662,7 +662,9 @@ class TongyiWholeEngineeringInstrumentation {
                         // Producer checks this same until after submission AND this receipt's fsync cost.
                         return QualificationOwnerShellTransport.Acquisition(raw, eof, error)
                     }
-                }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos)
+                }, SystemClock::elapsedRealtimeNanos), SystemClock::elapsedRealtimeNanos,
+                if (qualificationOnly) QualificationOwnerProbeScope.Presence.OWNED_PID_POSITIVE
+                else QualificationOwnerProbeScope.Presence.WHOLE_LIST)
             fun preserveAcquired(name: String, bytes: ByteArray, deadline: Long = preparationDeadline) {
                 gate(deadline)
                 val file = File(root, name)

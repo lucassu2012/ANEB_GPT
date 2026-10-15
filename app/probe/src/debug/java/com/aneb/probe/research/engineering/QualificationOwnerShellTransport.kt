@@ -22,11 +22,18 @@ class QualificationOwnerShellTransport(
 
     override fun sleepMillis(milliseconds: Long) = os.sleepMillis(milliseconds)
 
-    override fun executeOwnerGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult> {
+    override fun executeOwnerGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult> =
+        executeGroup(pid, deadlineNanos, "ps -A -o PID")
+
+    override fun executeOwnedPidPositiveGroup(pid: String, deadlineNanos: Long): List<OwnedProcessLifecycle.ShellResult> =
+        executeGroup(pid, deadlineNanos, "ps -p $pid -o PID")
+
+    private fun executeGroup(pid: String, deadlineNanos: Long,
+        presenceCommand: String): List<OwnedProcessLifecycle.ShellResult> {
         requireComplete(pid.matches(Regex("[1-9][0-9]*")) && clock.nowNanos() < deadlineNanos)
         val nonce = UUID.randomUUID().toString().replace("-", "")
         val prefix = "ANEB_OWNER_${nonce}_${pid}_${deadlineNanos}"
-        val commands = listOf("ps -A -o PID", "cat /proc/$pid/stat", "cat /proc/$pid/status",
+        val commands = listOf(presenceCommand, "cat /proc/$pid/stat", "cat /proc/$pid/status",
             "cat /proc/$pid/cmdline", "cat /proc/$pid/stat")
         val script = buildString {
             commands.forEachIndexed { index, command ->
