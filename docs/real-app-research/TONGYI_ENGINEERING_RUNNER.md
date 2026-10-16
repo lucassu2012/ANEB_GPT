@@ -349,3 +349,32 @@ selection/recording/network NOT_STARTED，formal0/metrics null/reference false/R
 not_computed。未完成同 Native/Core/HOST 的239B/readback→SEND→W1/C1→Reader 全流程，
 不补填已消耗机会，不修改冻结研究 schema/claim/时钟。实机准入与 THIS Reader 恢复仍由
 Root 对固定候选另行执行。
+
+父节点读回比较是另一个显式选择方法：
+`DeepSeekDraftRoleQualificationInstrumentation#compareOneCurrentModeParentRefreshWithoutComposerInputOrSend`，
+唯一 token `deepseek-parent-refresh-comparison-811`；参数白名单仍仅 class/debug、
+feature_release、固定 DeepSeek profile/package、唯一 run_id。原 D1/普通入口默认不启用。
+只在 first P1 暂存同次 read 的 Frame/handles，按对象身份绑定，并在原 until/owner/window/
+语义父子门内对选中模式的同一个实际 parent 调用 public refresh 一次，保留原 checked、
+raw before/after、refresh 返回/异常、耗时和部分失败。无第二次树遍历、替代 selector、
+额外点击或重新计时；比较不改原 immutable Frame、OFF predicate 或门返回事实。
+该 public refresh 可能影响 Android 后继缓存读，不能声称零干扰或原门的反事实等价。
+原 P0/P1 仍保留，比较字段嵌入独立 diagnostic 报告；失败/迟到/关系改变为 UNKNOWN。
+JVM mock 无法证明真实 provider 刷新效果；此处仅实际 Native 编译，设备比较由 Root
+另定一次新机会。Root 必须另确认真正初始 ON，不用 D1 持久 OFF 代替；SEND/输入资格
+和全流程结论仍未取得。
+
+普通 DeepSeek W1/C1 与 noSEND qualification 的当前模式读回，现在在原 acquisition
+handles 上刷新当前唯一 visible/enabled 语义 label 的直接 checkable/clickable parent，
+每个 eligible distinct parent 一次，ON/OFF 都读真实刷新值，再创建 immutable Frame。
+仅刷新两个已知模式 parent，不增加树遍历/选择器/点击，不把 checked 强制为 false；
+缺失、歧义、尚未就绪仍交原 readiness 判定。刷新失败、关系/owner/window 改变或迟到
+均拒绝；不拿旧全树相等覆盖合法的新 checked。其它节点仍是原顺序公共源，不能声称
+整棵树/provider 全部实时一致。原 D1/D2/只读观察入口不增加该普通读回刷新。
+
+Adapter 以兼容 `Android.read(until)` 传递本次原 READY/OFF 绝对截止时间，Native 使用
+min(PREP,until)；读前后先保留 PREP 到期优先，再拒绝本次 until 到期，predicate 不接收
+迟到 Frame。20s/5s/180s 常量与共享 READY cutoff 不变，无重新计时。旧 `read()` 默认接口
+仍可实现；Kotlin by 委托型测试 fixture 显式桥接到其原 read，防止默认委托绕过外部输入。
+现有接口自然 RED→GREEN 只证明迟到 OFF 不再被接受，不证明真实 provider 刷新修复；
+Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链，D2 不回填通过。

@@ -360,6 +360,35 @@ class DeepSeekEngineeringMigrationTest {
         assertTrue("no new-session/mode/focus action on an unbound semantic label", requested.isEmpty())
     }
 
+    @Test fun lateOffReadCannotBeAcceptedAfterTheOriginalOffDeadlineWhilePreparationRemainsOpen() {
+        val visible = VisibleAndroid()
+        val started = visible.now
+        var afterMode = false
+        var lateRead = false
+        val android = object : DeepSeekUiAdapter.Android {
+            override fun read(): DeepSeekUiAdapter.Frame {
+                val frame = visible.read()
+                if (afterMode && !lateRead) {
+                    lateRead = true
+                    visible.now = started + TongyiEngineeringRunner.INPUT_NANOS + 1L
+                }
+                return frame
+            }
+            override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, action: DeepSeekUiAdapter.Action) = visible.invoke(frame, node, action)
+            override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+                visible.activateCheckedMode(frame, label, control)
+                afterMode = true
+            }
+            override fun nowNanos() = visible.now
+            override fun sleepMillis(milliseconds: Long) = visible.sleepMillis(milliseconds)
+        }
+        val failure = runCatching { DeepSeekUiAdapter(android, started + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("an otherwise valid OFF read arriving past original OFF5 must not pass", "DEEPSEEK_PUBLIC_READINESS_EXPIRED", failure?.message)
+        assertTrue(lateRead && visible.now < started + TongyiEngineeringRunner.PREP_NANOS)
+        assertFalse(visible.focused)
+        assertEquals(listOf("new-parent:CLICK", "search:CLICK"), visible.invoked)
+    }
+
     @Test fun modeDiagnosticCopiesOneSuccessorAndStopsAfterFirstGateWithoutFocusOrInput() {
         // Software boundary only: this synthetic OFF response proves no real touch/PNG/App effect.
         val android = VisibleAndroid()
@@ -445,6 +474,7 @@ class DeepSeekEngineeringMigrationTest {
         var incompleteReturned = false
         val requests = mutableListOf<String>()
         val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun read(until: Long) = read() // Kotlin delegation would otherwise bypass this external read fixture.
             override fun read(): DeepSeekUiAdapter.Frame {
                 val complete = android.read()
                 reads++
@@ -484,6 +514,7 @@ class DeepSeekEngineeringMigrationTest {
         var reads = 0
         val requests = mutableListOf<String>()
         val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun read(until: Long) = read()
             override fun read(): DeepSeekUiAdapter.Frame {
                 val complete = android.read()
                 reads++
@@ -539,6 +570,7 @@ class DeepSeekEngineeringMigrationTest {
         // SHA05a8bbe5f386f20d6138f19bf61d7dc0852ae5726b36a40bc546890729d7f28d.
         // Owner/window/IDs and new-chat response are synthetic, not saved action successor frames.
         val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun read(until: Long) = read()
             override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, action: DeepSeekUiAdapter.Action) {
                 if (node.id == "public-38") {
                     check(action == DeepSeekUiAdapter.Action.CLICK && node.checked)

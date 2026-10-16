@@ -34,6 +34,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
     fun diagnoseFirstMode(feedback: ModeFeedback): ModeGate = checkNotNull(prepare(feedback))
     interface Android {
         fun read(): Frame
+        fun read(until: Long): Frame = read()
         fun invoke(frame: Frame, node: Node, action: Action)
         fun activateEmptyComposer(frame: Frame, hint: Node) { error("DEEPSEEK_SEMANTIC_COMPOSER_ACTIVATION_NOT_SUPPORTED") }
         fun activateCheckedMode(frame: Frame, label: Node, control: Node) { error("DEEPSEEK_SEMANTIC_MODE_ACTUATION_NOT_SUPPORTED") }
@@ -126,9 +127,12 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         check(now < preparationDeadline) { "PREPARATION_180_EXPIRED" }
         return now
     }
-    private fun read(observe: ((Frame, Long) -> Unit)? = null): Frame {
-        gate()
-        return validate(android.read()).also { frame -> val observedAt = gate(); observe?.invoke(frame, observedAt) }
+    private fun read(until: Long = preparationDeadline, observe: ((Frame, Long) -> Unit)? = null): Frame {
+        check(gate() < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
+        val frame = android.read(until)
+        val observedAt = gate() // Preserve PREP expiry priority, then the unchanged active cutoff.
+        check(observedAt < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
+        return validate(frame).also { observe?.invoke(it, observedAt) }
     }
     private fun await(budget: Long, observe: ((Frame, Long, Long) -> Unit)? = null, predicate: (Frame) -> Boolean): Frame {
         val until = minOf(preparationDeadline, android.nowNanos() + budget)
@@ -137,7 +141,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
     private fun awaitUntil(until: Long, observe: ((Frame, Long, Long) -> Unit)? = null, predicate: (Frame) -> Boolean): Frame {
         while (true) {
             check(android.nowNanos() < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
-            val frame = read(observe?.let { callback -> { frame, at -> callback(frame, until, at) } })
+            val frame = read(until, observe?.let { callback -> { frame, at -> callback(frame, until, at) } })
             if (predicate(frame)) return frame
             android.sleepMillis(50)
         }

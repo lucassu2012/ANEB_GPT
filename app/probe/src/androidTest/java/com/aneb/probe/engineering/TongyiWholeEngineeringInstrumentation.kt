@@ -221,6 +221,18 @@ class TongyiWholeEngineeringInstrumentation {
         return result
     }
 
+    /** New opt-in comparison only; default/D1 never takes this branch. */
+    internal fun runDeepSeekParentRefreshComparisonOnce(runId: String, root: File): DeepSeekModeOperationDiagnostic.Result {
+        val backend = NativePhone(root, "DEEPSEEK_PARENT_REFRESH_COMPARISON", JSONObject(), target = EngineeringTarget.DEEPSEEK)
+        val result = DeepSeekModeOperationDiagnostic(backend.modeFeedbackAndroid(), SystemClock::elapsedRealtimeNanos)
+            .runOnce(runId, root)
+        try { backend.sealModeFeedback(result) }
+        catch (retention: Exception) {
+            throw IllegalStateException("PARENT_REFRESH_REPORT_NOT_RETAINED_original_failure=${(result.gate?.failure ?: result.failure)?.message ?: "<NONE>"}", retention)
+        }
+        return result
+    }
+
     private class NativePhone(
         private val root: File,
         private val condition: String,
@@ -256,6 +268,9 @@ class TongyiWholeEngineeringInstrumentation {
         private val modeFeedbackSamples = ArrayList<ModeFeedbackSample>(2)
         private var modeFeedbackClickReturned: Boolean? = null
         private var modeFeedbackClickFailure: String? = null
+        private val modeParentRefreshEnabled = condition == "DEEPSEEK_PARENT_REFRESH_COMPARISON"
+        private var modeFeedbackAcquisition: Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>>? = null
+        private var modeParentRefreshRecord: JSONObject? = null
         private data class OrdinaryGraphicsBinding(
             val owner: OwnedProcessLifecycle.Owner, val windowId: Int, val width: Int, val height: Int,
             val rotation: Int, val rootBounds: TongyiPreparationRunner.Bounds, val windowBounds: TongyiPreparationRunner.Bounds,
@@ -543,19 +558,114 @@ class TongyiWholeEngineeringInstrumentation {
                     try {
                         launchOwned(deadlineNanos)
                         return deepSeekAdapter().diagnoseFirstMode { frame, mode, until, observedAt ->
+                            val comparisonFailure = if (modeParentRefreshEnabled)
+                                compareCurrentModeParent(frame, mode, until, observedAt) else null
                             captureModeFeedback("P1", frame, mode, until, observedAt)
                             val sample = modeFeedbackSamples.last().source
                             check(sample.optBoolean("capture_within_original_until") && !sample.has("capture_failure")) {
                                 "MODE_FEEDBACK_P1_TEMPORAL_OR_CAPTURE_UNKNOWN"
                             }
+                            if (comparisonFailure != null) throw comparisonFailure
                         }
                     } finally {
+                        modeFeedbackAcquisition = null
                         modeFeedbackActive = false
                         ordinaryPreInputPreparation = false
                     }
                 }
                 override fun cleanupOwned() = this@NativePhone.cleanupOwned()
             }
+        }
+
+        /** Exact returned acquisition only; refresh is an observation, never patched into its Frame. */
+        private fun compareCurrentModeParent(frame: DeepSeekUiAdapter.Frame, mode: String,
+            until: Long, observedAt: Long): Exception? {
+            val record = JSONObject().put("status", "UNKNOWN").put("mode", mode)
+                .put("owner", frame.owner).put("window_id", frame.windowId)
+                .put("original_until_elapsed_realtime_nanos", until.toString())
+                .put("frame_observed_elapsed_realtime_nanos", observedAt.toString())
+                .put("comparison_started_elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString())
+                .put("refresh_calls", 0).put("refresh_returned", JSONObject.NULL)
+                .put("interference", "public_refresh_may_affect_subsequent_android_cache_reads_not_a_counterfactual_original_gate")
+            var failure: Exception? = null
+            try {
+                check(modeParentRefreshEnabled && modeFeedbackActive && modeParentRefreshRecord == null) { "PARENT_REFRESH_SINGLE_COMPARISON_ONLY" }
+                modeParentRefreshRecord = record // Preserve partial facts even when a following public call throws.
+                val acquisition = checkNotNull(modeFeedbackAcquisition) { "PARENT_REFRESH_CURRENT_ACQUISITION_MISSING" }
+                check(acquisition.first === frame) { "PARENT_REFRESH_EXACT_FRAME_REQUIRED" }
+                val handles = acquisition.second
+                val label = frame.nodes.single { it.visible && it.enabled && it.text == mode }
+                val parent = frame.nodes.single { it.id == label.parent }
+                val actualLabel = handles[label.id.toInt()]
+                val actualParent = handles[parent.id.toInt()]
+                val parentParent = parent.parent?.let { handles[it.toInt()] }
+                record.put("copied_original_checked", parent.checked).put("label_id", label.id).put("parent_id", parent.id)
+                fun raw(node: AccessibilityNodeInfo): JSONObject {
+                    val bounds = Rect().also(node::getBoundsInScreen)
+                    return JSONObject().put("package", node.packageName?.toString() ?: JSONObject.NULL)
+                        .put("class", node.className?.toString() ?: JSONObject.NULL).put("window_id", node.windowId)
+                        .put("text", node.text?.toString() ?: JSONObject.NULL)
+                        .put("description", node.contentDescription?.toString() ?: JSONObject.NULL)
+                        .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                        .put("visible_to_user", node.isVisibleToUser).put("enabled", node.isEnabled)
+                        .put("clickable", node.isClickable).put("checkable", node.isCheckable).put("checked", node.isChecked)
+                }
+                fun sameStable(node: AccessibilityNodeInfo, expected: DeepSeekUiAdapter.Node): Boolean {
+                    val bounds = Rect().also(node::getBoundsInScreen)
+                    return node.packageName?.toString() == expected.packageName && node.className?.toString().orEmpty() == expected.className &&
+                        node.windowId == expected.windowId && node.text?.toString().orEmpty() == expected.text &&
+                        node.contentDescription?.toString().orEmpty() == expected.description && node.isVisibleToUser == expected.visible &&
+                        node.isEnabled == expected.enabled && node.isClickable == expected.clickable && node.isCheckable == expected.checkable &&
+                        bounds.left == expected.bounds.left && bounds.top == expected.bounds.top && bounds.right == expected.bounds.right && bounds.bottom == expected.bounds.bottom
+                }
+                fun guard() {
+                    check(SystemClock.elapsedRealtimeNanos() < until) { "PARENT_REFRESH_ORIGINAL_UNTIL_EXPIRED" }
+                    requireOwnedCurrent(until)
+                    val owned = checkNotNull(targetOwner)
+                    check(frame.owner == "${owned.pid}/${owned.uid}/${owned.startTicks}/" +
+                        Base64.encodeToString(owned.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)) { "PARENT_REFRESH_OWNER_CHANGED" }
+                    val root = handles.first()
+                    val window = checkNotNull(root.window) { "PARENT_REFRESH_WINDOW_MISSING" }
+                    check(root.windowId == frame.windowId && window.isActive && window.id == frame.windowId && window.root == root &&
+                        actualLabel.parent == actualParent && actualParent.parent == parentParent &&
+                        sameStable(actualLabel, label) && sameStable(actualParent, parent)) { "PARENT_REFRESH_RELATION_CHANGED" }
+                    check(SystemClock.elapsedRealtimeNanos() < until) { "PARENT_REFRESH_ORIGINAL_UNTIL_EXPIRED" }
+                }
+                fun recordState(name: String) {
+                    val state = JSONObject()
+                    record.put(name, state) // Keep any successfully copied prefix when a later getter throws.
+                    state.put("label_parent_matches", actualLabel.parent == actualParent)
+                        .put("parent_parent_matches", actualParent.parent == parentParent)
+                    state.put("label", raw(actualLabel)).put("parent", raw(actualParent))
+                }
+                recordState("before")
+                guard()
+                record.put("refresh_started_elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString()).put("refresh_calls", 1)
+                val refreshed = actualParent.refresh() // The one selected parent, never another root walk or click.
+                record.put("refresh_returned", refreshed)
+                    .put("refresh_returned_elapsed_realtime_nanos", SystemClock.elapsedRealtimeNanos().toString())
+                recordState("after")
+                guard()
+                check(refreshed) { "PARENT_REFRESH_RETURNED_FALSE" }
+                record.put("status", "COMPARISON_RECORDED_NOT_OFF_ACCEPTANCE")
+            } catch (original: Exception) {
+                failure = original
+                record.put("failure", original.message ?: original.javaClass.simpleName)
+                    .put("original_stack", original.stackTraceToString().take(16_384))
+            } finally {
+                val finished = SystemClock.elapsedRealtimeNanos()
+                record.put("comparison_finished_elapsed_realtime_nanos", finished.toString())
+                    .put("within_original_until", observedAt < until && finished < until)
+                if (finished >= until) {
+                    record.put("status", "UNKNOWN")
+                    if (failure == null) {
+                        failure = IllegalStateException("PARENT_REFRESH_FINISHED_OUTSIDE_ORIGINAL_UNTIL")
+                        record.put("failure", failure.message)
+                    }
+                }
+                modeFeedbackAcquisition = null // No acquisition-local handles kept into a later poll.
+            }
+            return failure
         }
 
         /** Copied Frame values + one public image, sequential rather than atomic. No tree read. */
@@ -634,7 +744,8 @@ class TongyiWholeEngineeringInstrumentation {
                 pair[0].source.getInt("window_id") == pair[1].source.getInt("window_id") &&
                 pair.all { it.png != null && it.source.optBoolean("capture_within_original_until") && !it.source.has("capture_failure") }
             writeJson("DEEPSEEK_SAME_MODE_FEEDBACK.json", JSONObject().put("kind", "private_same_operation_mode_feedback_only")
-                .put("feature_release", "deepseek-same-mode-feedback-811").put("run_id", root.name)
+                .put("feature_release", if (modeParentRefreshEnabled) "deepseek-parent-refresh-comparison-811" else "deepseek-same-mode-feedback-811").put("run_id", root.name)
+                .apply { if (modeParentRefreshEnabled) put("parent_refresh_comparison", modeParentRefreshRecord ?: JSONObject.NULL) }
                 .put("target_profile", target.id).put("target_package", TARGET)
                 .put("state", "DIAGNOSTIC_STOP_NOT_PREPARATION_QUALIFICATION")
                 .put("mode_observation", if (gate != null && gate.mode == null) "NOT_OBSERVED" else "ACTUAL_GATE_RECORDED_OR_UNKNOWN")
@@ -821,15 +932,82 @@ class TongyiWholeEngineeringInstrumentation {
                 node.className?.toString().orEmpty())
         }
 
-        private fun deepSeekFrame(): Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>> {
-            val (base, handles) = ordinaryPreparationFrame(deadlineNanos = preparationDeadline)
+        private fun deepSeekReadGate(until: Long) {
+            val now = SystemClock.elapsedRealtimeNanos()
+            check(now < preparationDeadline) { "PREPARATION_180_EXPIRED" }
+            check(now < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
+        }
+
+        /** Refresh only the known current semantic controls, not the rest of this tree. */
+        private fun refreshCurrentDeepSeekModeParents(handles: List<AccessibilityNodeInfo>, until: Long) {
+            val rootNode = handles.first()
+            val owner = checkNotNull(targetOwner)
+            val windowId = rootNode.windowId
+            val candidates = listOf("深度思考", "智能搜索").mapNotNull { name ->
+                val labels = handles.filter { visible(it) && it.isEnabled && it.text?.toString() == name }
+                if (labels.size != 1) return@mapNotNull null // Preserve opening/missing/ambiguous readiness semantics.
+                val label = labels.single()
+                val parentIndex = handles.indexOf(label.parent)
+                val parent = handles.getOrNull(parentIndex) ?: return@mapNotNull null
+                if (parent == rootNode || !visible(parent) || !parent.isEnabled || !parent.isCheckable ||
+                    !parent.isClickable || parent.isEditable || !parent.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } ||
+                    label.packageName?.toString() != TARGET || parent.packageName?.toString() != TARGET ||
+                    label.windowId != windowId || parent.windowId != windowId) return@mapNotNull null
+                Triple(name, label, parentIndex)
+            }
+            candidates.groupBy { it.third }.forEach { (parentIndex, labels) ->
+                val parent = handles[parentIndex]
+                val ancestor = parent.parent
+                fun stable(node: AccessibilityNodeInfo): List<Any?> {
+                    val bounds = Rect().also(node::getBoundsInScreen)
+                    return listOf(node.packageName?.toString(), node.className?.toString(), node.windowId,
+                        node.text?.toString(), node.contentDescription?.toString(), bounds.left, bounds.top, bounds.right, bounds.bottom,
+                        node.isVisibleToUser, node.isEnabled, node.isClickable, node.isCheckable, node.isEditable,
+                        node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) // checked intentionally not frozen.
+                }
+                val parentBefore = stable(parent)
+                val labelsBefore = labels.map { stable(it.second) }
+                fun guard() {
+                    deepSeekReadGate(until)
+                    requireOwnedCurrent(until)
+                    val window = checkNotNull(rootNode.window) { "DEEPSEEK_MODE_REFRESH_WINDOW_MISSING" }
+                    check(targetOwner == owner && rootNode.windowId == windowId && window.isActive &&
+                        window.id == windowId && window.root == rootNode && parent.parent == ancestor &&
+                        parent.isEnabled && parent.isVisibleToUser && parent.isCheckable && parent.isClickable && !parent.isEditable &&
+                        parent.packageName?.toString() == TARGET && parent.windowId == windowId &&
+                        parent.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } &&
+                        stable(parent) == parentBefore && labels.map { stable(it.second) } == labelsBefore &&
+                        labels.all { visible(it.second) && it.second.isEnabled &&
+                            it.second.parent == parent && it.second.text?.toString() == it.first &&
+                            it.second.packageName?.toString() == TARGET && it.second.windowId == windowId }) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
+                    deepSeekReadGate(until)
+                }
+                guard()
+                check(parent.refresh()) { "DEEPSEEK_CURRENT_MODE_REFRESH_FAILED" } // Once per eligible distinct parent, ON or OFF.
+                guard()
+            }
+            deepSeekReadGate(until)
+        }
+
+        private fun deepSeekFrame(deadlineNanos: Long = preparationDeadline): Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>> {
+            val until = minOf(preparationDeadline, deadlineNanos)
+            deepSeekReadGate(until)
+            val (base, handles) = try { ordinaryPreparationFrame(deadlineNanos = until) }
+            catch (original: Exception) {
+                try { deepSeekReadGate(until) }
+                catch (expired: Exception) { expired.addSuppressed(original); throw expired }
+                throw original
+            }
             val rootNode = handles.first()
             val window = checkNotNull(rootNode.window) { "DEEPSEEK_PUBLIC_WINDOW_REQUIRED" }
             check(rootNode.windowId >= 0 && window.isActive && window.id == rootNode.windowId && window.root == rootNode) {
                 "DEEPSEEK_CURRENT_WINDOW_CHANGED"
             }
+            if (target == EngineeringTarget.DEEPSEEK && condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION"))
+                refreshCurrentDeepSeekModeParents(handles, until)
             val frame = DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId, base.width, base.height, base.rotation,
                 "0", deepSeekNodeValues(handles))
+            deepSeekReadGate(until)
             if (draftQualificationActive) cacheDraftQualificationNodes(frame, handles)
             return frame to handles
         }
@@ -837,7 +1015,13 @@ class TongyiWholeEngineeringInstrumentation {
         private fun deepSeekAdapter() = DeepSeekUiAdapter(object : DeepSeekUiAdapter.Android {
             override fun nowNanos() = SystemClock.elapsedRealtimeNanos()
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
-            override fun read() = deepSeekFrame().first
+            override fun read(): DeepSeekUiAdapter.Frame = read(preparationDeadline)
+            override fun read(until: Long): DeepSeekUiAdapter.Frame {
+                val acquisition = deepSeekFrame(minOf(preparationDeadline, until))
+                if (modeParentRefreshEnabled && modeFeedbackActive && modeFeedbackClickReturned == true &&
+                    modeParentRefreshRecord == null && modeFeedbackAcquisition == null) modeFeedbackAcquisition = acquisition
+                return acquisition.first
+            }
             override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
                 val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                 action {
