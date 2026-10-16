@@ -1,6 +1,7 @@
 package com.aneb.probe.research.engineering
 
 import java.io.File
+import java.io.FileOutputStream
 
 /** A capability-limited draft qualification, not a collection/SEND/recording interface. */
 class DeepSeekDraftRoleQualification(private val android: Android, private val clock: TongyiEngineeringRunner.MonotonicClock) {
@@ -61,5 +62,51 @@ class DeepSeekDraftRoleQualification(private val android: Android, private val c
             readbackConfirmed, retained.toList(), failure?.let { it.message ?: it.javaClass.simpleName }
                 ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null,
             failure?.stackTraceToString()?.take(16_384), cleaned, rejected, rejectionFailure)
+    }
+}
+
+/** One current public-API source, with no preparation/input/action capability. */
+class DeepSeekPublicUiObservation(private val android: Android, private val clock: TongyiEngineeringRunner.MonotonicClock) {
+    interface Android {
+        fun launchOwned(deadlineNanos: Long)
+        fun readCurrent(): ByteArray
+        fun cleanupOwned(): Boolean
+    }
+    data class Result(val state: String, val sourceRetained: Boolean, val original: File?,
+        val failure: String?, val originalStack: String?, val ownedCleanup: Boolean,
+        val preparationDeadlineNanos: Long? = null)
+
+    fun runOnce(runId: String, root: File): Result {
+        require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        check(root.mkdir()) { "OPPORTUNITY_ALREADY_CONSUMED_NO_RETRY" }
+        val deadline = clock.nowNanos() + TongyiEngineeringRunner.PREP_NANOS
+        fun gate() { check(clock.nowNanos() < deadline) { "PREPARATION_180_EXPIRED" } }
+        var original: File? = null
+        var failure: Exception? = null
+        var cleaned = false
+        try {
+            gate()
+            android.launchOwned(deadline)
+            gate()
+            val bytes = android.readCurrent().copyOf() // Exactly one observation acquisition; no action capability.
+            gate()
+            check(bytes.isNotEmpty()) { "DEEPSEEK_PUBLIC_UI_SOURCE_EMPTY" }
+            val file = File(root, "current-public-ui-nodes.json")
+            check(file.createNewFile()) { "PUBLIC_UI_SOURCE_ALREADY_RETAINED" }
+            FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
+            original = file
+            gate()
+        } catch (caught: Exception) {
+            failure = caught
+        } finally {
+            cleaned = try { android.cleanupOwned() } catch (caught: Exception) {
+                if (failure == null) failure = caught
+                false
+            }
+        }
+        return Result(if (failure == null && original != null && cleaned) "PUBLIC_UI_OBSERVATION_RETAINED" else "PUBLIC_UI_OBSERVATION_UNKNOWN",
+            original != null, original, failure?.let { it.message ?: it.javaClass.simpleName }
+                ?: if (!cleaned) "OWNED_CLEANUP_UNKNOWN" else null,
+            failure?.stackTraceToString()?.take(16_384), cleaned, deadline)
     }
 }

@@ -387,6 +387,74 @@ class DeepSeekEngineeringMigrationTest {
         assertFalse(directory.resolve("SEND_INTENT.json").exists())
     }
 
+    @Test fun publicUiObservationRetainsOneRawCapabilitySourceAndClosesItsOwnerWithoutInput() {
+        val directory = Files.createTempDirectory("deepseek-public-ui").resolve("run").toFile()
+        val os = AndroidBoundary(directory)
+        val original = """{"source":"EXTERNAL_ANDROID_FIXTURE","owner":"fixture-owner","window_id":1,"nodes":[{"text":"深度思考","checked":false,"hint":null,"action_ids":[16]},{"text":"智能搜索","checked":true,"hint":null,"action_ids":[1,16]},{"text":"","editable":false,"focused":false,"action_ids":[]}]}""".toByteArray(Charsets.UTF_8)
+        var reads = 0
+        val android = object : DeepSeekPublicUiObservation.Android {
+            override fun launchOwned(deadlineNanos: Long) { os.lifecycle.requireAlive(os.owner, deadlineNanos) }
+            override fun readCurrent(): ByteArray { reads++; return original.copyOf() }
+            override fun cleanupOwned(): Boolean {
+                check(directory.resolve("current-public-ui-nodes.json").readBytes().contentEquals(original))
+                return os.cleanupOwned()
+            }
+        }
+        val result = DeepSeekPublicUiObservation(android, os).runOnce("DS_PUBLIC_UI", directory)
+        assertTrue("raw current capabilities must be retained: ${result.failure}", result.sourceRetained)
+        assertArrayEquals(original, checkNotNull(result.original).readBytes())
+        assertEquals("PUBLIC_UI_OBSERVATION_RETAINED", result.state)
+        assertTrue(result.ownedCleanup)
+        assertEquals(1, reads)
+        assertEquals(1, os.stops)
+        assertEquals(0, os.sends)
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+    }
+
+    @Test fun publicUiObservationPreservesAcquisitionFailureAndStillClosesItsOwner() {
+        val directory = Files.createTempDirectory("deepseek-public-ui-read-failure").resolve("run").toFile()
+        val os = AndroidBoundary(directory)
+        val original = IllegalStateException("EXTERNAL_CURRENT_API_READ_FAILED")
+        val android = object : DeepSeekPublicUiObservation.Android {
+            override fun launchOwned(deadlineNanos: Long) { os.lifecycle.requireAlive(os.owner, deadlineNanos) }
+            override fun readCurrent(): ByteArray = throw original
+            override fun cleanupOwned() = os.cleanupOwned()
+        }
+        val result = DeepSeekPublicUiObservation(android, os).runOnce("DS_PUBLIC_UI_READ_FAILURE", directory)
+        assertEquals("EXTERNAL_CURRENT_API_READ_FAILED", result.failure)
+        assertTrue(checkNotNull(result.originalStack).startsWith("java.lang.IllegalStateException: EXTERNAL_CURRENT_API_READ_FAILED"))
+        assertEquals("PUBLIC_UI_OBSERVATION_UNKNOWN", result.state)
+        assertFalse(result.sourceRetained)
+        assertNull(result.original)
+        assertTrue(result.ownedCleanup)
+        assertEquals(1, os.stops)
+        assertEquals(0, os.sends)
+        assertFalse(directory.resolve("current-public-ui-nodes.json").exists())
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+    }
+
+    @Test fun publicUiObservationRetainsItsSourceButNeverClaimsClosureWhenOwnedStopFails() {
+        val directory = Files.createTempDirectory("deepseek-public-ui-cleanup-failure").resolve("run").toFile()
+        val os = AndroidBoundary(directory).apply { refuseOwnedStop = true }
+        val original = """{"source":"EXTERNAL_ANDROID_FIXTURE","nodes":[]}""".toByteArray(Charsets.UTF_8)
+        val android = object : DeepSeekPublicUiObservation.Android {
+            override fun launchOwned(deadlineNanos: Long) { os.lifecycle.requireAlive(os.owner, deadlineNanos) }
+            override fun readCurrent() = original.copyOf()
+            override fun cleanupOwned() = os.cleanupOwned()
+        }
+        val result = DeepSeekPublicUiObservation(android, os).runOnce("DS_PUBLIC_UI_CLEANUP_FAILURE", directory)
+        assertTrue(result.sourceRetained)
+        assertArrayEquals(original, checkNotNull(result.original).readBytes())
+        assertEquals("PUBLIC_UI_OBSERVATION_UNKNOWN", result.state)
+        assertFalse(result.ownedCleanup)
+        assertNotNull(result.failure)
+        assertNotNull(result.originalStack)
+        assertEquals(1, os.stops)
+        assertTrue(os.alive)
+        assertEquals(0, os.sends)
+        assertFalse(directory.resolve("SEND_INTENT.json").exists())
+    }
+
     @Test fun noSendQualificationRequiresRealReadbackRetainsObservedDescriptionsAndClosesItsOwner() {
         val directory = Files.createTempDirectory("deepseek-no-send-qualification").resolve("run").toFile()
         val visible = VisibleAndroid()

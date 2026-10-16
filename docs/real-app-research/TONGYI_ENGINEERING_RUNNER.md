@@ -266,3 +266,30 @@ PackageManager 的目标信息/启动 intent 路由使用；不增加 QUERY_ALL_
 权限或 shell identity。此为必要的软件接线，不表示当前 P40 已实际发生包可见性失败，
 也不推定本轮设备 SDK。最终 merged Debug manifest/固定 APK 及真实目标可见性由 Root
 另核，不能把旧 APK 或本机编译外推为新现场通过。
+
+### DeepSeek 单次只读公开 API 观察入口
+
+必须按方法选择
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation#observeCurrentPublicUiWithoutPreparationOrActions`，
+不能按整个 class 运行（同类还保留原非 SEND 草稿资格方法）。它要求独立
+`feature_release=deepseek-public-ui-observation-811`、`target_profile=deepseek`、
+`target_package=com.deepseek.chat` 和唯一新 `run_id`；只另外允许 runner 的 `class`、
+`debug` 参数。payload/payload SHA、UI contract、network condition、execution mode
+等其它参数均拒绝。该入口不是 COLLECTION 或准备资格，也不进入 HOST whole class。
+
+复用原 Native launchOwned、完整进程身份/root/window 门、deepSeekFrame 及节点序列化循环，
+只请求一次有意的当前 Frame；不调用 prepare、新会话、模式切换、focus、输入、selection、
+DEL、SEND、Projection、录像或网络切换。原 PREP180 和共享 cleanup20 不变，无重试/polling。
+`current-public-ui-nodes.json` create-once/fsync 保留包/window/父子/边界、真实 action IDs、
+布尔值、可空原文/描述/hint 和 focusable，不把缺失模式当 OFF、不从 XML 造 action。
+Frame 值与随后同批 handle 的原文/action/focusable getters 是顺序公共源，非原子采样；
+intentional source 不冒称失败时快照。一次观察不代表 launch/owner/原共享清场没有查询。
+
+finally 结束共享 own cleanup 后，独立 `DEEPSEEK_PUBLIC_UI_OBSERVATION.json` 封存实际
+source-retained、原异常/有界栈、原绝对 deadline、真实 cleanup 和已存原件 pins。采集失败
+仍尝试清场；清场失败保持 UNKNOWN，不能由原件存在升级为闭合。未知草稿仍受原清场归属门
+保护，不扩大可删除集合。只有原件已留存且无原失败、cleanup 已知为 true，才报告
+PUBLIC_UI_OBSERVATION_RETAINED；这仍只是 API 原值观察，不是模式/聚焦/输入/SEND 资格。
+报告为私有 operational 原件，非正式 TERMINAL/PAIR 或 Reader 采集 bundle，
+formal0/metrics null/reference false/RPI not_computed。Root 仍需独立固定 APK、现场干净门、
+THIS Reader 备份/恢复及新机会；本机边界测试和 Native 编译不能代替实机事实，旧 R1/R2 不变。

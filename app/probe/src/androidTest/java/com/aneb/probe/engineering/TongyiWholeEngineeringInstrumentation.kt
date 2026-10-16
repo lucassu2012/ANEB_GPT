@@ -25,6 +25,7 @@ import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.EngineeringTarget
 import com.aneb.probe.research.engineering.DeepSeekUiAdapter
 import com.aneb.probe.research.engineering.DeepSeekDraftRoleQualification
+import com.aneb.probe.research.engineering.DeepSeekPublicUiObservation
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
 import com.aneb.probe.research.engineering.PublicUiIdleTimeoutScope
 import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
@@ -189,6 +190,18 @@ class TongyiWholeEngineeringInstrumentation {
         try { backend.sealDeepSeekDraftQualification(result) }
         catch (retention: Exception) {
             throw IllegalStateException("DEEPSEEK_QUALIFICATION_REPORT_NOT_RETAINED_original_failure=${result.failure ?: "<NONE>"}", retention)
+        }
+        return result
+    }
+
+    /** Current public APIs only; no UI contract, payload, preparation or action capability. */
+    internal fun runDeepSeekPublicUiObservationOnce(runId: String, root: File): DeepSeekPublicUiObservation.Result {
+        val backend = NativePhone(root, "DEEPSEEK_PUBLIC_UI_OBSERVATION", JSONObject(), target = EngineeringTarget.DEEPSEEK)
+        val result = DeepSeekPublicUiObservation(backend.publicUiObservationAndroid(), SystemClock::elapsedRealtimeNanos)
+            .runOnce(runId, root)
+        try { backend.sealPublicUiObservation(result) }
+        catch (retention: Exception) {
+            throw IllegalStateException("DEEPSEEK_PUBLIC_UI_REPORT_NOT_RETAINED_original_failure=${result.failure ?: "<NONE>"}", retention)
         }
         return result
     }
@@ -486,6 +499,46 @@ class TongyiWholeEngineeringInstrumentation {
             return snapshot()
         }
 
+        fun publicUiObservationAndroid(): DeepSeekPublicUiObservation.Android {
+            check(target == EngineeringTarget.DEEPSEEK && !preparationOnly && !qualificationOnly && !sourceInspectionOnly)
+            return object : DeepSeekPublicUiObservation.Android {
+                override fun launchOwned(deadlineNanos: Long) = this@NativePhone.launchOwned(deadlineNanos)
+                override fun readCurrent(): ByteArray {
+                    val (frame, handles) = deepSeekFrame() // One intentional Frame, using the existing walker.
+                    check(frame.nodes.all { it.packageName == TARGET && it.windowId == frame.windowId }) {
+                        "DEEPSEEK_CURRENT_WINDOW_REQUIRED"
+                    }
+                    return currentPublicNodeBytes(frame, handles, intentionalObservation = true)
+                }
+                override fun cleanupOwned() = this@NativePhone.cleanupOwned()
+            }
+        }
+
+        fun sealPublicUiObservation(result: DeepSeekPublicUiObservation.Result) {
+            val preserved = JSONArray()
+            listOf("OWNED_INSTRUMENTATION.json", "OWNED_TARGET.json", "current-public-ui-nodes.json").forEach { name ->
+                val file = File(root, name)
+                if (file.isFile) {
+                    val bytes = file.readBytes()
+                    preserved.put(JSONObject().put("path", name).put("bytes", bytes.size).put("sha256", sha(bytes)))
+                }
+            }
+            writeJson("DEEPSEEK_PUBLIC_UI_OBSERVATION.json", JSONObject().put("kind", "private_read_only_native_public_ui_observation")
+                .put("run_id", root.name).put("target_profile", target.id).put("target_package", TARGET)
+                .put("feature_release", "deepseek-public-ui-observation-811")
+                .put("state", result.state).put("source_retained", result.sourceRetained).put("preserved_files", preserved)
+                .put("failure", result.failure ?: JSONObject.NULL).put("original_stack", result.originalStack ?: JSONObject.NULL)
+                .put("owned_cleanup", result.ownedCleanup)
+                .put("preparation_deadline_elapsed_realtime_nanos", result.preparationDeadlineNanos?.toString() ?: JSONObject.NULL)
+                .put("observation_policy", "one_intentional_public_frame_no_polling_not_a_failure_snapshot")
+                .put("input", "NOT_STARTED").put("preparation", "NOT_STARTED").put("mode_actions", "NOT_STARTED")
+                .put("focus", "NOT_STARTED").put("selection", "NOT_STARTED").put("send_calls", 0)
+                .put("recording", "NOT_STARTED").put("network_transition", "NOT_STARTED")
+                .put("qualification", "NOT_PERFORMED").put("claim_scope", "private_public_api_observation_only")
+                .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only").put("boot_id", bootId ?: JSONObject.NULL)
+                .put("metrics", JSONObject.NULL).put("formal_new_slots", 0).put("reference_accepted", false).put("rpi", "not_computed"))
+        }
+
         fun deepSeekDraftQualificationAndroid(): DeepSeekDraftRoleQualification.Android {
             check(target == EngineeringTarget.DEEPSEEK && !preparationOnly && !qualificationOnly && !sourceInspectionOnly)
             draftQualificationActive = true // Per-instance only; never enables a COLLECTION capability.
@@ -536,25 +589,39 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         private fun cacheDraftQualificationNodes(frame: DeepSeekUiAdapter.Frame, handles: List<AccessibilityNodeInfo>) {
+            draftQualificationCachedNodes = currentPublicNodeBytes(frame, handles)
+        }
+
+        private fun currentPublicNodeBytes(frame: DeepSeekUiAdapter.Frame, handles: List<AccessibilityNodeInfo>,
+            intentionalObservation: Boolean = false): ByteArray {
             val nodes = JSONArray()
             frame.nodes.forEachIndexed { index, node ->
-                nodes.put(JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
+                val actual = handles[index]
+                val value = JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
                     .put("package", node.packageName).put("class", node.className).put("window_id", node.windowId)
                     .put("bounds", JSONArray(listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom)))
-                    .put("text", node.text).put("description", node.description).put("hint", node.hint ?: JSONObject.NULL)
+                    .put("text", if (intentionalObservation) (actual.text?.toString() ?: JSONObject.NULL) else node.text)
+                    .put("description", if (intentionalObservation) (actual.contentDescription?.toString() ?: JSONObject.NULL) else node.description)
+                    .put("hint", node.hint ?: JSONObject.NULL)
                     .put("showing_hint", node.showingHint).put("visible", node.visible).put("enabled", node.enabled)
                     .put("clickable", node.clickable).put("checkable", node.checkable).put("checked", node.checked)
                     .put("editable", node.editable).put("focused", node.focused)
-                    .put("action_ids", JSONArray(handles[index].actionList.map { it.id })))
+                    .put("action_ids", JSONArray(actual.actionList.map { it.id }))
+                if (intentionalObservation) value.put("focusable", actual.isFocusable)
+                    .put("frame_action_support", JSONObject().put("set_text", node.setTextAvailable)
+                        .put("click", node.clickAvailable).put("focus", node.focusAvailable))
+                nodes.put(value)
             }
-            draftQualificationCachedNodes = (JSONObject().put("kind", "private_current_public_objects_no_send_role_assignment")
+            val source = JSONObject().put("kind", if (intentionalObservation) "private_intentional_current_public_ui_observation"
+                else "private_current_public_objects_no_send_role_assignment")
                 .put("owner", frame.owner).put("window_id", frame.windowId).put("root_id", frame.rootId)
                 .put("display", JSONArray(listOf(frame.width, frame.height, frame.rotation)))
                 .put("editor_ids", JSONArray(frame.nodes.filter { it.visible && it.editable }.map { it.id }))
                 .put("described_node_ids", JSONArray(frame.nodes.filter { it.visible && it.description.isNotEmpty() }.map { it.id }))
                 .put("nodes", nodes).put("sampling_claim", "sequential_public_sources_not_atomic")
-                .put("failure_time_relation", "UNKNOWN_last_existing_acquisition_not_a_fresh_failure_snapshot")
-                .put("role_assignment", "UNKNOWN_no_description_is_promoted_to_SEND").put("reference_accepted", false)
+            if (intentionalObservation) source.put("source_timing", "one_intentional_frame_then_raw_nullable_text_action_and_focusable_getters_not_atomic")
+            else source.put("failure_time_relation", "UNKNOWN_last_existing_acquisition_not_a_fresh_failure_snapshot")
+            return (source.put("role_assignment", "UNKNOWN_no_description_is_promoted_to_SEND").put("reference_accepted", false)
                 .put("formal_new_slots", 0).toString(2) + "\n").toByteArray(Charsets.UTF_8)
         }
 
