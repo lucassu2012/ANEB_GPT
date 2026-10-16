@@ -218,9 +218,15 @@ Home PNG/XML 不证明该 API。不得猜坐标、发送盲键或沿用 Tongyi p
 拓扑。Root 必须另行在固定候选上验证这一实际资格缝隙，代码编译与外部 Android fixture
 不等于设备资格。239B 全量回读、同 handle/parent/window/owner、5秒 input/GO 门不变。
 
-SEND 描述必须来自新批准的当前公开语义资格；不默认猜“发送”或空白箭头。read-only
-snapshot 只在当前唯一语义对象/支持点击的直接父，与本轮完整239B composer、两模式控件、
-活动窗口及 owner 全部绑定后报告 uniqueSend。Root 的 Boolean invocation_authorized
+SEND 描述必须来自新批准的当前公开语义资格；不默认猜“发送”或空白箭头。SEND 专用解析保留
+语义对象自身/支持点击的直接父，只另容许一层无文本/描述/hint、不可编辑/勾选/点击、
+不支持 focus/click 且唯一子节点为该语义对象的透明包装；不任意向上寻找动作。包装及语义对象
+须被真实当前动作矩形包含，动作仍须有公开 CLICK 能力、位于 root 内且不等于全屏/root。
+read-only snapshot 仅在此真实祖先关系与完整239B输入、两模式、同一非全屏 composer、
+活动窗口及 owner 全部绑定后报告 uniqueSend。优先整个动作矩形位于 composer 内；
+仅 SEND 语义关系可由正面积语义对象同时完整位于真实动作和该 composer 内证明，不裁剪/
+替换动作矩形、不加像素容差。此有限关系回归不是 Android 当前性或真实发送证明。
+Root 的 Boolean invocation_authorized
 必须为 true，且真实 action 边界再次取得同样绑定，紧邻 ACTION_CLICK 确认同 Projection
 session active；Core 仍先 fsync SEND_INTENT 再一次调用。缺失、重名、替代、拒绝或不明
 均不重试，不借旧图片/历史 bounds/旧 handle 放行。

@@ -69,6 +69,64 @@ class DeepSeekEngineeringMigrationTest {
         override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000 }
     }
 
+    @Test fun r9OwnedDraftResolvesSemanticSendThroughTransparentWrapperAndBoundedComposer() {
+        // Finite public relation fixture from R9 owned-draft-nodes.json
+        // SHA256 925bbf12d0961cd9ca1a0f7ac09e466509c1c06eaef57173cec212b041f63a8d;
+        // selected ancestry/rectangles corroborated by owned-draft.xml
+        // SHA256 f58e97604561fa0b70079ed6ced44444433f6c4bb9eb32dfcf33a41892a2a6cb.
+        // Owner/window/IDs are fixture-only remappings, never runtime selectors.
+        // Capability inputs below derive from saved public action_ids (16=CLICK,
+        // 2097152=SET_TEXT), serialized sequentially rather than atomically with
+        // the copied Frame. This proves only the pure resolver, not a provider/SEND.
+        fun node(id: Int, parent: Int?, bounds: Bounds = Bounds(0, 0, 1200, 2640),
+            className: String = "android.view.View") =
+            DeepSeekUiAdapter.Node("r9-$id", parent?.let { "r9-$it" }, bounds,
+                windowId = 1, packageName = "com.deepseek.chat", className = className)
+        val nodes = (0..11).map { id ->
+            node(id, if (id == 0) null else id - 1, className = when (id) {
+                0, 2, 4 -> "android.widget.FrameLayout"
+                1, 3 -> "android.widget.LinearLayout"
+                5 -> "androidx.compose.ui.platform.ComposeView"
+                else -> "android.view.View"
+            })
+        } + listOf(
+            node(29, 11, Bounds(36, 922, 1164, 1533)),
+            node(31, 29, Bounds(36, 934, 1164, 1377)),
+            node(32, 31, Bounds(66, 934, 1134, 1377)),
+            node(33, 32, Bounds(84, 970, 1110, 1341),
+                "androidx.compose.ui.viewinterop.ViewFactoryHolder"),
+            node(34, 33, Bounds(84, 970, 1110, 1341), "android.widget.FrameLayout"),
+            node(35, 34, Bounds(84, 970, 1110, 1341), "android.widget.EditText").copy(
+                text = TongyiEngineeringRunner.PAYLOAD, showingHint = false, hint = "发消息",
+                editable = true, focused = true, clickable = true,
+                setTextAvailable = true, clickAvailable = true),
+            node(36, 29, Bounds(36, 1401, 846, 1497)),
+            node(37, 36, Bounds(36, 1347, 396, 1551)).copy(
+                checkable = true, checked = false, clickable = true, clickAvailable = true),
+            node(38, 37, Bounds(168, 1425, 336, 1474), "android.widget.TextView").copy(text = "深度思考"),
+            node(39, 36, Bounds(396, 1347, 696, 1551)).copy(
+                checkable = true, checked = false, clickable = true, clickAvailable = true),
+            node(40, 39, Bounds(492, 1425, 660, 1474), "android.widget.TextView").copy(text = "智能搜索"),
+            node(45, 29, Bounds(990, 1377, 1134, 1521)),
+            // Keep the actual public action rectangle, right6/bottom12 outside29.
+            node(46, 45, Bounds(978, 1353, 1170, 1545)).copy(clickable = true, clickAvailable = true),
+            node(47, 46, Bounds(978, 1353, 1170, 1545)),
+            // Exact SEND description is TWO edges below capable46, not on47.
+            node(48, 47, Bounds(1050, 1425, 1098, 1473)).copy(description = "发送"),
+        )
+        val frame = DeepSeekUiAdapter.Frame("R9_SAVED_PUBLIC_RELATION_FIXTURE", 1,
+            1200, 2640, 0, "r9-0", nodes)
+        val noOperations = object : DeepSeekUiAdapter.Android {
+            override fun read(): DeepSeekUiAdapter.Frame = error("PURE_RELATION_MUST_NOT_READ_ANDROID")
+            override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node,
+                action: DeepSeekUiAdapter.Action) { error("PURE_RELATION_MUST_NOT_INVOKE_ANDROID") }
+            override fun nowNanos(): Long = error("PURE_RELATION_MUST_NOT_READ_CLOCK")
+            override fun sleepMillis(milliseconds: Long) { error("PURE_RELATION_MUST_NOT_SLEEP") }
+        }
+        assertEquals(nodes.single { it.id == "r9-46" },
+            DeepSeekUiAdapter(noOperations, Long.MAX_VALUE).sendCandidate(frame, "发送"))
+    }
+
     @Test fun savedEmptyHomeWithExpandedModeBoundsReachesSupportedNewSessionBoundary() {
         // External Android frame with the captured 48-node public topology/geometry.
         // Owner/window/IDs are synthetic and consistently remapped; source pin and

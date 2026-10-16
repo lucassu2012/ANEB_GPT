@@ -75,6 +75,31 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         }
         return node
     }
+    private fun sendActionTarget(frame: Frame, semantic: Node): Node {
+        val nodes = current(frame)
+        val direct = nodes.singleOrNull { it.id == semantic.parent }
+        fun capable(node: Node) = node.clickable && node.clickAvailable
+        val action = if (capable(semantic) || direct?.let(::capable) == true) actionTarget(frame, semantic) else {
+            val wrapper = direct ?: error("DEEPSEEK_SUPPORTED_DIRECT_ACTION_REQUIRED")
+            check(!wrapper.editable && !wrapper.checkable && !wrapper.checked && !wrapper.clickable &&
+                !wrapper.clickAvailable && !wrapper.focusAvailable && !wrapper.showingHint &&
+                wrapper.text.isEmpty() && wrapper.description.isEmpty() && wrapper.hint.isNullOrEmpty() &&
+                frame.nodes.filter { it.parent == wrapper.id }.singleOrNull() == semantic) {
+                "DEEPSEEK_SUPPORTED_DIRECT_ACTION_REQUIRED"
+            }
+            val parent = nodes.singleOrNull { it.id == wrapper.parent && capable(it) }
+                ?: error("DEEPSEEK_SUPPORTED_DIRECT_ACTION_REQUIRED")
+            check(inside(semantic.bounds, wrapper.bounds) && inside(wrapper.bounds, parent.bounds)) {
+                "DEEPSEEK_ACTION_BOUNDS_CHANGED"
+            }
+            parent
+        }
+        val root = frame.nodes.single { it.id == frame.rootId }
+        check(action.id != root.id && action.bounds != root.bounds && inside(action.bounds, root.bounds) &&
+            inside(semantic.bounds, action.bounds)) { "DEEPSEEK_ACTION_BOUNDS_CHANGED" }
+        ancestors(frame, semantic) // Validate the actual complete path; selection above is at most two edges.
+        return action
+    }
     private fun mode(frame: Frame, text: String): Node {
         val label = witness(frame, text = text)
         return current(frame).singleOrNull { it.id == label.parent && it.checkable && it.clickable && it.clickAvailable }
@@ -93,7 +118,8 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         return path
     }
     private val requiredModes = listOf("深度思考", "智能搜索")
-    private fun composer(frame: Frame, input: Node, other: Node? = null, modeNames: List<String> = requiredModes): Node {
+    private fun composer(frame: Frame, input: Node, other: Node? = null, modeNames: List<String> = requiredModes,
+        sendWitness: Node? = null): Node {
         val controls = modeNames.map { it to mode(frame, it) }
         val controlPaths = controls.map { ancestors(frame, it.second) }
         val otherPath = other?.let { ancestors(frame, it) }
@@ -107,7 +133,9 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         return ancestors(frame, input).firstOrNull { it.id != root.id && it.bounds != root.bounds &&
             controlPaths.all { path -> it in path } && (otherPath == null || it in otherPath) &&
             inside(input.bounds, it.bounds) && controls.all { (name, control) -> modeContained(control, name, it) } &&
-            (other == null || inside(other.bounds, it.bounds)) } ?: error("DEEPSEEK_SHARED_COMPOSER_REQUIRED")
+            (other == null || inside(other.bounds, it.bounds) || (sendWitness != null &&
+                inside(sendWitness.bounds, other.bounds) && inside(sendWitness.bounds, it.bounds))) }
+            ?: error("DEEPSEEK_SHARED_COMPOSER_REQUIRED")
     }
     private fun emptyComposer(frame: Frame, modeNames: List<String> = requiredModes): Boolean {
         editor(frame)?.let { return empty(it) }
@@ -233,9 +261,10 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         if (empty(input)) return null
         check(input.enabled && input.focused && input.setTextAvailable && !input.showingHint && input.text == TongyiEngineeringRunner.PAYLOAD &&
             input.text.toByteArray(Charsets.UTF_8).size == 239) { "DEEPSEEK_EXACT_239B_REQUIRED" }
-        val candidate = actionTarget(frame, witness(frame, description = description))
+        val semantic = witness(frame, description = description)
+        val candidate = sendActionTarget(frame, semantic)
         check(!candidate.editable && candidate.id != input.id) { "DEEPSEEK_SEND_EDITOR_COLLISION" }
-        composer(frame, input, candidate)
+        composer(frame, input, candidate, sendWitness = semantic)
         return candidate
     }
 }
