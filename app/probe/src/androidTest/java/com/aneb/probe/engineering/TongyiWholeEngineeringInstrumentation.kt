@@ -194,6 +194,7 @@ class TongyiWholeEngineeringInstrumentation {
         catch (retention: Exception) {
             throw IllegalStateException("DEEPSEEK_QUALIFICATION_REPORT_NOT_RETAINED_original_failure=${result.failure ?: "<NONE>"}", retention)
         }
+        backend.persistDeepSeekModeGuardFailure(result) // Auxiliary only, after the original result/report and owned cleanup.
         return result
     }
 
@@ -263,6 +264,16 @@ class TongyiWholeEngineeringInstrumentation {
         private var draftQualificationSelectionEnd: Int? = null
         private var draftQualificationFullSelectionConfirmed: Boolean? = null
         private var draftQualificationEmptyConfirmed: Boolean? = null
+        private data class DeepSeekModeGuardFailure(
+            val phase: String, val parentIndex: Int, val labels: List<String>,
+            val activeUntil: Long, val preparationUntil: Long, val refreshReturned: Boolean?,
+            val reached: List<Pair<String, Boolean>>, val firstFalse: String,
+            val parentBefore: List<Any?>, val parentCurrent: List<Any?>?,
+            val labelsBefore: List<List<Any?>>, val labelsCurrent: List<List<Any?>>?,
+            val currentRootBounds: List<Int>? = null, val displayBounds: List<Int>? = null,
+        ) // Primitive values only; never retain provider handles for later serialization.
+        private var deepSeekModeGuardFailure: DeepSeekModeGuardFailure? = null
+        private var deepSeekModeGuardCaptureFailure: String? = null
         private var modeFeedbackActive = false
         private data class ModeFeedbackSample(val label: String, val source: JSONObject, val png: ByteArray?)
         private val modeFeedbackSamples = ArrayList<ModeFeedbackSample>(2)
@@ -919,6 +930,54 @@ class TongyiWholeEngineeringInstrumentation {
                 .put("formal_new_slots", 0).put("reference_accepted", false).put("rpi", "not_computed"))
         }
 
+        fun persistDeepSeekModeGuardFailure(result: DeepSeekDraftRoleQualification.Result) {
+            val observed = deepSeekModeGuardFailure
+            val captureFailure = deepSeekModeGuardCaptureFailure
+            if (observed == null && captureFailure == null) return
+            val retention = runCatching {
+                val report = JSONObject().put("kind", "private_current_mode_pair_acquisition_failure")
+                    .put("run_id", root.name).put("diagnostic_only", true)
+                    .put("original_result_state", result.state).put("original_failure", result.failure ?: JSONObject.NULL)
+                    .put("original_stack", result.originalStack ?: JSONObject.NULL)
+                    .put("capture_failure", captureFailure ?: JSONObject.NULL)
+                    .put("capture_state", if (observed == null) "UNKNOWN" else if (captureFailure != null) "PARTIAL" else "FIRST_FALSE_OBSERVED")
+                    .put("unreached_terms", "ABSENT_NOT_FALSE").put("source_timing", "current_pair_values_sequential_not_atomic_no_failure_resampling")
+                    .put("formal_new_slots", 0).put("metrics", JSONObject.NULL).put("reference_accepted", false).put("rpi", "not_computed")
+                if (observed != null) {
+                    val fields = listOf("package", "class", "window_id", "text", "description", "left", "top", "right", "bottom",
+                        "visible_to_user", "enabled", "clickable", "checkable", "editable", "click_action_available")
+                    fun comparison(before: List<Any?>, current: List<Any?>?): JSONObject = JSONObject()
+                        .put("baseline", JSONArray(before)).put("current", current?.let { JSONArray(it) } ?: JSONObject.NULL)
+                        .put("current_evaluation", if (current == null) "NOT_EVALUATED" else "EVALUATED")
+                        .put("different_fields", current?.let { values ->
+                            JSONArray(fields.indices.filter { before[it] != values[it] }.map { fields[it] })
+                        } ?: JSONObject.NULL)
+                    report.put("phase", observed.phase).put("acquisition_local_parent_index", observed.parentIndex)
+                        .put("labels", JSONArray(observed.labels)).put("first_false", observed.firstFalse)
+                        .put("active_until_nanos", observed.activeUntil.toString())
+                        .put("preparation_until_nanos", observed.preparationUntil.toString())
+                        .put("refresh_returned", observed.refreshReturned ?: JSONObject.NULL)
+                        .put("current_root_bounds", observed.currentRootBounds?.let { JSONArray(it) } ?: JSONObject.NULL)
+                        .put("display_bounds", observed.displayBounds?.let { JSONArray(it) } ?: JSONObject.NULL)
+                        .put("geometry_source", "AccessibilityNodeInfo.getBoundsInScreen;no_old_coordinate_substitution")
+                        .put("reached_terms", JSONArray().apply { observed.reached.forEach { (name, value) ->
+                            put(JSONObject().put("name", name).put("result", value))
+                        } })
+                        .put("stable_field_order", JSONArray(fields))
+                        .put("parent_stable", comparison(observed.parentBefore, observed.parentCurrent))
+                        .put("labels_stable", JSONArray().apply { observed.labelsBefore.forEachIndexed { index, baseline ->
+                            put(comparison(baseline, observed.labelsCurrent?.get(index)).put("label", observed.labels[index]))
+                        } })
+                }
+                writeJson("DEEPSEEK_MODE_REFRESH_GUARD_FAILURE.json", report)
+            }
+            retention.exceptionOrNull()?.let { failure -> runCatching {
+                instrumentation.sendStatus(0, Bundle().apply {
+                    putString("aneb_mode_refresh_guard_retention", "UNKNOWN:${failure.javaClass.simpleName}:${failure.message.orEmpty()}")
+                })
+            } } // Auxiliary retention cannot replace the already captured original result/failure.
+        }
+
         /** Immutable values from this actual tree; indices are acquisition-local handles, never selectors. */
         private fun deepSeekNodeValues(handles: List<AccessibilityNodeInfo>) = handles.mapIndexed { index, node ->
             val rect = Rect().also(node::getBoundsInScreen)
@@ -938,11 +997,57 @@ class TongyiWholeEngineeringInstrumentation {
             check(now < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
         }
 
-        /** Refresh only the known current semantic controls, not the rest of this tree. */
-        private fun refreshCurrentDeepSeekModeParents(handles: List<AccessibilityNodeInfo>, until: Long) {
+        /** One projection for final pair validation AND Frame use; later action helper remains unchanged. */
+        private fun currentModeNodeValues(handles: List<AccessibilityNodeInfo>, observedIndices: Set<Int>,
+            observations: MutableMap<Int, List<Any?>>): List<DeepSeekUiAdapter.Node> = handles.mapIndexed { index, node ->
+            val rect = Rect().also(node::getBoundsInScreen)
+            val parent = handles.indexOf(node.parent).takeIf { it >= 0 }?.toString()
+            val text = node.text?.toString()
+            val description = node.contentDescription?.toString()
+            val hint = node.hintText?.toString()
+            val showingHint = node.isShowingHintText
+            val visible = visible(node)
+            val enabled = node.isEnabled
+            val clickable = node.isClickable
+            val checkable = node.isCheckable
+            val checked = node.isChecked
+            val editable = node.isEditable
+            val focused = node.isFocused
+            val setTextAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+            val clickAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
+            val focusAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_FOCUS }
+            val windowId = node.windowId
+            val packageName = node.packageName?.toString()
+            val className = node.className?.toString()
+            if (index in observedIndices) observations[index] = listOf(packageName, className, windowId, text, description,
+                rect.left, rect.top, rect.right, rect.bottom, visible, enabled, clickable, checkable, editable, clickAvailable)
+            DeepSeekUiAdapter.Node(index.toString(), parent,
+                TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                text.orEmpty(), description.orEmpty(), hint, showingHint, visible, enabled, clickable, checkable, checked,
+                editable, focused, setTextAvailable, clickAvailable, focusAvailable, windowId, packageName.orEmpty(), className.orEmpty())
+        }
+
+        /** Refresh only the known semantic pairs; return the exact finally validated projection. */
+        private fun refreshCurrentDeepSeekModeParents(handles: List<AccessibilityNodeInfo>, until: Long,
+            width: Int, height: Int): List<DeepSeekUiAdapter.Node> {
             val rootNode = handles.first()
             val owner = checkNotNull(targetOwner)
             val windowId = rootNode.windowId
+            fun stable(node: AccessibilityNodeInfo): List<Any?> {
+                val bounds = Rect().also(node::getBoundsInScreen)
+                return listOf(node.packageName?.toString(), node.className?.toString(), node.windowId,
+                    node.text?.toString(), node.contentDescription?.toString(), bounds.left, bounds.top, bounds.right, bounds.bottom,
+                    node.isVisibleToUser, node.isEnabled, node.isClickable, node.isCheckable, node.isEditable,
+                    node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) // checked is observed, not frozen.
+            }
+            fun nonGeometryEqual(current: List<Any?>, baseline: List<Any?>) =
+                current.take(5) == baseline.take(5) && current.drop(9) == baseline.drop(9)
+            fun bounds(values: List<Any?>) = TongyiPreparationRunner.Bounds(
+                values[5] as Int, values[6] as Int, values[7] as Int, values[8] as Int)
+            fun inside(value: TongyiPreparationRunner.Bounds, container: TongyiPreparationRunner.Bounds) =
+                value.right > value.left && value.bottom > value.top && value.left >= container.left &&
+                    value.top >= container.top && value.right <= container.right && value.bottom <= container.bottom
+            val display = TongyiPreparationRunner.Bounds(0, 0, width, height)
             val candidates = listOf("深度思考", "智能搜索").mapNotNull { name ->
                 val labels = handles.filter { visible(it) && it.isEnabled && it.text?.toString() == name }
                 if (labels.size != 1) return@mapNotNull null // Preserve opening/missing/ambiguous readiness semantics.
@@ -955,38 +1060,115 @@ class TongyiWholeEngineeringInstrumentation {
                     label.windowId != windowId || parent.windowId != windowId) return@mapNotNull null
                 Triple(name, label, parentIndex)
             }
-            candidates.groupBy { it.third }.forEach { (parentIndex, labels) ->
+            data class PairBinding(val parentIndex: Int, val ancestorIndex: Int,
+                val labels: List<Triple<String, AccessibilityNodeInfo, Int>>,
+                val parentBefore: List<Any?>, val labelsBefore: List<List<Any?>>)
+            val pairs = candidates.groupBy { it.third }.map { (parentIndex, labels) ->
                 val parent = handles[parentIndex]
-                val ancestor = parent.parent
-                fun stable(node: AccessibilityNodeInfo): List<Any?> {
-                    val bounds = Rect().also(node::getBoundsInScreen)
-                    return listOf(node.packageName?.toString(), node.className?.toString(), node.windowId,
-                        node.text?.toString(), node.contentDescription?.toString(), bounds.left, bounds.top, bounds.right, bounds.bottom,
-                        node.isVisibleToUser, node.isEnabled, node.isClickable, node.isCheckable, node.isEditable,
-                        node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) // checked intentionally not frozen.
-                }
-                val parentBefore = stable(parent)
-                val labelsBefore = labels.map { stable(it.second) }
-                fun guard() {
+                val ancestorIndex = handles.indexOf(parent.parent)
+                check(ancestorIndex >= 0) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
+                PairBinding(parentIndex, ancestorIndex, labels, stable(parent), labels.map { stable(it.second) })
+            }
+            fun guard(pair: PairBinding, phase: String, refreshReturned: Boolean?,
+                projection: List<DeepSeekUiAdapter.Node>? = null, observations: Map<Int, List<Any?>>? = null) {
+                    val parentIndex = pair.parentIndex
+                    val parent = handles[parentIndex]
+                    val labels = pair.labels
                     deepSeekReadGate(until)
                     requireOwnedCurrent(until)
                     val window = checkNotNull(rootNode.window) { "DEEPSEEK_MODE_REFRESH_WINDOW_MISSING" }
-                    check(targetOwner == owner && rootNode.windowId == windowId && window.isActive &&
-                        window.id == windowId && window.root == rootNode && parent.parent == ancestor &&
-                        parent.isEnabled && parent.isVisibleToUser && parent.isCheckable && parent.isClickable && !parent.isEditable &&
-                        parent.packageName?.toString() == TARGET && parent.windowId == windowId &&
-                        parent.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } &&
-                        stable(parent) == parentBefore && labels.map { stable(it.second) } == labelsBefore &&
-                        labels.all { visible(it.second) && it.second.isEnabled &&
-                            it.second.parent == parent && it.second.text?.toString() == it.first &&
-                            it.second.packageName?.toString() == TARGET && it.second.windowId == windowId }) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
+                    val reached = if (draftQualificationActive && deepSeekModeGuardFailure == null) ArrayList<Pair<String, Boolean>>() else null
+                    var parentCurrent: List<Any?>? = null
+                    var labelsCurrent: List<List<Any?>>? = null
+                    var rootBounds: TongyiPreparationRunner.Bounds? = null
+                    fun note(name: String, value: Boolean): Boolean {
+                        if (reached != null) runCatching {
+                            reached.add(name to value)
+                            if (!value) deepSeekModeGuardFailure = DeepSeekModeGuardFailure(phase, parentIndex, labels.map { it.first },
+                                until, preparationDeadline, refreshReturned, reached.toList(), name,
+                                pair.parentBefore, parentCurrent, pair.labelsBefore, labelsCurrent,
+                                rootBounds?.let { listOf(it.left, it.top, it.right, it.bottom) }, listOf(0, 0, width, height))
+                        }.exceptionOrNull()?.let { diagnostic -> runCatching {
+                            if (deepSeekModeGuardCaptureFailure == null)
+                                deepSeekModeGuardCaptureFailure = "${diagnostic.javaClass.simpleName}:${diagnostic.message.orEmpty()}"
+                        } }
+                        return value // Diagnostic only; false is never converted to acceptance.
+                    }
+                    check(note("target_owner_equal", targetOwner == owner) &&
+                        note("root_window_id_equal", rootNode.windowId == windowId) && note("window_active", window.isActive) &&
+                        note("window_id_equal", window.id == windowId) && note("window_root_equal", window.root == rootNode)) {
+                        "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED"
+                    }
+                    val currentParent = observations?.getValue(parentIndex) ?: stable(parent)
+                    val currentLabels = labels.map { observations?.getValue(handles.indexOf(it.second)) ?: stable(it.second) }
+                    val currentRoot = projection?.first()?.bounds ?: Rect().also(rootNode::getBoundsInScreen).let {
+                        TongyiPreparationRunner.Bounds(it.left, it.top, it.right, it.bottom)
+                    }
+                    parentCurrent = currentParent
+                    labelsCurrent = currentLabels
+                    rootBounds = currentRoot
+                    val ancestorIndex = projection?.get(parentIndex)?.parent?.toIntOrNull() ?: if (projection == null)
+                        handles.indexOf(parent.parent) else -1
+                    check(note("projected_root_identity", projection == null || projection.first().let {
+                            it.parent == null && it.windowId == windowId && it.packageName == TARGET && it.visible && it.enabled
+                        }) && note("parent_ancestor_equal", ancestorIndex == pair.ancestorIndex) &&
+                        note("parent_current_visible", projection?.get(parentIndex)?.visible ?: visible(parent)) &&
+                        note("parent_enabled", currentParent[10] == true) && note("parent_visible_to_user", currentParent[9] == true) &&
+                        note("parent_checkable", currentParent[12] == true) && note("parent_clickable", currentParent[11] == true) &&
+                        note("parent_not_editable", currentParent[13] == false) &&
+                        note("parent_package_equal", currentParent[0] == TARGET) && note("parent_window_id_equal", currentParent[2] == windowId) &&
+                        note("parent_click_action_available", currentParent[14] == true) &&
+                        note("parent_non_geometry_equal", nonGeometryEqual(currentParent, pair.parentBefore)) &&
+                        note("labels_non_geometry_equal", currentLabels.indices.all { nonGeometryEqual(currentLabels[it], pair.labelsBefore[it]) }) &&
+                        labels.indices.all { index ->
+                            val (name, label) = labels[index]
+                            val currentLabel = currentLabels[index]
+                            val labelIndex = handles.indexOf(label)
+                            note("label:$name:visible", projection?.get(labelIndex)?.visible ?: visible(label)) &&
+                                note("label:$name:enabled", currentLabel[10] == true) &&
+                                note("label:$name:parent_equal", if (projection == null) label.parent == parent
+                                    else projection[labelIndex].parent == parentIndex.toString()) &&
+                                note("label:$name:text_equal", currentLabel[3] == name) &&
+                                note("label:$name:package_equal", currentLabel[0] == TARGET) &&
+                                note("label:$name:window_id_equal", currentLabel[2] == windowId) &&
+                                note("label:$name:current_unique", projection == null || projection.filter {
+                                    it.visible && it.enabled && it.text == name
+                                }.let { it.size == 1 && it.single().id == labelIndex.toString() })
+                        } && note("root_current_geometry", inside(currentRoot, display)) &&
+                        note("parent_current_geometry", inside(bounds(currentParent), currentRoot)) &&
+                        labels.indices.all { index ->
+                            val name = labels[index].first
+                            note("label:$name:current_geometry", inside(bounds(currentLabels[index]), currentRoot)) &&
+                                note("label:$name:inside_current_parent", inside(bounds(currentLabels[index]), bounds(currentParent)))
+                        }) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
+                    deepSeekReadGate(until)
+            }
+            pairs.forEach { pair ->
+                guard(pair, "BEFORE", null)
+                val parent = handles[pair.parentIndex]
+                check(parent.refresh()) { "DEEPSEEK_CURRENT_MODE_REFRESH_FAILED" } // Once per eligible distinct parent, ON or OFF.
+                pair.labels.forEach { (name, label) ->
+                    deepSeekReadGate(until)
+                    val refreshed = label.refresh() // Once for this already identified exact label, after its parent.
+                    if (!refreshed && draftQualificationActive && deepSeekModeGuardFailure == null) runCatching {
+                        deepSeekModeGuardFailure = DeepSeekModeGuardFailure("LABEL_REFRESH", pair.parentIndex,
+                            pair.labels.map { it.first }, until, preparationDeadline, true,
+                            listOf("label:$name:refresh_returned" to false), "label:$name:refresh_returned",
+                            pair.parentBefore, null, pair.labelsBefore, null)
+                    }
+                    check(refreshed) { "DEEPSEEK_CURRENT_MODE_LABEL_REFRESH_FAILED" }
                     deepSeekReadGate(until)
                 }
-                guard()
-                check(parent.refresh()) { "DEEPSEEK_CURRENT_MODE_REFRESH_FAILED" } // Once per eligible distinct parent, ON or OFF.
-                guard()
+                guard(pair, "AFTER_PAIR_REFRESH", true)
             }
             deepSeekReadGate(until)
+            val observations = HashMap<Int, List<Any?>>()
+            val observedIndices = pairs.flatMap { pair -> listOf(pair.parentIndex) + pair.labels.map { handles.indexOf(it.second) } }.toSet()
+            val projection = currentModeNodeValues(handles, observedIndices, observations)
+            // A later label refresh may affect an earlier pair. Validate ALL pairs from these exact final values.
+            pairs.forEach { guard(it, "FINAL_ALL_PAIRS", true, projection, observations) }
+            deepSeekReadGate(until)
+            return projection
         }
 
         private fun deepSeekFrame(deadlineNanos: Long = preparationDeadline): Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>> {
@@ -1003,10 +1185,11 @@ class TongyiWholeEngineeringInstrumentation {
             check(rootNode.windowId >= 0 && window.isActive && window.id == rootNode.windowId && window.root == rootNode) {
                 "DEEPSEEK_CURRENT_WINDOW_CHANGED"
             }
-            if (target == EngineeringTarget.DEEPSEEK && condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION"))
-                refreshCurrentDeepSeekModeParents(handles, until)
-            val frame = DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId, base.width, base.height, base.rotation,
-                "0", deepSeekNodeValues(handles))
+            val currentModeValues = if (target == EngineeringTarget.DEEPSEEK &&
+                condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION"))
+                refreshCurrentDeepSeekModeParents(handles, until, base.width, base.height) else null
+            val frame = DeepSeekUiAdapter.Frame(base.owner, currentModeValues?.first()?.windowId ?: rootNode.windowId,
+                base.width, base.height, base.rotation, "0", currentModeValues ?: deepSeekNodeValues(handles))
             deepSeekReadGate(until)
             if (draftQualificationActive) cacheDraftQualificationNodes(frame, handles)
             return frame to handles
