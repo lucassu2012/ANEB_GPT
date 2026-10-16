@@ -181,6 +181,12 @@ ViewFactoryHolder，以及与两个 checked 模式控件同属的非全屏 compo
 checkable、clickable 且支持公开点击的直接父操作；ON 时至多切一次并 fresh 读回 OFF。
 这只证明可见深度思考 OFF/智能搜索 OFF，不证明 backend 工具、模型或会话身份。
 
+composer 优先保留整个真实模式动作父被非全屏共享容器包含的路径。只有动作父越出该
+容器时，才允许同一 Frame 中唯一可见、正面积的语义 label 同时完整位于自己的真实
+直接 checked/clickable/支持动作父及共享容器内；动作父仍须在 root 内并保留共同祖先、
+包/window/owner 及原空草稿门。没有像素容差、全屏容器或额外采样兜底；label 越出
+composer 仍拒绝。该关系判据不解释某次 bounds 扩展原因，也不代表实机输入资格。
+
 聚焦只使用当前对象/直接父真实支持的 ACTION_FOCUS 或 ACTION_CLICK。若新会话没有
 实际可编辑、focused、支持 ACTION_SET_TEXT 的唯一 Android EditText，安全拒绝；保存的
 Home PNG/XML 不证明该 API。不得猜坐标、发送盲键或沿用 Tongyi pixel/menu/RID/SEND

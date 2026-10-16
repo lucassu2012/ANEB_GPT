@@ -90,9 +90,15 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         val searchPath = ancestors(frame, search)
         val otherPath = other?.let { ancestors(frame, it) }
         val root = frame.nodes.single { it.id == frame.rootId }
+        fun modeContained(control: Node, label: String, container: Node): Boolean {
+            if (inside(control.bounds, container.bounds)) return true
+            val semantic = witness(frame, text = label)
+            return semantic.parent == control.id && inside(semantic.bounds, control.bounds) &&
+                inside(semantic.bounds, container.bounds)
+        }
         return ancestors(frame, input).firstOrNull { it.id != root.id && it.bounds != root.bounds &&
             it in thinkingPath && it in searchPath && (otherPath == null || it in otherPath) &&
-            inside(input.bounds, it.bounds) && inside(thinking.bounds, it.bounds) && inside(search.bounds, it.bounds) &&
+            inside(input.bounds, it.bounds) && modeContained(thinking, "深度思考", it) && modeContained(search, "智能搜索", it) &&
             (other == null || inside(other.bounds, it.bounds)) } ?: error("DEEPSEEK_SHARED_COMPOSER_REQUIRED")
     }
     private fun emptyComposer(frame: Frame): Boolean {
