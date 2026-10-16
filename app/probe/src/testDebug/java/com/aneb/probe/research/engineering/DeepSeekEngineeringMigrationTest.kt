@@ -21,6 +21,7 @@ class DeepSeekEngineeringMigrationTest {
         var focusSupported = true
         private var newEmptyReadReturned = false
         val invoked = mutableListOf<String>()
+        val modeRequests = mutableListOf<String>()
         private val bounds = TongyiPreparationRunner.Bounds(0, 0, 1200, 2486)
         override fun read(): DeepSeekUiAdapter.Frame {
             if (newSession && replaceDraftAfterNewEmptyRead) {
@@ -58,6 +59,11 @@ class DeepSeekEngineeringMigrationTest {
                 "input" -> focused = true
                 else -> error("UNEXPECTED_PUBLIC_ACTION")
             }
+        }
+        override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+            check(label.parent == control.id && control.checked)
+            modeRequests += control.id
+            invoke(frame, control, DeepSeekUiAdapter.Action.CLICK) // External fixture effect only, not a Native fallback.
         }
         override fun nowNanos() = now
         override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000 }
@@ -354,6 +360,48 @@ class DeepSeekEngineeringMigrationTest {
         assertTrue("no new-session/mode/focus action on an unbound semantic label", requested.isEmpty())
     }
 
+    @Test fun checkedSearchUsesOneSemanticModeRequestBeforeAnyPointerOrComposerActivation() {
+        val android = SemanticComposerAndroid()
+        val modeRequests = mutableListOf<String>()
+        val legacyModeRequests = mutableListOf<String>()
+        // This existing public topology also matches the R3 last-cached source
+        // SHA05a8bbe5f386f20d6138f19bf61d7dc0852ae5726b36a40bc546890729d7f28d.
+        // Owner/window/IDs and new-chat response are synthetic, not saved action successor frames.
+        val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, action: DeepSeekUiAdapter.Action) {
+                if (node.id == "public-38") {
+                    check(action == DeepSeekUiAdapter.Action.CLICK && node.checked)
+                    legacyModeRequests += node.id
+                    return // External API accepts the request without an OFF observation; no actual-cause claim.
+                }
+                android.invoke(frame, node, action)
+            }
+            override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+                check(label.text == "智能搜索" && label.parent == control.id && control.checked && control.checkable)
+                modeRequests += "${label.text}:${control.id}"
+                error("EXTERNAL_SEMANTIC_MODE_DECLINED_BEFORE_POINTER")
+            }
+        }
+        val failure = runCatching { DeepSeekUiAdapter(boundary, android.now + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("one semantic mode request required: " + failure?.message, listOf("智能搜索:public-38"), modeRequests)
+        assertEquals("EXTERNAL_SEMANTIC_MODE_DECLINED_BEFORE_POINTER", failure?.message)
+        assertTrue("never perform an Accessibility mode click before the semantic request", legacyModeRequests.isEmpty())
+        assertEquals(listOf("public-22:CLICK"), android.actions)
+        assertTrue(android.activations.isEmpty())
+        assertTrue(android.searchOn)
+    }
+
+    @Test fun semanticModeVoidReturnWithoutVisibleOffRefusesOnceBeforeFocusOrInput() {
+        val android = VisibleAndroid().apply { refuseSearchOff = true }
+        val failure = runCatching { DeepSeekUiAdapter(android, android.now + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("DEEPSEEK_PUBLIC_READINESS_EXPIRED", failure?.message)
+        assertEquals(listOf("search"), android.modeRequests)
+        assertEquals(listOf("new-parent:CLICK", "search:CLICK"), android.invoked)
+        assertTrue(android.search)
+        assertFalse(android.focused)
+        assertEquals("", android.draft)
+    }
+
     @Test fun currentEmptyHintWithoutAdvertisedActionsReachesDistinctSemanticActivationBeforeAnyPointer() {
         val android = SemanticComposerAndroid()
         val failure = runCatching { DeepSeekUiAdapter(android, android.now + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
@@ -392,6 +440,10 @@ class DeepSeekEngineeringMigrationTest {
                 "public-38" -> searchOn = false // Synthetic external mode response.
                 else -> error("UNEXPECTED_ACTION_NO_INPUT_OR_SEND_ALLOWED")
             }
+        }
+        override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+            check(label.parent == control.id && control.checked)
+            invoke(frame, control, DeepSeekUiAdapter.Action.CLICK) // Mechanical external-fixture response, not product fallback.
         }
         override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {
             check(hint.id == "public-34" && !hint.clickAvailable && !hint.focusAvailable && !searchOn)

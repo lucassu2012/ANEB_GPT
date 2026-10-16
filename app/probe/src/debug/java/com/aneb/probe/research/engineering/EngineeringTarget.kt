@@ -30,6 +30,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         fun read(): Frame
         fun invoke(frame: Frame, node: Node, action: Action)
         fun activateEmptyComposer(frame: Frame, hint: Node) { error("DEEPSEEK_SEMANTIC_COMPOSER_ACTIVATION_NOT_SUPPORTED") }
+        fun activateCheckedMode(frame: Frame, label: Node, control: Node) { error("DEEPSEEK_SEMANTIC_MODE_ACTUATION_NOT_SUPPORTED") }
         fun nowNanos(): Long
         fun sleepMillis(milliseconds: Long)
     }
@@ -141,7 +142,8 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
             val parent = mode(frame, label)
             if (parent.checked) {
                 check(emptyComposer(frame)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
-                android.invoke(frame, parent, Action.CLICK)
+                editor(frame)?.let { composer(frame, it) }
+                android.activateCheckedMode(frame, witness(frame, text = label), parent)
                 await(TongyiEngineeringRunner.INPUT_NANOS) { !mode(it, label).checked }
             }
         }

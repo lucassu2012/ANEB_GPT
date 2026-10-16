@@ -694,6 +694,51 @@ class TongyiWholeEngineeringInstrumentation {
             override fun nowNanos() = SystemClock.elapsedRealtimeNanos()
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
             override fun read() = deepSeekFrame().first
+            override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+                val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
+                action {
+                    val (fresh, handles) = deepSeekFrame()
+                    check(fresh == frame && fresh.nodes.singleOrNull { it.id == label.id } == label &&
+                        fresh.nodes.singleOrNull { it.id == control.id } == control) { "DEEPSEEK_SEMANTIC_MODE_FRAME_CHANGED" }
+                    // The adapter proved this same Frame's empty bounded composer before requesting one ON-mode operation.
+                    check(label.text in setOf("深度思考", "智能搜索") && label.className.isNotBlank() &&
+                        label.parent == control.id && label.visible && label.enabled && !label.editable &&
+                        control.visible && control.enabled && control.checkable && control.checked &&
+                        control.clickable && control.clickAvailable && !control.editable) { "DEEPSEEK_CHECKED_MODE_ACTION_REQUIRED" }
+                    val labels = device.findObjects(By.pkg(TARGET).text(label.text).clazz(label.className))
+                    check(labels.size == 1) { "DEEPSEEK_SEMANTIC_MODE_LABEL_NOT_UNIQUE" }
+                    val publicLabel = labels.single()
+                    val publicControl = checkNotNull(publicLabel.parent) { "DEEPSEEK_SEMANTIC_MODE_PARENT_MISSING" }
+                    fun matchesPublic(actual: UiObject2, expected: DeepSeekUiAdapter.Node): Boolean {
+                        val bounds = actual.visibleBounds
+                        return actual.applicationPackage == expected.packageName && actual.className == expected.className &&
+                            actual.text.orEmpty() == expected.text && actual.contentDescription.orEmpty() == expected.description &&
+                            actual.isEnabled == expected.enabled && bounds.left == expected.bounds.left && bounds.top == expected.bounds.top &&
+                            bounds.right == expected.bounds.right && bounds.bottom == expected.bounds.bottom
+                    }
+                    check(matchesPublic(publicLabel, label) && matchesPublic(publicControl, control) &&
+                        publicControl.isCheckable && publicControl.isChecked && publicControl.isClickable) {
+                        "DEEPSEEK_SEMANTIC_MODE_PUBLIC_RELATION_CHANGED"
+                    }
+                    val actualLabel = handles[label.id.toInt()]
+                    val actualControl = handles[control.id.toInt()]
+                    check(actualLabel.refresh() && actualControl.refresh() && actualLabel.parent == actualControl &&
+                        deepSeekNodeValues(handles) == frame.nodes) { "DEEPSEEK_SEMANTIC_MODE_SOURCE_CHANGED" }
+                    requireOwnedCurrent(until)
+                    val activeRoot = checkNotNull(automation.rootInActiveWindow) { "DEEPSEEK_SEMANTIC_MODE_ROOT_MISSING" }
+                    val window = checkNotNull(activeRoot.window) { "DEEPSEEK_SEMANTIC_MODE_WINDOW_MISSING" }
+                    check(activeRoot == handles.first() && activeRoot.windowId == frame.windowId &&
+                        window.isActive && window.id == frame.windowId && window.root == activeRoot) {
+                        "DEEPSEEK_SEMANTIC_MODE_WINDOW_CHANGED"
+                    }
+                    check(publicControl.isEnabled && publicControl.isCheckable && publicControl.isChecked && publicControl.isClickable) {
+                        "DEEPSEEK_SEMANTIC_MODE_NO_LONGER_ON"
+                    }
+                    check(SystemClock.elapsedRealtimeNanos() < until) { "DEEPSEEK_SEMANTIC_MODE_ACTION_EXPIRED" }
+                    // One distinct semantic parent operation INSTEAD OF Accessibility CLICK; no fallback or local OFF mutation.
+                    publicControl.click()
+                }
+            }
             override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {
                 // Starts before the original action wrapper: never grants a later five-second budget.
                 val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)

@@ -178,7 +178,14 @@ DeepSeek `COLLECTION` release 的 `ui_contract` 必须由 Root 新鲜批准，�
 没有 editable 不等于空：必须是当前 TextView 提示“发消息或按住说话”、唯一直接
 ViewFactoryHolder，以及与两个 checked 模式控件同属的非全屏 composer。缺证明零新会话
 动作，未知草稿不触碰。模式标签本身可以是零 bounds，但只能对实际当前 enabled、
-checkable、clickable 且支持公开点击的直接父操作；ON 时至多切一次并 fresh 读回 OFF。
+checkable、clickable 且支持公开点击的直接父操作。对当前 checked-ON 模式，先在同一
+Frame 核空草稿/共享 composer，再明确选择一次 UiObject2 语义父操作，而不是先发
+Accessibility CLICK 再补点：唯一当前包/精确模式文本/类名 label 及直接父公开属性/bounds
+必须与 fresh 完整 Frame 一致，父仍 checked/checkable/clickable，且最后完整 owner/root/
+活动 window 及原 action5 预算通过，才 parameterless parent.click() 一次。原 advertised
+action IDs 不改写；公开对象匹配不冒称 native-handle alias。void 返回不等于 OFF，随后
+原局部5秒 fresh OFF await 仍必须通过；不重试、不加预算、缺失不当 OFF，新会话与
+composer 激活策略不改。操作是否在当前实机生效必须由 Root 新机会实际验收。
 这只证明可见深度思考 OFF/智能搜索 OFF，不证明 backend 工具、模型或会话身份。
 
 composer 优先保留整个真实模式动作父被非全屏共享容器包含的路径。只有动作父越出该
