@@ -13,6 +13,27 @@ import org.junit.runner.RunWith
 /** Not in the HOST-selected whole class; no SEND/recording/network capability. */
 @RunWith(AndroidJUnit4::class)
 class DeepSeekDraftRoleQualificationInstrumentation {
+    @Test fun diagnoseOneCheckedModeOperationWithoutComposerInputOrSend() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val args = InstrumentationRegistry.getArguments()
+        check(args.getString("feature_release") == "deepseek-same-mode-feedback-811") { "EXPLICIT_MODE_FEEDBACK_REQUIRED" }
+        val allowed = setOf("class", "debug", "feature_release", "target_profile", "target_package", "run_id")
+        check(args.keySet().all { it in allowed }) { "MODE_FEEDBACK_ARGUMENT_NOT_ALLOWED" }
+        check(args.getString("target_profile") == "deepseek" && args.getString("target_package") == "com.deepseek.chat") {
+            "FIXED_DEEPSEEK_TARGET_REQUIRED"
+        }
+        val runId = checkNotNull(args.getString("run_id"))
+        check(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        val parent = File(instrumentation.targetContext.getExternalFilesDir(null), "tongyi-engineering")
+        check(parent.exists() || parent.mkdirs())
+        val result = TongyiWholeEngineeringInstrumentation().runDeepSeekModeFeedbackOnce(runId, File(parent, runId))
+        runCatching { instrumentation.sendStatus(0, Bundle().apply {
+            putString("stream", "PMO811 diagnostic stop only: mode=${result.gate?.mode}; operation_returned=${result.gate?.operationReturned}; mode_gate_returned=${result.gate?.gateReturned}; cleanup=${result.ownedCleanup}; SEND0\n")
+        }) }
+        // JUnit success means this diagnostic entry returned with cleanup, not a mode/input qualification.
+        assertTrue("actual own cleanup required: ${result.cleanupFailure?.message}", result.ownedCleanup)
+    }
+
     @Test fun observeCurrentPublicUiWithoutPreparationOrActions() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val args = InstrumentationRegistry.getArguments()

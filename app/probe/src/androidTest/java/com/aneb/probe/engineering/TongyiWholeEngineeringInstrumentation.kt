@@ -28,6 +28,7 @@ import com.aneb.probe.research.engineering.EngineeringTarget
 import com.aneb.probe.research.engineering.DeepSeekUiAdapter
 import com.aneb.probe.research.engineering.DeepSeekDraftRoleQualification
 import com.aneb.probe.research.engineering.DeepSeekPublicUiObservation
+import com.aneb.probe.research.engineering.DeepSeekModeOperationDiagnostic
 import com.aneb.probe.research.engineering.OwnedShellScriptTransport
 import com.aneb.probe.research.engineering.PublicUiIdleTimeoutScope
 import com.aneb.probe.research.engineering.QualificationOwnerProbeScope
@@ -208,6 +209,18 @@ class TongyiWholeEngineeringInstrumentation {
         return result
     }
 
+    /** Separate explicitly selected diagnostic; never constructs a collection contract. */
+    internal fun runDeepSeekModeFeedbackOnce(runId: String, root: File): DeepSeekModeOperationDiagnostic.Result {
+        val backend = NativePhone(root, "DEEPSEEK_SAME_MODE_FEEDBACK", JSONObject(), target = EngineeringTarget.DEEPSEEK)
+        val result = DeepSeekModeOperationDiagnostic(backend.modeFeedbackAndroid(), SystemClock::elapsedRealtimeNanos)
+            .runOnce(runId, root)
+        try { backend.sealModeFeedback(result) } // Buffers persisted only after shared owned cleanup.
+        catch (retention: Exception) {
+            throw IllegalStateException("MODE_FEEDBACK_REPORT_NOT_RETAINED_original_failure=${(result.gate?.failure ?: result.failure)?.message ?: "<NONE>"}", retention)
+        }
+        return result
+    }
+
     private class NativePhone(
         private val root: File,
         private val condition: String,
@@ -238,6 +251,11 @@ class TongyiWholeEngineeringInstrumentation {
         private var draftQualificationSelectionEnd: Int? = null
         private var draftQualificationFullSelectionConfirmed: Boolean? = null
         private var draftQualificationEmptyConfirmed: Boolean? = null
+        private var modeFeedbackActive = false
+        private data class ModeFeedbackSample(val label: String, val source: JSONObject, val png: ByteArray?)
+        private val modeFeedbackSamples = ArrayList<ModeFeedbackSample>(2)
+        private var modeFeedbackClickReturned: Boolean? = null
+        private var modeFeedbackClickFailure: String? = null
         private data class OrdinaryGraphicsBinding(
             val owner: OwnedProcessLifecycle.Owner, val windowId: Int, val width: Int, val height: Int,
             val rotation: Int, val rootBounds: TongyiPreparationRunner.Bounds, val windowBounds: TongyiPreparationRunner.Bounds,
@@ -516,6 +534,132 @@ class TongyiWholeEngineeringInstrumentation {
             }
         }
 
+        fun modeFeedbackAndroid(): DeepSeekModeOperationDiagnostic.Android {
+            check(target == EngineeringTarget.DEEPSEEK && !preparationOnly && !qualificationOnly && !sourceInspectionOnly)
+            return object : DeepSeekModeOperationDiagnostic.Android {
+                override fun diagnoseFirstMode(deadlineNanos: Long): DeepSeekUiAdapter.ModeGate {
+                    ordinaryPreInputPreparation = true
+                    modeFeedbackActive = true
+                    try {
+                        launchOwned(deadlineNanos)
+                        return deepSeekAdapter().diagnoseFirstMode { frame, mode, until, observedAt ->
+                            captureModeFeedback("P1", frame, mode, until, observedAt)
+                            val sample = modeFeedbackSamples.last().source
+                            check(sample.optBoolean("capture_within_original_until") && !sample.has("capture_failure")) {
+                                "MODE_FEEDBACK_P1_TEMPORAL_OR_CAPTURE_UNKNOWN"
+                            }
+                        }
+                    } finally {
+                        modeFeedbackActive = false
+                        ordinaryPreInputPreparation = false
+                    }
+                }
+                override fun cleanupOwned() = this@NativePhone.cleanupOwned()
+            }
+        }
+
+        /** Copied Frame values + one public image, sequential rather than atomic. No tree read. */
+        private fun captureModeFeedback(label: String, frame: DeepSeekUiAdapter.Frame, mode: String,
+            until: Long, observedAt: Long) {
+            check(modeFeedbackActive && label in setOf("P0", "P1") &&
+                modeFeedbackSamples.none { it.label == label } && modeFeedbackSamples.size < 2) {
+                "MODE_FEEDBACK_SINGLE_PAIR_ONLY"
+            }
+            val started = SystemClock.elapsedRealtimeNanos()
+            val source = JSONObject().put("label", label).put("mode", mode).put("owner", frame.owner)
+                .put("source_time_meaning", if (label == "P0") "native_binding_completed_not_frame_acquisition_timestamp"
+                    else "existing_successor_frame_returned_before_capture")
+                .put("window_id", frame.windowId).put("root_id", frame.rootId)
+                .put("display", JSONArray(listOf(frame.width, frame.height, frame.rotation)))
+                .put("source_observed_elapsed_realtime_nanos", observedAt.toString())
+                .put("original_until_elapsed_realtime_nanos", until.toString())
+                .put("capture_started_elapsed_realtime_nanos", started.toString())
+                .put("mode_nodes", JSONArray().apply {
+                    val labels = frame.nodes.filter { it.visible && it.enabled && it.text in setOf("深度思考", "智能搜索") }
+                    val ids = labels.map { it.id }.toSet() + labels.mapNotNull { it.parent }.toSet()
+                    frame.nodes.filter { it.id in ids }.forEach { node ->
+                        put(JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
+                            .put("text", node.text).put("description", node.description).put("class", node.className)
+                            .put("package", node.packageName).put("window_id", node.windowId)
+                            .put("bounds", JSONArray(listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom)))
+                            .put("visible", node.visible).put("enabled", node.enabled).put("clickable", node.clickable)
+                            .put("checkable", node.checkable).put("checked", node.checked))
+                    }
+                }).put("sampling_claim", "copied_existing_frame_then_one_public_png_not_atomic_no_second_tree")
+            var png: ByteArray? = null
+            try {
+                check(observedAt < until && started < until) { "MODE_FEEDBACK_CAPTURE_NOT_STARTED_WITHIN_ORIGINAL_UNTIL" }
+                val screenshot = checkNotNull(automation.takeScreenshot()) { "MODE_FEEDBACK_SCREENSHOT_UNAVAILABLE" }
+                val bitmap = try { checkNotNull(screenshot.copy(Bitmap.Config.ARGB_8888, false)) {
+                    "MODE_FEEDBACK_SOFTWARE_BITMAP_UNAVAILABLE"
+                } } finally { screenshot.recycle() }
+                try {
+                    source.put("png_width", bitmap.width).put("png_height", bitmap.height)
+                    check(bitmap.width == frame.width && bitmap.height == frame.height) { "MODE_FEEDBACK_PNG_GEOMETRY_CHANGED" }
+                    png = ByteArrayOutputStream().use { output ->
+                        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "MODE_FEEDBACK_PNG_ENCODING_FAILED" }
+                        output.toByteArray()
+                    }
+                } finally { bitmap.recycle() }
+            } catch (failure: Exception) {
+                source.put("capture_failure", failure.message ?: failure.javaClass.simpleName)
+                    .put("capture_original_stack", failure.stackTraceToString().take(16_384))
+            } finally {
+                val completed = SystemClock.elapsedRealtimeNanos()
+                source.put("capture_completed_elapsed_realtime_nanos", completed.toString())
+                    .put("capture_within_original_until", observedAt < until && started < until && completed < until)
+                modeFeedbackSamples += ModeFeedbackSample(label, source, png)
+            }
+        }
+
+        fun sealModeFeedback(result: DeepSeekModeOperationDiagnostic.Result) {
+            val retained = JSONArray()
+            val retentionFailures = JSONArray()
+            modeFeedbackSamples.forEach { sample ->
+                fun retain(name: String, bytes: ByteArray) {
+                    try {
+                        check(File(root, name).createNewFile()) { "MODE_FEEDBACK_ARTIFACT_ALREADY_EXISTS" }
+                        FileOutputStream(File(root, name)).use { it.write(bytes); it.fd.sync() }
+                        retained.put(JSONObject().put("path", name).put("bytes", bytes.size).put("sha256", sha(bytes)))
+                    } catch (failure: Exception) {
+                        retentionFailures.put(JSONObject().put("path", name).put("failure", failure.message ?: failure.javaClass.simpleName))
+                    }
+                }
+                sample.png?.let { retain("mode-${sample.label}.png", it) }
+                retain("mode-${sample.label}-source.json", (sample.source.toString(2) + "\n").toByteArray(Charsets.UTF_8))
+            }
+            val gate = result.gate
+            val pair = modeFeedbackSamples.takeIf { it.size == 2 }
+            val pairBound = pair != null && pair[0].source.getString("owner") == pair[1].source.getString("owner") &&
+                pair[0].source.getInt("window_id") == pair[1].source.getInt("window_id") &&
+                pair.all { it.png != null && it.source.optBoolean("capture_within_original_until") && !it.source.has("capture_failure") }
+            writeJson("DEEPSEEK_SAME_MODE_FEEDBACK.json", JSONObject().put("kind", "private_same_operation_mode_feedback_only")
+                .put("feature_release", "deepseek-same-mode-feedback-811").put("run_id", root.name)
+                .put("target_profile", target.id).put("target_package", TARGET)
+                .put("state", "DIAGNOSTIC_STOP_NOT_PREPARATION_QUALIFICATION")
+                .put("mode_observation", if (gate != null && gate.mode == null) "NOT_OBSERVED" else "ACTUAL_GATE_RECORDED_OR_UNKNOWN")
+                .put("mode", gate?.mode ?: JSONObject.NULL)
+                .put("native_operation_returned", gate?.operationReturned ?: JSONObject.NULL)
+                .put("parameterless_parent_click_returned", modeFeedbackClickReturned ?: JSONObject.NULL)
+                .put("parameterless_parent_click_failure", modeFeedbackClickFailure ?: JSONObject.NULL)
+                .put("original_mode_gate_returned", gate?.gateReturned ?: JSONObject.NULL)
+                .put("original_failure", (gate?.failure ?: result.failure)?.let { it.message ?: it.javaClass.simpleName } ?: JSONObject.NULL)
+                .put("original_stack", (gate?.failure ?: result.failure)?.stackTraceToString()?.take(16_384) ?: JSONObject.NULL)
+                .put("feedback_failure", gate?.feedbackFailure?.let { it.message ?: it.javaClass.simpleName } ?: JSONObject.NULL)
+                .put("pair_temporally_and_owner_window_bound", pairBound)
+                .put("visual_interpretation", "UNKNOWN_ROOT_MUST_VIEW_ACTUAL_FULL_IMAGES")
+                .put("retained_originals", retained).put("retention_failures", retentionFailures)
+                .put("owned_cleanup", result.ownedCleanup)
+                .put("cleanup_failure", result.cleanupFailure?.let { it.message ?: it.javaClass.simpleName } ?: JSONObject.NULL)
+                .put("preparation_deadline_elapsed_realtime_nanos", result.preparationDeadlineNanos.toString())
+                .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only").put("boot_id", bootId ?: JSONObject.NULL)
+                .put("sampling_claim", "sequential_frame_and_png_not_atomic_not_continuous_not_zero_interference")
+                .put("input", "NOT_STARTED").put("focus", "NOT_STARTED").put("selection", "NOT_STARTED")
+                .put("send_calls", 0).put("recording", "NOT_STARTED").put("network_transition", "NOT_STARTED")
+                .put("claim_scope", "private_diagnostic_only").put("metrics", JSONObject.NULL)
+                .put("formal_new_slots", 0).put("reference_accepted", false).put("rpi", "not_computed"))
+        }
+
         fun sealPublicUiObservation(result: DeepSeekPublicUiObservation.Result) {
             val preserved = JSONArray()
             listOf("OWNED_INSTRUMENTATION.json", "OWNED_TARGET.json", "current-public-ui-nodes.json").forEach { name ->
@@ -720,6 +864,7 @@ class TongyiWholeEngineeringInstrumentation {
                         publicControl.isCheckable && publicControl.isChecked && publicControl.isClickable) {
                         "DEEPSEEK_SEMANTIC_MODE_PUBLIC_RELATION_CHANGED"
                     }
+                    if (modeFeedbackActive) captureModeFeedback("P0", frame, label.text, until, SystemClock.elapsedRealtimeNanos())
                     val actualLabel = handles[label.id.toInt()]
                     val actualControl = handles[control.id.toInt()]
                     check(actualLabel.refresh() && actualControl.refresh() && actualLabel.parent == actualControl &&
@@ -736,7 +881,14 @@ class TongyiWholeEngineeringInstrumentation {
                     }
                     check(SystemClock.elapsedRealtimeNanos() < until) { "DEEPSEEK_SEMANTIC_MODE_ACTION_EXPIRED" }
                     // One distinct semantic parent operation INSTEAD OF Accessibility CLICK; no fallback or local OFF mutation.
-                    publicControl.click()
+                    if (modeFeedbackActive) {
+                        try { publicControl.click(); modeFeedbackClickReturned = true }
+                        catch (failure: Exception) {
+                            modeFeedbackClickReturned = false
+                            modeFeedbackClickFailure = failure.message ?: failure.javaClass.simpleName
+                            throw failure
+                        }
+                    } else publicControl.click()
                 }
             }
             override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {

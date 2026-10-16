@@ -26,6 +26,12 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
     data class Frame(val owner: String, val windowId: Int, val width: Int, val height: Int,
         val rotation: Int, val rootId: String, val nodes: List<Node>)
     enum class Action { CLICK, FOCUS }
+    fun interface ModeFeedback {
+        fun successor(frame: Frame, mode: String, until: Long, observedAt: Long)
+    }
+    data class ModeGate(val mode: String?, val operationReturned: Boolean?, val gateReturned: Boolean?,
+        val failure: Exception?, val feedbackFailure: Exception? = null)
+    fun diagnoseFirstMode(feedback: ModeFeedback): ModeGate = checkNotNull(prepare(feedback))
     interface Android {
         fun read(): Frame
         fun invoke(frame: Frame, node: Node, action: Action)
@@ -115,16 +121,23 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         return true
     }
     fun modesOff(frame: Frame) = !mode(frame, "深度思考").checked && !mode(frame, "智能搜索").checked
-    private fun gate() { check(android.nowNanos() < preparationDeadline) { "PREPARATION_180_EXPIRED" } }
-    private fun read(): Frame { gate(); return validate(android.read()).also { gate() } }
-    private fun await(budget: Long, predicate: (Frame) -> Boolean): Frame {
-        val until = minOf(preparationDeadline, android.nowNanos() + budget)
-        return awaitUntil(until, predicate)
+    private fun gate(): Long {
+        val now = android.nowNanos()
+        check(now < preparationDeadline) { "PREPARATION_180_EXPIRED" }
+        return now
     }
-    private fun awaitUntil(until: Long, predicate: (Frame) -> Boolean): Frame {
+    private fun read(observe: ((Frame, Long) -> Unit)? = null): Frame {
+        gate()
+        return validate(android.read()).also { frame -> val observedAt = gate(); observe?.invoke(frame, observedAt) }
+    }
+    private fun await(budget: Long, observe: ((Frame, Long, Long) -> Unit)? = null, predicate: (Frame) -> Boolean): Frame {
+        val until = minOf(preparationDeadline, android.nowNanos() + budget)
+        return awaitUntil(until, observe, predicate)
+    }
+    private fun awaitUntil(until: Long, observe: ((Frame, Long, Long) -> Unit)? = null, predicate: (Frame) -> Boolean): Frame {
         while (true) {
             check(android.nowNanos() < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
-            val frame = read()
+            val frame = read(observe?.let { callback -> { frame, at -> callback(frame, until, at) } })
             if (predicate(frame)) return frame
             android.sleepMillis(50)
         }
@@ -143,7 +156,8 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         editor(frame)?.let { composer(frame, it, modeNames = present) }
         return present.size == requiredModes.size
     }
-    fun prepare() {
+    fun prepare() { prepare(null) }
+    private fun prepare(feedback: ModeFeedback?): ModeGate? {
         val initial = read()
         check(editor(initial)?.let(::empty) != false) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
         check(emptyComposer(initial)) { "DEEPSEEK_INITIAL_EMPTY_COMPOSER_REQUIRED" }
@@ -155,16 +169,34 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
                 emptyComposer(frame)
         }
         for (label in requiredModes) {
-            val frame = awaitUntil(readyUntil, ::currentModesReady)
+            val frame = awaitUntil(readyUntil, predicate = ::currentModesReady)
             check(android.nowNanos() < readyUntil) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
             val parent = mode(frame, label)
             if (parent.checked) {
                 check(emptyComposer(frame)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
                 editor(frame)?.let { composer(frame, it) }
-                android.activateCheckedMode(frame, witness(frame, text = label), parent)
-                await(TongyiEngineeringRunner.INPUT_NANOS) { !mode(it, label).checked }
+                var operationReturned = false
+                var feedbackFailure: Exception? = null
+                var successorObserved = false
+                try {
+                    android.activateCheckedMode(frame, witness(frame, text = label), parent)
+                    operationReturned = true
+                    val observe: ((Frame, Long, Long) -> Unit)? = feedback?.let { sink -> { successor, until, at ->
+                        if (!successorObserved) {
+                            successorObserved = true
+                            try { sink.successor(successor, label, until, at) }
+                            catch (failure: Exception) { feedbackFailure = failure }
+                        }
+                    } }
+                    await(TongyiEngineeringRunner.INPUT_NANOS, observe) { !mode(it, label).checked }
+                } catch (failure: Exception) {
+                    if (feedback == null) throw failure
+                    return ModeGate(label, operationReturned, if (operationReturned) false else null, failure, feedbackFailure)
+                }
+                if (feedback != null) return ModeGate(label, true, true, null, feedbackFailure)
             }
         }
+        if (feedback != null) return ModeGate(null, null, null, null)
         val frame = read()
         check(modesOff(frame)) { "DEEPSEEK_VISIBLE_OFF_OFF_REQUIRED" }
         val input = editor(frame)
@@ -186,6 +218,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         await(TongyiEngineeringRunner.INPUT_NANOS) {
             modesOff(it) && editor(it)?.let { n -> n.enabled && n.focused && n.setTextAvailable && empty(n) } == true
         }
+        return null
     }
 
     /** Read-only role; no old bounds, indices, image hashes or guessed blank icon. */

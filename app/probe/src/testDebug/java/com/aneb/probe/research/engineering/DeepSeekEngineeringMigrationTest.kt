@@ -360,6 +360,85 @@ class DeepSeekEngineeringMigrationTest {
         assertTrue("no new-session/mode/focus action on an unbound semantic label", requested.isEmpty())
     }
 
+    @Test fun modeDiagnosticCopiesOneSuccessorAndStopsAfterFirstGateWithoutFocusOrInput() {
+        // Software boundary only: this synthetic OFF response proves no real touch/PNG/App effect.
+        val android = VisibleAndroid()
+        val observed = mutableListOf<DeepSeekUiAdapter.Frame>()
+        var gate: DeepSeekUiAdapter.ModeGate? = null
+        val failure = runCatching {
+            gate = DeepSeekUiAdapter(android, android.now + TongyiEngineeringRunner.PREP_NANOS).diagnoseFirstMode {
+                frame, label, until, observedAt ->
+                check(label == "智能搜索" && observedAt < until)
+                observed += frame
+            }
+        }.exceptionOrNull()
+        assertNull("bounded diagnostic must return its actual mode gate: ${failure?.message}", failure)
+        assertEquals("智能搜索", gate?.mode)
+        assertEquals(true, gate?.operationReturned)
+        assertEquals(true, gate?.gateReturned)
+        assertNull(gate?.failure)
+        assertEquals(1, observed.size)
+        assertFalse(observed.single().nodes.single { it.id == "search" }.checked)
+        assertEquals(listOf("new-parent:CLICK", "search:CLICK"), android.invoked)
+        assertFalse(android.focused)
+        assertEquals("", android.draft)
+    }
+
+    @Test fun modeDiagnosticKeepsOriginalGateOutcomeSeparateFromCaptureCostAndFailureAndAlwaysCleansOwnedTarget() {
+        // External clock/mode/capture responses only. No real PNG or App effect is inferred.
+        for (offReturned in listOf(true, false)) {
+            val visible = VisibleAndroid().apply { refuseSearchOff = !offReturned }
+            val directory = Files.createTempDirectory("deepseek-mode-feedback").resolve("run").toFile()
+            var cleaned = false
+            var successorCalls = 0
+            var originalUntil = 0L
+            val android = object : DeepSeekModeOperationDiagnostic.Android {
+                override fun diagnoseFirstMode(deadlineNanos: Long) = DeepSeekUiAdapter(visible, deadlineNanos)
+                    .diagnoseFirstMode { _, _, until, _ ->
+                        successorCalls++
+                        originalUntil = until
+                        visible.now = until // Explicit external PNG cost consumes the ORIGINAL OFF5.
+                        error("EXTERNAL_CAPTURE_TEMPORAL_UNKNOWN")
+                    }
+                override fun cleanupOwned(): Boolean { cleaned = true; return true }
+            }
+            val result = DeepSeekModeOperationDiagnostic(android, object : TongyiEngineeringRunner.MonotonicClock {
+                override fun nowNanos() = visible.now
+            }).runOnce("MODE_FEEDBACK_BOUNDARY", directory)
+            assertTrue(cleaned && result.ownedCleanup)
+            assertNull(result.failure)
+            assertEquals(1, successorCalls)
+            assertEquals(true, result.gate?.operationReturned)
+            assertEquals(offReturned, result.gate?.gateReturned)
+            assertEquals("EXTERNAL_CAPTURE_TEMPORAL_UNKNOWN", result.gate?.feedbackFailure?.message)
+            assertEquals(if (offReturned) null else "DEEPSEEK_PUBLIC_READINESS_EXPIRED", result.gate?.failure?.message)
+            assertTrue("original wait was never reset to grant another five seconds", visible.now <= originalUntil + 50_000_000L)
+            assertEquals(listOf("new-parent:CLICK", "search:CLICK"), visible.invoked)
+            assertFalse(visible.focused)
+            assertEquals("", visible.draft)
+        }
+        val noMode = VisibleAndroid().apply { search = false }
+        val gate = DeepSeekUiAdapter(noMode, noMode.now + TongyiEngineeringRunner.PREP_NANOS)
+            .diagnoseFirstMode { _, _, _, _ -> error("NO_SUCCESSOR_WITHOUT_AN_ON_MODE_OPERATION") }
+        assertNull(gate.mode)
+        assertNull(gate.operationReturned)
+        assertNull(gate.gateReturned)
+        assertEquals(listOf("new-parent:CLICK"), noMode.invoked)
+        assertFalse(noMode.focused)
+
+        var cleanupCalled = false
+        val original = IllegalStateException("EXTERNAL_PREPARATION_REFUSAL")
+        val refused = DeepSeekModeOperationDiagnostic(object : DeepSeekModeOperationDiagnostic.Android {
+            override fun diagnoseFirstMode(deadlineNanos: Long): DeepSeekUiAdapter.ModeGate = throw original
+            override fun cleanupOwned(): Boolean { cleanupCalled = true; error("EXTERNAL_OWNED_CLEANUP_REFUSAL") }
+        }, object : TongyiEngineeringRunner.MonotonicClock { override fun nowNanos() = 1L })
+            .runOnce("MODE_FEEDBACK_REFUSAL", Files.createTempDirectory("deepseek-mode-refusal").resolve("run").toFile())
+        assertTrue(cleanupCalled)
+        assertSame(original, refused.failure)
+        assertFalse(refused.ownedCleanup)
+        assertEquals("EXTERNAL_OWNED_CLEANUP_REFUSAL", refused.cleanupFailure?.message)
+    }
+
     @Test fun currentModeControlsMayBecomeCompleteOnlyWithinTheOriginalNewSessionReadyDeadline() {
         val android = SemanticComposerAndroid()
         var reads = 0

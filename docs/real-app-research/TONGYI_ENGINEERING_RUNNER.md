@@ -318,3 +318,34 @@ PUBLIC_UI_OBSERVATION_RETAINED；这仍只是 API 原值观察，不是模式/�
 报告为私有 operational 原件，非正式 TERMINAL/PAIR 或 Reader 采集 bundle，
 formal0/metrics null/reference false/RPI not_computed。Root 仍需独立固定 APK、现场干净门、
 THIS Reader 备份/恢复及新机会；本机边界测试和 Native 编译不能代替实机事实，旧 R1/R2 不变。
+
+### DeepSeek 同一次模式操作的有界画面反馈（非准备资格）
+
+仅按方法选择
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation#diagnoseOneCheckedModeOperationWithoutComposerInputOrSend`，
+独立 token 为 `feature_release=deepseek-same-mode-feedback-811`；要求固定 DeepSeek
+profile/package、唯一新 run_id，只另外允许 runner 的 class/debug。payload、UI/SEND
+合同、network condition、collection/execution mode 等参数均拒绝。不得按整个 class 运行。
+
+该 capability-limited controller 创建一次根并复用 Native launchOwned、同一 adapter
+准备路径和原共享 owned cleanup；只到第一个原本需要关闭的 checked-ON 模式。
+原 Native 单次 parameterless parent click 不改为 label/coordinate/A11y/fallback，
+原完整 source/owner/active-window/expiry 门仍决定是否执行。P0 在 public 关系绑定后、
+原 final source/owner/window/expiry 门前，取一个完整公开 PNG 和已复制 mode 值；
+P1 只在原 OFF5 内第一次已取得 successor Frame 上取一个 PNG，不追加 tree walk。
+P0 时间指 binding 完成，不冒充 Frame 取得时刻；各时间为原 Android 单调时钟原值。
+
+PNG/压缩成本计入原 action/OFF 时限，不暂停、不重开、不延长，不重复模式操作。
+原 mode gate 返回/异常、click 调用返回、截图失败/时效、实际 cleanup 分开保留；
+迟到 PNG 即使拿到 OFF Frame 也不构成及时画面反馈，不能改写原 gate 返回事实。
+两 PNG/source 值先保留内存，finally 清场后 create-once/fsync 封存原件及
+`DEEPSEEK_SAME_MODE_FEEDBACK.json`；部分原件和留存失败保留，不覆盖原失败。
+无 checked-ON 模式则 NOT_OBSERVED，并同样在 composer/focus/input 前停止。
+
+报告固定 DIAGNOSTIC_STOP_NOT_PREPARATION_QUALIFICATION；JUnit 返回仅证明入口结束和
+cleanup 断言，不证明 mode、输入或研究资格。Root 必须亲自看实际完整 P0/P1，歧义仍
+UNKNOWN；顺序截图/Frame 不是原子、连续覆盖、零干扰或选择器/参考。SEND0、input/focus/
+selection/recording/network NOT_STARTED，formal0/metrics null/reference false/RPI
+not_computed。未完成同 Native/Core/HOST 的239B/readback→SEND→W1/C1→Reader 全流程，
+不补填已消耗机会，不修改冻结研究 schema/claim/时钟。实机准入与 THIS Reader 恢复仍由
+Root 对固定候选另行执行。
