@@ -168,6 +168,7 @@ class TongyiWholeEngineeringInstrumentation {
         }
         instrumentation.sendStatus(0, Bundle().apply { putString("aneb_terminal", terminal.toString()) })
         runCatching { backend.persistOriginalPreparationFailure() }
+        backend.persistDeepSeekGenerationFailure(result.state, result.reason)
     }
 
     /** Compile-only access to the real ordinary adapter; no preparation or capability substitution. */
@@ -195,6 +196,7 @@ class TongyiWholeEngineeringInstrumentation {
             throw IllegalStateException("DEEPSEEK_QUALIFICATION_REPORT_NOT_RETAINED_original_failure=${result.failure ?: "<NONE>"}", retention)
         }
         backend.persistDeepSeekModeGuardFailure(result) // Auxiliary only, after the original result/report and owned cleanup.
+        backend.persistDeepSeekGenerationFailure(result.state, result.failure)
         return result
     }
 
@@ -256,6 +258,12 @@ class TongyiWholeEngineeringInstrumentation {
         private var ordinaryOwnDraftParent: AccessibilityNodeInfo? = null
         private var ordinaryOwnDraftWindow = -1
         private var ordinaryOwnDraftOwner: OwnedProcessLifecycle.Owner? = null
+        private var ordinaryOwnDraftValue: DeepSeekUiAdapter.Node? = null
+        private data class DeepSeekAcquisition(val first: DeepSeekUiAdapter.Frame,
+            val second: List<AccessibilityNodeInfo>, val resourceIds: List<String?>? = null)
+        private val currentDeepSeekGenerationEnabled get() = target == EngineeringTarget.DEEPSEEK &&
+            condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION")
+        private var deepSeekGenerationFailure: JSONObject? = null // Copied prefix only, never an old map or provider handle.
         private var draftQualificationActive = false
         private var draftQualificationCachedNodes: ByteArray? = null
         private var draftQualificationSelectionAdvertised: Boolean? = null
@@ -280,7 +288,7 @@ class TongyiWholeEngineeringInstrumentation {
         private var modeFeedbackClickReturned: Boolean? = null
         private var modeFeedbackClickFailure: String? = null
         private val modeParentRefreshEnabled = condition == "DEEPSEEK_PARENT_REFRESH_COMPARISON"
-        private var modeFeedbackAcquisition: Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>>? = null
+        private var modeFeedbackAcquisition: DeepSeekAcquisition? = null
         private var modeParentRefreshRecord: JSONObject? = null
         private data class OrdinaryGraphicsBinding(
             val owner: OwnedProcessLifecycle.Owner, val windowId: Int, val width: Int, val height: Int,
@@ -821,14 +829,15 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 override fun enterExactAndReadback(text: String): DeepSeekDraftRoleQualification.Readback {
                     this@NativePhone.enterExact(text) // Original SET_TEXT + fresh full same-handle/parent/window/owner assertions.
-                    val actual = checkNotNull(ordinaryOwnDraft)
-                    val parent = checkNotNull(ordinaryOwnDraftParent)
+                    checkNotNull(ordinaryOwnDraft)
+                    checkNotNull(ordinaryOwnDraftParent)
+                    val value = checkNotNull(ordinaryOwnDraftValue)
                     val owner = checkNotNull(targetOwner)
-                    // Copy that successful original readback object; no refresh/tree/owner/UI acquisition.
-                    return DeepSeekDraftRoleQualification.Readback(actual.packageName?.toString().orEmpty(),
-                        "${owner.pid}/${owner.uid}/${owner.startTicks}", actual.windowId, parent.windowId,
-                        ordinaryOwnDraftOwner == owner && actual.windowId == ordinaryOwnDraftWindow,
-                        actual.text?.toString().orEmpty(), actual.isShowingHintText, actual.isFocused)
+                    // Exactly the successful same-generation immutable readback, not another provider sample.
+                    return DeepSeekDraftRoleQualification.Readback(value.packageName,
+                        "${owner.pid}/${owner.uid}/${owner.startTicks}", value.windowId, ordinaryOwnDraftWindow,
+                        ordinaryOwnDraftOwner == owner && value.windowId == ordinaryOwnDraftWindow,
+                        value.text, value.showingHint, value.focused)
                 }
                 override fun retainCurrent(label: String) {
                     check(label == "new-empty" || label == "owned-draft")
@@ -836,7 +845,7 @@ class TongyiWholeEngineeringInstrumentation {
                     check(deepSeekAdapter().modesOff(frame)) { "DEEPSEEK_VISIBLE_OFF_OFF_REQUIRED" }
                     val editor = frame.nodes.singleOrNull { it.visible && it.editable } ?: error("DEEPSEEK_EDITOR_NOT_UNIQUE")
                     check(editor.focused && editor.enabled && editor.setTextAvailable) { "DEEPSEEK_QUALIFICATION_FOCUSED_EDITOR_REQUIRED" }
-                    if (label == "new-empty") check(currentEmpty(handles[editor.id.toInt()])) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
+                    if (label == "new-empty") check(deepSeekEmpty(editor)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
                     else {
                         val actual = handles[editor.id.toInt()]
                         val parent = handles.singleOrNull { it == ordinaryOwnDraftParent }
@@ -978,6 +987,24 @@ class TongyiWholeEngineeringInstrumentation {
             } } // Auxiliary retention cannot replace the already captured original result/failure.
         }
 
+        fun persistDeepSeekGenerationFailure(state: String, failure: String?) {
+            val observed = deepSeekGenerationFailure ?: return
+            runCatching {
+                writeJson("DEEPSEEK_CURRENT_GENERATION_FAILURE.json", JSONObject()
+                    .put("kind", "private_current_generation_acquisition_failure").put("run_id", root.name)
+                    .put("original_result_state", state).put("original_failure", failure ?: JSONObject.NULL)
+                    .put("acquisition", observed).put("diagnostic_only", true).put("reference_accepted", false)
+                    .put("formal_new_slots", 0).put("metrics", JSONObject.NULL).put("rpi", "not_computed"))
+            }.exceptionOrNull()?.let { retention -> runCatching {
+                instrumentation.sendStatus(0, Bundle().apply {
+                    putString("aneb_current_generation_retention", "UNKNOWN:${retention.javaClass.simpleName}:${retention.message.orEmpty()}")
+                })
+            } } // Auxiliary serialization cannot replace the already captured original result or cleanup.
+        }
+
+        private fun deepSeekEmpty(node: DeepSeekUiAdapter.Node) = if (node.showingHint)
+            !node.hint.isNullOrEmpty() && (node.text.isEmpty() || node.text == node.hint) else node.text.isEmpty()
+
         /** Immutable values from this actual tree; indices are acquisition-local handles, never selectors. */
         private fun deepSeekNodeValues(handles: List<AccessibilityNodeInfo>) = handles.mapIndexed { index, node ->
             val rect = Rect().also(node::getBoundsInScreen)
@@ -997,183 +1024,177 @@ class TongyiWholeEngineeringInstrumentation {
             check(now < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
         }
 
-        /** One projection for final pair validation AND Frame use; later action helper remains unchanged. */
-        private fun currentModeNodeValues(handles: List<AccessibilityNodeInfo>, observedIndices: Set<Int>,
-            observations: MutableMap<Int, List<Any?>>): List<DeepSeekUiAdapter.Node> = handles.mapIndexed { index, node ->
-            val rect = Rect().also(node::getBoundsInScreen)
-            val parent = handles.indexOf(node.parent).takeIf { it >= 0 }?.toString()
-            val text = node.text?.toString()
-            val description = node.contentDescription?.toString()
-            val hint = node.hintText?.toString()
-            val showingHint = node.isShowingHintText
-            val visible = visible(node)
-            val enabled = node.isEnabled
-            val clickable = node.isClickable
-            val checkable = node.isCheckable
-            val checked = node.isChecked
-            val editable = node.isEditable
-            val focused = node.isFocused
-            val setTextAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
-            val clickAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
-            val focusAvailable = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_FOCUS }
-            val windowId = node.windowId
-            val packageName = node.packageName?.toString()
-            val className = node.className?.toString()
-            if (index in observedIndices) observations[index] = listOf(packageName, className, windowId, text, description,
-                rect.left, rect.top, rect.right, rect.bottom, visible, enabled, clickable, checkable, editable, clickAvailable)
-            DeepSeekUiAdapter.Node(index.toString(), parent,
-                TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom),
-                text.orEmpty(), description.orEmpty(), hint, showingHint, visible, enabled, clickable, checkable, checked,
-                editable, focused, setTextAvailable, clickAvailable, focusAvailable, windowId, packageName.orEmpty(), className.orEmpty())
-        }
-
-        /** Refresh only the known semantic pairs; return the exact finally validated projection. */
-        private fun refreshCurrentDeepSeekModeParents(handles: List<AccessibilityNodeInfo>, until: Long,
-            width: Int, height: Int): List<DeepSeekUiAdapter.Node> {
-            val rootNode = handles.first()
-            val owner = checkNotNull(targetOwner)
-            val windowId = rootNode.windowId
-            fun stable(node: AccessibilityNodeInfo): List<Any?> {
-                val bounds = Rect().also(node::getBoundsInScreen)
-                return listOf(node.packageName?.toString(), node.className?.toString(), node.windowId,
-                    node.text?.toString(), node.contentDescription?.toString(), bounds.left, bounds.top, bounds.right, bounds.bottom,
-                    node.isVisibleToUser, node.isEnabled, node.isClickable, node.isCheckable, node.isEditable,
-                    node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }) // checked is observed, not frozen.
+        /** Refresh before descending, then use exactly these copied values. No retained ancestor is refreshed later. */
+        private fun currentDeepSeekGeneration(until: Long): DeepSeekAcquisition {
+            val handles = ArrayList<AccessibilityNodeInfo>()
+            val values = ArrayList<DeepSeekUiAdapter.Node>()
+            val resources = ArrayList<String?>()
+            var phase = "OWNER_BEFORE"
+            var path = "0"
+            var attempted: JSONObject? = null
+            fun gate() {
+                deepSeekReadGate(until)
+                check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
             }
-            fun nonGeometryEqual(current: List<Any?>, baseline: List<Any?>) =
-                current.take(5) == baseline.take(5) && current.drop(9) == baseline.drop(9)
-            fun bounds(values: List<Any?>) = TongyiPreparationRunner.Bounds(
-                values[5] as Int, values[6] as Int, values[7] as Int, values[8] as Int)
-            fun inside(value: TongyiPreparationRunner.Bounds, container: TongyiPreparationRunner.Bounds) =
-                value.right > value.left && value.bottom > value.top && value.left >= container.left &&
-                    value.top >= container.top && value.right <= container.right && value.bottom <= container.bottom
-            val display = TongyiPreparationRunner.Bounds(0, 0, width, height)
-            val candidates = listOf("深度思考", "智能搜索").mapNotNull { name ->
-                val labels = handles.filter { visible(it) && it.isEnabled && it.text?.toString() == name }
-                if (labels.size != 1) return@mapNotNull null // Preserve opening/missing/ambiguous readiness semantics.
-                val label = labels.single()
-                val parentIndex = handles.indexOf(label.parent)
-                val parent = handles.getOrNull(parentIndex) ?: return@mapNotNull null
-                if (parent == rootNode || !visible(parent) || !parent.isEnabled || !parent.isCheckable ||
-                    !parent.isClickable || parent.isEditable || !parent.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK } ||
-                    label.packageName?.toString() != TARGET || parent.packageName?.toString() != TARGET ||
-                    label.windowId != windowId || parent.windowId != windowId) return@mapNotNull null
-                Triple(name, label, parentIndex)
-            }
-            data class PairBinding(val parentIndex: Int, val ancestorIndex: Int,
-                val labels: List<Triple<String, AccessibilityNodeInfo, Int>>,
-                val parentBefore: List<Any?>, val labelsBefore: List<List<Any?>>)
-            val pairs = candidates.groupBy { it.third }.map { (parentIndex, labels) ->
-                val parent = handles[parentIndex]
-                val ancestorIndex = handles.indexOf(parent.parent)
-                check(ancestorIndex >= 0) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
-                PairBinding(parentIndex, ancestorIndex, labels, stable(parent), labels.map { stable(it.second) })
-            }
-            fun guard(pair: PairBinding, phase: String, refreshReturned: Boolean?,
-                projection: List<DeepSeekUiAdapter.Node>? = null, observations: Map<Int, List<Any?>>? = null) {
-                    val parentIndex = pair.parentIndex
-                    val parent = handles[parentIndex]
-                    val labels = pair.labels
-                    deepSeekReadGate(until)
-                    requireOwnedCurrent(until)
-                    val window = checkNotNull(rootNode.window) { "DEEPSEEK_MODE_REFRESH_WINDOW_MISSING" }
-                    val reached = if (draftQualificationActive && deepSeekModeGuardFailure == null) ArrayList<Pair<String, Boolean>>() else null
-                    var parentCurrent: List<Any?>? = null
-                    var labelsCurrent: List<List<Any?>>? = null
-                    var rootBounds: TongyiPreparationRunner.Bounds? = null
-                    fun note(name: String, value: Boolean): Boolean {
-                        if (reached != null) runCatching {
-                            reached.add(name to value)
-                            if (!value) deepSeekModeGuardFailure = DeepSeekModeGuardFailure(phase, parentIndex, labels.map { it.first },
-                                until, preparationDeadline, refreshReturned, reached.toList(), name,
-                                pair.parentBefore, parentCurrent, pair.labelsBefore, labelsCurrent,
-                                rootBounds?.let { listOf(it.left, it.top, it.right, it.bottom) }, listOf(0, 0, width, height))
-                        }.exceptionOrNull()?.let { diagnostic -> runCatching {
-                            if (deepSeekModeGuardCaptureFailure == null)
-                                deepSeekModeGuardCaptureFailure = "${diagnostic.javaClass.simpleName}:${diagnostic.message.orEmpty()}"
-                        } }
-                        return value // Diagnostic only; false is never converted to acceptance.
+            fun inside(a: TongyiPreparationRunner.Bounds, b: TongyiPreparationRunner.Bounds) =
+                a.right > a.left && a.bottom > a.top && a.left >= b.left && a.top >= b.top &&
+                    a.right <= b.right && a.bottom <= b.bottom
+            try {
+                gate()
+                requireOwnedCurrent(until) // Process/foreground checks at bookends, not a shell probe per node.
+                gate()
+                val owner = checkNotNull(targetOwner)
+                val width = device.displayWidth
+                val height = device.displayHeight
+                val rotation = device.displayRotation
+                gate()
+                check(width == 1200 && height == 2640 && rotation == 0) { "CURRENT_GEOMETRY_INVALID" }
+                phase = "ROOT"
+                val rootNode = checkNotNull(automation.rootInActiveWindow) { "DEEPSEEK_CURRENT_ROOT_MISSING" }
+                data class Pending(val node: AccessibilityNodeInfo, val parent: Int?, val depth: Int, val path: String)
+                val pending = java.util.ArrayDeque<Pending>()
+                pending.addLast(Pending(rootNode, null, 0, "0"))
+                var windowId = -1
+                while (pending.isNotEmpty()) {
+                    gate()
+                    val item = pending.removeLast()
+                    path = item.path
+                    phase = "NODE_REFRESH"
+                    attempted = JSONObject().put("path", path).put("parent_index", item.parent ?: JSONObject.NULL)
+                        .put("index", handles.size).put("depth", item.depth)
+                        .put("refresh_returned", JSONObject.NULL).put("current_fields", "NOT_EVALUATED")
+                    check(handles.size < 2048 && item.depth < 2048 && handles.none { it == item.node }) {
+                        "DEEPSEEK_CURRENT_TREE_CYCLE_OR_UNBOUNDED"
                     }
-                    check(note("target_owner_equal", targetOwner == owner) &&
-                        note("root_window_id_equal", rootNode.windowId == windowId) && note("window_active", window.isActive) &&
-                        note("window_id_equal", window.id == windowId) && note("window_root_equal", window.root == rootNode)) {
-                        "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED"
+                    val node = item.node
+                    val refreshed = node.refresh()
+                    attempted.put("refresh_returned", refreshed)
+                    gate()
+                    check(refreshed) { "DEEPSEEK_CURRENT_NODE_REFRESH_FAILED" }
+                    phase = "NODE_COPY"
+                    val packageName = node.packageName?.toString().orEmpty()
+                    val nodeWindow = node.windowId
+                    val actualParent = node.parent
+                    attempted.put("package", packageName).put("window_id", nodeWindow)
+                        .put("parent_matches", if (item.parent == null) actualParent == null else actualParent == handles[item.parent])
+                    check(packageName == TARGET && (item.parent == null || actualParent == handles[item.parent]) &&
+                        (item.parent != null || actualParent == null)) { "DEEPSEEK_CURRENT_NODE_RELATION_CHANGED" }
+                    if (item.parent == null) {
+                        windowId = nodeWindow
+                        val window = checkNotNull(node.window) { "DEEPSEEK_PUBLIC_WINDOW_REQUIRED" }
+                        check(windowId >= 0 && window.isActive && window.id == windowId && window.root == node) {
+                            "DEEPSEEK_CURRENT_WINDOW_CHANGED"
+                        }
                     }
-                    val currentParent = observations?.getValue(parentIndex) ?: stable(parent)
-                    val currentLabels = labels.map { observations?.getValue(handles.indexOf(it.second)) ?: stable(it.second) }
-                    val currentRoot = projection?.first()?.bounds ?: Rect().also(rootNode::getBoundsInScreen).let {
-                        TongyiPreparationRunner.Bounds(it.left, it.top, it.right, it.bottom)
+                    check(nodeWindow == windowId) { "DEEPSEEK_CURRENT_NODE_WINDOW_CHANGED" }
+                    val rect = Rect().also(node::getBoundsInScreen)
+                    val actions = node.actionList.map { it.id }
+                    val ownVisible = node.isVisibleToUser
+                    val value = DeepSeekUiAdapter.Node(handles.size.toString(), item.parent?.toString(),
+                        TongyiPreparationRunner.Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                        node.text?.toString().orEmpty(), node.contentDescription?.toString().orEmpty(), node.hintText?.toString(),
+                        node.isShowingHintText, ownVisible && (item.parent?.let { values[it].visible } ?: true),
+                        node.isEnabled, node.isClickable, node.isCheckable, node.isChecked, node.isEditable, node.isFocused,
+                        AccessibilityNodeInfo.ACTION_SET_TEXT in actions, AccessibilityNodeInfo.ACTION_CLICK in actions,
+                        AccessibilityNodeInfo.ACTION_FOCUS in actions, nodeWindow, packageName, node.className?.toString().orEmpty())
+                    val resourceId = node.viewIdResourceName
+                    attempted.put("current_fields", JSONObject().put("class", value.className).put("text", value.text)
+                        .put("description", value.description).put("bounds", JSONArray(listOf(rect.left, rect.top, rect.right, rect.bottom)))
+                        .put("visible_to_user", ownVisible).put("effective_visible", value.visible).put("enabled", value.enabled)
+                        .put("checkable", value.checkable).put("checked", value.checked).put("editable", value.editable)
+                        .put("action_ids", JSONArray(actions)))
+                    gate()
+                    val index = handles.size
+                    handles.add(node); values.add(value); resources.add(resourceId)
+                    phase = "CHILD_ACQUISITION"
+                    val count = node.childCount
+                    check(count >= 0 && handles.size + pending.size + count <= 2048) { "DEEPSEEK_CURRENT_TREE_UNBOUNDED" }
+                    for (childIndex in count - 1 downTo 0) {
+                        gate()
+                        path = "${item.path}/$childIndex"
+                        val child = checkNotNull(node.getChild(childIndex)) { "DEEPSEEK_CURRENT_CHILD_INCOMPLETE" }
+                        gate()
+                        pending.addLast(Pending(child, index, item.depth + 1, path))
                     }
-                    parentCurrent = currentParent
-                    labelsCurrent = currentLabels
-                    rootBounds = currentRoot
-                    val ancestorIndex = projection?.get(parentIndex)?.parent?.toIntOrNull() ?: if (projection == null)
-                        handles.indexOf(parent.parent) else -1
-                    check(note("projected_root_identity", projection == null || projection.first().let {
-                            it.parent == null && it.windowId == windowId && it.packageName == TARGET && it.visible && it.enabled
-                        }) && note("parent_ancestor_equal", ancestorIndex == pair.ancestorIndex) &&
-                        note("parent_current_visible", projection?.get(parentIndex)?.visible ?: visible(parent)) &&
-                        note("parent_enabled", currentParent[10] == true) && note("parent_visible_to_user", currentParent[9] == true) &&
-                        note("parent_checkable", currentParent[12] == true) && note("parent_clickable", currentParent[11] == true) &&
-                        note("parent_not_editable", currentParent[13] == false) &&
-                        note("parent_package_equal", currentParent[0] == TARGET) && note("parent_window_id_equal", currentParent[2] == windowId) &&
-                        note("parent_click_action_available", currentParent[14] == true) &&
-                        note("parent_non_geometry_equal", nonGeometryEqual(currentParent, pair.parentBefore)) &&
-                        note("labels_non_geometry_equal", currentLabels.indices.all { nonGeometryEqual(currentLabels[it], pair.labelsBefore[it]) }) &&
-                        labels.indices.all { index ->
-                            val (name, label) = labels[index]
-                            val currentLabel = currentLabels[index]
-                            val labelIndex = handles.indexOf(label)
-                            note("label:$name:visible", projection?.get(labelIndex)?.visible ?: visible(label)) &&
-                                note("label:$name:enabled", currentLabel[10] == true) &&
-                                note("label:$name:parent_equal", if (projection == null) label.parent == parent
-                                    else projection[labelIndex].parent == parentIndex.toString()) &&
-                                note("label:$name:text_equal", currentLabel[3] == name) &&
-                                note("label:$name:package_equal", currentLabel[0] == TARGET) &&
-                                note("label:$name:window_id_equal", currentLabel[2] == windowId) &&
-                                note("label:$name:current_unique", projection == null || projection.filter {
-                                    it.visible && it.enabled && it.text == name
-                                }.let { it.size == 1 && it.single().id == labelIndex.toString() })
-                        } && note("root_current_geometry", inside(currentRoot, display)) &&
-                        note("parent_current_geometry", inside(bounds(currentParent), currentRoot)) &&
-                        labels.indices.all { index ->
-                            val name = labels[index].first
-                            note("label:$name:current_geometry", inside(bounds(currentLabels[index]), currentRoot)) &&
-                                note("label:$name:inside_current_parent", inside(bounds(currentLabels[index]), bounds(currentParent)))
-                        }) { "DEEPSEEK_MODE_REFRESH_RELATION_CHANGED" }
-                    deepSeekReadGate(until)
-            }
-            pairs.forEach { pair ->
-                guard(pair, "BEFORE", null)
-                val parent = handles[pair.parentIndex]
-                check(parent.refresh()) { "DEEPSEEK_CURRENT_MODE_REFRESH_FAILED" } // Once per eligible distinct parent, ON or OFF.
-                pair.labels.forEach { (name, label) ->
-                    deepSeekReadGate(until)
-                    val refreshed = label.refresh() // Once for this already identified exact label, after its parent.
-                    if (!refreshed && draftQualificationActive && deepSeekModeGuardFailure == null) runCatching {
-                        deepSeekModeGuardFailure = DeepSeekModeGuardFailure("LABEL_REFRESH", pair.parentIndex,
-                            pair.labels.map { it.first }, until, preparationDeadline, true,
-                            listOf("label:$name:refresh_returned" to false), "label:$name:refresh_returned",
-                            pair.parentBefore, null, pair.labelsBefore, null)
-                    }
-                    check(refreshed) { "DEEPSEEK_CURRENT_MODE_LABEL_REFRESH_FAILED" }
-                    deepSeekReadGate(until)
+                    gate()
+                    check(node.childCount == count) { "DEEPSEEK_CURRENT_CHILDREN_CHANGED" }
                 }
-                guard(pair, "AFTER_PAIR_REFRESH", true)
+                phase = "COPIED_GRAPH"
+                path = "0"
+                val nodes = values.toList()
+                val rootValue = nodes.first()
+                val display = TongyiPreparationRunner.Bounds(0, 0, width, height)
+                check(rootValue.parent == null && rootValue.visible && rootValue.enabled && inside(rootValue.bounds, display)) {
+                    "CURRENT_GEOMETRY_INVALID"
+                }
+                // Direct-parent indices point only backwards: every copied node reaches this root without another provider read.
+                check(nodes.drop(1).all { it.parent?.toIntOrNull()?.let { parent -> parent in 0 until it.id.toInt() } == true }) {
+                    "DEEPSEEK_CURRENT_ANCESTRY_CHANGED"
+                }
+                check(nodes.count { it.visible && it.editable } <= 1) { "DEEPSEEK_EDITOR_NOT_UNIQUE" }
+                for (name in listOf("深度思考", "智能搜索")) {
+                    val labels = nodes.filter { it.visible && it.enabled && it.text == name }
+                    check(labels.size <= 1) { "DEEPSEEK_SEMANTIC_WITNESS_NOT_UNIQUE" }
+                    labels.singleOrNull()?.let { label ->
+                        path = label.id
+                        attempted = JSONObject().put("copied_label_index", label.id).put("copied_parent_index", label.parent ?: JSONObject.NULL)
+                            .put("current_fields", "IN_COPIED_NODES_NOT_RESAMPLED")
+                        val parent = checkNotNull(label.parent?.toIntOrNull()?.let(nodes::getOrNull)) {
+                            "DEEPSEEK_CHECKED_MODE_PARENT_REQUIRED"
+                        }
+                        check(parent.id != rootValue.id && parent.visible && parent.enabled && parent.checkable &&
+                            parent.clickable && parent.clickAvailable && !parent.editable && !label.editable &&
+                            inside(parent.bounds, rootValue.bounds) && inside(label.bounds, parent.bounds)) {
+                            "DEEPSEEK_CURRENT_MODE_RELATION_CHANGED"
+                        }
+                    }
+                }
+                // Empty/shared composer semantics are checked by the unchanged adapter using this SAME immutable Frame.
+                val frame = DeepSeekUiAdapter.Frame("${owner.pid}/${owner.uid}/${owner.startTicks}/" +
+                    Base64.encodeToString(owner.rawCommandLine.toByteArray(Charsets.UTF_8), Base64.NO_WRAP),
+                    windowId, width, height, rotation, "0", nodes)
+                phase = "OWNER_WINDOW_DISPLAY_AFTER"
+                gate()
+                requireOwnedCurrent(until)
+                val currentRoot = checkNotNull(automation.rootInActiveWindow) { "DEEPSEEK_CURRENT_ROOT_MISSING" }
+                val window = checkNotNull(currentRoot.window) { "DEEPSEEK_PUBLIC_WINDOW_REQUIRED" }
+                check(targetOwner == owner && currentRoot == rootNode && currentRoot.windowId == windowId &&
+                    window.isActive && window.id == windowId && window.root == currentRoot &&
+                    device.displayWidth == width && device.displayHeight == height && device.displayRotation == rotation) {
+                    "DEEPSEEK_CURRENT_GENERATION_CHANGED"
+                }
+                gate()
+                return DeepSeekAcquisition(frame, handles.toList(), resources.toList())
+            } catch (original: Exception) {
+                // No provider getter, new read, or replacement failure in this auxiliary first-failure capture.
+                if (deepSeekGenerationFailure == null) runCatching {
+                    deepSeekGenerationFailure = JSONObject().put("phase", phase).put("path", path)
+                        .put("original_failure", original.message ?: original.javaClass.simpleName)
+                        .put("original_until_elapsed_realtime_nanos", until.toString())
+                        .put("preparation_until_elapsed_realtime_nanos", preparationDeadline.toString())
+                        .put("attempted_node", attempted ?: JSONObject.NULL)
+                        .put("copied_nodes", JSONArray().apply { values.forEach { value ->
+                            put(JSONObject().put("id", value.id).put("parent", value.parent ?: JSONObject.NULL)
+                                .put("package", value.packageName).put("window_id", value.windowId).put("class", value.className)
+                                .put("text", value.text).put("description", value.description)
+                                .put("bounds", JSONArray(listOf(value.bounds.left, value.bounds.top, value.bounds.right, value.bounds.bottom)))
+                                .put("visible", value.visible).put("enabled", value.enabled).put("checked", value.checked))
+                        } })
+                        .put("uncopied_nodes", "NOT_EVALUATED").put("claim", "sequential_public_refresh_before_descend_not_atomic_or_cachefree")
+                }
+                throw original
             }
-            deepSeekReadGate(until)
-            val observations = HashMap<Int, List<Any?>>()
-            val observedIndices = pairs.flatMap { pair -> listOf(pair.parentIndex) + pair.labels.map { handles.indexOf(it.second) } }.toSet()
-            val projection = currentModeNodeValues(handles, observedIndices, observations)
-            // A later label refresh may affect an earlier pair. Validate ALL pairs from these exact final values.
-            pairs.forEach { guard(it, "FINAL_ALL_PAIRS", true, projection, observations) }
-            deepSeekReadGate(until)
-            return projection
         }
 
-        private fun deepSeekFrame(deadlineNanos: Long = preparationDeadline): Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>> {
+        private fun deepSeekFrame(deadlineNanos: Long = preparationDeadline): DeepSeekAcquisition {
             val until = minOf(preparationDeadline, deadlineNanos)
             deepSeekReadGate(until)
+            if (currentDeepSeekGenerationEnabled) {
+                val acquisition = currentDeepSeekGeneration(until) // BEFORE the legacy full-tree walk.
+                if (draftQualificationActive) cacheDraftQualificationNodes(acquisition.first, acquisition.second)
+                deepSeekReadGate(until)
+                return acquisition
+            }
             val (base, handles) = try { ordinaryPreparationFrame(deadlineNanos = until) }
             catch (original: Exception) {
                 try { deepSeekReadGate(until) }
@@ -1185,14 +1206,11 @@ class TongyiWholeEngineeringInstrumentation {
             check(rootNode.windowId >= 0 && window.isActive && window.id == rootNode.windowId && window.root == rootNode) {
                 "DEEPSEEK_CURRENT_WINDOW_CHANGED"
             }
-            val currentModeValues = if (target == EngineeringTarget.DEEPSEEK &&
-                condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION"))
-                refreshCurrentDeepSeekModeParents(handles, until, base.width, base.height) else null
-            val frame = DeepSeekUiAdapter.Frame(base.owner, currentModeValues?.first()?.windowId ?: rootNode.windowId,
-                base.width, base.height, base.rotation, "0", currentModeValues ?: deepSeekNodeValues(handles))
+            val frame = DeepSeekUiAdapter.Frame(base.owner, rootNode.windowId,
+                base.width, base.height, base.rotation, "0", deepSeekNodeValues(handles))
             deepSeekReadGate(until)
             if (draftQualificationActive) cacheDraftQualificationNodes(frame, handles)
-            return frame to handles
+            return DeepSeekAcquisition(frame, handles)
         }
 
         private fun deepSeekAdapter() = DeepSeekUiAdapter(object : DeepSeekUiAdapter.Android {
@@ -1208,7 +1226,7 @@ class TongyiWholeEngineeringInstrumentation {
             override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
                 val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                 action {
-                    val (fresh, handles) = deepSeekFrame()
+                    val (fresh, handles) = deepSeekFrame(if (currentDeepSeekGenerationEnabled) until else preparationDeadline)
                     check(fresh == frame && fresh.nodes.singleOrNull { it.id == label.id } == label &&
                         fresh.nodes.singleOrNull { it.id == control.id } == control) { "DEEPSEEK_SEMANTIC_MODE_FRAME_CHANGED" }
                     // The adapter proved this same Frame's empty bounded composer before requesting one ON-mode operation.
@@ -1234,7 +1252,12 @@ class TongyiWholeEngineeringInstrumentation {
                     if (modeFeedbackActive) captureModeFeedback("P0", frame, label.text, until, SystemClock.elapsedRealtimeNanos())
                     val actualLabel = handles[label.id.toInt()]
                     val actualControl = handles[control.id.toInt()]
-                    check(actualLabel.refresh() && actualControl.refresh() && actualLabel.parent == actualControl &&
+                    if (currentDeepSeekGenerationEnabled) {
+                        val (confirmed, currentHandles) = deepSeekFrame(until)
+                        check(confirmed == frame && currentHandles[label.id.toInt()] == actualLabel &&
+                            currentHandles[control.id.toInt()] == actualControl &&
+                            confirmed.nodes[label.id.toInt()].parent == control.id) { "DEEPSEEK_SEMANTIC_MODE_SOURCE_CHANGED" }
+                    } else check(actualLabel.refresh() && actualControl.refresh() && actualLabel.parent == actualControl &&
                         deepSeekNodeValues(handles) == frame.nodes) { "DEEPSEEK_SEMANTIC_MODE_SOURCE_CHANGED" }
                     requireOwnedCurrent(until)
                     val activeRoot = checkNotNull(automation.rootInActiveWindow) { "DEEPSEEK_SEMANTIC_MODE_ROOT_MISSING" }
@@ -1262,7 +1285,7 @@ class TongyiWholeEngineeringInstrumentation {
                 // Starts before the original action wrapper: never grants a later five-second budget.
                 val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                 action {
-                    val (fresh, handles) = deepSeekFrame()
+                    val (fresh, handles) = deepSeekFrame(if (currentDeepSeekGenerationEnabled) until else preparationDeadline)
                     check(fresh == frame && fresh.nodes.singleOrNull { it.id == hint.id } == hint) {
                         "DEEPSEEK_SEMANTIC_ACTIVATION_FRAME_CHANGED"
                     }
@@ -1289,7 +1312,12 @@ class TongyiWholeEngineeringInstrumentation {
                         "DEEPSEEK_SEMANTIC_PUBLIC_RELATION_CHANGED"
                     }
                     val actual = handles[hint.id.toInt()]
-                    check(actual.refresh() && actual.parent == handles[holder.id.toInt()] && deepSeekNodeValues(handles) == frame.nodes) {
+                    if (currentDeepSeekGenerationEnabled) {
+                        val (confirmed, currentHandles) = deepSeekFrame(until)
+                        check(confirmed == frame && currentHandles[hint.id.toInt()] == actual &&
+                            currentHandles[holder.id.toInt()] == handles[holder.id.toInt()] &&
+                            confirmed.nodes[hint.id.toInt()].parent == holder.id) { "DEEPSEEK_SEMANTIC_SOURCE_CHANGED" }
+                    } else check(actual.refresh() && actual.parent == handles[holder.id.toInt()] && deepSeekNodeValues(handles) == frame.nodes) {
                         "DEEPSEEK_SEMANTIC_SOURCE_CHANGED"
                     }
                     requireOwnedCurrent(until)
@@ -1305,27 +1333,61 @@ class TongyiWholeEngineeringInstrumentation {
                 }
             }
             override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, kind: DeepSeekUiAdapter.Action) {
+                val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                 action {
-                    val (fresh, handles) = deepSeekFrame()
+                    val (fresh, handles) = deepSeekFrame(if (currentDeepSeekGenerationEnabled) until else preparationDeadline)
                     check(fresh == frame && fresh.nodes.singleOrNull { it.id == node.id } == node) { "DEEPSEEK_ACTION_FRAME_CHANGED" }
-                    val actual = handles[node.id.toInt()]
+                    var actual = handles[node.id.toInt()]
                     val actionId = when (kind) {
                         DeepSeekUiAdapter.Action.CLICK -> AccessibilityNodeInfo.ACTION_CLICK
                         DeepSeekUiAdapter.Action.FOCUS -> AccessibilityNodeInfo.ACTION_FOCUS
                     }
-                    check(actual.refresh() && deepSeekNodeValues(handles) == frame.nodes &&
-                        actual.actionList.any { it.id == actionId }) { "DEEPSEEK_PUBLIC_ACTION_CHANGED" }
-                    requireOwnedCurrent()
+                    if (currentDeepSeekGenerationEnabled) {
+                        val (confirmed, currentHandles) = deepSeekFrame(until)
+                        check(confirmed == frame && currentHandles[node.id.toInt()] == actual &&
+                            when (kind) { DeepSeekUiAdapter.Action.CLICK -> node.clickAvailable
+                                DeepSeekUiAdapter.Action.FOCUS -> node.focusAvailable }) { "DEEPSEEK_PUBLIC_ACTION_CHANGED" }
+                        actual = currentHandles[node.id.toInt()]
+                        requireOwnedCurrent(until)
+                        deepSeekReadGate(until)
+                    } else {
+                        check(actual.refresh() && deepSeekNodeValues(handles) == frame.nodes &&
+                            actual.actionList.any { it.id == actionId }) { "DEEPSEEK_PUBLIC_ACTION_CHANGED" }
+                        requireOwnedCurrent()
+                    }
                     check(actual.performAction(actionId)) { "DEEPSEEK_PUBLIC_ACTION_REFUSED" }
                 }
             }
         }, preparationDeadline)
 
         private fun currentDeepSeekSendRole(input: AccessibilityNodeInfo, empty: Boolean,
-            acquisition: Pair<DeepSeekUiAdapter.Frame, List<AccessibilityNodeInfo>>): AccessibilityNodeInfo? {
+            acquisition: DeepSeekAcquisition, until: Long = preparationDeadline): AccessibilityNodeInfo? {
             if (empty) return null
             val (frame, handles) = acquisition
             val owner = checkNotNull(targetOwner)
+            if (currentDeepSeekGenerationEnabled) {
+                val editor = currentDeepSeekEditor(acquisition)
+                val editorParent = checkNotNull(editor.parent?.toIntOrNull()?.let(handles::getOrNull)) {
+                    "DEEPSEEK_EDITOR_BINDING_CHANGED"
+                }
+                check(ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft && handles[editor.id.toInt()] == input &&
+                    editorParent == ordinaryOwnDraftParent && editor.windowId == ordinaryOwnDraftWindow &&
+                    editor.windowId == frame.windowId && editor.enabled && editor.focused && editor.setTextAvailable &&
+                    !editor.showingHint && editor.text == TongyiEngineeringRunner.PAYLOAD &&
+                    editor.text.toByteArray(Charsets.UTF_8).size == 239) { "DEEPSEEK_OWNED_DRAFT_REQUIRED" }
+                val candidate = deepSeekAdapter().sendCandidate(frame, ui.getJSONObject("deepseek_contract").getString("send_description"))
+                    ?: return null
+                val confirmed = deepSeekFrame(until)
+                check(confirmed.first == frame && confirmed.second[editor.id.toInt()] == input &&
+                    confirmed.second[checkNotNull(editor.parent).toInt()] == editorParent &&
+                    confirmed.second[candidate.id.toInt()] == handles[candidate.id.toInt()] &&
+                    targetOwner == owner && ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft &&
+                    editorParent == ordinaryOwnDraftParent && frame.windowId == ordinaryOwnDraftWindow) {
+                    "DEEPSEEK_SEND_BINDING_CHANGED"
+                }
+                deepSeekReadGate(minOf(until, preparationDeadline))
+                return confirmed.second[candidate.id.toInt()]
+            }
             check(ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft && input.parent == ordinaryOwnDraftParent &&
                 input.windowId == ordinaryOwnDraftWindow && input.windowId == frame.windowId && input.isEnabled && input.isFocused &&
                 !input.isShowingHintText && input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) { "DEEPSEEK_OWNED_DRAFT_REQUIRED" }
@@ -1340,8 +1402,63 @@ class TongyiWholeEngineeringInstrumentation {
             return actual
         }
 
+        private fun currentDeepSeekEditor(acquisition: DeepSeekAcquisition): DeepSeekUiAdapter.Node =
+            acquisition.first.nodes.singleOrNull { it.visible && it.editable && it.className == "android.widget.EditText" }
+                ?: error("CURRENT_EDITOR_UNAVAILABLE")
+
+        private fun enterExactDeepSeek(text: String) {
+            val owner = checkNotNull(targetOwner)
+            val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
+            lateinit var input: AccessibilityNodeInfo
+            lateinit var parent: AccessibilityNodeInfo
+            var windowId = -1
+            action {
+                val acquisition = deepSeekFrame(until)
+                val editor = currentDeepSeekEditor(acquisition)
+                input = acquisition.second[editor.id.toInt()]
+                check(editor.enabled && editor.focused && deepSeekEmpty(editor) && editor.setTextAvailable) {
+                    "CURRENT_EMPTY_FOCUS_REQUIRED"
+                }
+                parent = checkNotNull(editor.parent?.toIntOrNull()?.let(acquisition.second::getOrNull)) {
+                    "CURRENT_EDITOR_PARENT_REQUIRED"
+                }
+                windowId = editor.windowId
+                check(windowId >= 0 && acquisition.first.windowId == windowId &&
+                    acquisition.first.nodes[checkNotNull(editor.parent).toInt()].windowId == windowId && targetOwner == owner) {
+                    "CURRENT_EDITOR_WINDOW_CHANGED"
+                }
+                deepSeekReadGate(until)
+                check(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) })) {
+                    "SET_TEXT_REFUSED"
+                }
+            }
+            // SET_TEXT deliberately invalidates the pre-action values; only the SAME editor/parent may read back.
+            val acquisition = deepSeekFrame(until)
+            val value = currentDeepSeekEditor(acquisition)
+            val readback = acquisition.second[value.id.toInt()]
+            check(targetOwner == owner && readback == input &&
+                value.parent?.toIntOrNull()?.let { acquisition.second[it] } == parent && value.windowId == windowId &&
+                acquisition.first.windowId == windowId && value.enabled && value.focused && value.setTextAvailable) {
+                "CURRENT_EDITOR_READBACK_BINDING_CHANGED"
+            }
+            check(!value.showingHint && value.text == text && value.text.toByteArray(Charsets.UTF_8).size == 239) {
+                "COMPLETE_239B_READBACK_MISMATCH"
+            }
+            deepSeekReadGate(until)
+            ordinaryOwnDraft = readback
+            ordinaryOwnDraftParent = parent
+            ordinaryOwnDraftWindow = windowId
+            ordinaryOwnDraftOwner = owner
+            ordinaryOwnDraftValue = value
+        }
+
         override fun enterExact(text: String) {
             check(text == TongyiEngineeringRunner.PAYLOAD)
+            if (currentDeepSeekGenerationEnabled) {
+                enterExactDeepSeek(text)
+                return
+            }
             val owner = checkNotNull(targetOwner)
             lateinit var input: AccessibilityNodeInfo
             lateinit var parent: AccessibilityNodeInfo
@@ -1374,7 +1491,9 @@ class TongyiWholeEngineeringInstrumentation {
         override fun snapshot(): TongyiEngineeringRunner.Snapshot {
             projectionSession?.requireHealthy()
             requireOwnedCurrent()
-            val input = editNode()
+            val current = if (currentDeepSeekGenerationEnabled) deepSeekFrame() else null
+            val currentEditor = current?.let(::currentDeepSeekEditor)
+            val input = if (current != null) current.second[checkNotNull(currentEditor).id.toInt()] else editNode()
             val network = context.getSystemService(ConnectivityManager::class.java)
             val capabilities = network.getNetworkCapabilities(network.activeNetwork)
             val actual = when {
@@ -1387,18 +1506,20 @@ class TongyiWholeEngineeringInstrumentation {
                 capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             val attachmentIds = ui.getJSONArray("attachment_resource_ids")
             val noAttachments = freshEmpty && (0 until attachmentIds.length()).all { index ->
-                nodes().none { it.viewIdResourceName == attachmentIds.getString(index) && visible(it) }
+                if (current != null) checkNotNull(current.resourceIds).indices.none {
+                    checkNotNull(current.resourceIds)[it] == attachmentIds.getString(index) && current.first.nodes[it].visible
+                } else nodes().none { it.viewIdResourceName == attachmentIds.getString(index) && visible(it) }
             }
             // [] is allowed only in the explicitly accepted new-session/text-only contract.
             check(attachmentIds.length() > 0 || ui.optBoolean("new_session_text_only_attachment_contract", false)) {
                 "ATTACHMENT_ABSENCE_CONTRACT_REQUIRED"
             }
-            val empty = currentEmpty(input)
-            val deepSeek = if (target == EngineeringTarget.DEEPSEEK) deepSeekFrame() else null
+            val empty = currentEditor?.let(::deepSeekEmpty) ?: currentEmpty(input)
+            val deepSeek = current ?: if (target == EngineeringTarget.DEEPSEEK) deepSeekFrame() else null
             return TongyiEngineeringRunner.Snapshot(TARGET, true, if (deepSeek != null) deepSeekAdapter().modesOff(deepSeek.first)
                 else matching("ordinary_mode").size == 1,
-                noAttachments, freshEmpty && empty, if (empty) "" else input.text?.toString().orEmpty(),
-                input.isFocused, if (deepSeek != null) currentDeepSeekSendRole(input, empty, deepSeek) != null
+                noAttachments, freshEmpty && empty, if (empty) "" else currentEditor?.text ?: input.text?.toString().orEmpty(),
+                currentEditor?.focused ?: input.isFocused, if (deepSeek != null) currentDeepSeekSendRole(input, empty, deepSeek) != null
                 else if (ui.has("send_role_binding")) currentPrivateSendRole(input, empty) != null
                 else if (!ui.has("send")) false else matching("send").singleOrNull()?.let { it.isEnabled && it.isClickable } == true,
                 actual, noVpn)
@@ -1599,19 +1720,24 @@ class TongyiWholeEngineeringInstrumentation {
         override fun sendOnce() {
             check(!preparationOnly) { "PREPARATION_SEND_UNREACHABLE" }
             requireOwnedCurrent()
-            check(editNode().text?.toString() == TongyiEngineeringRunner.PAYLOAD)
+            if (!currentDeepSeekGenerationEnabled) check(editNode().text?.toString() == TongyiEngineeringRunner.PAYLOAD)
             if (target == EngineeringTarget.DEEPSEEK) {
+                val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
                 action {
                     val session = projectionSession
                     session?.requireRecordingActive()
                     val authorized = ui.getJSONObject("deepseek_contract").get("invocation_authorized")
                     check(authorized is Boolean && authorized) { "DEEPSEEK_SEND_INVOCATION_NOT_AUTHORIZED" }
-                    val input = editNode()
-                    val candidate = checkNotNull(currentDeepSeekSendRole(input, currentEmpty(input), deepSeekFrame())) {
+                    val acquisition = deepSeekFrame(if (currentDeepSeekGenerationEnabled) until else preparationDeadline)
+                    val editor = if (currentDeepSeekGenerationEnabled) currentDeepSeekEditor(acquisition) else null
+                    val input = if (editor != null) acquisition.second[editor.id.toInt()] else editNode()
+                    val candidate = checkNotNull(currentDeepSeekSendRole(input,
+                        editor?.let(::deepSeekEmpty) ?: currentEmpty(input), acquisition, until)) {
                         "DEEPSEEK_CURRENT_SEND_ROLE_REQUIRED"
                     }
                     check(projectionSession === session) { "CURRENT_CAPTURE_SESSION_CHANGED" }
                     session?.requireRecordingActive()
+                    if (currentDeepSeekGenerationEnabled) deepSeekReadGate(until)
                     check(candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "DEEPSEEK_SEND_CLICK_REFUSED" }
                 }
             } else if (ui.has("send_role_binding")) {
