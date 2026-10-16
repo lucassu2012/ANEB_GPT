@@ -20,7 +20,9 @@ import android.util.Base64
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.AndroidJUnit4
 import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import com.aneb.probe.research.engineering.OwnedProcessLifecycle
 import com.aneb.probe.research.engineering.EngineeringTarget
 import com.aneb.probe.research.engineering.DeepSeekUiAdapter
@@ -692,6 +694,52 @@ class TongyiWholeEngineeringInstrumentation {
             override fun nowNanos() = SystemClock.elapsedRealtimeNanos()
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
             override fun read() = deepSeekFrame().first
+            override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {
+                // Starts before the original action wrapper: never grants a later five-second budget.
+                val until = minOf(preparationDeadline, SystemClock.elapsedRealtimeNanos() + TongyiEngineeringRunner.INPUT_NANOS)
+                action {
+                    val (fresh, handles) = deepSeekFrame()
+                    check(fresh == frame && fresh.nodes.singleOrNull { it.id == hint.id } == hint) {
+                        "DEEPSEEK_SEMANTIC_ACTIVATION_FRAME_CHANGED"
+                    }
+                    // The adapter already proved this same Frame's empty/OFF-OFF bounded shared composer.
+                    val holder = fresh.nodes.single { it.id == hint.parent }
+                    check(hint.text == "发消息或按住说话" && hint.className == "android.widget.TextView" &&
+                        hint.visible && hint.enabled && !hint.editable && !hint.clickAvailable && !hint.focusAvailable &&
+                        holder.className == "androidx.compose.ui.viewinterop.ViewFactoryHolder" &&
+                        holder.visible && holder.enabled && !holder.editable && !holder.clickAvailable && !holder.focusAvailable) {
+                        "DEEPSEEK_SEMANTIC_EMPTY_HINT_REQUIRED"
+                    }
+                    val candidates = device.findObjects(By.pkg(TARGET).text(hint.text).clazz(hint.className))
+                    check(candidates.size == 1) { "DEEPSEEK_SEMANTIC_HINT_NOT_UNIQUE" }
+                    val candidate = candidates.single()
+                    val parent = checkNotNull(candidate.parent) { "DEEPSEEK_SEMANTIC_HOLDER_MISSING" }
+                    fun matchesPublic(actual: UiObject2, expected: DeepSeekUiAdapter.Node): Boolean {
+                        val bounds = actual.visibleBounds
+                        return actual.applicationPackage == expected.packageName && actual.className == expected.className &&
+                            actual.text.orEmpty() == expected.text && actual.contentDescription.orEmpty() == expected.description &&
+                            actual.isEnabled == expected.enabled && bounds.left == expected.bounds.left && bounds.top == expected.bounds.top &&
+                            bounds.right == expected.bounds.right && bounds.bottom == expected.bounds.bottom
+                    }
+                    check(matchesPublic(candidate, hint) && matchesPublic(parent, holder)) {
+                        "DEEPSEEK_SEMANTIC_PUBLIC_RELATION_CHANGED"
+                    }
+                    val actual = handles[hint.id.toInt()]
+                    check(actual.refresh() && actual.parent == handles[holder.id.toInt()] && deepSeekNodeValues(handles) == frame.nodes) {
+                        "DEEPSEEK_SEMANTIC_SOURCE_CHANGED"
+                    }
+                    requireOwnedCurrent(until)
+                    val activeRoot = checkNotNull(automation.rootInActiveWindow) { "DEEPSEEK_SEMANTIC_ROOT_MISSING" }
+                    val window = checkNotNull(activeRoot.window) { "DEEPSEEK_SEMANTIC_WINDOW_MISSING" }
+                    check(activeRoot == handles.first() && activeRoot.windowId == frame.windowId &&
+                        window.isActive && window.id == frame.windowId && window.root == activeRoot) {
+                        "DEEPSEEK_SEMANTIC_WINDOW_CHANGED"
+                    }
+                    check(SystemClock.elapsedRealtimeNanos() < until) { "DEEPSEEK_SEMANTIC_ACTIVATION_EXPIRED" }
+                    // Distinct public semantic UI operation; no Accessibility-handle alias or action_id is claimed.
+                    candidate.click()
+                }
+            }
             override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, kind: DeepSeekUiAdapter.Action) {
                 action {
                     val (fresh, handles) = deepSeekFrame()

@@ -187,8 +187,17 @@ composer 优先保留整个真实模式动作父被非全屏共享容器包含�
 包/window/owner 及原空草稿门。没有像素容差、全屏容器或额外采样兜底；label 越出
 composer 仍拒绝。该关系判据不解释某次 bounds 扩展原因，也不代表实机输入资格。
 
-聚焦只使用当前对象/直接父真实支持的 ACTION_FOCUS 或 ACTION_CLICK。若新会话没有
-实际可编辑、focused、支持 ACTION_SET_TEXT 的唯一 Android EditText，安全拒绝；保存的
+聚焦保留当前对象/直接父真实支持的 ACTION_FOCUS 或 ACTION_CLICK 原路径。仅当没有
+editor，且同一当前 Frame 的精确空 TextView 提示、唯一直接 ViewFactoryHolder、非全屏
+共享 composer、两模式 OFF/OFF、owner/root/window 都已验证，而原对象/直接父均无支持
+动作时，可请求独立的语义 composer 激活能力；绝不改写 action IDs/Available 布尔值。
+Native 在原 action/PREP/input5 内重新取得并比对整个 Frame，以包名/精确提示/类名找唯一
+当前 UiObject2，对照公开原文/描述、包/类、可见 bounds、enabled 及直接父关系，再刷新
+原节点并复核完整 owner/当前 root/活动 window，才至多一次 parameterless object.click()。
+只使用现有2.3公开 API，不用坐标入口、历史 bounds、私有 node accessor、反射、重试或
+第二套 collector；公开属性关系不冒称 UiObject2 与 Accessibility handle 的 native alias。
+异常/变化/歧义仍拒绝。void 返回不证明聚焦：原后续真实可编辑、focused、支持
+ACTION_SET_TEXT 的唯一 Android EditText/空态/OFF-OFF 门仍必须通过，否则安全拒绝；保存的
 Home PNG/XML 不证明该 API。不得猜坐标、发送盲键或沿用 Tongyi pixel/menu/RID/SEND
 拓扑。Root 必须另行在固定候选上验证这一实际资格缝隙，代码编译与外部 Android fixture
 不等于设备资格。239B 全量回读、同 handle/parent/window/owner、5秒 input/GO 门不变。

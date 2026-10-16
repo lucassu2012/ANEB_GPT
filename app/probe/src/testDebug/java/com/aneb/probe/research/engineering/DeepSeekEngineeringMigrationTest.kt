@@ -2,6 +2,7 @@ package com.aneb.probe.research.engineering
 
 import java.io.File
 import java.nio.file.Files
+import com.aneb.probe.research.engineering.TongyiPreparationRunner.Bounds
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -351,6 +352,113 @@ class DeepSeekEngineeringMigrationTest {
         val failure = runCatching { DeepSeekUiAdapter(android, 1_000_000_000L + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
         assertEquals("DEEPSEEK_SHARED_COMPOSER_REQUIRED", failure?.message)
         assertTrue("no new-session/mode/focus action on an unbound semantic label", requested.isEmpty())
+    }
+
+    @Test fun currentEmptyHintWithoutAdvertisedActionsReachesDistinctSemanticActivationBeforeAnyPointer() {
+        val android = SemanticComposerAndroid()
+        val failure = runCatching { DeepSeekUiAdapter(android, android.now + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("bounded semantic activation must be requested: "+failure?.message, listOf("public-34"), android.activations)
+        assertEquals("EXTERNAL_SEMANTIC_ACTIVATION_DECLINED_BEFORE_POINTER", failure?.message)
+        assertEquals(listOf("public-22:CLICK", "public-38:CLICK"), android.actions)
+        assertFalse("no editor/input success is fabricated by the sentinel", android.read().nodes.any { it.editable })
+    }
+
+    @Test fun semanticActivationVoidReturnWithoutARealEditableReadbackNeverCompletesPreparation() {
+        val android = SemanticComposerAndroid().apply { declineActivation = false }
+        val failure = runCatching { DeepSeekUiAdapter(android, android.now + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("DEEPSEEK_PUBLIC_READINESS_EXPIRED", failure?.message)
+        assertEquals(listOf("public-34"), android.activations)
+        assertEquals(listOf("public-22:CLICK", "public-38:CLICK"), android.actions)
+        assertFalse(android.read().nodes.any { it.editable })
+    }
+
+    private class SemanticComposerAndroid : DeepSeekUiAdapter.Android {
+        var now = 1_000_000_000L
+        var searchOn = true
+        var declineActivation = true
+        val actions = mutableListOf<String>()
+        val activations = mutableListOf<String>()
+        // Public topology/geometry from Native source SHA6c379975ece28f624df6876a8b00ca46d45e28a267b11d153d3bb692e8126787.
+        // Owner/window/local IDs are synthetic. Null semantic text/description map to empty exactly as Native Node values do.
+        // New-chat returns the same empty fixture and search CLICK flips its checked value: synthetic OS responses,
+        // NOT captured post-new-chat/mode frames. No post-click editor, input or SEND response is invented.
+        private val initial = observedEmptyComposerFrame()
+        override fun read() = initial.copy(nodes = initial.nodes.map { if (it.id == "public-38") it.copy(checked = searchOn) else it })
+        override fun invoke(frame: DeepSeekUiAdapter.Frame, node: DeepSeekUiAdapter.Node, action: DeepSeekUiAdapter.Action) {
+            actions += "${node.id}:$action"
+            check(action == DeepSeekUiAdapter.Action.CLICK && node.clickAvailable)
+            when (node.id) {
+                "public-22" -> Unit // Synthetic new-chat completion, no actual saved successor claim.
+                "public-38" -> searchOn = false // Synthetic external mode response.
+                else -> error("UNEXPECTED_ACTION_NO_INPUT_OR_SEND_ALLOWED")
+            }
+        }
+        override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {
+            check(hint.id == "public-34" && !hint.clickAvailable && !hint.focusAvailable && !searchOn)
+            activations += hint.id
+            if (declineActivation) error("EXTERNAL_SEMANTIC_ACTIVATION_DECLINED_BEFORE_POINTER")
+        }
+        override fun nowNanos() = now
+        override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000 }
+
+        private fun observedEmptyComposerFrame(): DeepSeekUiAdapter.Frame {
+            fun n(id: Int, parent: Int?, bounds: Bounds, text: String = "", description: String = "",
+                className: String = "android.view.View", visible: Boolean = true, checkable: Boolean = false,
+                checked: Boolean = false, directAction: Boolean = false) = DeepSeekUiAdapter.Node(
+                "public-$id", parent?.let { "public-$it" }, bounds, text = text, description = description,
+                className = className, visible = visible, checkable = checkable, checked = checked,
+                clickable = directAction, clickAvailable = directAction, focusAvailable = directAction)
+            return DeepSeekUiAdapter.Frame("EXTERNAL_PUBLIC_HOME_OWNER", 1, 1200, 2640, 0, "public-0", listOf(
+                n(0, null, Bounds(0, 0, 1200, 2640), className = "android.widget.FrameLayout"),
+                n(1, 0, Bounds(0, 0, 1200, 2640), className = "android.widget.LinearLayout"),
+                n(2, 1, Bounds(0, 0, 1200, 2640), className = "android.widget.FrameLayout"),
+                n(3, 2, Bounds(0, 0, 1200, 2640), className = "android.widget.LinearLayout"),
+                n(4, 3, Bounds(0, 0, 1200, 2640), className = "android.widget.FrameLayout"),
+                n(5, 4, Bounds(0, 0, 1200, 2640), className = "androidx.compose.ui.platform.ComposeView"),
+                n(6, 5, Bounds(0, 0, 1200, 2640)),
+                n(7, 6, Bounds(0, 0, 1200, 2640)),
+                n(8, 7, Bounds(0, 0, 1200, 2640)),
+                n(9, 8, Bounds(0, 0, 1200, 2640)),
+                n(10, 9, Bounds(0, 0, 1200, 2640)),
+                n(11, 10, Bounds(0, 0, 1200, 2640)),
+                n(12, 11, Bounds(270, 1342, 930, 1417), text = "今天有什么可以帮到你？", className = "android.widget.TextView"),
+                n(13, 11, Bounds(0, 0, 1200, 310)),
+                n(14, 13, Bounds(0, 154, 1200, 310)),
+                n(15, 14, Bounds(6, 160, 150, 304)),
+                n(16, 15, Bounds(6, 160, 150, 304), directAction = true),
+                n(17, 16, Bounds(42, 196, 114, 268), description = "打开侧边栏"),
+                n(18, 16, Bounds(12, 166, 144, 298), className = "android.widget.Button"),
+                n(19, 14, Bounds(156, 160, 1044, 304)),
+                n(20, 19, Bounds(528, 203, 672, 260), text = "新对话", className = "android.widget.TextView"),
+                n(21, 14, Bounds(1050, 160, 1194, 304)),
+                n(22, 21, Bounds(1050, 160, 1194, 304), directAction = true),
+                n(23, 22, Bounds(1086, 196, 1158, 268), description = "开启新对话"),
+                n(24, 22, Bounds(1056, 166, 1188, 298), className = "android.widget.Button"),
+                n(25, 11, Bounds(0, 2553, 1200, 2640)),
+                n(26, 25, Bounds(0, 2553, 1200, 2640)),
+                n(27, 26, Bounds(0, 2538, 1200, 2640)),
+                n(28, 11, Bounds(36, 2259, 1164, 2403), visible = false),
+                n(29, 11, Bounds(36, 2292, 1164, 2610)),
+                n(30, 29, Bounds(36, 2232, 1164, 2376)),
+                n(31, 29, Bounds(36, 2304, 1164, 2454)),
+                n(32, 31, Bounds(66, 2304, 1134, 2454)),
+                n(33, 32, Bounds(87, 2340, 1107, 2418), className = "androidx.compose.ui.viewinterop.ViewFactoryHolder"),
+                n(34, 33, Bounds(87, 2340, 1107, 2418), text = "发消息或按住说话", className = "android.widget.TextView"),
+                n(35, 29, Bounds(36, 2478, 846, 2574)),
+                n(36, 35, Bounds(36, 2424, 396, 2628), checkable = true, directAction = true),
+                n(37, 36, Bounds(168, 2502, 336, 2551), text = "深度思考", className = "android.widget.TextView"),
+                n(38, 35, Bounds(396, 2424, 696, 2628), checkable = true, checked = true, directAction = true),
+                n(39, 38, Bounds(492, 2502, 660, 2551), text = "智能搜索", className = "android.widget.TextView"),
+                n(40, 29, Bounds(846, 2430, 978, 2622)),
+                n(41, 40, Bounds(846, 2430, 978, 2622), directAction = true),
+                n(42, 41, Bounds(903, 2487, 978, 2565), description = "上传文件"),
+                n(43, 41, Bounds(888, 2472, 996, 2580), className = "android.widget.Button"),
+                n(44, 29, Bounds(978, 2430, 1170, 2622)),
+                n(45, 44, Bounds(978, 2430, 1170, 2622), directAction = true),
+                n(46, 45, Bounds(1035, 2487, 1113, 2565), description = "切换至语音"),
+                n(47, 45, Bounds(1020, 2472, 1128, 2580), className = "android.widget.Button"),
+            ))
+        }
     }
 
     @Test fun currentSemanticPreparationUsesCheckedParentsAndVerifiesVisibleOffOffBeforeFocus() {

@@ -29,6 +29,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
     interface Android {
         fun read(): Frame
         fun invoke(frame: Frame, node: Node, action: Action)
+        fun activateEmptyComposer(frame: Frame, hint: Node) { error("DEEPSEEK_SEMANTIC_COMPOSER_ACTIVATION_NOT_SUPPORTED") }
         fun nowNanos(): Long
         fun sleepMillis(milliseconds: Long)
     }
@@ -152,8 +153,15 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
             check(emptyComposer(frame)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
             val label = input ?: witness(frame, text = "发消息或按住说话")
             val canFocus = label.focusAvailable || current(frame).any { it.id == label.parent && it.focusAvailable }
-            val focus = actionTarget(frame, label, focus = canFocus)
-            android.invoke(frame, focus, if (canFocus) Action.FOCUS else Action.CLICK)
+            val canClick = label.clickable && label.clickAvailable ||
+                current(frame).any { it.id == label.parent && it.clickable && it.clickAvailable }
+            if (input == null && !canFocus && !canClick) {
+                // This is a distinct semantic-object operation, never a fabricated Accessibility action.
+                android.activateEmptyComposer(frame, label)
+            } else {
+                val focus = actionTarget(frame, label, focus = canFocus)
+                android.invoke(frame, focus, if (canFocus) Action.FOCUS else Action.CLICK)
+            }
         }
         await(TongyiEngineeringRunner.INPUT_NANOS) {
             modesOff(it) && editor(it)?.let { n -> n.enabled && n.focused && n.setTextAvailable && empty(n) } == true
