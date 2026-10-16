@@ -85,11 +85,10 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
         check(path.lastOrNull()?.id == frame.rootId) { "DEEPSEEK_ROOT_CHANGED" }
         return path
     }
-    private fun composer(frame: Frame, input: Node, other: Node? = null): Node {
-        val thinking = mode(frame, "深度思考")
-        val search = mode(frame, "智能搜索")
-        val thinkingPath = ancestors(frame, thinking)
-        val searchPath = ancestors(frame, search)
+    private val requiredModes = listOf("深度思考", "智能搜索")
+    private fun composer(frame: Frame, input: Node, other: Node? = null, modeNames: List<String> = requiredModes): Node {
+        val controls = modeNames.map { it to mode(frame, it) }
+        val controlPaths = controls.map { ancestors(frame, it.second) }
         val otherPath = other?.let { ancestors(frame, it) }
         val root = frame.nodes.single { it.id == frame.rootId }
         fun modeContained(control: Node, label: String, container: Node): Boolean {
@@ -99,11 +98,11 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
                 inside(semantic.bounds, container.bounds)
         }
         return ancestors(frame, input).firstOrNull { it.id != root.id && it.bounds != root.bounds &&
-            it in thinkingPath && it in searchPath && (otherPath == null || it in otherPath) &&
-            inside(input.bounds, it.bounds) && modeContained(thinking, "深度思考", it) && modeContained(search, "智能搜索", it) &&
+            controlPaths.all { path -> it in path } && (otherPath == null || it in otherPath) &&
+            inside(input.bounds, it.bounds) && controls.all { (name, control) -> modeContained(control, name, it) } &&
             (other == null || inside(other.bounds, it.bounds)) } ?: error("DEEPSEEK_SHARED_COMPOSER_REQUIRED")
     }
-    private fun emptyComposer(frame: Frame): Boolean {
+    private fun emptyComposer(frame: Frame, modeNames: List<String> = requiredModes): Boolean {
         editor(frame)?.let { return empty(it) }
         val hints = current(frame).filter { it.text == "发消息或按住说话" && it.className == "android.widget.TextView" && !it.editable }
         if (hints.size != 1) return false
@@ -112,7 +111,7 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
             it.className == "androidx.compose.ui.viewinterop.ViewFactoryHolder" && !it.editable &&
             it.text.isEmpty() && it.description.isEmpty() } ?: return false
         if (frame.nodes.filter { it.parent == holder.id }.singleOrNull() != hint || !inside(hint.bounds, holder.bounds)) return false
-        composer(frame, hint) // Same bounded, non-root composer as the two checked mode controls, not arbitrary body text.
+        composer(frame, hint, modeNames = modeNames) // Same bounded composer; pending checks still validate every present control.
         return true
     }
     fun modesOff(frame: Frame) = !mode(frame, "深度思考").checked && !mode(frame, "智能搜索").checked
@@ -120,6 +119,9 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
     private fun read(): Frame { gate(); return validate(android.read()).also { gate() } }
     private fun await(budget: Long, predicate: (Frame) -> Boolean): Frame {
         val until = minOf(preparationDeadline, android.nowNanos() + budget)
+        return awaitUntil(until, predicate)
+    }
+    private fun awaitUntil(until: Long, predicate: (Frame) -> Boolean): Frame {
         while (true) {
             check(android.nowNanos() < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
             val frame = read()
@@ -127,18 +129,34 @@ class DeepSeekUiAdapter(private val android: Android, private val preparationDea
             android.sleepMillis(50)
         }
     }
+    private fun currentModesReady(frame: Frame): Boolean {
+        check(editor(frame)?.let(::empty) != false) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
+        val visible = current(frame)
+        val present = requiredModes.filter { name ->
+            val count = visible.count { it.text == name }
+            check(count <= 1) { "DEEPSEEK_SEMANTIC_WITNESS_NOT_UNIQUE" }
+            count == 1
+        }
+        // Missing alone is pending. Malformed present controls, ancestry, empty
+        // hint/editor or composer remain hard refusals, without another acquisition.
+        check(emptyComposer(frame, present)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
+        editor(frame)?.let { composer(frame, it, modeNames = present) }
+        return present.size == requiredModes.size
+    }
     fun prepare() {
         val initial = read()
         check(editor(initial)?.let(::empty) != false) { "UNKNOWN_DRAFT_NOT_TOUCHED" }
         check(emptyComposer(initial)) { "DEEPSEEK_INITIAL_EMPTY_COMPOSER_REQUIRED" }
         android.invoke(initial, actionTarget(initial, witness(initial, description = "开启新对话")), Action.CLICK)
-        await(TongyiEngineeringRunner.READY_NANOS) { frame ->
+        val readyUntil = minOf(preparationDeadline, android.nowNanos() + TongyiEngineeringRunner.READY_NANOS)
+        awaitUntil(readyUntil) { frame ->
             val visible = current(frame)
             visible.count { it.text == "新对话" } == 1 && visible.count { it.text == "今天有什么可以帮到你？" } == 1 &&
                 emptyComposer(frame)
         }
-        for (label in listOf("深度思考", "智能搜索")) {
-            val frame = read()
+        for (label in requiredModes) {
+            val frame = awaitUntil(readyUntil, ::currentModesReady)
+            check(android.nowNanos() < readyUntil) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
             val parent = mode(frame, label)
             if (parent.checked) {
                 check(emptyComposer(frame)) { "UNKNOWN_DRAFT_NOT_TOUCHED" }

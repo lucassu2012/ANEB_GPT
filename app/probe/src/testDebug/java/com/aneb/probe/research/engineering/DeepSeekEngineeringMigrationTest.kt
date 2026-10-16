@@ -360,6 +360,98 @@ class DeepSeekEngineeringMigrationTest {
         assertTrue("no new-session/mode/focus action on an unbound semantic label", requested.isEmpty())
     }
 
+    @Test fun currentModeControlsMayBecomeCompleteOnlyWithinTheOriginalNewSessionReadyDeadline() {
+        val android = SemanticComposerAndroid()
+        var reads = 0
+        var incompleteReturned = false
+        val requests = mutableListOf<String>()
+        val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun read(): DeepSeekUiAdapter.Frame {
+                val complete = android.read()
+                reads++
+                if (reads == 4) {
+                    incompleteReturned = true
+                    return missingSearchCurrentFrame(complete)
+                }
+                // Explicit SYNTHETIC complete successor, not a saved R4 recovery frame.
+                return complete
+            }
+            override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+                check(incompleteReturned && frame == android.read() && label.parent == control.id && control.checked)
+                requests += label.text
+                error("EXTERNAL_COMPLETE_CURRENT_MODE_BOUNDARY_STOP")
+            }
+            override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) =
+                error("FOCUS_OR_INPUT_MUST_NOT_BE_REACHED")
+        }
+        val started = android.now
+        val failure = runCatching { DeepSeekUiAdapter(boundary, started + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("wait for complete current controls before requesting the mode: ${failure?.message}", listOf("智能搜索"), requests)
+        assertEquals("EXTERNAL_COMPLETE_CURRENT_MODE_BOUNDARY_STOP", failure?.message)
+        assertTrue(incompleteReturned)
+        assertTrue("complete current controls must arrive within the original READY deadline",
+            android.now < started + TongyiEngineeringRunner.READY_NANOS)
+        assertEquals(listOf("public-22:CLICK"), android.actions)
+        assertTrue(android.activations.isEmpty())
+        assertTrue(android.searchOn)
+    }
+
+    @Test fun persistentlyMissingCurrentModeExpiresAtTheNearSpentOriginalReadyDeadlineWithoutAnyModeOrFocusAction() {
+        // Honest post-GREEN regression. Time and the complete ready response are
+        // external fixtures, not modelled phone latency or an observed R4 successor.
+        val android = SemanticComposerAndroid()
+        val started = android.now
+        val originalReadyUntil = started + TongyiEngineeringRunner.READY_NANOS
+        var reads = 0
+        val requests = mutableListOf<String>()
+        val boundary = object : DeepSeekUiAdapter.Android by android {
+            override fun read(): DeepSeekUiAdapter.Frame {
+                val complete = android.read()
+                reads++
+                if (reads == 2) android.now = originalReadyUntil - 50_000_000L
+                return if (reads >= 3) missingSearchCurrentFrame(complete) else complete
+            }
+            override fun activateCheckedMode(frame: DeepSeekUiAdapter.Frame, label: DeepSeekUiAdapter.Node, control: DeepSeekUiAdapter.Node) {
+                requests += "mode:${label.text}"
+                error("NO_MODE_ACTION_WHILE_A_REQUIRED_CONTROL_IS_MISSING")
+            }
+            override fun activateEmptyComposer(frame: DeepSeekUiAdapter.Frame, hint: DeepSeekUiAdapter.Node) {
+                requests += "composer:${hint.id}"
+                error("NO_FOCUS_OR_INPUT_WHILE_A_REQUIRED_CONTROL_IS_MISSING")
+            }
+        }
+        val failure = runCatching { DeepSeekUiAdapter(boundary, started + TongyiEngineeringRunner.PREP_NANOS).prepare() }.exceptionOrNull()
+        assertEquals("DEEPSEEK_PUBLIC_READINESS_EXPIRED", failure?.message)
+        assertEquals("expiry is at the original absolute READY deadline, never a restarted20/5", originalReadyUntil, android.now)
+        assertTrue(requests.isEmpty())
+        assertEquals(listOf("public-22:CLICK"), android.actions)
+        assertTrue(android.activations.isEmpty())
+        assertTrue(android.searchOn)
+        assertFalse(android.read().nodes.any { it.editable })
+    }
+
+    private fun missingSearchCurrentFrame(complete: DeepSeekUiAdapter.Frame): DeepSeekUiAdapter.Frame {
+        // R4-shaped public fields: no search/upload/title/welcome, OFF thinking,
+        // owned empty hint and the "already new chat" message. IDs/window/owner
+        // are consistently synthetic; no saved private JSON or action successor is embedded.
+        val absent = setOf("public-12", "public-19", "public-20", "public-38", "public-39",
+            "public-40", "public-41", "public-42", "public-43")
+        val nodes = complete.nodes.filterNot { it.id in absent }.map { node -> when (node.id) {
+            "public-21", "public-22" -> node.copy(bounds = Bounds(1104,160,1194,304))
+            "public-23" -> node.copy(bounds = Bounds(1104,196,1158,268))
+            "public-31" -> node.copy(bounds = Bounds(36,2304,1164,2430))
+            "public-32" -> node.copy(bounds = Bounds(66,2304,1134,2430))
+            "public-35" -> node.copy(bounds = Bounds(36,2478,96,2574))
+            "public-44" -> node.copy(bounds = Bounds(1104,2430,1170,2622))
+            else -> node
+        } } + listOf(
+            DeepSeekUiAdapter.Node("pending-message-root", "public-7", Bounds(96,0,1104,2640)),
+            DeepSeekUiAdapter.Node("pending-message-holder", "pending-message-root", Bounds(443,1248,758,1392)),
+            DeepSeekUiAdapter.Node("pending-message", "pending-message-holder", Bounds(443,1287,758,1353),
+                text = "已经在新对话中", className = "android.widget.TextView"))
+        return complete.copy(nodes = nodes)
+    }
+
     @Test fun checkedSearchUsesOneSemanticModeRequestBeforeAnyPointerOrComposerActivation() {
         val android = SemanticComposerAndroid()
         val modeRequests = mutableListOf<String>()

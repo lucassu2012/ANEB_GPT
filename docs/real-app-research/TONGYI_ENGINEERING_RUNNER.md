@@ -188,6 +188,15 @@ action IDs 不改写；公开对象匹配不冒称 native-handle alias。void �
 composer 激活策略不改。操作是否在当前实机生效必须由 Root 新机会实际验收。
 这只证明可见深度思考 OFF/智能搜索 OFF，不证明 backend 工具、模型或会话身份。
 
+新会话 ready wait 开始时只创建一个绝对 READY20 截止（仍取 PREP180 最小值），并沿用到
+其后的 pre-mode 当前控件读取。只有必需精确模式 label 数为0时，才在原剩余时间内只读
+PENDING；缺失不当 OFF，不创建第二个20秒或5秒预算、不重用旧 Frame。每次先拒绝已知
+非空/替换草稿，并检查所有实际在场模式父/祖先/几何和空提示或 editor 的 bounded composer；
+重复、错误 owner/window/root、畸形关系仍立即拒绝。只有两 label/直接支持动作父及真实空
+共享 composer 同时齐全的 fresh Frame 才进入原模式决策；Native 的 fresh 全量比较、原
+post-action OFF5、focus/input5 和 cleanup20 不变。外部 fixture 的完整后继不证明设备会恢复，
+此前真实失败不重放、不回填 PASS；实际 DeepSeek 准备/输入资格仍须新机会另验。
+
 composer 优先保留整个真实模式动作父被非全屏共享容器包含的路径。只有动作父越出该
 容器时，才允许同一 Frame 中唯一可见、正面积的语义 label 同时完整位于自己的真实
 直接 checked/clickable/支持动作父及共享容器内；动作父仍须在 root 内并保留共同祖先、
