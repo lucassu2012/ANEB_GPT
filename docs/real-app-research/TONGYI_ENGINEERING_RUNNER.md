@@ -384,3 +384,57 @@ min(PREP,until)；读前后先保留 PREP 到期优先，再拒绝本次 until �
 仍可实现；Kotlin by 委托型测试 fixture 显式桥接到其原 read，防止默认委托绕过外部输入。
 现有接口自然 RED→GREEN 只证明迟到 OFF 不再被接受，不证明真实 provider 刷新修复；
 Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链，D2 不回填通过。
+
+## KimiChat 同采集器 COLLECTION（源码接入，实机整对仍待验）
+
+［KNOWN｜HIGH］Kimi closed profile 为 `kimi` / `com.moonshot.kimichat`，不是 KimiClaw。
+复用现有 Core、NativePhone、HOST `run_pair`、W1→C1、原件及 Reader 私有格式；不新增 collector。
+仅开放 COLLECTION，旧 preparation/UIQ/source-inspection 仍拒绝该 target。
+本节为 Root 在 KIMI_WHOLE_COLLECTION_CARD 中明确批准的新 Kimi 动作合同；
+不替换上述 Tongyi/DeepSeek 的 A11y CLICK 合同，也不继承 DeepSeek 的 OFF/OFF 或 backend-mode 结论。
+
+```json
+{
+  "binding_scope": "current_owned_kimi_ui",
+  "capture_backend": "android_media_projection_v1",
+  "new_session_text_only_attachment_contract": true,
+  "attachment_resource_ids": [],
+  "kimi_contract": {
+    "send_description": "发送讯息",
+    "invocation_backend": "public_uiobject2_semantic_click_v1",
+    "invocation_authorized": false
+  }
+}
+```
+
+［KNOWN｜HIGH］R5 的 bounded noSEND 实物证明固定239B输入、同身份回读、自有选区/一次DEL/空读，
+以及独立 cold-open empty；不证明普通采集或 SEND。保存的 SEND 语义及小父真实不可点击且无 ACTION_CLICK；
+源码不得把这些 false 字段改为 true，或点击整个输入区域的大父。Root 只能在新的固定实际 release 中授权 true；
+示例 false 不是执行许可，不是已有 Android Projection token。
+
+当前空主页必须仍满足已实测的 greeting/hint/唯一 editor/快速与进阶可见关系，否则 UNKNOWN；
+不猜新会话入口或 C1 UI。普通文本资格仅为当前文本 composer 与显式新空态/无附件合同，不推断后台模式。
+发送角色是当前唯一精确描述/包/类的正面积小语义对象，必须与同一个完整239B editor 处于有界非全屏
+composer 中，直接小父唯一包含该语义子节点，祖先关系、owner/window/原 raw editor-parent 身份必须成立。
+不向上找 clickable 大父，不以图标、历史 id/bounds/窗口号或假 ACTION_CLICK 作为能力。
+
+真正操作由同一 `resolve→ONE current generation→operation` 事务完成。Native 找当前唯一公开 UiObject2，
+将对象及直接父的公开原文/描述/包/类/visible bounds/enabled 与这份完整 Frame 的小目标关系逐字核对；
+原 raw 角色/祖先身份、活动 window、同 Projection session active、明确 Boolean authority 和原5秒门仍必需。
+只执行一次零参数 `UiObject2.click()`，这是明确的公共语义对象主路径，不是 A11y CLICK、坐标入口、
+先失败再 fallback、IME/Enter、重试或 native alias 证明。Core 源码不变：先 fsync SEND_INTENT，
+调用前 UNKNOWN、正常返回后1；1 不表示送达/回复/网络性能。
+
+［KNOWN｜HIGH］普通 Kimi 清理在重置绑定前捕获自有草稿义务，在原 owner/current target 边界内用同一 walker
+取得一次完整当前代，判别同 raw editor/parent/window 的已空、自有 exact239B 残稿、未知替换。
+已空必须由实际当前复制值证明；残稿走不变的严格全选/一次DEL/新空读；未知替换不碰。
+缺节点、进程已消失、换前台、stop 成功或 Launcher 本身不抵消该义务。
+仅已进入 Kimi COLLECTION 自有清理的调用方可显式选择原 cleanup20 截止，不用已过期 PREP 冒充清理事实，
+不重置或续期 PREP；默认 walker 及所有 PREP/input/SEND 门保持不变。R5 noSEND 清理义务保持原专用确认。
+
+［KNOWN｜HIGH］录制仍走现有正常 MediaProjection OS consent/session/FGS/MP4/MediaExtractor，
+不代授权、不复用未知 grant、不改 appops。HOST 保持 W1 闭合才 C1、原 supervisor/CANCEL、原件保留/pins、
+网络设置和 THIS Reader 原包恢复。部分失败、UNKNOWN/NA 与 R4 false-cleanup 保留；不补旧机会。
+源码/JVM/HOST fixture GREEN 不等于 Native 设备资格。须由 Root 后续固定候选完整门/CI/APK、新实际整对、
+有界原件分析及新 Kimi Reader 导入/查看/冷重开验收；旧 DeepSeek Reader 验收不外推。
+formal0、metrics=null、reference=false、RPI=not_computed，冻结239B/W1-C1/时钟/预算/schema/claim 不变。

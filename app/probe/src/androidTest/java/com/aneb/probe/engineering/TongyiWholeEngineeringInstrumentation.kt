@@ -63,7 +63,8 @@ class TongyiWholeEngineeringInstrumentation {
         check(mode == "COLLECTION" || mode == "PREPARATION_ONLY" || mode == "UI_REFERENCE_QUALIFICATION" || mode == "UI_SOURCE_INSPECTION") { "UNKNOWN_EXECUTION_MODE" }
         val target = EngineeringTarget.fromId(args.getString("target_profile") ?: "tongyi")
         check(args.getString("target_package")?.let { it == target.packageName } != false) { "TARGET_PROFILE_PACKAGE_MISMATCH" }
-        check(target == EngineeringTarget.TONGYI || target == EngineeringTarget.DEEPSEEK && mode == "COLLECTION") { "TARGET_MODE_UNSUPPORTED" }
+        check(target == EngineeringTarget.TONGYI || target in setOf(EngineeringTarget.DEEPSEEK, EngineeringTarget.KIMI) &&
+            mode == "COLLECTION") { "TARGET_MODE_UNSUPPORTED" }
         val preparationOnly = mode == "PREPARATION_ONLY"
         val qualificationOnly = mode == "UI_REFERENCE_QUALIFICATION"
         val sourceInspectionOnly = mode == "UI_SOURCE_INSPECTION"
@@ -279,9 +280,12 @@ class TongyiWholeEngineeringInstrumentation {
         private data class DeepSeekAcquisition(val first: DeepSeekUiAdapter.Frame,
             val second: List<AccessibilityNodeInfo>, val resourceIds: List<String?>? = null)
         private val kimiDraftQualificationEnabled get() = target == EngineeringTarget.KIMI && condition == "KIMI_DRAFT_ROLE_QUALIFICATION"
+        private val kimiCollectionEnabled get() = target == EngineeringTarget.KIMI && condition in setOf("W1", "C1") &&
+            !preparationOnly && !qualificationOnly && !sourceInspectionOnly
+        private val currentKimiUiEnabled get() = kimiCollectionEnabled || (kimiDraftQualificationEnabled && draftQualificationActive)
         private val currentDeepSeekGenerationEnabled get() = (target == EngineeringTarget.DEEPSEEK &&
             condition in setOf("W1", "C1", "DEEPSEEK_DRAFT_ROLE_QUALIFICATION")) ||
-            (kimiDraftQualificationEnabled && draftQualificationActive)
+            currentKimiUiEnabled
         private data class KimiEditorBinding(val owner: OwnedProcessLifecycle.Owner, val root: AccessibilityNodeInfo,
             val editor: AccessibilityNodeInfo, val parent: AccessibilityNodeInfo, val windowId: Int)
         private var kimiPreparationBinding: KimiEditorBinding? = null // Raw identity only; never an action handle.
@@ -464,6 +468,7 @@ class TongyiWholeEngineeringInstrumentation {
             ordinaryPreInputPreparation = !preparationOnly && !qualificationOnly && !sourceInspectionOnly
             try {
                 if (target == EngineeringTarget.DEEPSEEK) return prepareDeepSeek(deadlineNanos)
+                if (target == EngineeringTarget.KIMI) return prepareKimi(deadlineNanos)
                 check(ui.getString("binding_scope") == "root_current_807_ui_frame") { "CURRENT_FRAME_CONTRACT_REQUIRED" }
                 check(ui.getString("menu_argb_sha256").lowercase() == TongyiPreparationRunner.MENU_SHA256) { "FIXED_MENU_PIN_REQUIRED" }
                 check(ui.getJSONObject("menu").length() == 0 && ui.getJSONObject("focus_hint").length() == 0) {
@@ -562,6 +567,28 @@ class TongyiWholeEngineeringInstrumentation {
             } finally {
                 ordinaryPreInputPreparation = false
             }
+        }
+
+        private fun prepareKimi(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+            check(kimiCollectionEnabled && ui.keys().asSequence().toSet() == setOf("binding_scope", "capture_backend",
+                "attachment_resource_ids", "new_session_text_only_attachment_contract", "kimi_contract") &&
+                ui.getString("binding_scope") == "current_owned_kimi_ui" &&
+                ui.getString("capture_backend") == "android_media_projection_v1" &&
+                ui.get("new_session_text_only_attachment_contract") == true && ui.getJSONArray("attachment_resource_ids").length() == 0) {
+                "KIMI_TARGET_UI_CONTRACT_REQUIRED"
+            }
+            val contract = ui.getJSONObject("kimi_contract")
+            check(contract.keys().asSequence().toSet() == setOf("send_description", "invocation_backend", "invocation_authorized") &&
+                contract.getString("send_description") == "发送讯息" &&
+                contract.getString("invocation_backend") == "public_uiobject2_semantic_click_v1" &&
+                contract.get("invocation_authorized") is Boolean) { "KIMI_TARGET_UI_CONTRACT_REQUIRED" }
+            prepareProjectionCapture(deadlineNanos)
+            launchOwned(deadlineNanos)
+            kimiAdapter().prepareEmpty() // Current proved empty-home path only; no invented new-chat or mode operation.
+            freshEmpty = true
+            saveOriginals("new-empty")
+            ordinaryPreInputPreparation = false
+            return snapshot()
         }
 
         private fun prepareDeepSeek(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
@@ -1105,7 +1132,9 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         /** Refresh before descending, then use exactly these copied values. No retained ancestor is refreshed later. */
-        private fun currentDeepSeekGeneration(until: Long): DeepSeekAcquisition {
+        private fun currentDeepSeekGeneration(until: Long, kimiCleanupOwner: OwnedProcessLifecycle.Owner? = null): DeepSeekAcquisition {
+            if (kimiCleanupOwner != null) check(kimiCollectionEnabled && targetOwner == kimiCleanupOwner &&
+                cleanupPhase == "target_owned_draft_classify") { "KIMI_OWNED_CLEANUP_SCOPE_REQUIRED" }
             val handles = ArrayList<AccessibilityNodeInfo>()
             val values = ArrayList<DeepSeekUiAdapter.Node>()
             val resources = ArrayList<String?>()
@@ -1113,8 +1142,13 @@ class TongyiWholeEngineeringInstrumentation {
             var path = "0"
             var attempted: JSONObject? = null
             fun gate() {
-                deepSeekReadGate(until)
-                check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
+                if (kimiCleanupOwner == null) deepSeekReadGate(until)
+                else {
+                    // Same original cleanup20 cutoff, not a renewed or bypassed preparation/action deadline.
+                    val now = SystemClock.elapsedRealtimeNanos()
+                    check(kimiCollectionEnabled && targetOwner == kimiCleanupOwner && now < until) { "OWN_DRAFT_CLEAR_CLOSURE_EXPIRED" }
+                }
+                if (kimiCleanupOwner == null) check(!File(root, "CANCEL").exists()) { "CANCELLED_NO_RETRY" }
             }
             fun inside(a: TongyiPreparationRunner.Bounds, b: TongyiPreparationRunner.Bounds) =
                 a.right > a.left && a.bottom > a.top && a.left >= b.left && a.top >= b.top &&
@@ -1335,7 +1369,7 @@ class TongyiWholeEngineeringInstrumentation {
         private fun deepSeekCopiedActionMatches(baseline: DeepSeekUiAdapter.Frame, current: DeepSeekUiAdapter.Frame,
             roles: List<DeepSeekUiAdapter.Node>, kimiEmptyEditorFocus: Boolean): Boolean {
             if (!kimiEmptyEditorFocus) return current == baseline
-            if (!kimiDraftQualificationEnabled || !draftQualificationActive || roles.size != 1 ||
+            if (!currentKimiUiEnabled || roles.size != 1 ||
                 current.owner != baseline.owner || current.windowId != baseline.windowId ||
                 current.width != baseline.width || current.height != baseline.height ||
                 current.rotation != baseline.rotation || current.rootId != baseline.rootId) return false
@@ -1460,7 +1494,7 @@ class TongyiWholeEngineeringInstrumentation {
             }
 
         private fun requireKimiEditorBinding(acquisition: DeepSeekAcquisition, establish: Boolean = false) {
-            check(kimiDraftQualificationEnabled && draftQualificationActive) { "KIMI_NO_SEND_CAPABILITY_REQUIRED" }
+            check(currentKimiUiEnabled) { "KIMI_CURRENT_UI_CAPABILITY_REQUIRED" }
             val frame = acquisition.first
             val editor = currentDeepSeekEditor(acquisition)
             val parentValue = checkNotNull(editor.parent?.toIntOrNull()?.let(frame.nodes::getOrNull)) {
@@ -1483,7 +1517,7 @@ class TongyiWholeEngineeringInstrumentation {
                 binding.parent == parent && binding.windowId == frame.windowId) { "KIMI_PREPARED_EDITOR_RAW_IDENTITY_CHANGED" }
         }
 
-        private fun kimiAdapter() = KimiUiAdapter(object : KimiUiAdapter.Android {
+        private fun kimiAdapter(): KimiUiAdapter = KimiUiAdapter(object : KimiUiAdapter.Android {
             override fun nowNanos() = SystemClock.elapsedRealtimeNanos()
             override fun sleepMillis(milliseconds: Long) = SystemClock.sleep(milliseconds)
             override fun read(until: Long): DeepSeekUiAdapter.Frame {
@@ -1494,7 +1528,7 @@ class TongyiWholeEngineeringInstrumentation {
                 return acquisition.first
             }
             override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
-                check(kimiDraftQualificationEnabled && draftQualificationActive) { "KIMI_NO_SEND_CAPABILITY_REQUIRED" }
+                check(currentKimiUiEnabled) { "KIMI_CURRENT_UI_CAPABILITY_REQUIRED" }
                 deepSeekCurrentAction(frame, listOf(editor), { Unit }, deadlineNanos = until,
                     kimiEmptyEditorFocus = true) { current, _, _, activeUntil ->
                     requireKimiEditorBinding(current)
@@ -1502,11 +1536,44 @@ class TongyiWholeEngineeringInstrumentation {
                     check(value.visible && value.enabled && value.editable && value.className == "android.widget.EditText" &&
                         deepSeekEmpty(value) && !value.focused && value.focusAvailable) { "KIMI_CURRENT_EMPTY_FOCUS_REQUIRED" }
                     // The existing central acquisition/cache only; no extra walk or later action budget for retention I/O.
-                    writeDraftQualificationNodes("new-empty-prefocus-nodes.json")
+                    if (draftQualificationActive) writeDraftQualificationNodes("new-empty-prefocus-nodes.json")
                     requireDeepSeekActionWindow(current, activeUntil)
                     deepSeekActionGate(activeUntil)
                     check(current.second[value.id.toInt()].performAction(AccessibilityNodeInfo.ACTION_FOCUS)) { "KIMI_PUBLIC_FOCUS_REFUSED" }
                     deepSeekActionGate(activeUntil)
+                }
+            }
+            override fun clickCurrentSemanticSend(frame: DeepSeekUiAdapter.Frame, send: DeepSeekUiAdapter.Node, until: Long) {
+                check(kimiCollectionEnabled && !draftQualificationActive) { "KIMI_COLLECTION_SEND_REQUIRED" }
+                val editor = frame.nodes.single { it.visible && it.editable }
+                deepSeekCurrentAction(frame, listOf(editor, send), {
+                    val contract = ui.getJSONObject("kimi_contract")
+                    check(contract.get("invocation_authorized") is Boolean && contract.getBoolean("invocation_authorized") &&
+                        contract.getString("invocation_backend") == "public_uiobject2_semantic_click_v1" &&
+                        contract.getString("send_description") == send.description) { "KIMI_SEND_INVOCATION_NOT_AUTHORIZED" }
+                    val session = checkNotNull(projectionSession) { "PROJECTION_OWNED_SETUP_REQUIRED" }
+                    session.requireRecordingActive()
+                    val objects = device.findObjects(By.pkg(TARGET).desc(send.description).clazz(send.className))
+                    check(objects.size == 1) { "KIMI_PUBLIC_SEND_OBJECT_NOT_UNIQUE" }
+                    val semantic = objects.single()
+                    Triple(semantic, checkNotNull(semantic.parent) { "KIMI_PUBLIC_SEND_PARENT_MISSING" }, session)
+                }, deadlineNanos = until) { current, _, publicObjects, activeUntil ->
+                    requireKimiEditorBinding(current)
+                    val inputValue = currentDeepSeekEditor(current)
+                    val input = current.second[inputValue.id.toInt()]
+                    val currentSend = checkNotNull(kimiAdapter().sendCandidate(current.first, send.description)) { "KIMI_CURRENT_SEND_REQUIRED" }
+                    check(currentSend == send && ordinaryOwnDraftOwner == targetOwner && input == ordinaryOwnDraft &&
+                        inputValue.parent?.toIntOrNull()?.let { current.second[it] } == ordinaryOwnDraftParent &&
+                        inputValue.windowId == ordinaryOwnDraftWindow) { "KIMI_SEND_DRAFT_BINDING_CHANGED" }
+                    val parent = current.first.nodes.single { it.id == currentSend.parent }
+                    val (semantic, publicParent, session) = publicObjects
+                    check(deepSeekPublicMatches(semantic, currentSend) && deepSeekPublicMatches(publicParent, parent) &&
+                        semantic.parent == publicParent) { "KIMI_PUBLIC_SEND_RELATION_CHANGED" }
+                    check(projectionSession === session) { "CURRENT_CAPTURE_SESSION_CHANGED" }
+                    session.requireRecordingActive()
+                    requireDeepSeekActionWindow(current, activeUntil)
+                    deepSeekActionGate(activeUntil)
+                    semantic.click() // One primary public semantic-object operation; never A11y CLICK or coordinates/fallback.
                 }
             }
         }, preparationDeadline)
@@ -1680,7 +1747,10 @@ class TongyiWholeEngineeringInstrumentation {
                     editor.windowId == frame.windowId && editor.enabled && editor.focused && editor.setTextAvailable &&
                     !editor.showingHint && editor.text == TongyiEngineeringRunner.PAYLOAD &&
                     editor.text.toByteArray(Charsets.UTF_8).size == 239) { "DEEPSEEK_OWNED_DRAFT_REQUIRED" }
-                val candidate = deepSeekAdapter().sendCandidate(frame, ui.getJSONObject("deepseek_contract").getString("send_description"))
+                if (target == EngineeringTarget.KIMI) requireKimiEditorBinding(acquisition)
+                val candidate = (if (target == EngineeringTarget.KIMI)
+                    kimiAdapter().sendCandidate(frame, ui.getJSONObject("kimi_contract").getString("send_description"))
+                    else deepSeekAdapter().sendCandidate(frame, ui.getJSONObject("deepseek_contract").getString("send_description")))
                     ?: return null
                 // Pure role proof from THIS full acquisition; no mutation/resample or second confirmation tree.
                 check(targetOwner == owner && ordinaryOwnDraftOwner == owner && input == ordinaryOwnDraft &&
@@ -1718,7 +1788,7 @@ class TongyiWholeEngineeringInstrumentation {
             deepSeekActionGate(until)
             run {
                 val acquisition = deepSeekFrame(until)
-                if (kimiDraftQualificationEnabled) requireKimiEditorBinding(acquisition)
+                if (target == EngineeringTarget.KIMI) requireKimiEditorBinding(acquisition)
                 val editor = currentDeepSeekEditor(acquisition)
                 input = acquisition.second[editor.id.toInt()]
                 check(editor.enabled && editor.focused && deepSeekEmpty(editor) && editor.setTextAvailable) {
@@ -1741,7 +1811,7 @@ class TongyiWholeEngineeringInstrumentation {
             check(SystemClock.elapsedRealtimeNanos() - started <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_FIVE_SECOND_LIMIT" }
             // SET_TEXT deliberately invalidates the pre-action values; only the SAME editor/parent may read back.
             val acquisition = deepSeekFrame(until)
-            if (kimiDraftQualificationEnabled) requireKimiEditorBinding(acquisition)
+            if (target == EngineeringTarget.KIMI) requireKimiEditorBinding(acquisition)
             val value = currentDeepSeekEditor(acquisition)
             val readback = acquisition.second[value.id.toInt()]
             check(targetOwner == owner && readback == input &&
@@ -1799,6 +1869,7 @@ class TongyiWholeEngineeringInstrumentation {
             projectionSession?.requireHealthy()
             if (!currentDeepSeekGenerationEnabled) requireOwnedCurrent() // DeepSeek's full central bookends cover this boundary.
             val current = if (currentDeepSeekGenerationEnabled) deepSeekFrame() else null
+            if (target == EngineeringTarget.KIMI && current != null) requireKimiEditorBinding(current)
             val currentEditor = current?.let(::currentDeepSeekEditor)
             val input = if (current != null) current.second[checkNotNull(currentEditor).id.toInt()] else editNode()
             val network = context.getSystemService(ConnectivityManager::class.java)
@@ -1823,7 +1894,8 @@ class TongyiWholeEngineeringInstrumentation {
             }
             val empty = currentEditor?.let(::deepSeekEmpty) ?: currentEmpty(input)
             val deepSeek = current ?: if (target == EngineeringTarget.DEEPSEEK) deepSeekFrame() else null
-            val ordinaryTextVisible = if (deepSeek != null) deepSeekAdapter().modesOff(deepSeek.first)
+            val ordinaryTextVisible = if (target == EngineeringTarget.KIMI && deepSeek != null) kimiAdapter().ordinaryTextReady(deepSeek.first)
+                else if (deepSeek != null) deepSeekAdapter().modesOff(deepSeek.first)
                 else matching("ordinary_mode").size == 1
             val composerText = if (empty) "" else currentEditor?.text ?: input.text?.toString().orEmpty()
             val composerFocused = currentEditor?.focused ?: input.isFocused
@@ -2034,6 +2106,12 @@ class TongyiWholeEngineeringInstrumentation {
 
         override fun sendOnce() {
             check(!preparationOnly) { "PREPARATION_SEND_UNREACHABLE" }
+            if (kimiCollectionEnabled) {
+                val expected = checkNotNull(deepSeekSendExpectedFrame) { "KIMI_SEND_FRAME_BASELINE_MISSING" }
+                deepSeekSendExpectedFrame = null // One-use identity baseline; this does not authorize the invocation.
+                kimiAdapter().sendOnce(expected, ui.getJSONObject("kimi_contract").getString("send_description"))
+                return
+            }
             if (currentDeepSeekGenerationEnabled) {
                 val expected = checkNotNull(deepSeekSendExpectedFrame) { "DEEPSEEK_SEND_FRAME_BASELINE_MISSING" }
                 deepSeekSendExpectedFrame = null // The snapshot is only a one-use identity baseline, never invocation authority.
@@ -2193,6 +2271,8 @@ class TongyiWholeEngineeringInstrumentation {
         private fun cleanupOwnedDecision(): Boolean {
             // This immutable value is established only after exact bound input readback; retain the obligation across binding reset.
             val kimiOwnedDraftClearRequired = kimiDraftQualificationEnabled && draftQualificationActive && ordinaryOwnDraftValue != null
+            val kimiCollectionDraftRequired = kimiCollectionEnabled && ordinaryOwnDraftValue != null
+            var kimiCollectionEmptyConfirmed = false // Capture the obligation before any binding reset below.
             try {
                 var clean = preparationOnly || runCatching { stopOwnedRecording() }.onFailure { original ->
                     if (recordingCleanupFailure == null) recordingCleanupFailure =
@@ -2216,7 +2296,24 @@ class TongyiWholeEngineeringInstrumentation {
                             check(context.packageManager.getApplicationInfo(TARGET, 0).uid == targetUid)
                             cleanupPhase = "target_current_package"
                             if (device.currentPackageName == TARGET) {
-                                if (kimiOwnedDraftClearRequired) {
+                                if (kimiCollectionDraftRequired) {
+                                    cleanupPhase = "target_owned_draft_classify"
+                                    val current = currentDeepSeekGeneration(closureDeadline, kimiCleanupOwner = owner)
+                                    requireKimiEditorBinding(current)
+                                    val value = currentDeepSeekEditor(current)
+                                    check(ordinaryOwnDraftOwner == owner && current.second[value.id.toInt()] == ordinaryOwnDraft &&
+                                        value.parent?.toIntOrNull()?.let { current.second[it] } == ordinaryOwnDraftParent &&
+                                        value.windowId == ordinaryOwnDraftWindow && value.visible && value.enabled) {
+                                        "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED"
+                                    }
+                                    if (deepSeekEmpty(value)) kimiCollectionEmptyConfirmed = true
+                                    else {
+                                        check(!value.showingHint && value.text == TongyiEngineeringRunner.PAYLOAD &&
+                                            value.text.toByteArray(Charsets.UTF_8).size == 239) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
+                                        clearExactOwnedDraft(owner, closureDeadline) // Original exact selection/oneDEL/fresh-empty/closure path.
+                                        kimiCollectionEmptyConfirmed = true
+                                    }
+                                } else if (kimiOwnedDraftClearRequired) {
                                     cleanupPhase = "target_owned_draft_clear"
                                     clearExactOwnedDraft(owner, closureDeadline)
                                 } else {
@@ -2260,7 +2357,8 @@ class TongyiWholeEngineeringInstrumentation {
                     processes.requirePackageAbsent(TARGET, readDeadline())
                 }.isSuccess
                 return clean && targetClosed && noTarget && device.currentPackageName == "com.huawei.android.launcher" &&
-                    (!kimiOwnedDraftClearRequired || draftQualificationEmptyConfirmed == true)
+                    (!kimiOwnedDraftClearRequired || draftQualificationEmptyConfirmed == true) &&
+                    (!kimiCollectionDraftRequired || kimiCollectionEmptyConfirmed)
             } finally {
                 // Cached failed-acquisition values only; no UI/owner/clock query and no effect on cleanup truth.
                 runCatching { persistRejectedOrdinaryMenuObservation() }

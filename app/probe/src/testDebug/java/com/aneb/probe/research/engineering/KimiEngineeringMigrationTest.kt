@@ -9,6 +9,137 @@ import org.junit.rules.TemporaryFolder
 class KimiEngineeringMigrationTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun sameCoreCollectsKimiViaOnePublicSemanticSendAndOwnCleanup() {
+        var now = 1_000_000_000L
+        var owned = false
+        var focused = false
+        var draft = ""
+        var recording = false
+        var semanticSends = 0
+        var cleaned = false
+        var baseline: DeepSeekUiAdapter.Frame? = null
+        // Only descriptor/class and small send-wrapper/editor-composer topology
+        // are grounded in R5. All owner, focus, clocks, action responses and
+        // successor frames here are external OS hypotheses, not Native proof.
+        fun current(): DeepSeekUiAdapter.Frame {
+            val viewport = TongyiPreparationRunner.Bounds(0, 0, 1200, 2640)
+            val composer = TongyiPreparationRunner.Bounds(40, 1000, 1160, 1700)
+            val input = TongyiPreparationRunner.Bounds(90, 1100, 990, 1450)
+            val send = TongyiPreparationRunner.Bounds(1000, 1530, 1130, 1660)
+            fun node(id: String, parent: String?, box: TongyiPreparationRunner.Bounds = viewport,
+                text: String = "", description: String = "", clazz: String = "android.view.View") =
+                DeepSeekUiAdapter.Node(id, parent, box, text, description, windowId = 7,
+                    packageName = "com.moonshot.kimichat", className = clazz)
+            return DeepSeekUiAdapter.Frame("EXTERNAL_KIMI_OWNER", 7, 1200, 2640, 0, "root", listOf(
+                node("root", null), node("greeting", "root", text = "测试账户，今天要和 Kimi 一起做点什么", clazz = "android.widget.TextView"),
+                node("composer", "root", composer), node("input-parent", "composer", input),
+                node("input", "input-parent", input, text = draft, clazz = "android.widget.EditText").copy(
+                    editable = true, focused = focused, focusAvailable = true, setTextAvailable = true),
+                node("hint", "input", input, text = if (draft.isEmpty()) "尽管问，带图也行" else "", clazz = "android.widget.TextView"),
+                node("modes", "root"), node("quick", "modes", text = "快速", clazz = "android.widget.TextView"),
+                node("advanced", "modes", text = "进阶", clazz = "android.widget.TextView"),
+                node("small-send-parent", "composer", send),
+                node("semantic-send", "small-send-parent", send, description = "发送讯息"),
+            ))
+        }
+        val android = object : KimiUiAdapter.Android {
+            override fun read(until: Long): DeepSeekUiAdapter.Frame { check(now < until); return current() }
+            override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
+                check(now < until && frame == current() && !focused && draft.isEmpty())
+                focused = true
+            }
+            override fun clickCurrentSemanticSend(frame: DeepSeekUiAdapter.Frame, send: DeepSeekUiAdapter.Node, until: Long) {
+                check(now < until && frame == current() && recording && draft == TongyiEngineeringRunner.PAYLOAD)
+                check(send.description == "发送讯息" && !send.clickable && !send.clickAvailable)
+                semanticSends++ // This is the explicit external public semantic-object operation, NOT A11y CLICK.
+                draft = ""
+            }
+            override fun nowNanos() = now
+            override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000L }
+        }
+        val adapter = KimiUiAdapter(android, now + TongyiEngineeringRunner.PREP_NANOS)
+        val phone = object : TongyiEngineeringRunner.Phone {
+            override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+                owned = true; adapter.prepareEmpty(); return snapshot()
+            }
+            override fun enterExact(text: String) { check(owned && focused && draft.isEmpty()); draft = text }
+            override fun snapshot(): TongyiEngineeringRunner.Snapshot {
+                val frame = current()
+                baseline = frame
+                return TongyiEngineeringRunner.Snapshot("com.moonshot.kimichat", owned,
+                    adapter.ordinaryTextReady(frame), true, draft.isEmpty(), draft, focused,
+                    adapter.sendCandidate(frame, "发送讯息") != null, "W1", true)
+            }
+            override fun saveOriginals(label: String) = Unit
+            override fun startRecording(readyDeadlineNanos: Long) { check(now < readyDeadlineNanos); recording = true }
+            override fun sendOnce() { adapter.sendOnce(checkNotNull(baseline), "发送讯息") }
+            override fun observeUntil(deadlineNanos: Long) { check(recording && semanticSends == 1); now = deadlineNanos }
+            override fun stopOwnedRecording() { recording = false }
+            override fun cleanupOwned(): Boolean { cleaned = owned && !recording && draft.isEmpty(); owned = false; return cleaned }
+        }
+        val result = TongyiEngineeringRunner(phone, { now }, EngineeringTarget.KIMI)
+            .runOnce("KIMI_PUBLIC_SEMANTIC_WHOLE", "W1", File(temporary.root, "semantic-whole"))
+        assertEquals(result.reason, "OBSERVATION_CLOSED", result.state)
+        assertEquals("1", result.sendCalls)
+        assertEquals(1, semanticSends)
+        assertTrue(result.ownedCleanup && cleaned)
+        assertFalse(recording || owned)
+        assertEquals("", draft)
+    }
+
+    @Test fun ambiguousUnknownOrChangedKimiSendNeverInvokesOrReplacesDraft() {
+        val root = TongyiPreparationRunner.Bounds(0, 0, 1200, 2640)
+        val composer = TongyiPreparationRunner.Bounds(40, 1000, 1160, 1700)
+        val input = TongyiPreparationRunner.Bounds(90, 1100, 990, 1450)
+        val send = TongyiPreparationRunner.Bounds(1000, 1530, 1130, 1660)
+        fun node(id: String, parent: String?, bounds: TongyiPreparationRunner.Bounds = root,
+            text: String = "", description: String = "", clazz: String = "android.view.View") =
+            DeepSeekUiAdapter.Node(id, parent, bounds, text, description, windowId = 7,
+                packageName = "com.moonshot.kimichat", className = clazz)
+        // External OS source/action boundary hypotheses, not real UI/provider identity proof.
+        val valid = DeepSeekUiAdapter.Frame("EXTERNAL_CURRENT_OWNER", 7, 1200, 2640, 0, "root", listOf(
+            node("root", null), node("composer", "root", composer), node("input-parent", "composer", input),
+            node("editor", "input-parent", input, TongyiEngineeringRunner.PAYLOAD, clazz = "android.widget.EditText").copy(
+                editable = true, focused = true, setTextAvailable = true),
+            node("modes", "root"), node("quick", "modes", text = "快速", clazz = "android.widget.TextView"),
+            node("advanced", "modes", text = "进阶", clazz = "android.widget.TextView"),
+            node("send-parent", "composer", send), node("send", "send-parent", send, description = "发送讯息"),
+        ))
+        for (kind in listOf("ambiguous", "unknown-draft", "changed-at-operation")) {
+            val observed = when (kind) {
+                "ambiguous" -> valid.copy(nodes = valid.nodes + valid.nodes.last().copy(id = "duplicate-send"))
+                "unknown-draft" -> valid.copy(nodes = valid.nodes.map { if (it.editable) it.copy(text = "用户未发送的私人草稿") else it })
+                else -> valid
+            }
+            val live = if (kind == "changed-at-operation") observed.copy(owner = "EXTERNAL_REPLACEMENT_OWNER") else observed
+            var invocations = 0
+            var draft = observed.nodes.single { it.editable }.text
+            val originalDraft = draft
+            val android = object : KimiUiAdapter.Android {
+                override fun read(until: Long) = live
+                override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
+                    error("UNEXPECTED_FOCUS")
+                }
+                override fun clickCurrentSemanticSend(frame: DeepSeekUiAdapter.Frame, send: DeepSeekUiAdapter.Node, until: Long) {
+                    check(frame == live) { "EXTERNAL_CURRENT_TARGET_CHANGED" }
+                    invocations++
+                    draft = ""
+                }
+                override fun nowNanos() = 1_000_000_000L
+                override fun sleepMillis(milliseconds: Long) { error("UNEXPECTED_RETRY") }
+            }
+            val failure = runCatching { KimiUiAdapter(android, 100_000_000_000L).sendOnce(observed, "发送讯息") }.exceptionOrNull()
+            val expected = when (kind) {
+                "ambiguous" -> "KIMI_SEND_SEMANTIC_NOT_UNIQUE"
+                "unknown-draft" -> "UNKNOWN_DRAFT_NOT_TOUCHED"
+                else -> "EXTERNAL_CURRENT_TARGET_CHANGED"
+            }
+            assertEquals(kind, expected, failure?.message)
+            assertEquals(kind, 0, invocations)
+            assertEquals(kind, originalDraft, draft)
+        }
+    }
+
     @Test fun sameCoreClosesOneOwnedKimiAttempt() {
         val target = EngineeringTarget.fromId("kimi")
         var now = 1_000_000_000L
