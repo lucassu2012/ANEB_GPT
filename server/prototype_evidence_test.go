@@ -22,6 +22,23 @@ import (
 	"time"
 )
 
+var prototypeEvidenceRuntimeFixture struct {
+	once       sync.Once
+	directory  string
+	binaryPath string
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if prototypeEvidenceRuntimeFixture.directory != "" {
+		if err := os.RemoveAll(prototypeEvidenceRuntimeFixture.directory); err != nil {
+			_, _ = os.Stderr.WriteString("cleanup fake evidence runtime: " + err.Error() + "\n")
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
+
 type gatedEOFBody struct {
 	entered     chan struct{}
 	released    chan struct{}
@@ -719,7 +736,22 @@ func TestPrototypeEvidenceBundledRuntimeSmoke(t *testing.T) {
 
 func buildPrototypeEvidenceRuntime(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	prototypeEvidenceRuntimeFixture.once.Do(func() {
+		prototypeEvidenceRuntimeFixture.binaryPath = compilePrototypeEvidenceRuntime(t)
+	})
+	if prototypeEvidenceRuntimeFixture.binaryPath == "" {
+		t.Fatal("fake evidence runtime build did not complete")
+	}
+	return prototypeEvidenceRuntimeFixture.binaryPath
+}
+
+func compilePrototypeEvidenceRuntime(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("", "aneb-prototype-evidence-runtime-")
+	if err != nil {
+		t.Fatalf("create fake evidence runtime directory: %v", err)
+	}
+	prototypeEvidenceRuntimeFixture.directory = root
 	sourcePath := filepath.Join(root, "main.go")
 	binaryName := "fake-evidence-runtime"
 	if runtime.GOOS == "windows" {
