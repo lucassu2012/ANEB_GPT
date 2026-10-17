@@ -52,7 +52,7 @@ data class ResearchDocument(val id: String, val root: JsonObject, val records: L
         else -> "未确认来源"
     }
     val sourceNotice: String get() = if (recordKind == "OBSERVED") {
-        "实际观察仅为输入声明，不表示成功或验收通过；本工具未打开媒体、未核验本地来源或媒体哈希，不能据此归因为网络问题。"
+        "实际观察仅为输入声明，不表示成功或验收通过；不会自动打开引用路径。显式选择、确认保存后的本机原片仅核对声明 SHA-256；文件匹配不证明观察真实性或计时准确，不能据此归因为网络问题。"
     } else {
         "虚构样例仅用于演示，不计作实际观察或实测结果。"
     }
