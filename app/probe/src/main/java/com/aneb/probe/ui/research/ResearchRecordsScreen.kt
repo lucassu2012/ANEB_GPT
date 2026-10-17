@@ -344,8 +344,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         TextButton(onClick = back, enabled = !busy) {
             Text(if (document != null && profilesOpen) "返回 App 研究索引" else if (document != null || profilesOpen) "返回研究列表" else "返回测试历史")
         }
-        if (document == null) AnebPageIntro("R1 · MANUAL", ResearchReaderCopy.title, subtitle = ResearchReaderCopy.introduction)
-        else Text("研究结果", style = MaterialTheme.typography.titleLarge)
+        Text(if (document == null) ResearchReaderCopy.title else "研究结果", style = MaterialTheme.typography.titleLarge)
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
         notice?.let { Text(it, color = colors.ink, modifier = Modifier.padding(vertical = 8.dp)) }
         val current = document
@@ -388,17 +387,22 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     selectedId = id
                 }, busy = busy, modifier = Modifier.weight(1f))
             } else {
-                OutlinedButton(onClick = { action { refresh(); profilesOpen = true } }, enabled = !busy) { Text("App 研究索引 · 已存研究") }
-                Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
-                OutlinedButton(onClick = { privateSdkOpen = true }, enabled = !busy) { Text("私有 SDK 观察 · 独立本机副本") }
-                OutlinedButton(onClick = { engineeringOpen = true }, enabled = !busy) { Text("工程采集原件 · 截图与采屏回看") }
-                Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
-                Button(onClick = {
-                    batchPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                }, enabled = !busy) { Text("批量导入原文与分析 JSON") }
-                Text("每次最多 20 个文件、总计 10 MiB；单份仍限 1 MiB。只在预览中确认后写入本机。", color = colors.muted)
-                Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item {
+                        Column(Modifier.fillMaxWidth()) {
+                            AnebPageIntro("R1 · MANUAL", ResearchReaderCopy.title, subtitle = ResearchReaderCopy.introduction)
+                            OutlinedButton(onClick = { action { refresh(); profilesOpen = true } }, enabled = !busy) { Text("App 研究索引 · 已存研究") }
+                            Button(onClick = { manualOpen = true }, enabled = !busy) { Text("新建 / 继续手工研究记录") }
+                            OutlinedButton(onClick = { privateSdkOpen = true }, enabled = !busy) { Text("私有 SDK 观察 · 独立本机副本") }
+                            OutlinedButton(onClick = { engineeringOpen = true }, enabled = !busy) { Text("工程采集原件 · 截图与采屏回看") }
+                            Button(onClick = { picker.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("导入 JSON 记录") }
+                            Button(onClick = {
+                                batchPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                            }, enabled = !busy) { Text("批量导入原文与分析 JSON") }
+                            Text("每次最多 20 个文件、总计 10 MiB；单份仍限 1 MiB。只在预览中确认后写入本机。", color = colors.muted)
+                            Text("先预览，再保存到本机。未识别的记录类型不作为实测导入。", color = colors.muted)
+                        }
+                    }
                     if (entries.isEmpty()) item { Text("暂无研究记录。可导入文本 alignment-1 或视频 research-video-1 文件；样例与观察声明分开。", color = colors.muted, modifier = Modifier.padding(vertical = 20.dp)) }
                     items(entries, key = { it.id }) { entry ->
                         Card(Modifier.fillMaxWidth()) {
@@ -520,17 +524,17 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     }
                 }) { Text("确认保存 ${current.recordKind}") }
             }
-            if (!current.isVideo) {
-                Text("按输入声明 App 查看", style = MaterialTheme.typography.labelLarge)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item { FilterChip(selected = appFilter == null, onClick = { clearAttemptTarget(); appFilter = null }, enabled = !busy, label = { Text("全部") }) }
-                    items(appFilters) { option ->
-                        FilterChip(selected = appFilter == option, onClick = { clearAttemptTarget(); appFilter = option }, enabled = !busy, label = { Text(option.label) })
-                    }
-                }
-            }
             LazyColumn(Modifier.weight(1f), state = readerListState, contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
+                    if (!current.isVideo) {
+                        Text("按输入声明 App 查看", style = MaterialTheme.typography.labelLarge)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item { FilterChip(selected = appFilter == null, onClick = { clearAttemptTarget(); appFilter = null }, enabled = !busy, label = { Text("全部") }) }
+                            items(appFilters) { option ->
+                                FilterChip(selected = appFilter == option, onClick = { clearAttemptTarget(); appFilter = option }, enabled = !busy, label = { Text(option.label) })
+                            }
+                        }
+                    }
                     Text("${current.sourceLabel} · 批次 ${current.id.take(8)}…", style = MaterialTheme.typography.labelLarge)
                     if (!current.isVideo) ResearchConversationPane(conversations, conversation, onSelect = {
                         clearAttemptTarget()

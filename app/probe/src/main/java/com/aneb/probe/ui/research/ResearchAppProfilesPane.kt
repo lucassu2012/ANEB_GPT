@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.aneb.probe.research.*
+import com.aneb.probe.ui.components.AnebPageIntro
 import kotlinx.serialization.json.JsonPrimitive
 
 @Composable
@@ -41,55 +42,60 @@ internal fun ResearchAppProfilesPane(
     val current = selectedProfile?.let { selected -> profiles.firstOrNull { it.appName == selected.appName } }
         ?: profiles.firstOrNull()
     Column(modifier) {
-        Text("App 研究索引", style = MaterialTheme.typography.titleLarge)
-        Text("按输入声明整理，未核验实际 App/来源；不同批次不自动可比。人工结论卡是原文候选，不是自动汇总或网络归因。")
-        Text("来源类型（按批次原声明）", style = MaterialTheme.typography.labelLarge)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ResearchSourceKindSelection.values().toList()) { option ->
-                FilterChip(
-                    selected = scope.sourceKind == option,
-                    onClick = { onScopeChange(scope.copy(sourceKind = option)) },
-                    enabled = !busy,
-                    label = { Text(option.displayLabel) },
-                )
-            }
-        }
-        Text("原始 condition（完整字面匹配）", style = MaterialTheme.typography.labelLarge)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                FilterChip(
-                    selected = scope.condition == ResearchConditionFilter.All,
-                    onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.All)) },
-                    enabled = !busy,
-                    label = { Text("全部 condition") },
-                )
-            }
-            item {
-                FilterChip(
-                    selected = scope.condition == ResearchConditionFilter.MissingOrUnrecognized,
-                    onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.MissingOrUnrecognized)) },
-                    enabled = !busy,
-                    label = { Text("未提供 / 无效") },
-                )
-            }
-            items(conditionValues) { value ->
-                FilterChip(
-                    selected = scope.condition == ResearchConditionFilter.Literal(value),
-                    onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.Literal(value))) },
-                    enabled = !busy,
-                    label = { Text("condition ${JsonPrimitive(value)}", maxLines = 1) },
-                )
-            }
-        }
-        if (scope != ResearchRecordScopeFilter()) {
-            TextButton(enabled = !busy, onClick = { onScopeChange(ResearchRecordScopeFilter()) }) { Text("清除来源与 condition 筛选") }
-        }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(profiles) { profile ->
-                FilterChip(selected = current?.appName == profile.appName, onClick = { onSelect(profile) }, enabled = !busy, label = { Text(profile.label) })
-            }
-        }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                Column(Modifier.fillMaxWidth()) {
+                    AnebPageIntro("R1 · MANUAL", ResearchReaderCopy.title, subtitle = ResearchReaderCopy.introduction)
+                    Text("App 研究索引", style = MaterialTheme.typography.titleLarge)
+                    Text("按输入声明整理，未核验实际 App/来源；不同批次不自动可比。人工结论卡是原文候选，不是自动汇总或网络归因。")
+                    Text("来源类型（按批次原声明）", style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(ResearchSourceKindSelection.values().toList()) { option ->
+                            FilterChip(
+                                selected = scope.sourceKind == option,
+                                onClick = { onScopeChange(scope.copy(sourceKind = option)) },
+                                enabled = !busy,
+                                label = { Text(option.displayLabel) },
+                            )
+                        }
+                    }
+                    Text("原始 condition（完整字面匹配）", style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            FilterChip(
+                                selected = scope.condition == ResearchConditionFilter.All,
+                                onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.All)) },
+                                enabled = !busy,
+                                label = { Text("全部 condition") },
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = scope.condition == ResearchConditionFilter.MissingOrUnrecognized,
+                                onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.MissingOrUnrecognized)) },
+                                enabled = !busy,
+                                label = { Text("未提供 / 无效") },
+                            )
+                        }
+                        items(conditionValues) { value ->
+                            FilterChip(
+                                selected = scope.condition == ResearchConditionFilter.Literal(value),
+                                onClick = { onScopeChange(scope.copy(condition = ResearchConditionFilter.Literal(value))) },
+                                enabled = !busy,
+                                label = { Text("condition ${JsonPrimitive(value)}", maxLines = 1) },
+                            )
+                        }
+                    }
+                    if (scope != ResearchRecordScopeFilter()) {
+                        TextButton(enabled = !busy, onClick = { onScopeChange(ResearchRecordScopeFilter()) }) { Text("清除来源与 condition 筛选") }
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(profiles) { profile ->
+                            FilterChip(selected = current?.appName == profile.appName, onClick = { onSelect(profile) }, enabled = !busy, label = { Text(profile.label) })
+                        }
+                    }
+                }
+            }
             if (current == null) item {
                 Text("当前范围没有匹配的文本批次；可清除筛选。视频与无法索引的原文件仍在下方保持可访问。")
             }
