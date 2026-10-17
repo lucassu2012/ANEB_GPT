@@ -34,6 +34,25 @@ class ReportTests(unittest.TestCase):
                      '计划：3', '发送/尝试：2', '未执行：1', '已确认完成：1', 'a' * 64]:
             self.assertIn(text, page)
 
+    def test_unconfirmed_completion_is_not_presented_as_observed_app_failure(self):
+        data = self.sample()
+        data['record_kind'] = 'OBSERVED'
+        data['counts']['visible_completed_confirmed'] = 0
+        row = data['records'][0]
+        row['input_record']['outcome'] = {
+            'executed': True, 'status': 'incomplete',
+            'visible_completion': 'uncertain', 'instruction_following': 'uncertain'}
+        row['completion']['reason'] = 'completion_unconfirmed'
+        before = json.dumps(data, sort_keys=True)
+        page = self.render(data)
+        self.assertIn('源记录状态：未标注完成（incomplete）', page)
+        self.assertIn('完成未获确认，完成时长不可用；不等于 App 失败。', page)
+        for text in ['可见完成：不确定（uncertain）', '已确认完成：0',
+                     '首次反馈：interval / 0.76–0.84 秒', '完成：NA / NA']:
+            self.assertIn(text, page)
+        self.assertNotIn('执行状态：未完成', page)
+        self.assertEqual(before, json.dumps(data, sort_keys=True))
+
     def test_visible_completion_and_missing_duration_are_not_conflated(self):
         data = self.sample()
         data['records'][0]['completion'].update(
@@ -43,10 +62,10 @@ class ReportTests(unittest.TestCase):
         self.assertIn('源标注可见完成；完成时长不可计算', page)
         self.assertIn('缺少末次正文时间（T3）', page)
         self.assertIn('连续可见覆盖未确认', page)
-        self.assertNotIn('未确认正常完成，完成时长不可用', page)
+        self.assertNotIn('完成未获确认，完成时长不可用；不等于 App 失败。', page)
         self.assertIn('可见完成按源标注计数，不等于指令成功或App成功率', page)
         data['records'][0]['completion']['reason'] = 'completion_unconfirmed'
-        self.assertIn('未确认正常完成，完成时长不可用', self.render(data))
+        self.assertIn('完成未获确认，完成时长不可用；不等于 App 失败。', self.render(data))
 
     def test_private_record_is_not_dumped_and_hostile_text_is_inert(self):
         data = self.sample()
@@ -113,7 +132,7 @@ class ReportTests(unittest.TestCase):
         page = self.render(data)
         self.assertIn('SAMPLE 演示｜没有真实 App 测量', page)
         self.assertIn('未执行，因此无此指标', page)
-        self.assertNotIn('未确认正常完成，完成时长不可用', page)
+        self.assertNotIn('完成未获确认，完成时长不可用；不等于 App 失败。', page)
         self.assertIn('未知／未提供', page)
         self.assertIn('端到端可见体验不隔离网络、模型、服务端与设备贡献', page)
 
@@ -121,14 +140,14 @@ class ReportTests(unittest.TestCase):
         data = self.sample()
         for status, flag, translated, answer in [
                 ('completed', 'yes', '已完成（completed）', '是（yes）'),
-                ('incomplete', 'uncertain', '未完成（incomplete）', '不确定（uncertain）')]:
+                ('incomplete', 'uncertain', '未标注完成（incomplete）', '不确定（uncertain）')]:
             with self.subTest(status=status):
                 data['records'][0]['input_record']['outcome'] = {
                     'executed': True, 'status': status,
                     'visible_completion': flag, 'instruction_following': flag}
                 page = self.render(data)
                 card = page.split('<section>', 1)[1].split('</section>', 1)[0]
-                self.assertIn('执行状态：' + translated, card)
+                self.assertIn('源记录状态：' + translated, card)
                 self.assertIn('可见完成：' + answer, card)
                 self.assertIn('指令满足：' + answer, card)
                 self.assertNotIn('失败', card)

@@ -17,7 +17,7 @@ def interval(value):
 
 
 def translated(value):
-    labels = {'completed': '已完成', 'incomplete': '未完成',
+    labels = {'completed': '已完成', 'incomplete': '未标注完成',
               'yes': '是', 'no': '否', 'uncertain': '不确定', 'not_run': '未执行'}
     return labels.get(value, '未知／未提供') + '（' + esc(value) + '）'
 
@@ -50,7 +50,7 @@ def render_report(data):
                      + '；模式：' + esc(row['input_record']['app'].get('model_mode') or '未知／未提供') + '</p>')
         outcome = row['input_record'].get('outcome') or {}
         not_run = outcome.get('executed') is False
-        parts.append('<p>执行状态：' + (translated('not_run') if not_run else translated(outcome.get('status')))
+        parts.append('<p>源记录状态：' + (translated('not_run') if not_run else translated(outcome.get('status')))
                      + '；可见完成：' + translated(outcome.get('visible_completion'))
                      + '；指令满足：' + translated(outcome.get('instruction_following')) + '</p>')
         evidence = row['input_record'].get('evidence') or {}
@@ -63,7 +63,7 @@ def render_report(data):
             if not_run:
                 parts.append('<p>未执行，因此无此指标</p>')
             elif metric.get('reason') == 'completion_unconfirmed':
-                parts.append('<p>未确认正常完成，完成时长不可用</p>')
+                parts.append('<p>完成未获确认，完成时长不可用；不等于 App 失败。</p>')
             elif metric.get('reason') == 'completion_timing_unavailable':
                 parts.append('<p>源标注可见完成；完成时长不可计算</p>')
                 labels = {
