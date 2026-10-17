@@ -1301,6 +1301,7 @@ class TongyiWholeEngineeringInstrumentation {
         /** One latest full generation owns this action's BEFORE/AFTER proof; baseline handles are identity-only. */
         private fun <T> deepSeekCurrentAction(frame: DeepSeekUiAdapter.Frame, roles: List<DeepSeekUiAdapter.Node>,
             resolve: () -> T, deadlineNanos: Long = Long.MAX_VALUE,
+            kimiEmptyEditorFocus: Boolean = false,
             operation: (DeepSeekAcquisition, DeepSeekAcquisition, T, Long) -> Unit) {
             val started = SystemClock.elapsedRealtimeNanos() // BEFORE lookup; never renewed after an acquisition.
             val until = minOf(preparationDeadline, started + TongyiEngineeringRunner.INPUT_NANOS, deadlineNanos)
@@ -1313,7 +1314,7 @@ class TongyiWholeEngineeringInstrumentation {
             val publicObject = resolve() // Semantic lookup only, never an action or a new baseline.
             deepSeekActionGate(until)
             val current = deepSeekFrame(until) // ONE central tree, with its full owner BEFORE AND AFTER.
-            check(current.first == frame) {
+            check(deepSeekCopiedActionMatches(frame, current.first, roles, kimiEmptyEditorFocus)) {
                 if (kimiDraftQualificationEnabled && draftQualificationActive &&
                     actionFrameFailure == null && actionFrameFailureCaptureFailure == null) {
                     try { actionFrameFailure = CopiedActionFrameFailure(baseline.first, current.first, until) }
@@ -1324,16 +1325,45 @@ class TongyiWholeEngineeringInstrumentation {
                 }
                 "DEEPSEEK_ACTION_FRAME_CHANGED"
             }
-            requireDeepSeekRoleIdentities(baseline, current, roles)
+            requireDeepSeekRoleIdentities(baseline, current, roles, kimiEmptyEditorFocus)
             deepSeekActionGate(until)
             operation(current, baseline, publicObject, until) // No baseline operation, fallback or intervening acquisition.
             check(SystemClock.elapsedRealtimeNanos() - started <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_FIVE_SECOND_LIMIT" }
         }
 
+        /** Only empty Kimi FOCUS may exclude unrelated copied nodes; raw identities remain mandatory below. */
+        private fun deepSeekCopiedActionMatches(baseline: DeepSeekUiAdapter.Frame, current: DeepSeekUiAdapter.Frame,
+            roles: List<DeepSeekUiAdapter.Node>, kimiEmptyEditorFocus: Boolean): Boolean {
+            if (!kimiEmptyEditorFocus) return current == baseline
+            if (!kimiDraftQualificationEnabled || !draftQualificationActive || roles.size != 1 ||
+                current.owner != baseline.owner || current.windowId != baseline.windowId ||
+                current.width != baseline.width || current.height != baseline.height ||
+                current.rotation != baseline.rotation || current.rootId != baseline.rootId) return false
+            val role = roles.single()
+            fun emptyEditor(frame: DeepSeekUiAdapter.Frame) = frame.nodes.singleOrNull { it.visible && it.editable }
+                ?.takeIf { it.enabled && it.className == "android.widget.EditText" &&
+                    deepSeekEmpty(it) && !it.focused && it.focusAvailable }
+            if (emptyEditor(baseline) != role || emptyEditor(current) != role) return false
+            fun ancestry(frame: DeepSeekUiAdapter.Frame): List<DeepSeekUiAdapter.Node>? {
+                val chain = ArrayList<DeepSeekUiAdapter.Node>()
+                val seen = HashSet<String>()
+                var value = frame.nodes.singleOrNull { it.id == role.id } ?: return null
+                while (true) {
+                    if (chain.size >= frame.nodes.size || !seen.add(value.id)) return null
+                    chain.add(value)
+                    val parentId = value.parent ?: return chain.takeIf { value.id == frame.rootId }
+                    value = frame.nodes.singleOrNull { it.id == parentId } ?: return null
+                }
+            }
+            val baselineChain = ancestry(baseline) ?: return false
+            return ancestry(current) == baselineChain // Complete Node equality, including ids, geometry and every capability.
+        }
+
         private fun requireDeepSeekRoleIdentities(baseline: DeepSeekAcquisition, current: DeepSeekAcquisition,
-            roles: List<DeepSeekUiAdapter.Node>) {
+            roles: List<DeepSeekUiAdapter.Node>, kimiEmptyEditorFocus: Boolean = false) {
             val frame = baseline.first
-            check(current.first == frame && roles.all { frame.nodes.singleOrNull { n -> n.id == it.id } == it }) {
+            check(deepSeekCopiedActionMatches(frame, current.first, roles, kimiEmptyEditorFocus) &&
+                roles.all { frame.nodes.singleOrNull { n -> n.id == it.id } == it }) {
                 "DEEPSEEK_ACTION_FRAME_CHANGED"
             }
             val identityIds = HashSet<String>()
@@ -1465,7 +1495,8 @@ class TongyiWholeEngineeringInstrumentation {
             }
             override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
                 check(kimiDraftQualificationEnabled && draftQualificationActive) { "KIMI_NO_SEND_CAPABILITY_REQUIRED" }
-                deepSeekCurrentAction(frame, listOf(editor), { Unit }, deadlineNanos = until) { current, _, _, activeUntil ->
+                deepSeekCurrentAction(frame, listOf(editor), { Unit }, deadlineNanos = until,
+                    kimiEmptyEditorFocus = true) { current, _, _, activeUntil ->
                     requireKimiEditorBinding(current)
                     val value = current.first.nodes[editor.id.toInt()]
                     check(value.visible && value.enabled && value.editable && value.className == "android.widget.EditText" &&
