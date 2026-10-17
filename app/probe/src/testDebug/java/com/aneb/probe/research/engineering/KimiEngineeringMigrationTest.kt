@@ -255,4 +255,60 @@ class KimiEngineeringMigrationTest {
         assertFalse(current.nodes.single { it.editable }.focused)
     }
 
+
+    @Test fun prepareEmptyAcceptsFocusedCurrentGenerationAfterDfsReindex() {
+        var now = 1_000_000_000L
+        var focused = false
+        // External OS fixture hypothesis, not actual raw Android identities or
+        // a device qualification. The valid current graph may be reindexed after
+        // focus; Native must independently retain the actual editor/parent proof.
+        fun current(): DeepSeekUiAdapter.Frame {
+            val viewport = TongyiPreparationRunner.Bounds(0, 0, 1200, 2640)
+            val editorId = if (focused) "21" else "41"
+            val parentId = if (focused) "20" else "40"
+            val editorBox = if (focused) TongyiPreparationRunner.Bounds(94, 1208, 1106, 1366)
+                else TongyiPreparationRunner.Bounds(266, 2335, 1093, 2494)
+            fun node(id: String, parent: String?, text: String = "", className: String = "android.view.View") =
+                DeepSeekUiAdapter.Node(id, parent, viewport, text = text, windowId = 43641,
+                    packageName = "com.moonshot.kimichat", className = className)
+            return DeepSeekUiAdapter.Frame("HYPOTHETICAL_KIMI_OWNER", 43641, 1200, 2640, 0, "0", listOf(
+                node("0", null, className = "android.widget.FrameLayout"),
+                node("1", "0"),
+                node("2", "1", "测试账户，今天要和 Kimi 一起做点什么", "android.widget.TextView"),
+                node(parentId, "0").copy(bounds = editorBox),
+                node(editorId, parentId, className = "android.widget.EditText").copy(
+                    bounds = editorBox, editable = true, focused = focused, focusAvailable = true),
+                node(if (focused) "22" else "42", editorId, "尽管问，带图也行",
+                    "android.widget.TextView").copy(bounds = editorBox),
+                node("6", "0").copy(clickable = true),
+                node("7", "6", "快速", "android.widget.TextView"),
+                node("8", "6", "进阶", "android.widget.TextView"),
+            ))
+        }
+        val android = object : KimiUiAdapter.Android {
+            override fun read(until: Long): DeepSeekUiAdapter.Frame {
+                check(now < until)
+                return current()
+            }
+
+            override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame,
+                editor: DeepSeekUiAdapter.Node, until: Long) {
+                check(now < until && frame == current() && !focused)
+                check(editor.id == "41" && editor.parent == "40" && editor.focusAvailable && editor.text.isEmpty())
+                focused = true
+                now += 100_000_000L
+            }
+
+            override fun nowNanos() = now
+            override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000L }
+        }
+        val prepared = KimiUiAdapter(android, now + TongyiEngineeringRunner.PREP_NANOS).prepareEmpty()
+        val editor = prepared.nodes.single { it.editable }
+
+        assertEquals(current(), prepared)
+        assertTrue(focused && editor.focused && editor.text.isEmpty())
+        assertEquals("21", editor.id)
+        assertEquals("20", editor.parent)
+    }
+
 }

@@ -112,14 +112,14 @@ class KimiUiAdapter(private val android: Android, private val preparationDeadlin
             val after = read(until)
             val focused = editor(after)
             check(after.owner == before.owner && after.windowId == before.windowId &&
-                after.width == before.width && after.height == before.height && after.rotation == before.rotation &&
-                focused.id == input.id && focused.parent == input.parent) { "KIMI_CURRENT_EDITOR_BINDING_CHANGED" }
-            // Copied keys constrain this value flow, not raw Accessibility identity.
-            // Native must establish the same actual editor/parent in its public-API transaction.
+                after.width == before.width && after.height == before.height && after.rotation == before.rotation) {
+                "KIMI_CURRENT_EDITOR_BINDING_CHANGED"
+            }
+            // IDs/parent IDs are acquisition-local and may change after focus.
+            // Native independently proves the actual editor/parent identity, not copied indices.
             gate(until)
             if (focused.focused) return after
             android.sleepMillis(50)
         }
     }
 }
-
