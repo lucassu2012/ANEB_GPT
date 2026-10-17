@@ -33,6 +33,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -681,6 +684,10 @@ class MainActivity : ComponentActivity() {
                     // Surface 已消费顶部状态栏，Scaffold 不再重复消费系统 Insets。
                     val atRoot = screen is Screen.Home
                     val showMainNav = atRoot || screen is Screen.Servers
+                    var mainNavigationHeightPx by remember { mutableIntStateOf(0) }
+                    val researchBottomInset = with(LocalDensity.current) {
+                        if (showMainNav) mainNavigationHeightPx.toDp() else 0.dp
+                    }
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = AnebTheme.colors.background,
@@ -735,6 +742,7 @@ class MainActivity : ComponentActivity() {
                                         onGenerateReport = { screen = Screen.Report },
                                         onBack = { tab = MainTab.Test },
                                         showBack = false,
+                                        researchBottomInset = researchBottomInset,
                                     )
                                     MainTab.Map -> ExperienceMapRoute()
                                     MainTab.Settings -> SettingsScreen(
@@ -967,7 +975,9 @@ class MainActivity : ComponentActivity() {
                                         tab = it
                                         if (screen !is Screen.Home) screen = Screen.Home
                                     },
-                                    modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter),
+                                    modifier = Modifier
+                                        .align(androidx.compose.ui.Alignment.BottomCenter)
+                                        .onSizeChanged { mainNavigationHeightPx = it.height },
                                 )
                             }
                         }
@@ -1082,10 +1092,13 @@ class MainActivity : ComponentActivity() {
         onGenerateReport: () -> Unit,
         onBack: () -> Unit,
         showBack: Boolean = true,
+        researchBottomInset: Dp = 0.dp,
     ) {
         var researchOpen by rememberSaveable { mutableStateOf(false) }
         if (researchOpen) {
-            com.aneb.probe.ui.research.ResearchRecordsScreen(onBack = { researchOpen = false })
+            Box(Modifier.fillMaxSize().padding(bottom = researchBottomInset)) {
+                com.aneb.probe.ui.research.ResearchRecordsScreen(onBack = { researchOpen = false })
+            }
             return
         }
         val history by produceState(initialValue = HistoryData()) {
