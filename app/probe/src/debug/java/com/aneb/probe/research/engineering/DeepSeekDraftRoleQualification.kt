@@ -4,7 +4,11 @@ import java.io.File
 import java.io.FileOutputStream
 
 /** A capability-limited draft qualification, not a collection/SEND/recording interface. */
-class DeepSeekDraftRoleQualification(private val android: Android, private val clock: TongyiEngineeringRunner.MonotonicClock) {
+class DeepSeekDraftRoleQualification(
+    private val android: Android,
+    private val clock: TongyiEngineeringRunner.MonotonicClock,
+    private val target: EngineeringTarget = EngineeringTarget.DEEPSEEK,
+) {
     data class Readback(val packageName: String, val owner: String, val windowId: Int, val parentWindowId: Int,
         val sameEditorAndParent: Boolean, val text: String, val showingHint: Boolean, val focused: Boolean)
     interface Android {
@@ -37,7 +41,7 @@ class DeepSeekDraftRoleQualification(private val android: Android, private val c
             val inputStarted = clock.nowNanos()
             val actual = android.enterExactAndReadback(TongyiEngineeringRunner.PAYLOAD)
             check(clock.nowNanos() - inputStarted <= TongyiEngineeringRunner.INPUT_NANOS) { "INPUT_FIVE_SECOND_LIMIT" }
-            check(actual.packageName == EngineeringTarget.DEEPSEEK.packageName && actual.owner.isNotBlank() &&
+            check(actual.packageName == target.packageName && actual.owner.isNotBlank() &&
                 actual.windowId >= 0 && actual.windowId == actual.parentWindowId && actual.sameEditorAndParent &&
                 actual.focused && !actual.showingHint && actual.text == TongyiEngineeringRunner.PAYLOAD &&
                 actual.text.toByteArray(Charsets.UTF_8).size == 239) { "DEEPSEEK_QUALIFICATION_EXACT_READBACK_REQUIRED" }

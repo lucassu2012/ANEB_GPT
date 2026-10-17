@@ -13,7 +13,7 @@ import time
 PAYLOAD = "请给出三条整理书桌的实用建议，分别涉及纸张、文具和桌面清洁。每条单独一行，每行约15个汉字。只写这三行，不加标题、编号或额外解释。请直接回答，不搜索、不调用工具。"
 PAYLOAD_SHA256 = "f1e312c9123478fcf64c9ad056a436a493f6bd5dde09af029fc8ad62186efac5"
 TARGET = "com.aliyun.tongyi"
-TARGET_PROFILES = {"tongyi": TARGET, "deepseek": "com.deepseek.chat"}
+TARGET_PROFILES = {"tongyi": TARGET, "deepseek": "com.deepseek.chat", "kimi": "com.moonshot.kimichat"}
 DEBUG_PACKAGE = "com.aneb.probe.codex"
 TEST_PACKAGE = DEBUG_PACKAGE + ".test"
 INSTRUMENTATION_CLASS = "com.aneb.probe.engineering.TongyiWholeEngineeringInstrumentation"
@@ -159,6 +159,23 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 or not isinstance(contract.get("send_description"), str)
                 or not contract["send_description"].strip() or len(contract["send_description"]) > 128):
             result["reason"] = "DEEPSEEK_TARGET_UI_CONTRACT_REQUIRED"
+            _json(output_root / result_file, result)
+            return result
+    if target_profile == "kimi":
+        ui = release.get("ui_contract")
+        contract = ui.get("kimi_contract") if isinstance(ui, dict) else None
+        if (not isinstance(ui, dict) or set(ui) != {"binding_scope", "capture_backend",
+                "attachment_resource_ids", "new_session_text_only_attachment_contract", "kimi_contract"}
+                or ui.get("binding_scope") != "current_owned_kimi_ui"
+                or ui.get("capture_backend") != "android_media_projection_v1"
+                or type(ui.get("attachment_resource_ids")) is not list or ui["attachment_resource_ids"] != []
+                or ui.get("new_session_text_only_attachment_contract") is not True
+                or not isinstance(contract, dict)
+                or set(contract) != {"send_description", "invocation_backend", "invocation_authorized"}
+                or contract.get("send_description") != "发送讯息"
+                or contract.get("invocation_backend") != "public_uidevice_current_semantic_center_v1"
+                or type(contract.get("invocation_authorized")) is not bool):
+            result["reason"] = "KIMI_TARGET_UI_CONTRACT_REQUIRED"
             _json(output_root / result_file, result)
             return result
     if release.get("execution_mode", "COLLECTION") not in ("COLLECTION", "PREPARATION_ONLY", "UI_REFERENCE_QUALIFICATION", "UI_SOURCE_INSPECTION") or (

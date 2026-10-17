@@ -3,7 +3,8 @@ package com.aneb.probe.research.engineering
 /** Closed execution identity, never an arbitrary package or a scientific/measurement mode. */
 enum class EngineeringTarget(val id: String, val packageName: String) {
     TONGYI("tongyi", "com.aliyun.tongyi"),
-    DEEPSEEK("deepseek", "com.deepseek.chat");
+    DEEPSEEK("deepseek", "com.deepseek.chat"),
+    KIMI("kimi", "com.moonshot.kimichat");
 
     companion object {
         fun fromId(id: String): EngineeringTarget = entries.singleOrNull { it.id == id }

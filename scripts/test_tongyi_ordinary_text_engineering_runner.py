@@ -327,6 +327,85 @@ class WholeEngineeringHostTest(unittest.TestCase):
                 self.assertTrue(all(hashlib.sha256((root / "actual" / p["path"]).read_bytes()).hexdigest() == p["sha256"]
                                     for p in attempt["artifacts"]))
 
+    def test_whole_kimi_target_routes_two_conditions_and_restores_this_reader(self):
+        class KimiOs(ExternalPhone):
+            # External Android/ADB output only; this does not qualify real Kimi SEND or media.
+            def run(self, argv, timeout, **kwargs):
+                args = list(argv)[3:]
+                if args[:3] == ["shell", "am", "instrument"]:
+                    if (args[args.index("target_profile") + 1] != "kimi"
+                            or args[args.index("target_package") + 1] != "com.moonshot.kimichat"):
+                        return 1, b"INSTRUMENTATION_FAILED: FIXED_KIMI_REQUIRED\n", b""
+                    contract = json.loads(base64.b64decode(args[args.index("ui_contract_b64") + 1]))
+                    if contract != expected_ui:
+                        return 1, b"INSTRUMENTATION_FAILED: KIMI_CONTRACT_CHANGED\n", b""
+                rc, raw, error = super().run(argv, timeout, **kwargs)
+                if args[:3] == ["shell", "am", "instrument"]:
+                    run = args[args.index("run_id") + 1]
+                    remote = "/sdcard/Android/data/com.aneb.probe.codex/files/tongyi-engineering/" + run
+                    terminal = json.loads(self.files[remote]["TERMINAL.json"])
+                    terminal.update(target_profile="kimi", target_package="com.moonshot.kimichat")
+                    self.files[remote]["TERMINAL.json"] = json.dumps(terminal).encode()
+                if args == ["shell", "dumpsys", "connectivity"] and self.wifi_on == "0":
+                    return 0, CURRENT_CELLULAR_NR, b""
+                return rc, raw, error
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = self.release(root)
+            expected_ui = {"binding_scope": "current_owned_kimi_ui",
+                "capture_backend": "android_media_projection_v1",
+                "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True,
+                "kimi_contract": {"send_description": "发送讯息",
+                    "invocation_backend": "public_uidevice_current_semantic_center_v1", "invocation_authorized": True}}
+            original = root / "this-reader.apk"
+            original.write_bytes(b"HOST_ONLY_THIS_ORIGINAL_READER_APK")
+            release.update(target_profile="kimi", target_package="com.moonshot.kimichat",
+                network_transition_authorized=True, ui_contract=expected_ui,
+                original_debug_apk=str(original), original_debug_apk_sha256=hashlib.sha256(original.read_bytes()).hexdigest())
+            phone = KimiOs()
+            phone.require_native_abi = True
+            phone.old_apk = phone.installed_debug = original.read_bytes()
+            result = run_pair(release, root / "actual", system=phone)
+            self.assertEqual("PAIR_OBSERVATION_CLOSED", result["state"], result)
+            self.assertEqual(["W1", "C1"], [row["network_condition"] for row in result["attempts"]])
+            self.assertEqual([1, 1], [row["send_calls"] for row in result["attempts"]])
+            self.assertTrue(all(row["owned_cleanup"] for row in result["attempts"]))
+            self.assertTrue(result["network_settings_restored"] and result["original_reader_restored"])
+            self.assertEqual(phone.old_apk, phone.installed_debug)
+            self.assertFalse(phone.instrument_alive or phone.companion_installed)
+            for attempt in result["attempts"]:
+                terminal = json.loads((root / "actual" / attempt["run_id"] / "originals" / "TERMINAL.json").read_bytes())
+                self.assertEqual(("kimi", "com.moonshot.kimichat"), (terminal["target_profile"], terminal["target_package"]))
+                self.assertTrue(all(hashlib.sha256((root / "actual" / pin["path"]).read_bytes()).hexdigest() == pin["sha256"]
+                                    for pin in attempt["artifacts"]))
+            self.assertEqual(result, json.loads((root / "actual" / "PAIR_RESULT.json").read_bytes()))
+
+    def test_kimi_old_contract_or_wrong_backend_or_mode_has_zero_external_actions(self):
+        for kind in ("old-contract", "old-backend", "wrong-backend", "input-only"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                release = self.release(root)
+                release.update(target_profile="kimi", target_package="com.moonshot.kimichat")
+                release["ui_contract"] = {"binding_scope": "current_owned_kimi_ui",
+                    "capture_backend": "android_media_projection_v1",
+                    "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True,
+                    "kimi_contract": {"send_description": "发送讯息",
+                        "invocation_backend": "public_uidevice_current_semantic_center_v1", "invocation_authorized": False}}
+                if kind == "old-contract":
+                    release["ui_contract"] = {"binding_scope": "current_owned_deepseek_ui"}
+                elif kind == "old-backend":
+                    release["ui_contract"]["kimi_contract"]["invocation_backend"] = "public_uiobject2_semantic_click_v1"
+                elif kind == "wrong-backend":
+                    release["ui_contract"]["kimi_contract"]["invocation_backend"] = "a11y_click"
+                else:
+                    release["execution_mode"] = "PREPARATION_ONLY"
+                phone = ExternalPhone()
+                result = run_pair(release, root / "actual", system=phone)
+                expected = "TARGET_PROFILE_PACKAGE_OR_MODE_MISMATCH" if kind == "input-only" else "KIMI_TARGET_UI_CONTRACT_REQUIRED"
+                self.assertEqual(expected, result["reason"])
+                self.assertEqual([], phone.commands)
+
     def test_public_source_inspection_closes_two_read_only_home_sources_without_accepting_reference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
