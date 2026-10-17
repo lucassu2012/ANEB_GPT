@@ -22,6 +22,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.research.*
 import com.aneb.probe.ui.components.AnebPageIntro
@@ -46,6 +49,16 @@ private data class PendingConclusionCard(
 fun ResearchRecordsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val store = remember(context) { ResearchRecordStore(File(context.noBackupFilesDir, "r1-research")) }
+    val manualMediaStore = remember(context, store) { ManualResearchMediaStore(File(context.noBackupFilesDir, "r1-research-media"), store) }
+    val manualPlaybackOwner = remember { ManualResearchMediaPlaybackOwner() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(manualPlaybackOwner, lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) manualPlaybackOwner.stop()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); manualPlaybackOwner.stop() }
+    }
     val analysisStore = remember(context) { ResearchAnalysisStore(File(context.noBackupFilesDir, "r1-research-analysis")) }
     val conclusionStore = remember(context) { ResearchConclusionStore(File(context.noBackupFilesDir, "r1-research-conclusions")) }
     val conclusionIndex = remember(store, analysisStore, conclusionStore) { ResearchConclusionIndex(store, analysisStore, conclusionStore) }
@@ -694,6 +707,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                             isNavigationTarget = requestedAttemptLocator?.let {
                                 it.sourceId == turn.sourceId && it.attemptId == turn.attempt.attemptId
                             } == true,
+                            mediaAttachment = if (selectedId == current.id && pending == null && !current.isVideo && current.recordKind == "OBSERVED") {
+                                { ManualResearchMediaAttachment(current.id, turn.attempt, manualMediaStore, manualPlaybackOwner, enabled = !busy) }
+                            } else null,
                         )
                     }
                 }
@@ -877,6 +893,7 @@ private fun ResearchAttemptCard(
     turn: ResearchConversationTurn,
     analysis: ResearchAnalysis?,
     isNavigationTarget: Boolean = false,
+    mediaAttachment: (@Composable () -> Unit)? = null,
 ) {
     val attempt = turn.attempt
     var rawExpanded by remember(turn.sourceId, attempt.attemptId) { mutableStateOf(false) }
@@ -895,6 +912,7 @@ private fun ResearchAttemptCard(
             Text("${raw.text("record_kind") ?: "未确认来源"} · ${attempt.attemptId}")
             Text("原始 condition：${attempt.originalConditionDisplay}")
             ResearchConversationTurnContent(turn, analysis)
+            mediaAttachment?.invoke()
             TextButton(onClick = { rawExpanded = !rawExpanded }) { Text(if (rawExpanded) "收起原始标注与证据引用" else "展开原始标注与证据引用") }
             if (rawExpanded) {
                 attempt.sourceWarnings.forEach { Text(it, color = AnebTheme.colors.fair) }

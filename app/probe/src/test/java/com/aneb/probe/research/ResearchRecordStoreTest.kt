@@ -118,7 +118,8 @@ class ResearchRecordStoreTest {
         assertTrue(document.exportFileName.startsWith("ANEB-R1-OBSERVED-"))
         assertEquals(listOf("失败", "完成未确认", "未执行"), document.records.map { it.statusLabel })
         assertTrue(document.records.all { row -> row.sourceWarnings.any { it.contains("缺少本地来源引用") } })
-        assertTrue(document.sourceNotice.contains("未打开媒体"))
+        assertTrue(document.sourceNotice.contains("不会自动打开引用路径"))
+        assertTrue(document.sourceNotice.contains("文件匹配不证明观察真实性"))
         val withReference = document.records[0].raw.toMutableMap().apply {
             put("evidence", buildJsonObject {
                 put("local_ref", "TEST-ONLY-NONEXISTENT/source-note.txt")
