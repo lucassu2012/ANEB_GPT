@@ -357,7 +357,7 @@ class WholeEngineeringHostTest(unittest.TestCase):
                 "capture_backend": "android_media_projection_v1",
                 "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True,
                 "kimi_contract": {"send_description": "发送讯息",
-                    "invocation_backend": "public_uiobject2_semantic_click_v1", "invocation_authorized": True}}
+                    "invocation_backend": "public_uidevice_current_semantic_center_v1", "invocation_authorized": True}}
             original = root / "this-reader.apk"
             original.write_bytes(b"HOST_ONLY_THIS_ORIGINAL_READER_APK")
             release.update(target_profile="kimi", target_package="com.moonshot.kimichat",
@@ -382,7 +382,7 @@ class WholeEngineeringHostTest(unittest.TestCase):
             self.assertEqual(result, json.loads((root / "actual" / "PAIR_RESULT.json").read_bytes()))
 
     def test_kimi_old_contract_or_wrong_backend_or_mode_has_zero_external_actions(self):
-        for kind in ("old-contract", "wrong-backend", "input-only"):
+        for kind in ("old-contract", "old-backend", "wrong-backend", "input-only"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 release = self.release(root)
@@ -391,9 +391,11 @@ class WholeEngineeringHostTest(unittest.TestCase):
                     "capture_backend": "android_media_projection_v1",
                     "attachment_resource_ids": [], "new_session_text_only_attachment_contract": True,
                     "kimi_contract": {"send_description": "发送讯息",
-                        "invocation_backend": "public_uiobject2_semantic_click_v1", "invocation_authorized": False}}
+                        "invocation_backend": "public_uidevice_current_semantic_center_v1", "invocation_authorized": False}}
                 if kind == "old-contract":
                     release["ui_contract"] = {"binding_scope": "current_owned_deepseek_ui"}
+                elif kind == "old-backend":
+                    release["ui_contract"]["kimi_contract"]["invocation_backend"] = "public_uiobject2_semantic_click_v1"
                 elif kind == "wrong-backend":
                     release["ui_contract"]["kimi_contract"]["invocation_backend"] = "a11y_click"
                 else:

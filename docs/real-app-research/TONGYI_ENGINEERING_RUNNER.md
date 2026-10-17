@@ -390,7 +390,7 @@ Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链
 ［KNOWN｜HIGH］Kimi closed profile 为 `kimi` / `com.moonshot.kimichat`，不是 KimiClaw。
 复用现有 Core、NativePhone、HOST `run_pair`、W1→C1、原件及 Reader 私有格式；不新增 collector。
 仅开放 COLLECTION，旧 preparation/UIQ/source-inspection 仍拒绝该 target。
-本节为 Root 在 KIMI_WHOLE_COLLECTION_CARD 中明确批准的新 Kimi 动作合同；
+本节为 Root 在 KIMI_CURRENT_GENERATION_PRIMARY_BACKEND_DECISION_R7 中明确版本化替换的 Kimi 私有动作合同；
 不替换上述 Tongyi/DeepSeek 的 A11y CLICK 合同，也不继承 DeepSeek 的 OFF/OFF 或 backend-mode 结论。
 
 ```json
@@ -401,7 +401,7 @@ Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链
   "attachment_resource_ids": [],
   "kimi_contract": {
     "send_description": "发送讯息",
-    "invocation_backend": "public_uiobject2_semantic_click_v1",
+    "invocation_backend": "public_uidevice_current_semantic_center_v1",
     "invocation_authorized": false
   }
 }
@@ -418,12 +418,19 @@ Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链
 composer 中，直接小父唯一包含该语义子节点，祖先关系、owner/window/原 raw editor-parent 身份必须成立。
 不向上找 clickable 大父，不以图标、历史 id/bounds/窗口号或假 ACTION_CLICK 作为能力。
 
-真正操作由同一 `resolve→ONE current generation→operation` 事务完成。Native 找当前唯一公开 UiObject2，
-将对象及直接父的公开原文/描述/包/类/visible bounds/enabled 与这份完整 Frame 的小目标关系逐字核对；
-原 raw 角色/祖先身份、活动 window、同 Projection session active、明确 Boolean authority 和原5秒门仍必需。
-只执行一次零参数 `UiObject2.click()`，这是明确的公共语义对象主路径，不是 A11y CLICK、坐标入口、
-先失败再 fallback、IME/Enter、重试或 native alias 证明。Core 源码不变：先 fsync SEND_INTENT，
-调用前 UNKNOWN、正常返回后1；1 不表示送达/回复/网络性能。
+真正操作由同一 `resolve→ONE current generation→operation` 事务完成。resolve 只核合同及同一活跃
+Projection session，不调用 `UiDevice.findObjects` 或加入第二棵确认树。Native 仅从本次完整当前代取得
+唯一小 SEND 语义节点；原 raw 角色/全部祖先身份、239B editor-parent/owner、活动 window、Projection active、
+明确 Boolean authority 和原5秒门仍必需。实际活动 window 须 API30+ 可证 displayId=0，默认 display
+1200×2640/rotation0；不支持、非默认或变化直接拒绝，不提高 manifest minSDK。
+中心直接取该节点 screen-pixel bounds，必须严格位于节点、每个已复制中间祖先、根和 display 内；
+缺失/循环/零面积/裁剪拒绝，不 clamp、不改选其他点，不用 dp 或历史/缩放截图坐标。
+只执行一次公共 `UiDevice.click(centerX,centerY)`，并检查 Boolean；false/异常保持 consumed UNKNOWN。
+这是显式新 primary backend，不是 A11y CLICK、旧对象路径失败后的 fallback、IME/Enter 或重试；
+旧 `public_uiobject2_semantic_click_v1` 严格拒绝。Core 不变：先 fsync SEND_INTENT，调用前 UNKNOWN，
+只有正常 true 返回才允许既有 invocation-return1；1 不表示命中语义、送达/回复/网络性能。
+检查到触点及 DOWN→UP100ms 不原子，移动/遮挡及 A11y bounds 与真实触摸区不一致仍是待实机验证风险。
+R6 的旧后端 consumed UNKNOWN 保留；新合同不宣称已证明唯一缓存根因或普适 Android 解法。
 
 ［KNOWN｜HIGH］普通 Kimi 清理在重置绑定前捕获自有草稿义务，在原 owner/current target 边界内用同一 walker
 取得一次完整当前代，判别同 raw editor/parent/window 的已空、自有 exact239B 残稿、未知替换。

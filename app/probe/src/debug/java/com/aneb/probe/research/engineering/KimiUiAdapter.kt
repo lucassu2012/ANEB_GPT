@@ -146,6 +146,13 @@ class KimiUiAdapter(private val android: Android, private val preparationDeadlin
             inside(semantic.bounds, parent.bounds) && inside(composer.bounds, root.bounds)) {
             "KIMI_SEND_COMPOSER_RELATION_REQUIRED"
         }
+        val centerX = semantic.bounds.left + (semantic.bounds.right - semantic.bounds.left) / 2
+        val centerY = semantic.bounds.top + (semantic.bounds.bottom - semantic.bounds.top) / 2
+        check(centerX > 0 && centerX < frame.width && centerY > 0 && centerY < frame.height &&
+            (listOf(semantic) + sendPath).all { node ->
+                centerX > node.bounds.left && centerX < node.bounds.right &&
+                    centerY > node.bounds.top && centerY < node.bounds.bottom
+            }) { "KIMI_CURRENT_SEND_CENTER_CLIPPED" }
         return semantic
     }
 
@@ -154,7 +161,7 @@ class KimiUiAdapter(private val android: Android, private val preparationDeadlin
         gate(until)
         val semantic = checkNotNull(sendCandidate(frame, description)) { "KIMI_CURRENT_SEND_REQUIRED" }
         gate(until)
-        android.clickCurrentSemanticSend(frame, semantic, until) // One primary public-object operation, never a fallback.
+        android.clickCurrentSemanticSend(frame, semantic, until) // One current-semantic primary operation, never a fallback.
         gate(until)
     }
 

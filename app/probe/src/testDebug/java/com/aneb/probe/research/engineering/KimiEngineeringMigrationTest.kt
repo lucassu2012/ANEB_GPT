@@ -9,6 +9,126 @@ import org.junit.rules.TemporaryFolder
 class KimiEngineeringMigrationTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun clippedKimiSendCenterNeverInvokesOrChangesOwnedDraft() {
+        val viewport = TongyiPreparationRunner.Bounds(0, 0, 1200, 2640)
+        val composer = TongyiPreparationRunner.Bounds(40, 1000, 1160, 1700)
+        val input = TongyiPreparationRunner.Bounds(90, 1100, 990, 1450)
+        val send = TongyiPreparationRunner.Bounds(1000, 1530, 1130, 1660)
+        fun node(id: String, parent: String?, bounds: TongyiPreparationRunner.Bounds = viewport,
+            text: String = "", description: String = "", clazz: String = "android.view.View") =
+            DeepSeekUiAdapter.Node(id, parent, bounds, text, description, windowId = 7,
+                packageName = "com.moonshot.kimichat", className = clazz)
+        // External Android frame: partial visibility need not make the raw center touchable.
+        val frame = DeepSeekUiAdapter.Frame("EXTERNAL_CURRENT_OWNER", 7, 1200, 2640, 0, "root", listOf(
+            node("root", null), node("composer", "root", composer), node("input-parent", "composer", input),
+            node("editor", "input-parent", input, TongyiEngineeringRunner.PAYLOAD, clazz = "android.widget.EditText").copy(
+                editable = true, focused = true, setTextAvailable = true),
+            node("modes", "root"), node("quick", "modes", text = "快速", clazz = "android.widget.TextView"),
+            node("advanced", "modes", text = "进阶", clazz = "android.widget.TextView"),
+            node("clipping-ancestor", "composer", TongyiPreparationRunner.Bounds(1000, 1530, 1040, 1660)),
+            node("send-parent", "clipping-ancestor", send),
+            node("send", "send-parent", send, description = "发送讯息"),
+        ))
+        var invocations = 0
+        var draft = TongyiEngineeringRunner.PAYLOAD
+        val android = object : KimiUiAdapter.Android {
+            override fun read(until: Long) = frame
+            override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
+                error("UNEXPECTED_FOCUS")
+            }
+            override fun clickCurrentSemanticSend(frame: DeepSeekUiAdapter.Frame, send: DeepSeekUiAdapter.Node, until: Long) {
+                invocations++
+                draft = ""
+            }
+            override fun nowNanos() = 1_000_000_000L
+            override fun sleepMillis(milliseconds: Long) { error("UNEXPECTED_RETRY") }
+        }
+        val failure = runCatching { KimiUiAdapter(android, 100_000_000_000L).sendOnce(frame, "发送讯息") }.exceptionOrNull()
+        assertEquals("KIMI_CURRENT_SEND_CENTER_CLIPPED", failure?.message)
+        assertEquals(0, invocations)
+        assertEquals(TongyiEngineeringRunner.PAYLOAD, draft)
+    }
+
+    @Test fun refusedExternalKimiTouchKeepsConsumedUnknownAndOwnCleanup() {
+        var now = 1_000_000_000L
+        var owned = false
+        var focused = false
+        var draft = ""
+        var recording = false
+        var attempts = 0
+        var cleaned = false
+        var baseline: DeepSeekUiAdapter.Frame? = null
+        fun current(): DeepSeekUiAdapter.Frame {
+            val viewport = TongyiPreparationRunner.Bounds(0, 0, 1200, 2640)
+            val composer = TongyiPreparationRunner.Bounds(40, 1000, 1160, 1700)
+            val input = TongyiPreparationRunner.Bounds(90, 1100, 990, 1450)
+            val send = TongyiPreparationRunner.Bounds(1000, 1530, 1130, 1660)
+            fun node(id: String, parent: String?, bounds: TongyiPreparationRunner.Bounds = viewport,
+                text: String = "", description: String = "", clazz: String = "android.view.View") =
+                DeepSeekUiAdapter.Node(id, parent, bounds, text, description, windowId = 7,
+                    packageName = "com.moonshot.kimichat", className = clazz)
+            return DeepSeekUiAdapter.Frame("EXTERNAL_KIMI_OWNER", 7, 1200, 2640, 0, "root", listOf(
+                node("root", null), node("greeting", "root", text = "测试账户，今天要和 Kimi 一起做点什么", clazz = "android.widget.TextView"),
+                node("composer", "root", composer), node("input-parent", "composer", input),
+                node("input", "input-parent", input, draft, clazz = "android.widget.EditText").copy(
+                    editable = true, focused = focused, focusAvailable = true, setTextAvailable = true),
+                node("hint", "input", input, if (draft.isEmpty()) "尽管问，带图也行" else "", clazz = "android.widget.TextView"),
+                node("modes", "root"), node("quick", "modes", text = "快速", clazz = "android.widget.TextView"),
+                node("advanced", "modes", text = "进阶", clazz = "android.widget.TextView"),
+                node("send-parent", "composer", send), node("send", "send-parent", send, description = "发送讯息"),
+            ))
+        }
+        // Explicit external Android refusal, not a mock of Native or evidence of real injection.
+        val android = object : KimiUiAdapter.Android {
+            override fun read(until: Long): DeepSeekUiAdapter.Frame { check(now < until); return current() }
+            override fun focusCurrentEmptyEditor(frame: DeepSeekUiAdapter.Frame, editor: DeepSeekUiAdapter.Node, until: Long) {
+                check(now < until && draft.isEmpty() && !focused); focused = true
+            }
+            override fun clickCurrentSemanticSend(frame: DeepSeekUiAdapter.Frame, send: DeepSeekUiAdapter.Node, until: Long) {
+                check(now < until && frame == current() && recording && draft == TongyiEngineeringRunner.PAYLOAD)
+                attempts++
+                val externalTouchReturned = false
+                check(externalTouchReturned) { "KIMI_CURRENT_SEMANTIC_TOUCH_REFUSED" }
+            }
+            override fun nowNanos() = now
+            override fun sleepMillis(milliseconds: Long) { now += milliseconds * 1_000_000L }
+        }
+        val adapter = KimiUiAdapter(android, now + TongyiEngineeringRunner.PREP_NANOS)
+        val phone = object : TongyiEngineeringRunner.Phone {
+            override fun prepare(deadlineNanos: Long): TongyiEngineeringRunner.Snapshot {
+                owned = true; adapter.prepareEmpty(); return snapshot()
+            }
+            override fun enterExact(text: String) { check(owned && focused && draft.isEmpty()); draft = text }
+            override fun snapshot(): TongyiEngineeringRunner.Snapshot {
+                val frame = current(); baseline = frame
+                return TongyiEngineeringRunner.Snapshot("com.moonshot.kimichat", owned,
+                    adapter.ordinaryTextReady(frame), true, draft.isEmpty(), draft, focused,
+                    adapter.sendCandidate(frame, "发送讯息") != null, "W1", true)
+            }
+            override fun saveOriginals(label: String) = Unit
+            override fun startRecording(readyDeadlineNanos: Long) { check(now < readyDeadlineNanos); recording = true }
+            override fun sendOnce() = adapter.sendOnce(checkNotNull(baseline), "发送讯息")
+            override fun observeUntil(deadlineNanos: Long) { error("REFUSED_TOUCH_CANNOT_OBSERVE") }
+            override fun stopOwnedRecording() { recording = false }
+            override fun cleanupOwned(): Boolean {
+                if (owned) recording = false // External cleanup owns capture shutdown, as Native cleanup does.
+                if (owned && draft == TongyiEngineeringRunner.PAYLOAD) draft = ""
+                cleaned = owned && !recording && draft.isEmpty(); owned = false; return cleaned
+            }
+        }
+        val output = File(temporary.root, "refused-touch")
+        val result = TongyiEngineeringRunner(phone, { now }, EngineeringTarget.KIMI)
+            .runOnce("KIMI_REFUSED_EXTERNAL_TOUCH", "W1", output)
+        assertEquals("KIMI_CURRENT_SEMANTIC_TOUCH_REFUSED", result.reason)
+        assertEquals("OBSERVATION_UNKNOWN", result.state)
+        assertEquals("UNKNOWN", result.sendCalls)
+        assertTrue(File(output, "SEND_INTENT.json").readText().contains("consumed_before_invocation"))
+        assertEquals(1, attempts)
+        assertTrue(result.ownedCleanup && cleaned)
+        assertFalse(recording || owned)
+        assertEquals("", draft)
+    }
+
     @Test fun sameCoreCollectsKimiViaOnePublicSemanticSendAndOwnCleanup() {
         var now = 1_000_000_000L
         var owned = false

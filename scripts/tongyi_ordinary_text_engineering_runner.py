@@ -173,7 +173,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 or not isinstance(contract, dict)
                 or set(contract) != {"send_description", "invocation_backend", "invocation_authorized"}
                 or contract.get("send_description") != "发送讯息"
-                or contract.get("invocation_backend") != "public_uiobject2_semantic_click_v1"
+                or contract.get("invocation_backend") != "public_uidevice_current_semantic_center_v1"
                 or type(contract.get("invocation_authorized")) is not bool):
             result["reason"] = "KIMI_TARGET_UI_CONTRACT_REQUIRED"
             _json(output_root / result_file, result)

@@ -580,7 +580,7 @@ class TongyiWholeEngineeringInstrumentation {
             val contract = ui.getJSONObject("kimi_contract")
             check(contract.keys().asSequence().toSet() == setOf("send_description", "invocation_backend", "invocation_authorized") &&
                 contract.getString("send_description") == "发送讯息" &&
-                contract.getString("invocation_backend") == "public_uiobject2_semantic_click_v1" &&
+                contract.getString("invocation_backend") == "public_uidevice_current_semantic_center_v1" &&
                 contract.get("invocation_authorized") is Boolean) { "KIMI_TARGET_UI_CONTRACT_REQUIRED" }
             prepareProjectionCapture(deadlineNanos)
             launchOwned(deadlineNanos)
@@ -1131,6 +1131,15 @@ class TongyiWholeEngineeringInstrumentation {
             check(now < until) { "DEEPSEEK_PUBLIC_READINESS_EXPIRED" }
         }
 
+        private fun requireKimiCollectionDisplay(window: android.view.accessibility.AccessibilityWindowInfo,
+            width: Int, height: Int, rotation: Int) {
+            if (!kimiCollectionEnabled) return
+            if (Build.VERSION.SDK_INT < 30) error("KIMI_DEFAULT_DISPLAY_API_REQUIRED")
+            check(window.displayId == 0 && width == 1200 && height == 2640 && rotation == 0) {
+                "KIMI_CURRENT_DEFAULT_DISPLAY_REQUIRED"
+            }
+        }
+
         /** Refresh before descending, then use exactly these copied values. No retained ancestor is refreshed later. */
         private fun currentDeepSeekGeneration(until: Long, kimiCleanupOwner: OwnedProcessLifecycle.Owner? = null): DeepSeekAcquisition {
             if (kimiCleanupOwner != null) check(kimiCollectionEnabled && targetOwner == kimiCleanupOwner &&
@@ -1199,6 +1208,7 @@ class TongyiWholeEngineeringInstrumentation {
                         check(windowId >= 0 && window.isActive && window.id == windowId && window.root == node) {
                             "DEEPSEEK_CURRENT_WINDOW_CHANGED"
                         }
+                        requireKimiCollectionDisplay(window, width, height, rotation)
                     }
                     check(nodeWindow == windowId) { "DEEPSEEK_CURRENT_NODE_WINDOW_CHANGED" }
                     val rect = Rect().also(node::getBoundsInScreen)
@@ -1277,6 +1287,7 @@ class TongyiWholeEngineeringInstrumentation {
                     device.displayWidth == width && device.displayHeight == height && device.displayRotation == rotation) {
                     "DEEPSEEK_CURRENT_GENERATION_CHANGED"
                 }
+                requireKimiCollectionDisplay(window, width, height, rotation)
                 gate()
                 return DeepSeekAcquisition(frame, handles.toList(), resources.toList())
             } catch (original: Exception) {
@@ -1426,6 +1437,8 @@ class TongyiWholeEngineeringInstrumentation {
                 window.isActive && window.id == current.first.windowId && window.root == activeRoot) {
                 "DEEPSEEK_SEMANTIC_WINDOW_CHANGED"
             }
+            if (kimiCollectionEnabled) requireKimiCollectionDisplay(window,
+                device.displayWidth, device.displayHeight, device.displayRotation)
             deepSeekActionGate(until)
         }
 
@@ -1549,15 +1562,12 @@ class TongyiWholeEngineeringInstrumentation {
                 deepSeekCurrentAction(frame, listOf(editor, send), {
                     val contract = ui.getJSONObject("kimi_contract")
                     check(contract.get("invocation_authorized") is Boolean && contract.getBoolean("invocation_authorized") &&
-                        contract.getString("invocation_backend") == "public_uiobject2_semantic_click_v1" &&
+                        contract.getString("invocation_backend") == "public_uidevice_current_semantic_center_v1" &&
                         contract.getString("send_description") == send.description) { "KIMI_SEND_INVOCATION_NOT_AUTHORIZED" }
                     val session = checkNotNull(projectionSession) { "PROJECTION_OWNED_SETUP_REQUIRED" }
                     session.requireRecordingActive()
-                    val objects = device.findObjects(By.pkg(TARGET).desc(send.description).clazz(send.className))
-                    check(objects.size == 1) { "KIMI_PUBLIC_SEND_OBJECT_NOT_UNIQUE" }
-                    val semantic = objects.single()
-                    Triple(semantic, checkNotNull(semantic.parent) { "KIMI_PUBLIC_SEND_PARENT_MISSING" }, session)
-                }, deadlineNanos = until) { current, _, publicObjects, activeUntil ->
+                    session
+                }, deadlineNanos = until) { current, _, session, activeUntil ->
                     requireKimiEditorBinding(current)
                     val inputValue = currentDeepSeekEditor(current)
                     val input = current.second[inputValue.id.toInt()]
@@ -1565,15 +1575,15 @@ class TongyiWholeEngineeringInstrumentation {
                     check(currentSend == send && ordinaryOwnDraftOwner == targetOwner && input == ordinaryOwnDraft &&
                         inputValue.parent?.toIntOrNull()?.let { current.second[it] } == ordinaryOwnDraftParent &&
                         inputValue.windowId == ordinaryOwnDraftWindow) { "KIMI_SEND_DRAFT_BINDING_CHANGED" }
-                    val parent = current.first.nodes.single { it.id == currentSend.parent }
-                    val (semantic, publicParent, session) = publicObjects
-                    check(deepSeekPublicMatches(semantic, currentSend) && deepSeekPublicMatches(publicParent, parent) &&
-                        semantic.parent == publicParent) { "KIMI_PUBLIC_SEND_RELATION_CHANGED" }
+                    // sendCandidate proved the raw center strictly inside every copied ancestor and display.
+                    val centerX = currentSend.bounds.left + (currentSend.bounds.right - currentSend.bounds.left) / 2
+                    val centerY = currentSend.bounds.top + (currentSend.bounds.bottom - currentSend.bounds.top) / 2
                     check(projectionSession === session) { "CURRENT_CAPTURE_SESSION_CHANGED" }
                     session.requireRecordingActive()
                     requireDeepSeekActionWindow(current, activeUntil)
                     deepSeekActionGate(activeUntil)
-                    semantic.click() // One primary public semantic-object operation; never A11y CLICK or coordinates/fallback.
+                    check(device.click(centerX, centerY)) { "KIMI_CURRENT_SEMANTIC_TOUCH_REFUSED" }
+                    // One primary public device touch; true is invocation return, never delivery or hit proof.
                 }
             }
         }, preparationDeadline)
