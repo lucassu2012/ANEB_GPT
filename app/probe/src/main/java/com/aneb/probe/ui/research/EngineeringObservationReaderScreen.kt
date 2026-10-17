@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -75,9 +76,13 @@ internal class SelectedEngineeringTree(private val resolver: ContentResolver, pr
 @Composable
 fun EngineeringObservationReaderScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val controller = remember(context) {
-        EngineeringObservationReaderController(EngineeringObservationStore(File(context.noBackupFilesDir, "engineering-observations")))
+    val originals = remember(context) { EngineeringObservationStore(File(context.noBackupFilesDir, "engineering-observations")) }
+    val controller = remember(originals) { EngineeringObservationReaderController(originals) }
+    val reviews = remember(context, originals) {
+        EngineeringObservationReviewStore(File(context.noBackupFilesDir, "engineering-observation-reviews"), originals)
     }
+    var reviewPairId by rememberSaveable { mutableStateOf<String?>(null) }
+    val reviewController = remember(originals, reviews, reviewPairId) { EngineeringObservationReviewController(originals, reviews) }
     var state by remember(controller) { mutableStateOf(controller.state) }
     var busy by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
@@ -131,6 +136,11 @@ fun EngineeringObservationReaderScreen(onBack: () -> Unit) {
         }
         return
     }
+    reviewPairId?.let { pairId ->
+        EngineeringObservationReviewScreen(pairId, originals, reviewController,
+            onBack = { reviewPairId = null }, onOriginal = { asset, file -> selected = asset to file })
+        return
+    }
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
         Row {
             TextButton(enabled = !busy && !choosing, onClick = { leave(onBack) }) { Text("返回研究记录") }
@@ -180,6 +190,9 @@ fun EngineeringObservationReaderScreen(onBack: () -> Unit) {
                     SelectionContainer { Text("清单 SHA-256：${document.id}", style = MaterialTheme.typography.bodySmall) }
                     Text("${document.attempts.sumOf { it.assets.size }} 个原件 · ${document.attempts.sumOf { a -> a.assets.sumOf { it.bytes } }} B", style = MaterialTheme.typography.bodySmall)
                     if (!state.saved) Button(enabled = !busy && !choosing, onClick = { confirmSave = true }) { Text("确认复制全部原件到本机") }
+                    if (state.saved) Button(enabled = !busy && !choosing, onClick = { reviewPairId = document.id }) {
+                        Text("先读人工复核 · 查看／新建结论与证据")
+                    }
                     Text("SHA 一致只证明复制关系，不认证源真。未保存预览不能打开原件。", style = MaterialTheme.typography.bodySmall)
                 }
                 document.attempts.forEach { attempt ->
