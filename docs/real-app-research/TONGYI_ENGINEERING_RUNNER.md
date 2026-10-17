@@ -143,3 +143,244 @@ Android 只结束自己启动且 PID/UID/start-ticks仍匹配的通义与 screen
 只切换获准 WiFi，原 mobile_data/stayon 只读不改；结束恢复本轮 WiFi 原值并核三设置。此工程设置值恢复不单独证明原 SSID、全部后台或网络路由恢复；Root 最后仍按 AGENTS 做现场前置/后置，未知会话不结束，不能凭 Launcher 就宣称全局 clean。
 
 若原件传输、native terminal、录像/目标归属、自有进程退出、设置恢复或原 APK 恢复任一不明，PAIR_STOPPED，C1 NOT_RUN（如尚未开始），原输出保留。不能换目录/runId补旧失败，不把独立之后清场回填原轮成功。
+
+## 同引擎 DeepSeek 私有方法迁移
+
+同一 `run_pair` / `collectOnePrivateEngineeringObservation` 支持封闭的
+`target_profile`：缺省 `tongyi` → `com.aliyun.tongyi`；显式 `deepseek` →
+`com.deepseek.chat`。`target_package` 如给出必须与封闭选择一致。HOST 传入两字段，
+Native、Core、进程身份观察及 force-stop 使用同一选择；DeepSeek terminal 必须回传相同
+身份才可封存为该 target 的闭合结果。不能把 DeepSeek 原件写成 Tongyi。已有 Reader 的
+private engineering pair 原件格式不变，不新增正式 schema、评分、转换器或第二 collector。
+名称中的 `tongyi-engineering-807` feature release、instrumentation class 与私有输出目录
+是共享协议入口，不是目标身份。旧 Tongyi preparation/UIQ/source-inspection 模式仍仅支持
+Tongyi，不能把这些模式的 Tongyi 像素或 snapshot 冒充 DeepSeek 资格。
+
+DeepSeek `COLLECTION` release 的 `ui_contract` 必须由 Root 新鲜批准，形状如下；这不是
+可执行授权示例，`send_description` 的占位文字绝不能当已证实 SEND 语义：
+
+```json
+{
+  "binding_scope": "current_owned_deepseek_ui",
+  "capture_backend": "android_media_projection_v1",
+  "new_session_text_only_attachment_contract": true,
+  "attachment_resource_ids": [],
+  "deepseek_contract": {
+    "visible_modes": "thinking_off_search_off",
+    "send_description": "ROOT_MUST_BIND_THE_CURRENT_SUPPORTED_PUBLIC_SEND_DESCRIPTION",
+    "invocation_authorized": false
+  }
+}
+```
+
+同一 Native 使用真实当前树的“开启新对话”语义对象或其支持 ACTION_CLICK 的直接父，
+再确认“新对话”及“今天有什么可以帮到你？”的新空态。进入前已有 editable 必须明确为空；
+没有 editable 不等于空：必须是当前 TextView 提示“发消息或按住说话”、唯一直接
+ViewFactoryHolder，以及与两个 checked 模式控件同属的非全屏 composer。缺证明零新会话
+动作，未知草稿不触碰。模式标签本身可以是零 bounds，但只能对实际当前 enabled、
+checkable、clickable 且支持公开点击的直接父操作。对当前 checked-ON 模式，先在同一
+Frame 核空草稿/共享 composer，再明确选择一次 UiObject2 语义父操作，而不是先发
+Accessibility CLICK 再补点：唯一当前包/精确模式文本/类名 label 及直接父公开属性/bounds
+必须与 fresh 完整 Frame 一致，父仍 checked/checkable/clickable，且最后完整 owner/root/
+活动 window 及原 action5 预算通过，才 parameterless parent.click() 一次。原 advertised
+action IDs 不改写；公开对象匹配不冒称 native-handle alias。void 返回不等于 OFF，随后
+原局部5秒 fresh OFF await 仍必须通过；不重试、不加预算、缺失不当 OFF，新会话与
+composer 激活策略不改。操作是否在当前实机生效必须由 Root 新机会实际验收。
+这只证明可见深度思考 OFF/智能搜索 OFF，不证明 backend 工具、模型或会话身份。
+
+新会话 ready wait 开始时只创建一个绝对 READY20 截止（仍取 PREP180 最小值），并沿用到
+其后的 pre-mode 当前控件读取。只有必需精确模式 label 数为0时，才在原剩余时间内只读
+PENDING；缺失不当 OFF，不创建第二个20秒或5秒预算、不重用旧 Frame。每次先拒绝已知
+非空/替换草稿，并检查所有实际在场模式父/祖先/几何和空提示或 editor 的 bounded composer；
+重复、错误 owner/window/root、畸形关系仍立即拒绝。只有两 label/直接支持动作父及真实空
+共享 composer 同时齐全的 fresh Frame 才进入原模式决策；Native 的 fresh 全量比较、原
+post-action OFF5、focus/input5 和 cleanup20 不变。外部 fixture 的完整后继不证明设备会恢复，
+此前真实失败不重放、不回填 PASS；实际 DeepSeek 准备/输入资格仍须新机会另验。
+
+composer 优先保留整个真实模式动作父被非全屏共享容器包含的路径。只有动作父越出该
+容器时，才允许同一 Frame 中唯一可见、正面积的语义 label 同时完整位于自己的真实
+直接 checked/clickable/支持动作父及共享容器内；动作父仍须在 root 内并保留共同祖先、
+包/window/owner 及原空草稿门。没有像素容差、全屏容器或额外采样兜底；label 越出
+composer 仍拒绝。该关系判据不解释某次 bounds 扩展原因，也不代表实机输入资格。
+
+聚焦保留当前对象/直接父真实支持的 ACTION_FOCUS 或 ACTION_CLICK 原路径。仅当没有
+editor，且同一当前 Frame 的精确空 TextView 提示、唯一直接 ViewFactoryHolder、非全屏
+共享 composer、两模式 OFF/OFF、owner/root/window 都已验证，而原对象/直接父均无支持
+动作时，可请求独立的语义 composer 激活能力；绝不改写 action IDs/Available 布尔值。
+Native 在原 action/PREP/input5 内重新取得并比对整个 Frame，以包名/精确提示/类名找唯一
+当前 UiObject2，对照公开原文/描述、包/类、可见 bounds、enabled 及直接父关系，再刷新
+原节点并复核完整 owner/当前 root/活动 window，才至多一次 parameterless object.click()。
+只使用现有2.3公开 API，不用坐标入口、历史 bounds、私有 node accessor、反射、重试或
+第二套 collector；公开属性关系不冒称 UiObject2 与 Accessibility handle 的 native alias。
+异常/变化/歧义仍拒绝。void 返回不证明聚焦：原后续真实可编辑、focused、支持
+ACTION_SET_TEXT 的唯一 Android EditText/空态/OFF-OFF 门仍必须通过，否则安全拒绝；保存的
+Home PNG/XML 不证明该 API。不得猜坐标、发送盲键或沿用 Tongyi pixel/menu/RID/SEND
+拓扑。Root 必须另行在固定候选上验证这一实际资格缝隙，代码编译与外部 Android fixture
+不等于设备资格。239B 全量回读、同 handle/parent/window/owner、5秒 input/GO 门不变。
+
+SEND 描述必须来自新批准的当前公开语义资格；不默认猜“发送”或空白箭头。SEND 专用解析保留
+语义对象自身/支持点击的直接父，只另容许一层无文本/描述/hint、不可编辑/勾选/点击、
+不支持 focus/click 且唯一子节点为该语义对象的透明包装；不任意向上寻找动作。包装及语义对象
+须被真实当前动作矩形包含，动作仍须有公开 CLICK 能力、位于 root 内且不等于全屏/root。
+read-only snapshot 仅在此真实祖先关系与完整239B输入、两模式、同一非全屏 composer、
+活动窗口及 owner 全部绑定后报告 uniqueSend。优先整个动作矩形位于 composer 内；
+仅 SEND 语义关系可由正面积语义对象同时完整位于真实动作和该 composer 内证明，不裁剪/
+替换动作矩形、不加像素容差。此有限关系回归不是 Android 当前性或真实发送证明。
+Root 的 Boolean invocation_authorized
+必须为 true，且真实 action 边界再次取得同样绑定，紧邻 ACTION_CLICK 确认同 Projection
+session active；Core 仍先 fsync SEND_INTENT 再一次调用。缺失、重名、替代、拒绝或不明
+均不重试，不借旧图片/历史 bounds/旧 handle 放行。
+
+媒体使用原共享 MediaProjection 正常 OS 授权/FGS/session/MP4/MediaExtractor 路径；不
+自动批准、不绕录屏、不重置180/20/5/90。清场使用原共享全进程身份观察和20秒预算：
+仅本轮 exact239B、同真实 editor/parent/window/owner 才可公开全选一次、DEL down/up
+一次、fresh 空读、正常 HOME，再确认 owned stop/全包 absent。缺 public selection 支持、
+未知替代内容或清场不明不能补删或报告成功；持久 cold-empty 仍需实际独立验收。
+
+HOST 保留原 W1 闭合后才 C1、310秒 supervisor/cooperative CANCEL、原件 pull/pins、
+THIS Reader 字节恢复及三设置恢复流程。这里不扩大默认网络恢复的证明范围。未来真实
+DeepSeek 必须新目录/新机会/新现场 admission、新目标版本和公开 API/模式/SEND 绑定、
+固定 APK/CI/payload/tool pins、普通测试 SEND/网络与正常 OS consent 授权，不复用旧
+DeepSeek03–06/C01/C02 或 Tongyi release。当前源码与本机外部边界测试不构成该实机放行。
+所有结果仍 private method-migration/formal0、metrics=null、RPI=not_computed；媒体域、
+Android clock、HOST clock 不混用，调用返回不证明 delivery/回复/完成或网络因果。
+
+### DeepSeek 独立非 SEND 资格入口
+
+SEND 描述未知时，不填占位描述跑 COLLECTION。独立 instrumentation class 为
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation`，唯一方法
+`qualifyCurrentDraftAndPublicActionsWithoutSendOrRecording`。它不在 HOST 按整类选择的
+`TongyiWholeEngineeringInstrumentation` 中；HOST/COLLECTION 的原门不变。
+
+Root 新鲜批准的 direct instrumentation 参数是 `feature_release=deepseek-no-send-qualification-811`、
+`target_profile=deepseek`、`target_package=com.deepseek.chat`、唯一新 `run_id`、原固定
+`payload_sha256`、UTF-8 JSON 的 `ui_contract_b64`。不得传 `network_condition` 或
+`execution_mode`。合同如下（仅格式，不是实机授权）：
+
+```json
+{
+  "binding_scope": "current_owned_deepseek_ui",
+  "new_session_text_only_attachment_contract": true,
+  "attachment_resource_ids": [],
+  "deepseek_qualification": {"visible_modes": "thinking_off_search_off"}
+}
+```
+
+此入口拒绝 `capture_backend`、`deepseek_contract`、`send`、`send_role_binding` 及
+Tongyi 菜单像素字段；不请求 Projection/consent，不录屏、不切网络、不 SEND。
+能力接口仅有准备空态、输入及实际回读、观察留存、缓存拒绝留存和共享 own cleanup，
+不暴露通用 Phone。原 create-once 根和 PREP180/input5/cleanup20 不变；无 Core.runOnce、
+普通 snapshot、sendCandidate、startRecording 或 observeUntil 调用。
+
+真实 Native 仍复用 launchOwned / DeepSeekUiAdapter.prepare / enterExact / saveOriginals /
+cleanupOwned。正向通过必须是原 SET_TEXT 返回后同 owner/editor/parent/window 的完整239B
+实际回读；不支持聚焦/编辑/公开动作即失败，不把“正确的拒绝码”当输入资格 GREEN。
+完整 new-empty、owned-draft 阶段各有原 PNG/XML/owner 及当前节点 JSON；节点包括真实
+action IDs、文本/提示/描述、checked/focus、包/window、父子/边界关系，可供 Root 独立判断
+当前 composer 与动作。描述不自动成为 SEND，空白图标不改名。各源是顺序采样，非原子。
+
+清场仍只有原来的完整身份/自有239B全选一次、DEL一次、fresh空读、HOME/owned stop。
+仅在这些原动作/检查处内存复制 advertised、原 selection 返回值、原实际 selection start/end
+及空读确认；不多选、不多删、不加 UI read 或预算。未到达/未读字段为 null，不能把
+advertised 支持当实际清除成功，更不证明冷开持久为空。
+
+finally 共享清场结束后封存 `DEEPSEEK_DRAFT_ROLE_QUALIFICATION.json`：实际回读状态、
+阶段/原件 pins、原失败/栈、真实 cleanup、selection 观察、SEND0、recording NOT_STARTED、
+formal0/metrics null/reference false。失败可保留最后已取得节点的缓存；缓存可能早于
+失败，不是失败时重采或清场后的当前状态。清场/留存失败不升级为通过，部分原件保留。
+该文件不是正式 TERMINAL/PAIR，也不作为 Reader 的已闭合采集 bundle。Root 必须另发
+新现场前置/THIS Reader 备份、候选软件资格和一次机会卡；本机边界测试/编译不是设备
+API、角色、持久清场或后续 SEND 准入。后续真正 SEND 合同仍独立批准。
+
+Debug manifest 的显式 package queries 同时声明 Tongyi 与 DeepSeek，以供 targetContext
+PackageManager 的目标信息/启动 intent 路由使用；不增加 QUERY_ALL_PACKAGES、Release
+权限或 shell identity。此为必要的软件接线，不表示当前 P40 已实际发生包可见性失败，
+也不推定本轮设备 SDK。最终 merged Debug manifest/固定 APK 及真实目标可见性由 Root
+另核，不能把旧 APK 或本机编译外推为新现场通过。
+
+### DeepSeek 单次只读公开 API 观察入口
+
+必须按方法选择
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation#observeCurrentPublicUiWithoutPreparationOrActions`，
+不能按整个 class 运行（同类还保留原非 SEND 草稿资格方法）。它要求独立
+`feature_release=deepseek-public-ui-observation-811`、`target_profile=deepseek`、
+`target_package=com.deepseek.chat` 和唯一新 `run_id`；只另外允许 runner 的 `class`、
+`debug` 参数。payload/payload SHA、UI contract、network condition、execution mode
+等其它参数均拒绝。该入口不是 COLLECTION 或准备资格，也不进入 HOST whole class。
+
+复用原 Native launchOwned、完整进程身份/root/window 门、deepSeekFrame 及节点序列化循环，
+只请求一次有意的当前 Frame；不调用 prepare、新会话、模式切换、focus、输入、selection、
+DEL、SEND、Projection、录像或网络切换。原 PREP180 和共享 cleanup20 不变，无重试/polling。
+`current-public-ui-nodes.json` create-once/fsync 保留包/window/父子/边界、真实 action IDs、
+布尔值、可空原文/描述/hint 和 focusable，不把缺失模式当 OFF、不从 XML 造 action。
+Frame 值与随后同批 handle 的原文/action/focusable getters 是顺序公共源，非原子采样；
+intentional source 不冒称失败时快照。一次观察不代表 launch/owner/原共享清场没有查询。
+
+finally 结束共享 own cleanup 后，独立 `DEEPSEEK_PUBLIC_UI_OBSERVATION.json` 封存实际
+source-retained、原异常/有界栈、原绝对 deadline、真实 cleanup 和已存原件 pins。采集失败
+仍尝试清场；清场失败保持 UNKNOWN，不能由原件存在升级为闭合。未知草稿仍受原清场归属门
+保护，不扩大可删除集合。只有原件已留存且无原失败、cleanup 已知为 true，才报告
+PUBLIC_UI_OBSERVATION_RETAINED；这仍只是 API 原值观察，不是模式/聚焦/输入/SEND 资格。
+报告为私有 operational 原件，非正式 TERMINAL/PAIR 或 Reader 采集 bundle，
+formal0/metrics null/reference false/RPI not_computed。Root 仍需独立固定 APK、现场干净门、
+THIS Reader 备份/恢复及新机会；本机边界测试和 Native 编译不能代替实机事实，旧 R1/R2 不变。
+
+### DeepSeek 同一次模式操作的有界画面反馈（非准备资格）
+
+仅按方法选择
+`com.aneb.probe.engineering.DeepSeekDraftRoleQualificationInstrumentation#diagnoseOneCheckedModeOperationWithoutComposerInputOrSend`，
+独立 token 为 `feature_release=deepseek-same-mode-feedback-811`；要求固定 DeepSeek
+profile/package、唯一新 run_id，只另外允许 runner 的 class/debug。payload、UI/SEND
+合同、network condition、collection/execution mode 等参数均拒绝。不得按整个 class 运行。
+
+该 capability-limited controller 创建一次根并复用 Native launchOwned、同一 adapter
+准备路径和原共享 owned cleanup；只到第一个原本需要关闭的 checked-ON 模式。
+原 Native 单次 parameterless parent click 不改为 label/coordinate/A11y/fallback，
+原完整 source/owner/active-window/expiry 门仍决定是否执行。P0 在 public 关系绑定后、
+原 final source/owner/window/expiry 门前，取一个完整公开 PNG 和已复制 mode 值；
+P1 只在原 OFF5 内第一次已取得 successor Frame 上取一个 PNG，不追加 tree walk。
+P0 时间指 binding 完成，不冒充 Frame 取得时刻；各时间为原 Android 单调时钟原值。
+
+PNG/压缩成本计入原 action/OFF 时限，不暂停、不重开、不延长，不重复模式操作。
+原 mode gate 返回/异常、click 调用返回、截图失败/时效、实际 cleanup 分开保留；
+迟到 PNG 即使拿到 OFF Frame 也不构成及时画面反馈，不能改写原 gate 返回事实。
+两 PNG/source 值先保留内存，finally 清场后 create-once/fsync 封存原件及
+`DEEPSEEK_SAME_MODE_FEEDBACK.json`；部分原件和留存失败保留，不覆盖原失败。
+无 checked-ON 模式则 NOT_OBSERVED，并同样在 composer/focus/input 前停止。
+
+报告固定 DIAGNOSTIC_STOP_NOT_PREPARATION_QUALIFICATION；JUnit 返回仅证明入口结束和
+cleanup 断言，不证明 mode、输入或研究资格。Root 必须亲自看实际完整 P0/P1，歧义仍
+UNKNOWN；顺序截图/Frame 不是原子、连续覆盖、零干扰或选择器/参考。SEND0、input/focus/
+selection/recording/network NOT_STARTED，formal0/metrics null/reference false/RPI
+not_computed。未完成同 Native/Core/HOST 的239B/readback→SEND→W1/C1→Reader 全流程，
+不补填已消耗机会，不修改冻结研究 schema/claim/时钟。实机准入与 THIS Reader 恢复仍由
+Root 对固定候选另行执行。
+
+父节点读回比较是另一个显式选择方法：
+`DeepSeekDraftRoleQualificationInstrumentation#compareOneCurrentModeParentRefreshWithoutComposerInputOrSend`，
+唯一 token `deepseek-parent-refresh-comparison-811`；参数白名单仍仅 class/debug、
+feature_release、固定 DeepSeek profile/package、唯一 run_id。原 D1/普通入口默认不启用。
+只在 first P1 暂存同次 read 的 Frame/handles，按对象身份绑定，并在原 until/owner/window/
+语义父子门内对选中模式的同一个实际 parent 调用 public refresh 一次，保留原 checked、
+raw before/after、refresh 返回/异常、耗时和部分失败。无第二次树遍历、替代 selector、
+额外点击或重新计时；比较不改原 immutable Frame、OFF predicate 或门返回事实。
+该 public refresh 可能影响 Android 后继缓存读，不能声称零干扰或原门的反事实等价。
+原 P0/P1 仍保留，比较字段嵌入独立 diagnostic 报告；失败/迟到/关系改变为 UNKNOWN。
+JVM mock 无法证明真实 provider 刷新效果；此处仅实际 Native 编译，设备比较由 Root
+另定一次新机会。Root 必须另确认真正初始 ON，不用 D1 持久 OFF 代替；SEND/输入资格
+和全流程结论仍未取得。
+
+普通 DeepSeek W1/C1 与 noSEND qualification 的当前模式读回，现在在原 acquisition
+handles 上刷新当前唯一 visible/enabled 语义 label 的直接 checkable/clickable parent，
+每个 eligible distinct parent 一次，ON/OFF 都读真实刷新值，再创建 immutable Frame。
+仅刷新两个已知模式 parent，不增加树遍历/选择器/点击，不把 checked 强制为 false；
+缺失、歧义、尚未就绪仍交原 readiness 判定。刷新失败、关系/owner/window 改变或迟到
+均拒绝；不拿旧全树相等覆盖合法的新 checked。其它节点仍是原顺序公共源，不能声称
+整棵树/provider 全部实时一致。原 D1/D2/只读观察入口不增加该普通读回刷新。
+
+Adapter 以兼容 `Android.read(until)` 传递本次原 READY/OFF 绝对截止时间，Native 使用
+min(PREP,until)；读前后先保留 PREP 到期优先，再拒绝本次 until 到期，predicate 不接收
+迟到 Frame。20s/5s/180s 常量与共享 READY cutoff 不变，无重新计时。旧 `read()` 默认接口
+仍可实现；Kotlin by 委托型测试 fixture 显式桥接到其原 read，防止默认委托绕过外部输入。
+现有接口自然 RED→GREEN 只证明迟到 OFF 不再被接受，不证明真实 provider 刷新修复；
+Root 仍须在固定候选上走新的普通 noSEND239B/readback 与后续整链，D2 不回填通过。

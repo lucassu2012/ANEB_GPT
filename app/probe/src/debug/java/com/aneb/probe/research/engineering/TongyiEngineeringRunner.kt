@@ -7,6 +7,7 @@ import java.io.FileOutputStream
 class TongyiEngineeringRunner(
     private val phone: Phone,
     private val clock: MonotonicClock,
+    private val target: EngineeringTarget = EngineeringTarget.TONGYI,
 ) {
     fun interface MonotonicClock { fun nowNanos(): Long }
 
@@ -58,7 +59,7 @@ class TongyiEngineeringRunner(
         var cleaned = false
         fun inPreparation() { check(clock.nowNanos() < preparationDeadline) { "PREPARATION_180_EXPIRED" } }
         fun eligible(snapshot: Snapshot, empty: Boolean) {
-            check(snapshot.packageName == PACKAGE && snapshot.ownedLifecycle) { "CURRENT_OWNER_REQUIRED" }
+            check(snapshot.packageName == target.packageName && snapshot.ownedLifecycle) { "CURRENT_OWNER_REQUIRED" }
             check(snapshot.ordinaryTextVisible && snapshot.noAttachments) { "ORDINARY_TEXT_NO_ATTACHMENTS_REQUIRED" }
             check(snapshot.networkCondition == networkCondition && snapshot.notVpn) { "CURRENT_NETWORK_MISMATCH" }
             check(snapshot.composerFocused) { "CURRENT_FOCUS_REQUIRED" }
@@ -295,6 +296,7 @@ class OwnedShellScriptTransport(private val directory: File) {
 class OwnedProcessLifecycle(
     private val shell: Shell,
     private val clock: TongyiEngineeringRunner.MonotonicClock,
+    private val target: EngineeringTarget = EngineeringTarget.TONGYI,
 ) {
     interface Shell {
         fun execute(command: String, deadlineNanos: Long): ShellResult
@@ -367,7 +369,7 @@ class OwnedProcessLifecycle(
 
     /** A successful complete shell process list, not pidof's empty/nonzero response. */
     fun requirePackageAbsent(packageName: String, deadlineNanos: Long) {
-        check(packageName == TongyiEngineeringRunner.PACKAGE)
+        check(packageName == target.packageName)
         val lines = read("ps -A -o PID,NAME", deadlineNanos).trim().lines().map(String::trim)
         check(lines.size >= 2 && lines.first().split(Regex("\\s+")) == listOf("PID", "NAME")) {
             "PACKAGE_PROCESS_LIST_UNKNOWN"
@@ -394,8 +396,8 @@ class OwnedProcessLifecycle(
                 "kill -2 ${owner.pid}"
             }
             Stop.TARGET_FORCE_STOP -> {
-                check(owner.commandLine.first() == TongyiEngineeringRunner.PACKAGE) { "TARGET_COMMAND_NOT_OWNED" }
-                "am force-stop ${TongyiEngineeringRunner.PACKAGE}"
+                check(owner.commandLine.first() == target.packageName) { "TARGET_COMMAND_NOT_OWNED" }
+                "am force-stop ${target.packageName}"
             }
         }
         read(command, deadlineNanos)

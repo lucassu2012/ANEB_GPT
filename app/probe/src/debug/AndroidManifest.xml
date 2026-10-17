@@ -6,6 +6,7 @@
     <!-- Debug-only explicit target visibility for the private Android engineering executor. -->
     <queries>
         <package android:name="com.aliyun.tongyi" />
+        <package android:name="com.deepseek.chat" />
     </queries>
     <application android:networkSecurityConfig="@xml/network_security_config">
         <activity

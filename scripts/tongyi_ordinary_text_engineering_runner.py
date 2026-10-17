@@ -13,6 +13,7 @@ import time
 PAYLOAD = "请给出三条整理书桌的实用建议，分别涉及纸张、文具和桌面清洁。每条单独一行，每行约15个汉字。只写这三行，不加标题、编号或额外解释。请直接回答，不搜索、不调用工具。"
 PAYLOAD_SHA256 = "f1e312c9123478fcf64c9ad056a436a493f6bd5dde09af029fc8ad62186efac5"
 TARGET = "com.aliyun.tongyi"
+TARGET_PROFILES = {"tongyi": TARGET, "deepseek": "com.deepseek.chat"}
 DEBUG_PACKAGE = "com.aneb.probe.codex"
 TEST_PACKAGE = DEBUG_PACKAGE + ".test"
 INSTRUMENTATION_CLASS = "com.aneb.probe.engineering.TongyiWholeEngineeringInstrumentation"
@@ -134,6 +135,32 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
         result["reason"] = "EXPLICIT_NEW_FEATURE_RELEASE_REQUIRED"
         _json(output_root / result_file, result)
         return result
+    target_profile = release.get("target_profile", "tongyi")
+    if not isinstance(target_profile, str) or target_profile not in TARGET_PROFILES:
+        result["reason"] = "UNSUPPORTED_TARGET_PROFILE"
+        _json(output_root / result_file, result)
+        return result
+    target_package = TARGET_PROFILES[target_profile]
+    if release.get("target_package", target_package) != target_package or (target_profile != "tongyi" and input_only):
+        result["reason"] = "TARGET_PROFILE_PACKAGE_OR_MODE_MISMATCH"
+        _json(output_root / result_file, result)
+        return result
+    result.update(target_profile=target_profile, target_package=target_package)
+    if target_profile == "deepseek":
+        ui = release.get("ui_contract")
+        contract = ui.get("deepseek_contract") if isinstance(ui, dict) else None
+        if (not isinstance(ui, dict) or ui.get("binding_scope") != "current_owned_deepseek_ui"
+                or ui.get("capture_backend") != "android_media_projection_v1"
+                or any(key in ui for key in ("send", "send_role_binding", "menu_argb_sha256"))
+                or not isinstance(contract, dict)
+                or set(contract) != {"visible_modes", "send_description", "invocation_authorized"}
+                or contract.get("visible_modes") != "thinking_off_search_off"
+                or type(contract.get("invocation_authorized")) is not bool
+                or not isinstance(contract.get("send_description"), str)
+                or not contract["send_description"].strip() or len(contract["send_description"]) > 128):
+            result["reason"] = "DEEPSEEK_TARGET_UI_CONTRACT_REQUIRED"
+            _json(output_root / result_file, result)
+            return result
     if release.get("execution_mode", "COLLECTION") not in ("COLLECTION", "PREPARATION_ONLY", "UI_REFERENCE_QUALIFICATION", "UI_SOURCE_INSPECTION") or (
             input_only and release.get("network_transition_authorized") is True):
         result["reason"] = "UNKNOWN_MODE_OR_PREPARATION_NETWORK_CHANGE_FORBIDDEN"
@@ -391,6 +418,7 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
                 "shell", "am", "instrument", "-w", "-r", "-e", "class", INSTRUMENTATION_CLASS,
                 "-e", "feature_release", "tongyi-engineering-807", "-e", "payload_sha256", PAYLOAD_SHA256,
                 "-e", "run_id", run_id,
+                "-e", "target_profile", target_profile, "-e", "target_package", target_package,
                 *( ["-e", "execution_mode", "UI_SOURCE_INSPECTION" if source_inspection else "UI_REFERENCE_QUALIFICATION" if qualification else "PREPARATION_ONLY"] if input_only else ["-e", "network_condition", network] ),
                 "-e", "ui_contract_b64", base64.b64encode(json.dumps(release["ui_contract"], ensure_ascii=False).encode("utf-8")).decode("ascii"),
                 TEST_PACKAGE + "/androidx.test.runner.AndroidJUnitRunner",
@@ -404,6 +432,8 @@ def run_pair(release: dict, output_root: Path, *, system=None) -> dict:
             terminal = json.loads((dest / "TERMINAL.json").read_text(encoding="utf-8"))
             if terminal.get("run_id") != run_id or terminal.get("network_condition") != (None if input_only else network):
                 raise RuntimeError("NATIVE_TERMINAL_IDENTITY_MISMATCH")
+            if target_profile != "tongyi" and (terminal.get("target_profile") != target_profile or terminal.get("target_package") != target_package):
+                raise RuntimeError("NATIVE_TARGET_IDENTITY_MISMATCH")
             attempt["send_calls"] = terminal.get("send_calls", "UNKNOWN")
             if preparation:
                 result["send_calls"] = attempt["send_calls"]
