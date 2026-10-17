@@ -291,6 +291,10 @@ class TongyiWholeEngineeringInstrumentation {
         private var deepSeekGenerationFailure: JSONObject? = null // Copied prefix only, never an old map or provider handle.
         private var draftQualificationActive = false
         private var draftQualificationCachedNodes: ByteArray? = null
+        private data class CopiedActionFrameFailure(val baseline: DeepSeekUiAdapter.Frame,
+            val current: DeepSeekUiAdapter.Frame, val until: Long)
+        private var actionFrameFailure: CopiedActionFrameFailure? = null
+        private var actionFrameFailureCaptureFailure: String? = null
         private var draftQualificationSelectionAdvertised: Boolean? = null
         private var draftQualificationSelectionReturned: Boolean? = null
         private var draftQualificationSelectionStart: Int? = null
@@ -892,6 +896,7 @@ class TongyiWholeEngineeringInstrumentation {
                 override fun retainRejectedCached(): Boolean {
                     if (draftQualificationCachedNodes == null) return false
                     writeDraftQualificationNodes("rejected-current-nodes.json") // Cached pre-cleanup acquisition only; no resampling.
+                    persistCopiedActionFrameFailure() // Existing hook is after original failure capture and owned cleanup.
                     return true
                 }
                 override fun cleanupOwned() = this@NativePhone.cleanupOwned()
@@ -942,12 +947,52 @@ class TongyiWholeEngineeringInstrumentation {
             }
         }
 
+        /** Copied values only: no provider handle, actionList read, normalization or loss of list order. */
+        private fun copiedActionFrameJson(frame: DeepSeekUiAdapter.Frame): JSONObject =
+            JSONObject().put("owner", frame.owner).put("window_id", frame.windowId).put("root_id", frame.rootId)
+                .put("display", JSONArray(listOf(frame.width, frame.height, frame.rotation)))
+                .put("nodes", JSONArray().apply { frame.nodes.forEach { node ->
+                    put(JSONObject().put("id", node.id).put("parent", node.parent ?: JSONObject.NULL)
+                        .put("package", node.packageName).put("class", node.className).put("window_id", node.windowId)
+                        .put("bounds", JSONArray(listOf(node.bounds.left, node.bounds.top, node.bounds.right, node.bounds.bottom)))
+                        .put("text", node.text).put("description", node.description).put("hint", node.hint ?: JSONObject.NULL)
+                        .put("showing_hint", node.showingHint).put("visible", node.visible).put("enabled", node.enabled)
+                        .put("clickable", node.clickable).put("checkable", node.checkable).put("checked", node.checked)
+                        .put("editable", node.editable).put("focused", node.focused)
+                        .put("frame_action_support", JSONObject().put("set_text", node.setTextAvailable)
+                            .put("click", node.clickAvailable).put("focus", node.focusAvailable)))
+                } })
+
+        private fun persistCopiedActionFrameFailure() {
+            check(actionFrameFailureCaptureFailure == null) {
+                "ACTION_FRAME_PAIR_CAPTURE_FAILED_${actionFrameFailureCaptureFailure}"
+            }
+            val observed = actionFrameFailure ?: return
+            writeJson("rejected-action-frame-pair.json", JSONObject()
+                .put("kind", "private_copied_action_frame_equality_failure")
+                .put("run_id", root.name).put("target_profile", target.id).put("target_package", TARGET)
+                .put("phase", "CURRENT_FRAME_EQUALITY_BEFORE_RAW_ROLE_GATE_AND_OPERATION")
+                .put("original_until_elapsed_realtime_nanos", observed.until.toString())
+                .put("clock_domain", "Android_elapsedRealtimeNanos_raw_operational_only")
+                .put("baseline_frame", copiedActionFrameJson(observed.baseline))
+                .put("current_frame", copiedActionFrameJson(observed.current))
+                .put("capture_policy", "exact_compared_copied_frames_no_handle_resampling")
+                .put("sampling_claim", "sequential_public_sources_not_atomic")
+                .put("raw_identity", "NOT_PROVED_BY_COPIED_FRAMES")
+                .put("raw_role_identity_gate", "NOT_REACHED_AT_THIS_REJECTION")
+                .put("operation", "NOT_STARTED_AT_THIS_REJECTION")
+                .put("action_support_source", "copied_frame_booleans_only_no_action_ids_resampling")
+                .put("claim_scope", "private_failure_diagnostic_only").put("metrics", JSONObject.NULL)
+                .put("formal_new_slots", 0).put("reference_accepted", false).put("rpi", "not_computed"))
+        }
+
         fun sealDeepSeekDraftQualification(result: DeepSeekDraftRoleQualification.Result,
             reportName: String = "DEEPSEEK_DRAFT_ROLE_QUALIFICATION.json",
             featureRelease: String = "deepseek-no-send-qualification-811") {
             val originals = JSONArray()
             root.listFiles().orEmpty().filter { it.isFile && (it.name.startsWith("new-empty") ||
-                it.name.startsWith("owned-draft") || it.name == "rejected-current-nodes.json" || it.name.startsWith("OWNED_")) }
+                it.name.startsWith("owned-draft") || it.name == "rejected-current-nodes.json" ||
+                it.name == "rejected-action-frame-pair.json" || it.name.startsWith("OWNED_")) }
                 .sortedBy { it.name }.forEach { file ->
                     val bytes = file.readBytes()
                     originals.put(JSONObject().put("path", file.name).put("bytes", bytes.size).put("sha256", sha(bytes)))
@@ -1268,7 +1313,17 @@ class TongyiWholeEngineeringInstrumentation {
             val publicObject = resolve() // Semantic lookup only, never an action or a new baseline.
             deepSeekActionGate(until)
             val current = deepSeekFrame(until) // ONE central tree, with its full owner BEFORE AND AFTER.
-            check(current.first == frame) { "DEEPSEEK_ACTION_FRAME_CHANGED" }
+            check(current.first == frame) {
+                if (kimiDraftQualificationEnabled && draftQualificationActive &&
+                    actionFrameFailure == null && actionFrameFailureCaptureFailure == null) {
+                    try { actionFrameFailure = CopiedActionFrameFailure(baseline.first, current.first, until) }
+                    catch (_: Throwable) {
+                        // Fixed scalar only: no getter/serialization may replace the original check outcome.
+                        actionFrameFailureCaptureFailure = "ALLOCATION_FAILED"
+                    }
+                }
+                "DEEPSEEK_ACTION_FRAME_CHANGED"
+            }
             requireDeepSeekRoleIdentities(baseline, current, roles)
             deepSeekActionGate(until)
             operation(current, baseline, publicObject, until) // No baseline operation, fallback or intervening acquisition.
