@@ -2191,6 +2191,8 @@ class TongyiWholeEngineeringInstrumentation {
         }
 
         private fun cleanupOwnedDecision(): Boolean {
+            // This immutable value is established only after exact bound input readback; retain the obligation across binding reset.
+            val kimiOwnedDraftClearRequired = kimiDraftQualificationEnabled && draftQualificationActive && ordinaryOwnDraftValue != null
             try {
                 var clean = preparationOnly || runCatching { stopOwnedRecording() }.onFailure { original ->
                     if (recordingCleanupFailure == null) recordingCleanupFailure =
@@ -2214,15 +2216,20 @@ class TongyiWholeEngineeringInstrumentation {
                             check(context.packageManager.getApplicationInfo(TARGET, 0).uid == targetUid)
                             cleanupPhase = "target_current_package"
                             if (device.currentPackageName == TARGET) {
-                                cleanupPhase = "target_editor_read"
-                                val input = editNodeOrNull(closureDeadline)
-                                cleanupPhase = "target_draft_guard"
-                                if (preparationOnly) {
-                                    check(input == null || currentEmpty(input)) { "PREPARATION_UNKNOWN_DRAFT_NOT_TOUCHED" }
-                                } else if (input != null && !input.isShowingHintText && input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) {
+                                if (kimiOwnedDraftClearRequired) {
+                                    cleanupPhase = "target_owned_draft_clear"
                                     clearExactOwnedDraft(owner, closureDeadline)
                                 } else {
-                                    check(input == null || currentEmpty(input)) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
+                                    cleanupPhase = "target_editor_read"
+                                    val input = editNodeOrNull(closureDeadline)
+                                    cleanupPhase = "target_draft_guard"
+                                    if (preparationOnly) {
+                                        check(input == null || currentEmpty(input)) { "PREPARATION_UNKNOWN_DRAFT_NOT_TOUCHED" }
+                                    } else if (input != null && !input.isShowingHintText && input.text?.toString() == TongyiEngineeringRunner.PAYLOAD) {
+                                        clearExactOwnedDraft(owner, closureDeadline)
+                                    } else {
+                                        check(input == null || currentEmpty(input)) { "UNKNOWN_REPLACEMENT_DRAFT_NOT_TOUCHED" }
+                                    }
                                 }
                             }
                             }
@@ -2252,7 +2259,8 @@ class TongyiWholeEngineeringInstrumentation {
                 val noTarget = runCatching {
                     processes.requirePackageAbsent(TARGET, readDeadline())
                 }.isSuccess
-                return clean && targetClosed && noTarget && device.currentPackageName == "com.huawei.android.launcher"
+                return clean && targetClosed && noTarget && device.currentPackageName == "com.huawei.android.launcher" &&
+                    (!kimiOwnedDraftClearRequired || draftQualificationEmptyConfirmed == true)
             } finally {
                 // Cached failed-acquisition values only; no UI/owner/clock query and no effect on cleanup truth.
                 runCatching { persistRejectedOrdinaryMenuObservation() }
