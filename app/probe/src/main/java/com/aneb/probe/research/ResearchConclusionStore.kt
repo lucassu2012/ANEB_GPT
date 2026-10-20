@@ -2,6 +2,7 @@ package com.aneb.probe.research
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
@@ -59,6 +60,16 @@ class ResearchConclusionStore(private val directory: File) {
         val bytes = target.readBytes()
         require(hash(bytes) == id) { "结论卡完整性检查失败" }
         return decode(source, analysis, bytes)
+    }
+
+    /** Export the validated saved Markdown bytes, without reconstructing or normalizing them. */
+    fun export(source: ResearchDocument, analysis: ResearchAnalysis, id: String, output: OutputStream) {
+        val target = file(source.id, analysis.id, id)
+        require(target.length() <= MAX_BYTES) { "结论卡超过 1 MiB" }
+        val bytes = target.readBytes()
+        require(hash(bytes) == id) { "结论卡完整性检查失败" }
+        decode(source, analysis, bytes)
+        output.write(bytes)
     }
 
     fun list(source: ResearchDocument, analysis: ResearchAnalysis): List<ResearchConclusionEntry> {
