@@ -1,6 +1,6 @@
 # 本地离线研究包
 
-本页区分 Android 私有文本 ZIP 与已有桌面研究包。两者都不是正式 evidence schema
+本页区分 Android 私有文本 ZIP、视频 ZIP 与已有桌面研究包。它们都不是正式 evidence schema
 或评分器，不重新分析、合组或作跨 App 排名；不改变原研究标注或指标。
 
 ## Android 私有文本 ZIP
@@ -37,6 +37,42 @@ SAMPLE/OBSERVED 是原输入声明，不做真实性认证；UNKNOWN、NA、unce
 `ResearchOfflineReportDownloadsTest` 使用合成 SAMPLE 和真实 store/ZIP，系统输出边界
 可注入失败。代码/JVM 回归、完整门/CI/APK及真机实际点击/Downloads读回分别验收，
 不能由这些 JVM 测试推定后几项已完成。
+
+## Android 私有视频 ZIP
+
+在现有研究记录详情打开**已保存的视频原文**，选择本批已保存的匹配分析后，点击
+“导出私有视频报告 ZIP”。原文或分析仍为未保存预览时不能导出；视频不需要、也不生成
+人工结论卡。支持现有 `research-video-1` SAMPLE/OBSERVED 及已有的 blocked NOT_RUN 格式，
+不新增采集、播放或测量入口。历史 NOT_RUN 的交付不是新播放观察，也不计播放失败。
+
+确认页列出原文与分析两个完整 SHA-256，说明私密研究文字/本地路径、整批、不联网、
+不上传或分享。取消不创建下载；改选原文或分析使旧确认失效，已消费的确认不能再次写入。
+后台 IO 与忙碌防重复复用现有机制；取消是合作式检查，不承诺立即中断同步压缩。
+write、ZIP finish 或实际输出 close 失败均不发布成功，本机两原件保留。
+
+每包固定四个文件：`index.html`、`source.json`、`analysis.json`、`SHA256SUMS.txt`。
+两份 JSON 是从实际 store 重新校验读取的原字节；清单覆盖首页及两原件，自排除清单。
+入口只写 `Downloads/ANEB`。解压并保留四件，再打开 UTF-8 首页即可离线阅读；不需服务器。
+不含媒体、截图、APK 或脚本，不沿引用路径读取文件；外来文字/URL 仅转义显示。
+ZIP 仍可能含私密原文字段，不应公开上传。
+
+导出前核 source SHA、完整 `input_record`、有序 slot/status 和批次整数 counts。
+完整上下文按已有 CLI 的 JSON 解析语义比较，不因对象键序/空白或合法数字往返错拒：
+整数保留精确区分，小数/指数按现有 Python CLI 的 binary64 值匹配；这只是关联检查，
+不改写两原件、不重新计算首画面/窗口。损坏或错配时拒绝输出，不自动修复/删除输入。
+
+可读页复用现有视频 presentation：保留逐槽原状态、导入秒区间、NA/uncertain/NOT_RUN、
+原因、计划终点与覆盖声明。窗口完整不是软件验证连续播放，已执行不是成功率；
+不套用文本时长模型、不生成缓冲/暂停、视频 RPI、平均/排名或网络因果。
+SAMPLE 仅合成演示，OBSERVED 只是原输入声明，SHA 不认证观察真实性。
+
+维护入口为 `ResearchVideoOfflineReportExporter`、`ResearchVideoOfflineReportConfirmation`
+及既有 `ResearchRecordsScreen`，实际发布仍由原 `Exporter` 负责。视频与 849 文本 API 独立，
+不要为了视频伪造结论或改变文本五件 ZIP。定点测试类为
+`ResearchVideoOfflineReportExporterTest`、`ResearchVideoOfflineReportDownloadsTest`；测试用
+合成资源与真实 store/ZIP，只有 OS Downloads 边界替身，非手机点击证据。
+新旧文本/视频导入、阅读与 JSON 导出需一起回归。JVM、完整门/CI/APK、浏览器宽窄呈现、
+实际手机确认/取消/失败及 Downloads 读回分别验收，不用前一阶段票代替后一阶段。
 
 ## 桌面 CLI 使用
 
