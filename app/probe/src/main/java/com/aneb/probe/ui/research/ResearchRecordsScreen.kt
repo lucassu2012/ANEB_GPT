@@ -35,6 +35,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.*
 
 /** Local manual research only. No measurement, metrics calculation, or automatic sharing. */
@@ -62,6 +64,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     val analysisStore = remember(context) { ResearchAnalysisStore(File(context.noBackupFilesDir, "r1-research-analysis")) }
     val conclusionStore = remember(context) { ResearchConclusionStore(File(context.noBackupFilesDir, "r1-research-conclusions")) }
     val conclusionIndex = remember(store, analysisStore, conclusionStore) { ResearchConclusionIndex(store, analysisStore, conclusionStore) }
+    val offlineReportExporter = remember(store, analysisStore, conclusionStore) { ResearchOfflineReportExporter(store, analysisStore, conclusionStore) }
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(emptyList<ResearchEntry>()) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -100,9 +103,19 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var indexScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
     var requestedScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
     var requestedAttemptLocator by remember { mutableStateOf<ResearchAttemptLocator?>(null) }
+    var offlineReportConfirmation by remember { mutableStateOf(ResearchOfflineReportConfirmation()) }
+
+    fun selectedOfflineReportTarget(): ResearchOfflineReportTarget? {
+        val card = selectedConclusion ?: return null
+        if (pending != null || pendingAnalysis != null || selectedId != card.sourceId ||
+            document?.id != card.sourceId || analysis?.sourceId != card.sourceId || analysis?.id != card.analysisId ||
+            loadedConclusionPair != (card.sourceId to card.analysisId)) return null
+        return ResearchOfflineReportTarget(card.sourceId, card.analysisId, card.id)
+    }
 
     fun clearAttemptTarget() { requestedAttemptLocator = null }
     fun clearConclusionView() {
+        offlineReportConfirmation = offlineReportConfirmation.cancel()
         loadedConclusionPair = null
         conclusionEntries = emptyList()
         selectedConclusion = null
@@ -572,6 +585,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                     conclusionPicker.launch(arrayOf("text/plain", "text/markdown", "application/octet-stream"))
                                 }) { Text("选择并预览人工结论卡（UTF-8）") }
                                 if (conclusionEntries.isEmpty()) Text("尚无此原文 / 分析对应的结论卡；未知结论不补写。")
+                                if (selectedConclusion == null) Text("导出报告前，请先校验并选择本分析对应的人工结论卡。原文与分析仍可分别导出。", style = MaterialTheme.typography.bodySmall)
                                 else Text("列表只读文件名，点击后才校验并读取正文。", style = MaterialTheme.typography.bodySmall)
                                 conclusionEntries.take(visibleConclusionCount).forEach { entry ->
                                     if (entry.error != null) Text("${entry.id.take(12)}…：${entry.error}", style = MaterialTheme.typography.bodySmall)
@@ -614,6 +628,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                                     val endOffset = card.text.offsetByCodePoints(startOffset, minOf(pageSize, codePointCount - startCodePoint))
                                     Text("${card.appName} · ${current.sourceLabel} · 人工结论原文、非网络归因 · 纯文本第 ${safePage + 1}/$pageCount 页；不打开卡片内链接或媒体。", style = MaterialTheme.typography.bodySmall)
                                     SelectionContainer { Text("原文 SHA-256：${card.sourceId}\n分析 SHA-256：${card.analysisId}\n卡片 SHA-256：${card.id}", style = MaterialTheme.typography.bodySmall) }
+                                    OutlinedButton(enabled = !busy && selectedOfflineReportTarget() != null, onClick = {
+                                        selectedOfflineReportTarget()?.let { offlineReportConfirmation = offlineReportConfirmation.select(it) }
+                                    }) { Text(ResearchOfflineReportCopy.title) }
                                     SelectionContainer {
                                         Text(card.text.substring(startOffset, endOffset))
                                     }
@@ -720,6 +737,51 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
         }
     }
+    offlineReportConfirmation.pending?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) offlineReportConfirmation = offlineReportConfirmation.cancel() },
+            title = { Text(ResearchOfflineReportCopy.title) },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(ResearchOfflineReportCopy.confirmation(target))
+                    if (target != selectedOfflineReportTarget()) {
+                        Text("所选原文、分析或结论已改变；请取消后重新打开匹配的人工结论卡。")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !busy && target == selectedOfflineReportTarget(), onClick = {
+                    if (!busy) offlineReportConfirmation = offlineReportConfirmation.confirm(selectedOfflineReportTarget()) { selected ->
+                        action {
+                            try {
+                                val result = withContext(Dispatchers.IO) {
+                                    val exportContext = currentCoroutineContext()
+                                    exportContext.ensureActive()
+                                    val name = "ANEB-private-research-" + selected.sourceId.take(12) + ".zip"
+                                    Exporter.exportToDownloads(context, name, "application/zip") { output ->
+                                        offlineReportExporter.writeTo(selected.sourceId, selected.analysisId, selected.conclusionId, output)
+                                        exportContext.ensureActive()
+                                    }
+                                }
+                                notice = if (result.ok) "已导出私有离线报告 ZIP 到 Downloads/ANEB（" + result.bytes + " 字节）。仅本机保存，未上传或分享。"
+                                    else ResearchOfflineReportCopy.failure
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                notice = ResearchOfflineReportCopy.failure
+                            }
+                        }
+                    }
+                }) { Text("确认导出 ZIP · 仅本机") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { offlineReportConfirmation = offlineReportConfirmation.cancel() }) {
+                    Text("取消 · 不导出")
+                }
+            },
+        )
+    }
+
     pendingConclusionCard?.takeIf { card ->
         selectedId == card.sourceId && document?.id == card.sourceId && analysis?.id == card.analysisId &&
             pending == null && pendingAnalysis == null

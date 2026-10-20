@@ -1,10 +1,47 @@
 # 本地离线研究包
 
-这是研究交付工具，不是正式 evidence schema、Android 内置导出或评分器。它复用
-`research_report.py`（文本）和`research_video.py`的render（视频），不运行分析、不复制
-计算、不合组、不作跨 App 排名。Android与正式schema不变。
+本页区分 Android 私有文本 ZIP 与已有桌面研究包。两者都不是正式 evidence schema
+或评分器，不重新分析、合组或作跨 App 排名；不改变原研究标注或指标。
 
-## 使用
+## Android 私有文本 ZIP
+
+入口在现有研究记录详情：选择一份**已保存文本原文**及对应分析，再打开已保存的
+匹配人工结论卡，点击“导出私有离线报告 ZIP”。没有匹配结论时先导入/选择该分析的
+人工结论；原有分别导出原文和分析 JSON 的入口仍独立可用。视频不在这个 ZIP 入口范围内。
+
+确认页显示原文、分析、结论的三个完整 SHA-256，并明确说明：导出整批已保存记录，
+不应用当前 App、来源、condition 或会话筛选；包可能含私密文字和本地引用路径。
+选择“取消 · 不导出”不创建下载；选择“确认导出 ZIP · 仅本机”后在后台生成。
+忙碌时不接受第二次导出。只有写入、ZIP 完成和输出流关闭均成功，才发布到
+`Downloads/ANEB` 并显示成功；失败保留本机原文/分析/结论，不用不完整包冒充成功。
+
+每包固定五个安全文件名，不从输入引用拼接路径：
+
+- `index.html`：UTF-8 离线首页、整批逐次原值/缺失状态、已有导入分组及人工结论原文。
+- `source.json`、`analysis.json`、`conclusion.md`：重新从实际 store 验证读取的原字节，
+  不重序列化、不换行转换。
+- `SHA256SUMS.txt`：覆盖首页与三原件，自排除清单；仅字节核对，不是签名或真实性认证。
+
+将 ZIP 解压到一个目录，保留全部文件，再用浏览器打开 `index.html`；无需服务器或网络。
+外来文字按 HTML 转义的文本显示，Markdown/HTML 不执行；链接只指向固定包内原件。
+不会沿 `local_ref` 打开文件，不含截图/录像/脚本，不上传或自动分享。包仍可能包含敏感
+文字/原路径，只应在获授权的私有范围内保存。
+
+SAMPLE/OBSERVED 是原输入声明，不做真实性认证；UNKNOWN、NA、uncertain、not_computed、
+未执行与不完整的原提示保留。可见完成、指令满足和有效完成时长是不同事实，不能据此
+新增成功率、停顿/RPI 或网络因果。修改原值展示时复用已有 reader，不另写科学计算。
+
+实现位于 `ResearchOfflineReportExporter`、既有 `ResearchConclusionStore` 和
+`ResearchRecordsScreen`/`ResearchOfflineReportConfirmation`；Downloads 发布仍复用
+原 `Exporter`。对应 `ResearchOfflineReportExporterTest` 与
+`ResearchOfflineReportDownloadsTest` 使用合成 SAMPLE 和真实 store/ZIP，系统输出边界
+可注入失败。代码/JVM 回归、完整门/CI/APK及真机实际点击/Downloads读回分别验收，
+不能由这些 JVM 测试推定后几项已完成。
+
+## 桌面 CLI 使用
+
+以下为原有桌面工具：复用 `research_report.py`（文本）和 `research_video.py` 的 render
+（视频）；这一路仍输出目录而非 Android ZIP。
 
 ```powershell
 python -B scripts/research_bundle.py C:/local/input-manifest.json -o C:/local/new-bundle
@@ -83,7 +120,7 @@ JSON 和卡内可能有本地研究文字及原路径，包仅限授权本地研
 不含视频/截图/可执行脚本；不使用原始私密视频或准备截图。SAMPLE/OBSERVED 逐 App 标明。
 可见结束、指令满足、有效完成时长是不同事实；工具不改这些值。
 
-## 定点测试
+## 桌面 CLI 定点测试
 
 ```powershell
 python -B -m unittest discover -s tests -p 'test_*research*.py' -q
