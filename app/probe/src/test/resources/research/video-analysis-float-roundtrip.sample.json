@@ -1,0 +1,79 @@
+{
+  "record_kind": "SAMPLE",
+  "counts": {
+    "planned": 1,
+    "executed": 1,
+    "not_run": 0
+  },
+  "source_sha256": "97ce229d39e7542a6b89539d14ecca3a69dca72c35c851f7d9f749eb3f42587b",
+  "input_record": {
+    "format": "research-video-1",
+    "record_kind": "SAMPLE",
+    "app": "SAMPLE 视频 App（合成演示）",
+    "evidence": [
+      {
+        "reference": "SAMPLE-not-a-real-video.mp4",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "note": "合成占位，不存在真实媒体，不得当作OBSERVED"
+      }
+    ],
+    "attempts": [
+      {
+        "slot": "SAMPLE-R1",
+        "status": "EXECUTED",
+        "V0": {
+          "clock_id": "SAMPLE-original-pts",
+          "pts_s": [
+            10.0,
+            10.1
+          ]
+        },
+        "VF": {
+          "clock_id": "SAMPLE-original-pts",
+          "pts_s": [
+            12.3,
+            12.5
+          ]
+        },
+        "window_end": {
+          "clock_id": "SAMPLE-original-pts",
+          "pts_s": [
+            40.1,
+            40.2
+          ]
+        },
+        "visible_target_playback": "yes",
+        "window_complete": "yes",
+        "reason": "纯合成演示：首画面/运动与窗口覆盖均是假定测试输入，不是真实播放事实。"
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "slot": "SAMPLE-R1",
+      "status": "EXECUTED",
+      "reason": "纯合成演示：首画面/运动与窗口覆盖均是假定测试输入，不是真实播放事实。",
+      "first_frame_wait": {
+        "status": "valid",
+        "interval_s": [
+          2.2,
+          2.5
+        ],
+        "reason": null
+      },
+      "window": {
+        "planned_end_pts_s": [
+          40.0,
+          40.1
+        ],
+        "status": "observed_complete",
+        "reason": null
+      },
+      "buffering_pause": {
+        "status": "not_computed",
+        "count": null,
+        "duration_s": null
+      }
+    }
+  ]
+}

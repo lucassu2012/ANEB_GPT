@@ -65,6 +65,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     val conclusionStore = remember(context) { ResearchConclusionStore(File(context.noBackupFilesDir, "r1-research-conclusions")) }
     val conclusionIndex = remember(store, analysisStore, conclusionStore) { ResearchConclusionIndex(store, analysisStore, conclusionStore) }
     val offlineReportExporter = remember(store, analysisStore, conclusionStore) { ResearchOfflineReportExporter(store, analysisStore, conclusionStore) }
+    val videoReportExporter = remember(store, analysisStore) { ResearchVideoOfflineReportExporter(store, analysisStore) }
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(emptyList<ResearchEntry>()) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -104,6 +105,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var requestedScopeFilter by remember { mutableStateOf(ResearchRecordScopeFilter()) }
     var requestedAttemptLocator by remember { mutableStateOf<ResearchAttemptLocator?>(null) }
     var offlineReportConfirmation by remember { mutableStateOf(ResearchOfflineReportConfirmation()) }
+    var videoReportConfirmation by remember { mutableStateOf(ResearchVideoOfflineReportConfirmation()) }
 
     fun selectedOfflineReportTarget(): ResearchOfflineReportTarget? {
         val card = selectedConclusion ?: return null
@@ -113,9 +115,18 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
         return ResearchOfflineReportTarget(card.sourceId, card.analysisId, card.id)
     }
 
+    fun selectedVideoReportTarget(): ResearchVideoOfflineReportTarget? {
+        val source = document ?: return null
+        val derived = analysis ?: return null
+        if (pending != null || pendingAnalysis != null || selectedId != source.id ||
+            !source.isVideo || !derived.isVideo || derived.sourceId != source.id) return null
+        return ResearchVideoOfflineReportTarget(source.id, derived.id)
+    }
+
     fun clearAttemptTarget() { requestedAttemptLocator = null }
     fun clearConclusionView() {
         offlineReportConfirmation = offlineReportConfirmation.cancel()
+        videoReportConfirmation = videoReportConfirmation.cancel()
         loadedConclusionPair = null
         conclusionEntries = emptyList()
         selectedConclusion = null
@@ -557,6 +568,13 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     Text(if (currentAnalysis == null) "尚未选择本批分析 · 结果未知，不补 0"
                         else "${if (pendingAnalysis != null) "预览分析（未保存）" else "所选分析"} ${currentAnalysis.id.take(12)}… · 整批原副本，未按当前筛选重算或核验",
                         style = MaterialTheme.typography.bodySmall)
+                    if (current.isVideo) {
+                        Text("视频报告只打包已保存的原文与匹配分析，不需要人工结论，不是新播放测试。", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(enabled = !busy && selectedVideoReportTarget() != null, onClick = {
+                            selectedVideoReportTarget()?.let { videoReportConfirmation = videoReportConfirmation.select(it) }
+                        }) { Text(ResearchVideoOfflineReportCopy.title) }
+                        if (selectedVideoReportTarget() == null) Text("请先保存视频原文，并选择本批已保存的分析；预览状态不能导出报告。", style = MaterialTheme.typography.bodySmall)
+                    }
                     if (!current.isVideo && (readerScopeFilter != ResearchRecordScopeFilter() || appFilter != null || conversation != null)) {
                         TextButton(enabled = !busy, onClick = {
                             clearAttemptTarget()
@@ -736,6 +754,43 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+    videoReportConfirmation.pending?.let { target ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) videoReportConfirmation = videoReportConfirmation.cancel() },
+            title = { Text(ResearchVideoOfflineReportCopy.title) },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(ResearchVideoOfflineReportCopy.confirmation(target))
+                    if (target != selectedVideoReportTarget()) Text("所选视频原文或分析已改变；请取消后重新选择匹配的已保存副本。")
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !busy && target == selectedVideoReportTarget(), onClick = {
+                    if (!busy) videoReportConfirmation = videoReportConfirmation.confirm(selectedVideoReportTarget()) { selected ->
+                        action {
+                            try {
+                                val result = withContext(Dispatchers.IO) {
+                                    val exportContext = currentCoroutineContext()
+                                    exportContext.ensureActive()
+                                    val name = "ANEB-private-video-" + selected.sourceId.take(12) + ".zip"
+                                    Exporter.exportToDownloads(context, name, "application/zip") { output ->
+                                        videoReportExporter.writeTo(selected.sourceId, selected.analysisId, output)
+                                        exportContext.ensureActive()
+                                    }
+                                }
+                                notice = if (result.ok) "已导出私有视频报告 ZIP 到 Downloads/ANEB（" + result.bytes + " 字节）。仅本机保存，未上传或分享。"
+                                    else ResearchVideoOfflineReportCopy.failure
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { notice = ResearchVideoOfflineReportCopy.failure }
+                        }
+                    }
+                }) { Text("确认导出视频 ZIP · 仅本机") }
+            },
+            dismissButton = {
+                TextButton(enabled = !busy, onClick = { videoReportConfirmation = videoReportConfirmation.cancel() }) { Text("取消 · 不导出") }
+            },
+        )
     }
     offlineReportConfirmation.pending?.let { target ->
         AlertDialog(
