@@ -37,6 +37,7 @@ import kotlin.coroutines.resumeWithException
 class AnebClient private constructor(
     bound: BoundNetwork?,
     clock: MonotonicNanosClock,
+    private val loadedLocal: Boolean = false,
 ) {
 
     /** Preserve the existing public default-argument constructor and Android clock behavior. */
@@ -59,7 +60,8 @@ class AnebClient private constructor(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
-        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate))
+        .addInterceptor(if (loadedLocal && !prototypePrivate) LoadedNodePolicy.interceptor()
+            else EngineeringCleartextPolicy.interceptor(prototypePrivate))
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
         .apply {
             if (bound != null) {
@@ -752,6 +754,9 @@ class AnebClient private constructor(
     private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
 
     internal companion object {
+        internal fun forLoadedResponsiveness(bound: BoundNetwork?): AnebClient =
+            AnebClient(bound, AndroidMonotonicNanosClock, loadedLocal = true)
+
         /** Construct a clock-injected client without exposing a public overload. */
         @JvmStatic
         @JvmSynthetic

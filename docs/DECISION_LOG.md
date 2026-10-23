@@ -69,6 +69,16 @@
 | DN-4A | Null output has deterministic `primary_null_reason` plus ordered, deduplicated `all_null_reasons`; raw-event-to-report recomputation is the verifier authority. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-5A | VERSION/package binds exactly the four existing machine contracts; no `evidence-schema.json` artifact is invented. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 
+### D-39 — 负载下响应性独立纵切（2026-10-23）
+
+PO 批准先查重、复用既有引擎及导出，固定候选通过质量门后一次 P40/本地节点验收。
+历史 ANEB 已有合并 loaded RTT，本次不重复建设综合引擎。当前产品只新增显式隔离模式，
+留存 idle/download/upload 各阶段 raw 与客户端观测传输重叠，旁列 P50/P95/增量。
+旧 Basic、Token、Prototype、postLoadPingMs、AQS/RPI、门限和冻结合同均不改变。
+详细固定口径和验收见 [LOADED_RESPONSIVENESS_V1.md](LOADED_RESPONSIVENESS_V1.md)。
+缺失/失败保持 null，上传写入字节不冒充远端接收；不作网络因果或运营商结论。
+不恢复千问、不追加云端/生产签名/上传权限。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

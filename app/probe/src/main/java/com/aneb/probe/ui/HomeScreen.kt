@@ -144,7 +144,9 @@ fun HomeScreen(
             Spacer(Modifier.height(27.dp))
             IdleStartRing(running = running, onStart = onStart)
             Text(
-                if (testMode == AnebTestMode.NETWORK_BASIC) {
+                if (testMode == AnebTestMode.NETWORK_RESPONSIVENESS) {
+                    "分别测量空闲、下载及上传期间的响应性；不产生综合分"
+                } else if (testMode == AnebTestMode.NETWORK_BASIC) {
                     "测试下载、上传、Ping、抖动与应用层请求失败"
                 } else {
                     "评估网络是否适合 AI 对话、编码和文件上传"
@@ -258,12 +260,13 @@ fun HomeScreen(
                     action = "更换",
                     onAction = onOpenServer,
                 )
-                if (testMode == AnebTestMode.NETWORK_BASIC && lastBasicRun != null) {
+                if (testMode.isBasic && lastBasicRun != null) {
                     val down = lastBasicRun.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
                     val up = lastBasicRun.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
                     SheetDetailRow(
                         symbol = "↕",
-                        label = "上次基础测速",
+                        label = if (lastBasicRun.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID)
+                            "上次负载响应性" else "上次基础测速",
                         value = "↓ $down  ↑ $up Mbps",
                         action = "查看",
                         onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
