@@ -28,6 +28,7 @@ try {
         ':probe:testDebugUnitTest' `
         ':probe:lintDebug' `
         ':probe:assembleDebug' `
+        ':probe:assembleDebugAndroidTest' `
         '--no-daemon' `
         '--no-parallel' `
         '--max-workers=1'

@@ -16,6 +16,27 @@ class ResearchVideoOfflineReportExporter(
     private val records: ResearchRecordStore,
     private val analyses: ResearchAnalysisStore,
 ) {
+    /** New collector originals only; never relabel them as legacy V0/VF analysis. */
+    fun writeRawTo(sourceId: String, output: OutputStream) {
+        val source = records.open(sourceId)
+        require(source.isBusinessVideo) { "仅支持已保存的 business-video-raw-1 原文" }
+        val entries = linkedMapOf("source.json" to bytes { records.export(sourceId, it) })
+        entries["index.html"] = buildString {
+            append("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">")
+            append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+            append("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">")
+            append("<title>ANEB 业务视频采集原文</title><style>body{max-width:960px;margin:24px auto;padding:0 16px;font-family:system-ui,sans-serif;line-height:1.6}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}</style></head><body>")
+            append("<h1>ANEB 业务视频采集原文 · " + escape(source.root.text("runId").orEmpty()) + "</h1>")
+            append("<p>business-video-raw-1 · 未核验 · 不是旧 V0/VF。采集闭合不等于播放成功，不附媒体、不打开引用、不上传。</p>")
+            append("<p>首次采集器观察播放等待：NA（待独立复核）；播放器首帧：NA；卡顿：not_computed。</p>")
+            append("<p>一份运行内的帧不是多个独立样本；elapsed 纳秒不能当 MP4 PTS。App版本、网络和内容身份需回到完整原件核对，本摘要不补造。</p>")
+            append("<p>原文 SHA-256：<code>" + escape(source.id) + "</code> · <a href=\"source.json\">原始 JSON</a></p>")
+            append("<h2>原文内容 · 不重新计算</h2><pre>" + escape(source.root.toString()) + "</pre>")
+            append("<p><a href=\"SHA256SUMS.txt\">SHA-256清单</a>覆盖首页与JSON，不包含清单自身；不是签名或真实性认证。</p></body></html>")
+        }.toByteArray(Charsets.UTF_8)
+        writeArchive(entries, output)
+    }
+
     fun writeTo(sourceId: String, analysisId: String, output: OutputStream) {
         val source = records.open(sourceId)
         val analysis = analyses.open(source, analysisId)
@@ -37,6 +58,10 @@ class ResearchVideoOfflineReportExporter(
             "analysis.json" to bytes { analyses.export(source, analysisId, it) },
         )
         entries["index.html"] = index(source, analysis, entries).toByteArray(Charsets.UTF_8)
+        writeArchive(entries, output)
+    }
+
+    private fun writeArchive(entries: LinkedHashMap<String, ByteArray>, output: OutputStream) {
         entries["SHA256SUMS.txt"] = entries.entries.joinToString("") { (name, content) ->
             sha256(content) + "  " + name + "\n"
         }.toByteArray(Charsets.UTF_8)
