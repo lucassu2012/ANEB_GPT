@@ -40,6 +40,16 @@ class ResearchVideoOfflineReportExporter(
     fun writeTo(sourceId: String, analysisId: String, output: OutputStream) {
         val source = records.open(sourceId)
         val analysis = analyses.open(source, analysisId)
+        if (source.isBusinessVideo) {
+            require(analysis.isBusinessVideo) { "业务视频仅支持对应版本的独立复核副本" }
+            val entries = linkedMapOf(
+                "source.json" to bytes { records.export(sourceId, it) },
+                "analysis.json" to bytes { analyses.export(source, analysisId, it) },
+            )
+            entries["index.html"] = businessIndex(source, analysis, entries).toByteArray(Charsets.UTF_8)
+            writeArchive(entries, output)
+            return
+        }
         require(source.isVideo && analysis.isVideo) { "视频报告仅支持已保存的视频原文及匹配分析" }
         require(sameJsonValue(source.root, analysis.root["input_record"])) { "视频分析的完整原文副本不匹配；本次未改动原件" }
         val slots = source.records.map { it.attemptId to it.status }
@@ -59,6 +69,31 @@ class ResearchVideoOfflineReportExporter(
         )
         entries["index.html"] = index(source, analysis, entries).toByteArray(Charsets.UTF_8)
         writeArchive(entries, output)
+    }
+
+    private fun businessIndex(
+        source: ResearchDocument,
+        analysis: ResearchAnalysis,
+        originals: Map<String, ByteArray>,
+    ): String = buildString {
+        append("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">")
+        append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+        append("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">")
+        append("<title>ANEB 业务视频复核</title><style>body{max-width:960px;margin:24px auto;padding:0 16px;font-family:system-ui,sans-serif;line-height:1.6}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}section{border-top:1px solid #ccd5df;padding:16px 0}</style></head><body>")
+        append("<h1>ANEB 业务视频复核 · " + escape(source.root.text("runId").orEmpty()) + "</h1>")
+        append("<p>business-video-review-1 · 独立导入副本。原始执行状态置前，复核声明不能覆盖它；本机未读取或重验媒体、时钟或数值。</p>")
+        append("<section><h2>原始执行与复核声明</h2><pre>" + escape(analysis.summaryLines.joinToString("\n")) + "</pre></section>")
+        append("<section><h2>新方法结果、观察及限制</h2><pre>" +
+            escape((analysis.attemptLines(source.records.single().attemptId) + analysis.groupLines).joinToString("\n")) + "</pre></section>")
+        append("<section><h2>绑定原件</h2><p>原文 SHA-256：<code>" + escape(source.id) + "</code></p>")
+        append("<p>复核 SHA-256：<code>" + escape(analysis.id) + "</code></p>")
+        originals.forEach { (name, content) ->
+            append("<p><a href=\"" + name + "\">" + name + "</a> · " + content.size +
+                " 字节 · SHA-256 <code>" + sha256(content) + "</code></p>")
+        }
+        append("<p><a href=\"SHA256SUMS.txt\">SHA-256清单</a>覆盖首页和两份JSON，不含清单自身；不是签名或真实性认证。</p></section>")
+        append("<section><h2>原始采集内容 · 不修改</h2><pre>" + escape(source.root.toString()) + "</pre></section>")
+        append("<section><h2>范围</h2><p>仅本机离线交接，不附媒体、不打开引用、不上传、不计算评分或网络原因；引用路径与哈希只是输入声明。一次运行的多帧不是多个样本，不回填旧 V0/VF、Completion 或原始null字段。</p></section></body></html>")
     }
 
     private fun writeArchive(entries: LinkedHashMap<String, ByteArray>, output: OutputStream) {

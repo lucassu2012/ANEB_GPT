@@ -5,6 +5,7 @@ import java.math.RoundingMode
 
 /** Chinese labels over imported values only: no duration, count, or aggregate is calculated here. */
 val ResearchAnalysis.summaryLines: List<String> get() {
+    if (isBusinessVideo) return businessSummaryLines
     if (isVideo) return videoSummaryLines
     val counts = root["counts"] as? JsonObject
     return listOf(
@@ -17,6 +18,7 @@ val ResearchAnalysis.summaryLines: List<String> get() {
 }
 
 fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
+    if (isBusinessVideo) return businessAttemptLines(attemptId)
     if (isVideo) return videoAttemptLines(attemptId)
     val row = records[attemptId] ?: return listOf("此尝试尚未关联分析（非 0）。")
     return buildList {
@@ -63,6 +65,7 @@ fun ResearchAnalysis.attemptLines(attemptId: String): List<String> {
 }
 
 val ResearchAnalysis.groupLines: List<String> get() {
+    if (isBusinessVideo) return listOf("业务视频单次复核不合组、不计算成功率或网络归因。")
     if (isVideo) return listOf("视频研究不跨 App 汇总、排名或推断网络原因。")
     val groups = root["groups"] as? JsonArray
     if (groups.isNullOrEmpty()) return listOf("无可比较分组；不自动合组或生成汇总。")
@@ -77,6 +80,44 @@ val ResearchAnalysis.groupLines: List<String> get() {
                 add("$label · 有效区间 valid_n：${number(metric?.get("valid_n"))}；点子集 point_n：${number(metric?.get("point_n"))}；NA：${number(metric?.get("na_n"))}；不确定：${number(metric?.get("uncertain_n"))}")
                 add("点子集中位数：${number(metric?.get("point_median_s"))} 秒；点子集范围：${seconds(metric?.get("point_range_s"))}；仅描述等端点子集，不是整组中位数。")
             }
+        }
+    }
+}
+
+private val ResearchAnalysis.businessSummaryLines: List<String> get() {
+    val raw = root.getValue("input_record").jsonObject
+    val row = records.values.single()
+    return listOf(
+        "业务视频复核 · 导入声明，本机未读取或重验媒体、时钟或数值。",
+        "原始执行：${raw.text("state")} / ${raw.text("category")} / ${raw["reason"]}",
+        "原始自有清理声明：${raw["ownedCleanup"]}；复核不能覆盖原始状态。",
+        "复核声明：${row.text("qualification")}；方法（输入声明）：${root.text("method_id")}",
+        "以下是独立的新方法结果，不回填采集原文或旧 V0/VF、Completion，不代表网络因果。",
+    )
+}
+
+private fun ResearchAnalysis.businessAttemptLines(attemptId: String): List<String> {
+    val row = records[attemptId] ?: return listOf("本运行尚未关联业务视频复核（非 0）。")
+    val metrics = row.getValue("metrics").jsonObject
+    return buildList {
+        listOf("visible_pointer_to_target_wait" to "可见指针状态至目标内在动态",
+            "visible_switch_wait" to "可见切换至目标内在动态").forEach { (key, label) ->
+            val metric = metrics.getValue(key).jsonObject
+            val value = when (metric.text("status")) {
+                "interval" -> seconds(metric["interval_s"])
+                "uncertain" -> "不确定（uncertain）"
+                else -> "NA（不可计算，不补 0）"
+            }
+            add("$label（$key）：$value；复核提供的依据/原因：${metric.text("reason")}")
+        }
+        add(intervalDisplayNotice)
+        add("卡顿：not_computed；不是没有卡顿。")
+        listOf("observations" to "复核观察声明", "limitations" to "限制").forEach { (key, label) ->
+            row.getValue(key).jsonArray.forEach { add("$label：${it.jsonPrimitive.content}") }
+        }
+        row.getValue("evidence_references").jsonArray.forEach {
+            val reference = it.jsonObject
+            add("来源引用（仅文本，不打开或验真）：${reference.text("reference")}；声明 SHA-256：${reference.text("sha256")}")
         }
     }
 }

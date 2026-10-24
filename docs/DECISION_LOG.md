@@ -122,6 +122,15 @@ Native逐次记录实际查询、手机elapsed请求/返回或异常、返回数
 后续查询/原件保留失败或CANCEL仍保存已有有界候选，来源分类保持UNKNOWN且传播原错误/取消，运行取消仍为CANCELLED；不因部分命中放行。输入前再核录制健康、准备截止与当前App/窗口，不能对变化的前台注入。
 新raw/binding仅增加可空uiObservationMethod声明；旧数据、旧NA/V0/VF/Completion、指标/评分、冻结正式schema与原时钟不改。实机provider兼容性尚未证明；固定候选完整门/CI/APK后，须另定明确方法资格卡，不因本条自动授权重试或R/B对照。
 
+### D-46 — 原始业务视频与独立复核副本分离交接（2026-10-25）
+
+沿PO已批准的Profile纵切复用已有Reader/报告/证据，不把结果交接组件替代一个有效真实场景或受控网络基线。1d03公开定点方法已实机进入一次输入，但其唯一资格在同包新窗口/空查询后停止，账号相关模态另有媒体证据；两项既定V2数值仍NA，原始ownedCleanup=false与稍后Root全局清场分开保留。一次独立前置准备也未取得可共同确认的提示，未点击/滑动或新增研究样本，不重开旧机会。
+
+仅新增私有导入sidecar `business-video-review-1`，复用ResearchAnalysisStore、原始业务pane与现有视频ZIP/Downloads流程；不改旧正式evidence schema、workload、RPI、评分、V0/VF/Completion或原始采集字段。
+复核必须绑定原文SHA、完整原文和唯一run；类型由业务校验成功分支显式赋值，不由旧分析中的未知format字段推断。原始STOPPED/清理未确认不能被声明为QUALIFIED；导入声明本身依然不是Android媒体、时钟或真实性认证。
+两项新方法区间或NA、原因/限制及来源文本单独保存/重开/展示，不计算端点或达标结论、不改rawnull。引用不读取/打开；ZIP只含原文/复核原字节、可读首页与校验清单，不附媒体、不上传或自动聚合。
+此变更不开放业务采集/重试、账号登录或新协议处理、网络规则/驱动操作；产品Reader QA与研究资格分开授权/记录。使用说明见business-baseline/REVIEWED_RESULTS.md。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

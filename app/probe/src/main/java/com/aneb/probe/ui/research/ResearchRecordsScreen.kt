@@ -119,8 +119,9 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     fun selectedVideoReportTarget(): ResearchVideoOfflineReportTarget? {
         val source = document ?: return null
         val derived = analysis ?: return null
+        val matchedKind = (source.isVideo && derived.isVideo) || (source.isBusinessVideo && derived.isBusinessVideo)
         if (pending != null || pendingAnalysis != null || selectedId != source.id ||
-            !source.isVideo || !derived.isVideo || derived.sourceId != source.id) return null
+            !matchedKind || derived.sourceId != source.id) return null
         return ResearchVideoOfflineReportTarget(source.id, derived.id)
     }
 
@@ -464,6 +465,58 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                 },
                 onExportJson = { confirmExport = true },
                 onExportReport = { businessRawReportId = current.id },
+                reviewContent = {
+                    if (pending == null) {
+                        val review = analysis?.takeIf { it.sourceId == current.id && it.isBusinessVideo }
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("本次业务视频复核 · 独立副本", style = MaterialTheme.typography.titleMedium)
+                                Text("仅接收 business-video-review-1；绑定原文 SHA 与完整原文。本机不读取或重验媒体，不替换原始状态或旧指标。")
+                                Button(enabled = !busy, onClick = {
+                                    analysisImportSourceId = current.id
+                                    analysis = null; pendingAnalysis = null
+                                    analysisPicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                                }) { Text("选择本次复核 JSON") }
+                                analysisEntries.forEach { entry ->
+                                    if (entry.error != null) Text("${entry.id.take(12)}：${entry.error}")
+                                    else TextButton(enabled = !busy, onClick = {
+                                        action {
+                                            analysis = null; pendingAnalysis = null
+                                            val opened = withContext(Dispatchers.IO) { analysisStore.open(store.open(current.id), entry.id) }
+                                            if (selectedId == current.id && document?.id == current.id) analysis = opened
+                                        }
+                                    }) { Text("重开复核副本 ${entry.id.take(12)}…") }
+                                }
+                                if (review == null) Text("尚未选择复核；原始 null 与 not_computed 保持不变。")
+                                else {
+                                    Text(if (pendingAnalysis == null) "已保存复核副本" else "复核预览 · 未保存", style = MaterialTheme.typography.titleSmall)
+                                    SelectionContainer { Text("复核 SHA-256：${review.id}\n关联原文：${review.sourceId}", style = MaterialTheme.typography.bodySmall) }
+                                    review.summaryLines.forEach { Text(it) }
+                                    review.attemptLines(current.records.single().attemptId).forEach { Text(it) }
+                                    if (pendingAnalysis != null) Button(enabled = !busy, onClick = {
+                                        val bytes = pendingAnalysis ?: return@Button
+                                        action {
+                                            val source = withContext(Dispatchers.IO) { store.open(current.id) }
+                                            val saved = withContext(Dispatchers.IO) { analysisStore.save(source, bytes) }
+                                            if (selectedId == current.id && document?.id == current.id) {
+                                                analysis = saved; pendingAnalysis = null
+                                                analysisEntries = withContext(Dispatchers.IO) { analysisStore.list(source) }
+                                                notice = "复核副本已独立保存；原始失败、清理声明和指标未改。"
+                                            }
+                                        }
+                                    }) { Text("确认保存复核副本") }
+                                    else {
+                                        TextButton(enabled = !busy, onClick = { analysisExportId = review.id }) { Text("导出复核 JSON") }
+                                        OutlinedButton(enabled = !busy, onClick = {
+                                            selectedVideoReportTarget()?.let { videoReportConfirmation = videoReportConfirmation.select(it) }
+                                        }) { Text("导出含复核的业务视频报告 ZIP") }
+                                    }
+                                    TextButton(enabled = !busy, onClick = { analysis = null; pendingAnalysis = null }) { Text("取消复核选择") }
+                                }
+                            }
+                        }
+                    }
+                },
             )
         } else {
             var appFilter by remember(current.id) { mutableStateOf(requestedAppFilter?.takeIf { it.sourceId == current.id }) }
@@ -1037,6 +1090,7 @@ private fun ResearchBusinessVideoRawPane(
     onSave: () -> Unit,
     onExportJson: () -> Unit,
     onExportReport: () -> Unit,
+    reviewContent: @Composable () -> Unit,
 ) {
     val raw = document.root
     val frames = (raw["frames"] as? JsonArray).orEmpty()
@@ -1058,10 +1112,11 @@ private fun ResearchBusinessVideoRawPane(
                 "reason" to "停止原因", "swipeCalls" to "上划调用数", "ownedCleanup" to "自有清理声明").forEach { (key, label) ->
                 Text("$label：${displayValue(raw[key])}")
             }
-            Text("首次采集器观察播放等待：NA（待独立复核）；播放器首帧：NA；卡顿：not_computed。")
+            Text("原始采集字段保持：播放等待 NA；播放器首帧 NA；卡顿 not_computed。独立复核另区显示，不回填原文。")
             Text("不是旧 V0/VF；不从录制就绪推算 PTS。App版本、实际网络与内容身份须回到 binding/app-identity/界面及媒体原件核对，不能由本摘要推断。", style = MaterialTheme.typography.bodySmall)
             Text("此入口不附媒体、不自动打开路径、不计算评分或网络归因。", style = MaterialTheme.typography.bodySmall)
         }
+        item { reviewContent() }
         item {
             Text("操作时间原文 · elapsed纳秒，不是MP4 PTS", style = MaterialTheme.typography.titleSmall)
             SelectionContainer { Text(displayValue(raw["events"]), style = MaterialTheme.typography.bodySmall) }
