@@ -148,6 +148,7 @@ SNIFF资格必须复制而非阻断且永不Send副本。限速保留原始包�
 沿PO已批准的单App场景纵切复用原prepare、PID/UID/start身份、自有Shell、公开查询/截图/cleanup；不是新采集框架、账户登录或业务手势。新增显式source_observation_method=friends-invite-public-source-1，只能用于SOURCE_PREPARATION/max_gestures=0且不能与feed UI绑定/方法混用。
 本方法固定查询已见邀请原片中的“发现抖音朋友”“登录后”“拒绝”“继续”，仅作同App/同窗口可见公开节点召回；保留逐查询elapsed/返回数/异常/部分来源和一张原截图，不使用uiautomator idle，不fallback/重查，不操作这些按钮。它不进入feed分类、不产生业务样本/录制/指标；空返回不证明没有弹窗，命中不证明必须登录或账号健康。
 原feed准入/targeted方法、严格选择器、旧资格/前置机会及失败/NA均不变，不借新名称恢复已停止的全树idle准备路线。固定候选完整门/CI/APK及新鲜AGENTS前置之后，才可另立该新来源路径的一次有限准备卡；本代码决定自身不释放实机或研究quota。同步公开provider调用仍不能承诺可中断硬截止，失败须保留并停止，不加预算。
+准入卡反审核出85990cd在同步查询迟到返回后仍可继续查询/截图，故该卡从未放行。修正沿用同一preparationEnd：新source路径在查询前后和截图前后检查，迟到结果先保留再抛错，禁止下一项UI工作并进入原210秒清理。截止后保留返回节点的已有属性，但不新发祖先查询；可见性未评估写null而非false。source旋转在查询前取得，原截止写入独立诊断；REFERENCE旧测量时钟和数据不替换，不以加预算或重试换通过。
 
 ## 否决记录（评估后明确不采纳）
 
