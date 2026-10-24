@@ -17,7 +17,8 @@ class VideoScenarioExecutionTest {
         val plan = VideoScenarioProfile.compile(profile)
         val root = File(temporary.root, "new-reference-1")
         val phone = PhoneBoundary(root)
-        val binding = VideoRunBinding(root.name, plan.profileSourceSha256, 100L, "R", "wifi-network-1", "test-clock")
+        val binding = VideoRunBinding(root.name, plan.profileSourceSha256, 100L, "R", "wifi-network-1", "test-clock",
+            uiObservationMethod = VideoUiQueries.TARGETED_METHOD)
 
         val result = VideoScenarioExecution(phone) { phone.time }.runOnce(profile, binding, root)
 
@@ -32,6 +33,7 @@ class VideoScenarioExecutionTest {
         assertTrue(File(root, "SWIPE_INTENT.json").isFile)
         assertTrue(File(root, "result.json").isFile)
         assertEquals(plan.profileSourceSha256, result.profileSha256)
+        assertEquals(binding.uiObservationMethod, result.uiObservationMethod)
         val returned = result.events.single { it.name == "swipe_returned" }.atNs
         val ended = result.events.single { it.name == "observation_window_ended" }.atNs
         assertEquals(30_000_000_000L, ended - returned)

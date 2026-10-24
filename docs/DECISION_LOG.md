@@ -113,6 +113,15 @@ Native在ACTION_DOWN前的专门拒绝可报告PRE_INPUT_REJECTED；必须保留
 新的UI原件逐行记录实际classification_eligible和值，分类器使用同一组采集值；这些依然是先后公开观察，不宣称原子页面快照。旧ui2/ui3回放缺每节点包/祖先来源，只证明选择器与执行拒绝兼容，不重新证明Android可见性过滤。
 此修正不开放实机重试、R/B条件对照或网络设置变更；稳定页面准入仍须单独解决，不能只把失败改成更好看的分类。
 
+### D-45 — 显式版本化的公开定点UI读取候选（2026-10-24）
+
+沿PO已授权的单App/单场景主线解决页面读取可靠性，不把D-44诊断通过当业务通过，也不重开5e旧机会。
+新观察策略`targeted-public-selectors-1`必须同时由执行参数`ui_observation_method`与固定UI binding声明；缺省仍是旧`legacy-public-tree-1`策略，二者不一致即拒绝。方法声明只表示实际选择的观察策略，不证明来源或指标有效。
+查询词“推荐”仅从已观察的严格description派生，用Android公开文本查询召回，再用原有逐字description/唯一性/同包/当前根与祖先可见性/精确geometry分类；不将query_text改为最终text条件，不采用更弱的FEED_CONTINUATION，不在新策略失败后回退全树或补查。
+Native逐次记录实际查询、手机elapsed请求/返回或异常、返回数、节点值/根关联和最终拒绝；每次最多32个固定查询、最多2048个不同返回节点，本绑定实际仅2查询。原截图/30秒观察窗和360/210预算不变。查询时长不是App/网络耗时，返回数不是召回完整性证明。
+后续查询/原件保留失败或CANCEL仍保存已有有界候选，来源分类保持UNKNOWN且传播原错误/取消，运行取消仍为CANCELLED；不因部分命中放行。输入前再核录制健康、准备截止与当前App/窗口，不能对变化的前台注入。
+新raw/binding仅增加可空uiObservationMethod声明；旧数据、旧NA/V0/VF/Completion、指标/评分、冻结正式schema与原时钟不改。实机provider兼容性尚未证明；固定候选完整门/CI/APK后，须另定明确方法资格卡，不因本条自动授权重试或R/B对照。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

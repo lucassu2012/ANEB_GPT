@@ -57,6 +57,7 @@ data class VideoRunBinding(
     val conditionId: String,
     val networkKey: String,
     val clockId: String,
+    val uiObservationMethod: String? = null,
 )
 
 @Serializable
@@ -80,6 +81,7 @@ data class VideoScenarioResult(
     val stallStatus: String = "not_computed",
     val format: String = "business-video-raw-1",
     val preInputRejection: VideoInputRejectionSource? = null,
+    val uiObservationMethod: String? = null,
 )
 
 /** One phone scenario, not an App automation framework. Android/OS is the only replaceable boundary. */
@@ -248,7 +250,8 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
         val result = VideoScenarioResult(binding.runId, binding.profileSha256, binding.conditionId, binding.clockId,
             if (captured && cleaned) "CAPTURED_AWAITING_REVIEW" else "STOPPED",
             category, reason ?: if (!cleaned) "OWNED_CLEANUP_UNCONFIRMED" else null,
-            calls, cleaned, events, frames, preInputRejection = preInputRejection)
+            calls, cleaned, events, frames, preInputRejection = preInputRejection,
+            uiObservationMethod = binding.uiObservationMethod)
         writeNew("result.json", codec.encodeToString(VideoScenarioResult.serializer(), result))
         return result
     }

@@ -51,12 +51,13 @@ class NativeVideoScenarioInstrumentation {
         check(parent.isDirectory || parent.mkdirs())
         val root = File(parent, runId)
         val uiText = arguments.getString("ui_binding_b64")?.let { String(Base64.decode(it, Base64.DEFAULT), Charsets.UTF_8) }
-        if (mode == "REFERENCE_QUALIFICATION") {
+        val observationMethod = VideoUiQueries.selectMethod(arguments.getString("ui_observation_method"), uiText)
+        if (mode == "REFERENCE_QUALIFICATION" || observationMethod == VideoUiQueries.TARGETED_METHOD) {
             check(uiText != null && sha(uiText.toByteArray()) == arguments.getString("ui_binding_sha256")) { "VIDEO_UI_BINDING_REQUIRED" }
         }
         val network = if (mode == "REFERENCE_QUALIFICATION")
             checkNotNull(arguments.getString("network_key")?.takeIf { it.isNotBlank() }) else null
-        val phone = NativeVideoPhone(instrumentation, root, version, uiText, network)
+        val phone = NativeVideoPhone(instrumentation, root, version, uiText, network, observationMethod)
         val clockId = "android-elapsed:$runId"
         if (mode == "SOURCE_PREPARATION") {
             check(root.mkdir()) { "VIDEO_SOURCE_OPPORTUNITY_ALREADY_CONSUMED" }
@@ -82,7 +83,8 @@ class NativeVideoScenarioInstrumentation {
             check(failure == null) { "VIDEO_SOURCE_STOPPED" }
             return
         }
-        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, "QUAL_REFERENCE", checkNotNull(network), clockId)
+        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, "QUAL_REFERENCE", checkNotNull(network), clockId,
+            uiObservationMethod = observationMethod)
         val result = VideoScenarioExecution(phone, SystemClock::elapsedRealtimeNanos).runOnce(source, binding, root)
         check(result.ownedCleanup) { "VIDEO_OWNED_CLEANUP_UNCONFIRMED" }
         // CAPTURED means pending independent media/content review, not successful playback or a valid metric.
@@ -111,10 +113,13 @@ private class NativeVideoPhone(
     private val expectedVersion: Long,
     private val uiText: String?,
     private val expectedNetworkKey: String?,
+    private val observationMethod: String,
 ) : VideoScenarioExecution.Phone {
     private val context: Context = instrumentation.targetContext
     private val automation = instrumentation.uiAutomation
     private val ui = uiText?.let(::JSONObject)
+    private val targetedQueries = if (observationMethod == VideoUiQueries.TARGETED_METHOD)
+        VideoUiQueries.compile(checkNotNull(uiText)) else null
     private val shell by lazy { VideoOwnerShell(automation, root.canonicalFile, SystemClock::elapsedRealtimeNanos) }
     private var owner: OwnedProcessLifecycle.Owner? = null
     private var launched = false
@@ -126,6 +131,7 @@ private class NativeVideoPhone(
     private var inputAttempted = false
     private var expectedViewport: VideoViewport? = null
     private var recordingClosed = false
+    private var lastInspectedWindowId = -1
     private val packageName = NativeVideoScenarioInstrumentation.PACKAGE
 
     override fun prepare(deadlineNs: Long): VideoPage {
@@ -203,6 +209,9 @@ private class NativeVideoPhone(
         val network = networkKey()
         val pixels = display()
         val rows = JSONArray()
+        val queryTraces = JSONArray()
+        var queryFailure: Exception? = null
+        var queryRetentionFailure: Exception? = null
         val visible = mutableListOf<VideoUiPublicNode>()
         fun visibleWithinCurrentRoot(node: AccessibilityNodeInfo): Boolean {
             if (currentRoot == null || node.windowId != currentRoot.windowId) return false
@@ -229,9 +238,58 @@ private class NativeVideoPhone(
             if (eligible) visible += value
             for (index in 0 until node.childCount) node.getChild(index)?.let { walk(it, isVisible, depth + 1) }
         }
+        fun retainQueriedNode(node: AccessibilityNodeInfo) {
+            val box = Rect().also(node::getBoundsInScreen)
+            val isVisible = visibleWithinCurrentRoot(node)
+            val value = VideoUiPublicNode(node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
+                VideoViewport(box.left, box.top, box.right, box.bottom))
+            val nodePackage = node.packageName?.toString()
+            val eligible = isVisible && nodePackage == packageName
+            rows.put(JSONObject().put("resource_id", value.resourceId).put("class", node.className?.toString())
+                .put("text", value.text).put("description", value.description)
+                .put("node_package", nodePackage).put("node_window_id", node.windowId)
+                .put("visible", isVisible).put("classification_eligible", eligible)
+                .put("bounds", JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
+            if (eligible) visible += value
+        }
         var queryMode = "full_public_tree"
         if (currentPackage == packageName && currentRoot != null) {
-            if (!inputAttempted || ui == null) {
+            if (targetedQueries != null) {
+                queryMode = VideoUiQueries.TARGETED_METHOD
+                val observed = linkedSetOf<AccessibilityNodeInfo>()
+                try {
+                    for (query in targetedQueries) {
+                        if (File(root, "CANCEL").exists()) throw VideoOperationCancelled()
+                        val requested = SystemClock.elapsedRealtimeNanos()
+                        val trace = JSONObject().put("selector", query.selector).put("kind", query.kind).put("value", query.value)
+                            .put("root_window_id", currentRoot.windowId).put("requested_elapsed_ns", requested.toString())
+                        val returned = try {
+                            when (query.kind) {
+                                "VIEW_ID" -> currentRoot.findAccessibilityNodeInfosByViewId(query.value)
+                                "TEXT" -> currentRoot.findAccessibilityNodeInfosByText(query.value)
+                                else -> error("VIDEO_PUBLIC_QUERY_KIND_UNSUPPORTED")
+                            }
+                        } catch (failure: Exception) {
+                            queryTraces.put(trace.put("status", "THREW").put("finished_elapsed_ns", SystemClock.elapsedRealtimeNanos().toString())
+                                .put("error_type", failure.javaClass.simpleName))
+                            throw failure
+                        }
+                        queryTraces.put(trace.put("status", "RETURNED").put("returned_elapsed_ns", SystemClock.elapsedRealtimeNanos().toString())
+                            .put("returned_count", returned.size))
+                        check(returned.size <= 2048) { "VIDEO_PUBLIC_QUERY_LIMIT" }
+                        observed += returned
+                        check(observed.size <= 2048) { "VIDEO_PUBLIC_QUERY_LIMIT" }
+                    }
+                } catch (failure: Exception) {
+                    queryFailure = failure // Retain the partial source below, then propagate; never fall back or admit it.
+                }
+                try {
+                    observed.take(2048).forEach(::retainQueriedNode)
+                } catch (failure: Exception) {
+                    queryRetentionFailure = failure
+                    if (queryFailure == null) queryFailure = failure
+                }
+            } else if (!inputAttempted || ui == null) {
                 walk(currentRoot, true, 0)
             } else {
                 // Do not dump the whole hierarchy before every sampled image. Use current public
@@ -251,25 +309,16 @@ private class NativeVideoPhone(
                         else currentRoot.findAccessibilityNodeInfosByText(selector.getString("text"))
                     }.distinct()
                     check(observed.size <= 2048) { "VIDEO_PUBLIC_QUERY_LIMIT" }
-                    for (node in observed) {
-                        val box = Rect().also(node::getBoundsInScreen)
-                        val isVisible = visibleWithinCurrentRoot(node)
-                        val value = VideoUiPublicNode(node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
-                            VideoViewport(box.left, box.top, box.right, box.bottom))
-                        val eligible = isVisible && node.packageName?.toString() == packageName
-                        rows.put(JSONObject().put("resource_id", value.resourceId).put("class", node.className?.toString())
-                            .put("text", value.text).put("description", value.description)
-                            .put("visible", isVisible).put("classification_eligible", eligible)
-                            .put("bounds", JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
-                        if (eligible) visible += value
-                    }
+                    observed.forEach(::retainQueriedNode)
                 } else walk(currentRoot, true, 0)
             }
         }
         var kind = "UNKNOWN"
         var viewport = VideoViewport(0, 0, 0, 0)
-        var admissionReason: String? = null
-        if (ui != null && currentPackage == packageName) {
+        var admissionReason: String? = queryFailure?.let {
+            if (it is VideoOperationCancelled) "OWNED_CANCEL_REQUESTED" else "PUBLIC_QUERY_FAILED"
+        }
+        if (queryFailure == null && ui != null && currentPackage == packageName) {
             check(pixels.first == ui.getInt("display_width") && pixels.second == ui.getInt("display_height") &&
                 rotation() == ui.getInt("rotation")) { "VIDEO_DISPLAY_CHANGED" }
             val decision = VideoUiAdmission.classify(checkNotNull(uiText), visible)
@@ -282,12 +331,18 @@ private class NativeVideoPhone(
             .put("requested_elapsed_ns", started.toString()).put("returned_elapsed_ns", SystemClock.elapsedRealtimeNanos().toString())
             .put("package", currentPackage).put("window_id", currentRoot?.windowId ?: -1).put("network_key", network)
             .put("query_mode", queryMode)
+            .put("ui_observation_method", observationMethod).put("query_traces", queryTraces)
+            .put("query_plan_count", targetedQueries?.size ?: JSONObject.NULL)
+            .put("observer_error", queryFailure?.javaClass?.simpleName ?: JSONObject.NULL)
+            .put("source_retention_error", queryRetentionFailure?.javaClass?.simpleName ?: JSONObject.NULL)
             .put("admission_scope", ui?.optString("admission_scope") ?: "SOURCE_ONLY_NO_ADMISSION")
             .put("blocker_coverage", ui?.optString("blocker_coverage") ?: "UNASSESSED")
             .put("uncovered_blocker_kinds", ui?.optJSONArray("uncovered_blocker_kinds") ?: JSONObject.NULL)
             .put("viewport_binding_matches", expectedViewport?.let { it == viewport } ?: JSONObject.NULL)
             .put("admission_reason", admissionReason ?: JSONObject.NULL)
             .put("width", pixels.first).put("height", pixels.second).put("rotation", rotation()).put("kind", kind).put("nodes", rows))
+        queryFailure?.let { throw it }
+        lastInspectedWindowId = currentRoot?.windowId ?: -1
         return VideoPage(currentPackage, context.packageManager.getPackageInfo(packageName, 0).longVersionCode,
             kind, network, viewport, name, admissionReason)
     }
@@ -301,7 +356,13 @@ private class NativeVideoPhone(
         val currentOwner = shell.findPackageOwner(packageName, expectedOwner.uid, minOf(preparationEnd, SystemClock.elapsedRealtimeNanos() + 10_000_000_000L))
         check(currentOwner == expectedOwner) { "VIDEO_GESTURE_OWNER_CHANGED" }
         val page = inspect()
+        session.requireRecordingActive()
         VideoUiAdmission.requireBeforeInput(page, packageName, expectedVersion, checkNotNull(expectedNetworkKey))
+        check(SystemClock.elapsedRealtimeNanos() < preparationEnd) { "PREPARATION_DEADLINE_EXPIRED_BEFORE_INPUT" }
+        val inputRoot = automation.rootInActiveWindow
+        check(inputRoot?.packageName?.toString() == packageName && inputRoot.windowId == lastInspectedWindowId) {
+            "VIDEO_FOREGROUND_CHANGED_BEFORE_INPUT"
+        }
         val box = page.viewport
         val x = box.left + (box.right - box.left) * swipe.x.toFloat()
         val from = box.top + (box.bottom - box.top) * swipe.fromY.toFloat()

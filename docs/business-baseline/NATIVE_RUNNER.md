@@ -31,6 +31,14 @@ gesture viewport及其精确 `viewport_bounds`。容器可能包括覆盖控件�
 内容是否合格继续交独立原件复核；不因正向页绑定而自动成为播放成功或有效基线。
 该版本会在手势前做全树检查，输入后可采用相同公开选择器有界查询；均非原子页面事务或私有状态证明。
 
+### 可选新观察策略（须明确选择，尚未实机合格）
+
+`ui_observation_method`缺省为旧`legacy-public-tree-1`，保留上述旧接线。新值`targeted-public-selectors-1`必须与UI binding的`observation_method`完全一致，且另核该文件原字节SHA；不声明或不一致不能悄悄切换。
+新策略在输入前后均只执行固定有界查询：resource_id走公开ID查询；显式query_text（或已有text）走公开文本查询，查询词必须是绑定text/description中的原样非空子串。它只是召回提示，最终仍用原选择器严格分类。没有全树fallback、模糊放行、补手势或跳过无法查询的selector。
+每次最多32个固定selector查询/2048个不同返回节点；当前真实绑定为“推荐”文本查询和原viewport ID查询共2项。`query_traces`保存每次方式/词/请求与返回手机elapsed/原返回数或异常；节点保存node_package/node_window_id及实际classification_eligible。部分查询/原件保留失败仍写UNKNOWN来源并传播，不使用已命中的部分分类；CANCEL在查询间也可停止。
+binding/result的可空`uiObservationMethod`记录选择值，旧无字段数据不被赋予新方法。单次API时长不等于App响应，API可能漏掉provider/嵌套内容，空返回不等于画面为空。策略可编译/离线通过不表示P40可用。
+公开API边界见[Android查询说明](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByText(java.lang.String))；AOSP源码只提供候选依据，不能替代实际provider资格。首次新方法卡必须保持原App/场景/动作/窗口及失败停止条件，旧机会不重开。
+
 分类由Native与离线回放共用同一纯函数。Native仍负责同包及祖先可见性过滤，并把实际分类节点值和`classification_eligible`记入原件，避免事后重读另一个节点状态冒充分类依据。
 最后输入前的明确拒绝另记`PRE_INPUT_REJECTED`，携带`preInputRejection.originalReference/sha256/pageKind/adapterPhase`；只有对应本轮同目录UI原件存在且SHA已计算，才报告此适配器零次注入。
 普通/输入后异常、原件缺失仍为UNKNOWN；`Phone.swipeOnce`边界被调用一次不等于注入一次。新诊断不改旧失败原件，不重置目录或机会，也不是设备全局无输入证明。
