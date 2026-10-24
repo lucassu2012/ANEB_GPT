@@ -104,6 +104,15 @@ v1旧指标、旧Completion、评分、旧数据/耗尽attempt、冻结正式合
 已取零手势来源只证明当前推荐页/容器；首资格使用已知正向锚点、精确viewport与显式非穷尽blocker覆盖，不为凑表虚构异常selector。未知页面停止；正向匹配不证明无广告、账号正常或正在播放。
 资格条件标`QUAL_REFERENCE`，不混入R/B六次。将来R/B保持相同网关拓扑，仅改变单一已校准约束，并检查蜂窝/多链路旁路。
 
+### D-44 — 业务视频输入前拒绝的原件关联诊断（2026-10-24）
+
+唯一参考机会`video-qual-20261024-5e7829c`已失败并消耗：最后公开UI缺推荐锚点，原件仍为OPERATION_UNKNOWN，不能回填或重开。
+本次仅离线修正诊断：Native的既有选择器分类移入可回放纯函数，同包/祖先可见性过滤仍由Native执行，未知页面、viewport、App/网络和一次机会守卫不放宽。
+Native在ACTION_DOWN前的专门拒绝可报告PRE_INPUT_REJECTED；必须保留确切UI引用和SHA，才声明此适配器零次注入。任意普通/输入后异常、原件不可关联仍为UNKNOWN，不等于设备全局无输入证明。
+`business-video-raw-1`仅兼容增加可空preInputRejection诊断；旧原件不重写，原始时延null/stalls not_computed、30秒窗、360/210预算及冻结正式schema/指标/评分不变。
+新的UI原件逐行记录实际classification_eligible和值，分类器使用同一组采集值；这些依然是先后公开观察，不宣称原子页面快照。旧ui2/ui3回放缺每节点包/祖先来源，只证明选择器与执行拒绝兼容，不重新证明Android可见性过滤。
+此修正不开放实机重试、R/B条件对照或网络设置变更；稳定页面准入仍须单独解决，不能只把失败改成更好看的分类。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

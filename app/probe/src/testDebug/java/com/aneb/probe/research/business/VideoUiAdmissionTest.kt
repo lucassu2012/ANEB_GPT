@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VideoUiAdmissionTest {
+    @Test fun `a missing feed anchor stays unknown and explains the refusal without discarding its viewport`() {
+        val source = binding().dropLast(1) + """,
+          "feed_anchor":{"description":"selected fixture feed"},
+          "gesture_viewport":{"resource_id":"fixture-viewport"}
+        }"""
+        val viewport = VideoUiPublicNode("fixture-viewport", null, null, VideoViewport(0, 0, 1200, 2478))
+        val anchor = VideoUiPublicNode(null, null, "selected fixture feed", VideoViewport(0, 0, 100, 100))
+        assertEquals("FEED_READY", VideoUiAdmission.classify(source, listOf(anchor, viewport)).kind)
+
+        val missing = VideoUiAdmission.classify(source, listOf(viewport))
+
+        assertEquals("UNKNOWN", missing.kind)
+        assertEquals(viewport.bounds, missing.viewport)
+        assertEquals("FEED_ANCHOR_MISSING", missing.reason)
+    }
+
     @Test fun `declared known feed can bind its source viewport without inventing blocker rules`() {
         assertEquals(VideoViewport(0, 0, 1200, 2478), VideoUiAdmission.compile(binding()))
     }

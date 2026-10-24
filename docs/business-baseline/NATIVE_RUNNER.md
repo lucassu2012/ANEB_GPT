@@ -31,6 +31,10 @@ gesture viewport及其精确 `viewport_bounds`。容器可能包括覆盖控件�
 内容是否合格继续交独立原件复核；不因正向页绑定而自动成为播放成功或有效基线。
 该版本会在手势前做全树检查，输入后可采用相同公开选择器有界查询；均非原子页面事务或私有状态证明。
 
+分类由Native与离线回放共用同一纯函数。Native仍负责同包及祖先可见性过滤，并把实际分类节点值和`classification_eligible`记入原件，避免事后重读另一个节点状态冒充分类依据。
+最后输入前的明确拒绝另记`PRE_INPUT_REJECTED`，携带`preInputRejection.originalReference/sha256/pageKind/adapterPhase`；只有对应本轮同目录UI原件存在且SHA已计算，才报告此适配器零次注入。
+普通/输入后异常、原件缺失仍为UNKNOWN；`Phone.swipeOnce`边界被调用一次不等于注入一次。新诊断不改旧失败原件，不重置目录或机会，也不是设备全局无输入证明。
+
 不得复制占位参数直接运行。总控须先核验设备在线、Huawei Launcher 前台、冲突进程/服务、
 活动 VPN/隧道和实际网络；来源不明的会话不结束。Source 准备同样需要该前置条件。
 
@@ -72,8 +76,9 @@ gesture viewport及其精确 `viewport_bounds`。容器可能包括覆盖控件�
 ［KNOWN｜HIGH］当前电脑 Intel I219-V 有线口未连接，WLAN 正在使用；ICS 已运行但归属未确认。
 不得将其停止或改造成“本轮自有服务”。本轮没有启用热点、安装驱动或改变手机网络。
 
-［INFERRED｜HIGH］可验证的候选拓扑为“有线上游→Windows→本轮 Wi-Fi 热点→P40”。
-先需接好网线并核实上网、实际共享绑定、手机默认路径与恢复；拓扑成立不等于整形成立。
+［KNOWN｜HIGH］正确WindowsPowerShell5.1子进程的公开WinRT读取已报告Wi-Fi上游、TetheringCapability=Enabled、OperationalState=Off，未Configure/Start。先前7.6.5宿主的API异常不构成硬件不支持证据。
+［INFERRED｜HIGH］候选拓扑包括“有线上游或现有Wi-Fi上游→Windows→本轮 Wi-Fi 热点→P40”；网线不是已证实硬前置。
+仍须核实实际共享绑定、手机默认路径、蜂窝/多路旁路与恢复；同卡无线竞争须实测记录，拓扑成立不等于整形成立。
 Windows 主机 QoS 规则成功不证明覆盖 ICS/NAT 手机下行；ANEB 节点 netem 不覆盖第三方视频 CDN。
 要新增转发层整形，须先锁定具体工具/版本/签名/hash、手机接口/地址范围、方向、时间窗、恢复和实测校准来源。
 本候选不带驱动安装、热点/路由修改或任意 VPN 功能，不用关闭安全功能换通过。

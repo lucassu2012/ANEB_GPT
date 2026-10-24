@@ -4,6 +4,8 @@ import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -11,6 +13,62 @@ import org.junit.rules.TemporaryFolder
 
 class VideoScenarioFailureTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun `final page rejection retains its source and does not inject input or reopen the opportunity`() {
+        val attempt = Attempt("final-page-rejected")
+        attempt.phone.finalInputPageKind = "UNKNOWN"
+
+        val result = attempt.run()
+
+        assertStopped(result, "PRE_INPUT_REJECTED", "PAGE_NOT_READY:UNKNOWN")
+        assertTrue(attempt.phone.gestures.isEmpty())
+        assertEquals(1, attempt.phone.boundaryOperations.count { it == "swipeOnce" })
+        assertTrue(File(attempt.directory, "SWIPE_INTENT.json").isFile)
+        assertTrue(result.ownedCleanup)
+        assertEquals(1, result.frames.size)
+        assertFalse(result.events.any { it.name == "swipe_returned" })
+        val raw = Json.parseToJsonElement(File(attempt.directory, "result.json").readText()).jsonObject
+        val rejection = raw.getValue("preInputRejection").jsonObject
+        assertEquals("ui-final.json", rejection.getValue("originalReference").jsonPrimitive.content)
+        val original = File(attempt.directory, "ui-final.json").readBytes()
+        val sourceSha = MessageDigest.getInstance("SHA-256").digest(original).joinToString("") { "%02x".format(it) }
+        assertEquals(sourceSha, rejection.getValue("sha256").jsonPrimitive.content)
+        val retained = snapshot(attempt.directory)
+        assertThrows(IllegalStateException::class.java) { attempt.run() }
+        assertEquals(retained, snapshot(attempt.directory))
+        assertPersisted(attempt, result)
+    }
+
+    @Test
+    fun `an exception after input starts remains unknown rather than becoming a pre input rejection`() {
+        val attempt = Attempt("failure-after-input")
+        attempt.phone.gestureFailure = IllegalStateException("offline partial input then tool failure")
+
+        val result = attempt.run()
+
+        assertStopped(result, "OPERATION_UNKNOWN", "IllegalStateException", "UNKNOWN")
+        assertEquals(1, attempt.phone.gestures.size)
+        assertNull(result.preInputRejection)
+        assertTrue(result.ownedCleanup)
+        assertFalse(result.events.any { it.name == "input_rejected_before_injection" })
+        assertPersisted(attempt, result)
+    }
+
+    @Test
+    fun `a typed rejection without its retained UI source cannot establish zero input`() {
+        val attempt = Attempt("unlinked-rejection")
+        attempt.phone.finalInputPageKind = "UNKNOWN"
+        attempt.phone.retainFinalInputSource = false
+
+        val result = attempt.run()
+
+        assertStopped(result, "OPERATION_UNKNOWN", "PRE_INPUT_REJECTION_SOURCE_UNCONFIRMED", "UNKNOWN")
+        assertTrue(attempt.phone.gestures.isEmpty())
+        assertNull(result.preInputRejection)
+        assertTrue(result.ownedCleanup)
+        assertPersisted(attempt, result)
+    }
 
     @Test
     fun `viewport change before the gesture stops without touching the feed and retains originals`() {
@@ -280,6 +338,8 @@ class VideoScenarioFailureTest {
         var inspectedViewport = VideoViewport(0, 100, 1200, 2400)
         var networkAfterSwipe = "wifi-network-1"
         var gestureAccepted = true
+        var finalInputPageKind: String? = null
+        var retainFinalInputSource = true
         var gestureFailure: Exception? = null
         var recordingStartFailure: RuntimeException? = null
         var recordingStopFailure: RuntimeException? = null
@@ -311,6 +371,13 @@ class VideoScenarioFailureTest {
 
         override fun swipeOnce(swipe: VideoSwipe): Boolean {
             boundaryOperations += "swipeOnce"
+            finalInputPageKind?.let { kind ->
+                // Explicit offline boundary source, not a real Android hierarchy or media.
+                val original = File(directory, "ui-final.json")
+                if (retainFinalInputSource) original.writeText("{\"offline_fixture\":true,\"kind\":\"$kind\"}\n")
+                val finalPage = page(kind, inspectedViewport).copy(originalReference = original.name)
+                VideoUiAdmission.requireBeforeInput(finalPage, "com.ss.android.ugc.aweme", 100L, "wifi-network-1")
+            }
             gestures += swipe
             time += swipe.durationMs * 1_000_000L
             gestureFailure?.let { throw it }

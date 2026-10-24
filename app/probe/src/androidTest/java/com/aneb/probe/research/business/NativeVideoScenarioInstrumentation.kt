@@ -203,7 +203,7 @@ private class NativeVideoPhone(
         val network = networkKey()
         val pixels = display()
         val rows = JSONArray()
-        val visible = mutableListOf<AccessibilityNodeInfo>()
+        val visible = mutableListOf<VideoUiPublicNode>()
         fun visibleWithinCurrentRoot(node: AccessibilityNodeInfo): Boolean {
             if (currentRoot == null || node.windowId != currentRoot.windowId) return false
             var ancestor: AccessibilityNodeInfo? = node
@@ -219,11 +219,14 @@ private class NativeVideoPhone(
             check(depth <= 128 && rows.length() < 2048) { "VIDEO_PUBLIC_TREE_LIMIT" }
             val isVisible = parentVisible && node.isVisibleToUser
             val bounds = Rect().also(node::getBoundsInScreen)
-            rows.put(JSONObject().put("resource_id", node.viewIdResourceName ?: JSONObject.NULL)
-                .put("class", node.className?.toString()).put("text", node.text?.toString())
-                .put("description", node.contentDescription?.toString()).put("visible", isVisible)
+            val value = VideoUiPublicNode(node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
+                VideoViewport(bounds.left, bounds.top, bounds.right, bounds.bottom))
+            val eligible = isVisible && node.packageName?.toString() == packageName
+            rows.put(JSONObject().put("resource_id", value.resourceId ?: JSONObject.NULL)
+                .put("class", node.className?.toString()).put("text", value.text)
+                .put("description", value.description).put("visible", isVisible).put("classification_eligible", eligible)
                 .put("enabled", node.isEnabled).put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))))
-            if (isVisible && node.packageName?.toString() == packageName) visible += node
+            if (eligible) visible += value
             for (index in 0 until node.childCount) node.getChild(index)?.let { walk(it, isVisible, depth + 1) }
         }
         var queryMode = "full_public_tree"
@@ -251,47 +254,28 @@ private class NativeVideoPhone(
                     for (node in observed) {
                         val box = Rect().also(node::getBoundsInScreen)
                         val isVisible = visibleWithinCurrentRoot(node)
-                        rows.put(JSONObject().put("resource_id", node.viewIdResourceName).put("class", node.className?.toString())
-                            .put("text", node.text?.toString()).put("description", node.contentDescription?.toString())
-                            .put("visible", isVisible).put("bounds", JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
-                        if (isVisible && node.packageName?.toString() == packageName) visible += node
+                        val value = VideoUiPublicNode(node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
+                            VideoViewport(box.left, box.top, box.right, box.bottom))
+                        val eligible = isVisible && node.packageName?.toString() == packageName
+                        rows.put(JSONObject().put("resource_id", value.resourceId).put("class", node.className?.toString())
+                            .put("text", value.text).put("description", value.description)
+                            .put("visible", isVisible).put("classification_eligible", eligible)
+                            .put("bounds", JSONArray(listOf(box.left, box.top, box.right, box.bottom))))
+                        if (eligible) visible += value
                     }
                 } else walk(currentRoot, true, 0)
             }
         }
-        fun matches(selector: JSONObject): List<AccessibilityNodeInfo> {
-            val keys = listOf("resource_id", "text", "description")
-            check(keys.any { selector.optString(it).isNotBlank() }) { "VIDEO_PUBLIC_SELECTOR_REQUIRED" }
-            return visible.filter { node -> keys.all { field -> !selector.has(field) || selector.getString(field) == when (field) {
-                "resource_id" -> node.viewIdResourceName.orEmpty()
-                "text" -> node.text?.toString().orEmpty()
-                else -> node.contentDescription?.toString().orEmpty()
-            } } }
-        }
         var kind = "UNKNOWN"
         var viewport = VideoViewport(0, 0, 0, 0)
+        var admissionReason: String? = null
         if (ui != null && currentPackage == packageName) {
             check(pixels.first == ui.getInt("display_width") && pixels.second == ui.getInt("display_height") &&
                 rotation() == ui.getInt("rotation")) { "VIDEO_DISPLAY_CHANGED" }
-            val blockers = ui.getJSONObject("blockers")
-            val blocked = blockers.keys().asSequence().filter { key ->
-                val selectors = blockers.getJSONArray(key)
-                (0 until selectors.length()).any { matches(selectors.getJSONObject(it)).isNotEmpty() }
-            }.toList()
-            val region = matches(ui.getJSONObject("gesture_viewport")).singleOrNull()
-            if (region != null) {
-                val box = Rect().also(region::getBoundsInScreen)
-                check(box.left >= 0 && box.top >= 0 && box.right <= pixels.first && box.bottom <= pixels.second && box.width() > 0 && box.height() > 0)
-                viewport = VideoViewport(box.left, box.top, box.right, box.bottom)
-            }
-            kind = when {
-                blocked.size > 1 -> "UNKNOWN"
-                blocked.size == 1 -> blocked.single()
-                viewport != expectedViewport -> "UNKNOWN"
-                matches(ui.getJSONObject("feed_anchor")).size == 1 && region != null -> "FEED_READY"
-                ui.has("loading_marker") && matches(ui.getJSONObject("loading_marker")).size == 1 -> "VIDEO_LOADING"
-                else -> "UNKNOWN"
-            }
+            val decision = VideoUiAdmission.classify(checkNotNull(uiText), visible)
+            kind = decision.kind
+            viewport = decision.viewport
+            admissionReason = decision.reason
         }
         val name = "ui-${readSequence++}.json"
         write(name, JSONObject().put("source", "sequential_public_accessibility_not_atomic_or_private_state_proof")
@@ -302,9 +286,10 @@ private class NativeVideoPhone(
             .put("blocker_coverage", ui?.optString("blocker_coverage") ?: "UNASSESSED")
             .put("uncovered_blocker_kinds", ui?.optJSONArray("uncovered_blocker_kinds") ?: JSONObject.NULL)
             .put("viewport_binding_matches", expectedViewport?.let { it == viewport } ?: JSONObject.NULL)
+            .put("admission_reason", admissionReason ?: JSONObject.NULL)
             .put("width", pixels.first).put("height", pixels.second).put("rotation", rotation()).put("kind", kind).put("nodes", rows))
         return VideoPage(currentPackage, context.packageManager.getPackageInfo(packageName, 0).longVersionCode,
-            kind, network, viewport, name)
+            kind, network, viewport, name, admissionReason)
     }
 
     override fun swipeOnce(swipe: VideoSwipe): Boolean {
@@ -316,8 +301,7 @@ private class NativeVideoPhone(
         val currentOwner = shell.findPackageOwner(packageName, expectedOwner.uid, minOf(preparationEnd, SystemClock.elapsedRealtimeNanos() + 10_000_000_000L))
         check(currentOwner == expectedOwner) { "VIDEO_GESTURE_OWNER_CHANGED" }
         val page = inspect()
-        check(page.kind == "FEED_READY" && page.packageName == packageName && page.versionCode == expectedVersion)
-        check(page.networkKey == expectedNetworkKey) { "VIDEO_REFERENCE_NETWORK_CHANGED_BEFORE_GESTURE" }
+        VideoUiAdmission.requireBeforeInput(page, packageName, expectedVersion, checkNotNull(expectedNetworkKey))
         val box = page.viewport
         val x = box.left + (box.right - box.left) * swipe.x.toFloat()
         val from = box.top + (box.bottom - box.top) * swipe.fromY.toFloat()

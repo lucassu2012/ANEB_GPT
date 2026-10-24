@@ -9,6 +9,21 @@ import kotlinx.serialization.json.Json
 /** Explicit observation of this run's cancel request, never inferred from an arbitrary tool error. */
 class VideoOperationCancelled : Exception("OWNED_CANCEL_DURING_OPERATION")
 
+/** Only the adapter's final gate, before ACTION_DOWN, may declare this narrow phase. */
+class VideoPreInputRejected private constructor(val page: VideoPage, code: String) : Exception(code) {
+    companion object {
+        internal fun reject(page: VideoPage, code: String): Nothing = throw VideoPreInputRejected(page, code)
+    }
+}
+
+@Serializable
+data class VideoInputRejectionSource(
+    val originalReference: String,
+    val sha256: String,
+    val pageKind: String,
+    val adapterPhase: String = "BEFORE_FIRST_INPUT_NOT_DEVICE_GLOBAL_NO_INPUT_PROOF",
+)
+
 @Serializable
 data class VideoViewport(val left: Int, val top: Int, val right: Int, val bottom: Int)
 
@@ -20,6 +35,7 @@ data class VideoPage(
     val networkKey: String,
     val viewport: VideoViewport,
     val originalReference: String,
+    val admissionReason: String? = null,
 )
 
 @Serializable
@@ -63,6 +79,7 @@ data class VideoScenarioResult(
     val playerFirstFrameMs: Double? = null,
     val stallStatus: String = "not_computed",
     val format: String = "business-video-raw-1",
+    val preInputRejection: VideoInputRejectionSource? = null,
 )
 
 /** One phone scenario, not an App automation framework. Android/OS is the only replaceable boundary. */
@@ -104,6 +121,7 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
         var totalBytes = 0L
         val paths = mutableSetOf<String>()
         var admittedViewport: VideoViewport? = null
+        var preInputRejection: VideoInputRejectionSource? = null
         fun stop(kind: String, code: String): Nothing = throw Stop(kind, code)
         fun requirePage(page: VideoPage, action: Boolean) {
             if (page.packageName != plan.definition.packageName || page.versionCode != binding.appVersionCode) {
@@ -191,6 +209,30 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
             category = failure.category
             reason = failure.message
             event("stopped")
+        } catch (failure: VideoPreInputRejected) {
+            // A generic adapter exception never enters this branch. Bind the explicit phase to
+            // its actual retained UI bytes before reporting zero injections by this adapter.
+            try {
+                val reference = failure.page.originalReference
+                require(reference.matches(Regex("[A-Za-z0-9_-]+\\.json")))
+                val original = File(directory, reference).canonicalFile
+                require(original.parentFile == directory.canonicalFile && original.isFile)
+                val digest = MessageDigest.getInstance("SHA-256")
+                original.inputStream().use { stream ->
+                    val block = ByteArray(16_384)
+                    while (true) { val count = stream.read(block); if (count < 0) break; digest.update(block, 0, count) }
+                }
+                preInputRejection = VideoInputRejectionSource(reference,
+                    digest.digest().joinToString("") { "%02x".format(it) }, failure.page.kind)
+                calls = "0"
+                category = "PRE_INPUT_REJECTED"
+                reason = failure.message
+                event("input_rejected_before_injection")
+            } catch (_: Exception) {
+                category = "OPERATION_UNKNOWN"
+                reason = "PRE_INPUT_REJECTION_SOURCE_UNCONFIRMED"
+                event("failure_retained")
+            }
         } catch (failure: VideoOperationCancelled) {
             category = "CANCELLED"
             reason = failure.message
@@ -206,7 +248,7 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
         val result = VideoScenarioResult(binding.runId, binding.profileSha256, binding.conditionId, binding.clockId,
             if (captured && cleaned) "CAPTURED_AWAITING_REVIEW" else "STOPPED",
             category, reason ?: if (!cleaned) "OWNED_CLEANUP_UNCONFIRMED" else null,
-            calls, cleaned, events, frames)
+            calls, cleaned, events, frames, preInputRejection = preInputRejection)
         writeNew("result.json", codec.encodeToString(VideoScenarioResult.serializer(), result))
         return result
     }
