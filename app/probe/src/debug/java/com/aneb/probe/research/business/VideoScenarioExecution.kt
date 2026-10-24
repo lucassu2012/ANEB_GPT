@@ -103,6 +103,7 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
         var cleaned = false
         var totalBytes = 0L
         val paths = mutableSetOf<String>()
+        var admittedViewport: VideoViewport? = null
         fun stop(kind: String, code: String): Nothing = throw Stop(kind, code)
         fun requirePage(page: VideoPage, action: Boolean) {
             if (page.packageName != plan.definition.packageName || page.versionCode != binding.appVersionCode) {
@@ -120,6 +121,9 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
                 }
                 stop(kind, page.kind)
             }
+            val expectedViewport = admittedViewport
+            if (expectedViewport == null) admittedViewport = page.viewport
+            else if (page.viewport != expectedViewport) stop("ENVIRONMENT_CHANGED", "VIDEO_VIEWPORT_CHANGED")
         }
         fun live() {
             if (File(directory, "CANCEL").exists()) stop("CANCELLED", "OWNED_CANCEL_REQUESTED")

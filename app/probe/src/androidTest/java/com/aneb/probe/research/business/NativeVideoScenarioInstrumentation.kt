@@ -82,7 +82,7 @@ class NativeVideoScenarioInstrumentation {
             check(failure == null) { "VIDEO_SOURCE_STOPPED" }
             return
         }
-        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, "R", checkNotNull(network), clockId)
+        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, "QUAL_REFERENCE", checkNotNull(network), clockId)
         val result = VideoScenarioExecution(phone, SystemClock::elapsedRealtimeNanos).runOnce(source, binding, root)
         check(result.ownedCleanup) { "VIDEO_OWNED_CLEANUP_UNCONFIRMED" }
         // CAPTURED means pending independent media/content review, not successful playback or a valid metric.
@@ -94,9 +94,12 @@ class NativeVideoScenarioInstrumentation {
         internal fun sha(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
         internal fun writeJson(root: File, name: String, value: JSONObject) {
+            writeOriginal(root, name, value.toString(2) + "\n")
+        }
+        internal fun writeOriginal(root: File, name: String, value: String) {
             val file = File(root, name)
             check(file.createNewFile()) { "VIDEO_ORIGINAL_ALREADY_EXISTS" }
-            FileOutputStream(file).use { it.write((value.toString(2) + "\n").toByteArray(Charsets.UTF_8)); it.fd.sync() }
+            FileOutputStream(file).use { it.write(value.toByteArray(Charsets.UTF_8)); it.fd.sync() }
         }
     }
 }
@@ -121,7 +124,7 @@ private class NativeVideoPhone(
     private var readSequence = 0
     private var gestureConsumed = false
     private var inputAttempted = false
-    private var admittedViewport: VideoViewport? = null
+    private var expectedViewport: VideoViewport? = null
     private var recordingClosed = false
     private val packageName = NativeVideoScenarioInstrumentation.PACKAGE
 
@@ -146,10 +149,8 @@ private class NativeVideoPhone(
         ui?.let {
             check(it.getLong("app_version_code") == expectedVersion)
             check(it.getInt("display_width") > 0 && it.getInt("display_height") > 0 && it.getInt("rotation") in 0..3)
-            val blockerKeys = it.getJSONObject("blockers").keys().asSequence().toSet()
-            check(blockerKeys == setOf("LOGIN_REQUIRED", "PAYMENT_REQUIRED", "PROTOCOL_REQUIRED", "AD_PRESENT", "BUSINESS_ERROR"))
-            blockerKeys.forEach { key -> check(it.getJSONObject("blockers").getJSONArray(key).length() > 0) }
-            write("ui-binding.json", it)
+            expectedViewport = VideoUiAdmission.compile(checkNotNull(uiText))
+            NativeVideoScenarioInstrumentation.writeOriginal(root, "ui-binding.json", uiText)
         }
         if (ui != null) {
             // The normal OS grant belongs to preparation, not the separate 20-second encoder-ready budget.
@@ -286,6 +287,7 @@ private class NativeVideoPhone(
             kind = when {
                 blocked.size > 1 -> "UNKNOWN"
                 blocked.size == 1 -> blocked.single()
+                viewport != expectedViewport -> "UNKNOWN"
                 matches(ui.getJSONObject("feed_anchor")).size == 1 && region != null -> "FEED_READY"
                 ui.has("loading_marker") && matches(ui.getJSONObject("loading_marker")).size == 1 -> "VIDEO_LOADING"
                 else -> "UNKNOWN"
@@ -296,6 +298,10 @@ private class NativeVideoPhone(
             .put("requested_elapsed_ns", started.toString()).put("returned_elapsed_ns", SystemClock.elapsedRealtimeNanos().toString())
             .put("package", currentPackage).put("window_id", currentRoot?.windowId ?: -1).put("network_key", network)
             .put("query_mode", queryMode)
+            .put("admission_scope", ui?.optString("admission_scope") ?: "SOURCE_ONLY_NO_ADMISSION")
+            .put("blocker_coverage", ui?.optString("blocker_coverage") ?: "UNASSESSED")
+            .put("uncovered_blocker_kinds", ui?.optJSONArray("uncovered_blocker_kinds") ?: JSONObject.NULL)
+            .put("viewport_binding_matches", expectedViewport?.let { it == viewport } ?: JSONObject.NULL)
             .put("width", pixels.first).put("height", pixels.second).put("rotation", rotation()).put("kind", kind).put("nodes", rows))
         return VideoPage(currentPackage, context.packageManager.getPackageInfo(packageName, 0).longVersionCode,
             kind, network, viewport, name)
@@ -312,7 +318,6 @@ private class NativeVideoPhone(
         val page = inspect()
         check(page.kind == "FEED_READY" && page.packageName == packageName && page.versionCode == expectedVersion)
         check(page.networkKey == expectedNetworkKey) { "VIDEO_REFERENCE_NETWORK_CHANGED_BEFORE_GESTURE" }
-        admittedViewport = page.viewport
         val box = page.viewport
         val x = box.left + (box.right - box.left) * swipe.x.toFloat()
         val from = box.top + (box.bottom - box.top) * swipe.fromY.toFloat()

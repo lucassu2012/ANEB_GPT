@@ -13,6 +13,26 @@ class VideoScenarioFailureTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `viewport change before the gesture stops without touching the feed and retains originals`() {
+        val attempt = Attempt("viewport-changed-before-gesture")
+        attempt.phone.preparedViewport = VideoViewport(0, 0, 1200, 2478)
+        attempt.phone.inspectedViewport = VideoViewport(0, 0, 1200, 1800)
+
+        val result = attempt.run()
+
+        assertStopped(result, "ENVIRONMENT_CHANGED", "VIDEO_VIEWPORT_CHANGED")
+        assertTrue(attempt.phone.gestures.isEmpty())
+        assertTrue(result.ownedCleanup)
+        assertTrue(result.frames.isEmpty())
+        assertFalse(File(attempt.directory, "SWIPE_INTENT.json").exists())
+        assertEquals(attempt.source, File(attempt.directory, "profile.json").readText())
+        assertEquals(attempt.binding, Json.decodeFromString(
+            VideoRunBinding.serializer(), File(attempt.directory, "binding.json").readText(),
+        ))
+        assertPersisted(attempt, result)
+    }
+
+    @Test
     fun `explicit native cancellation during an operation is cancelled and never retried`() {
         val attempt = Attempt("cancel-during-gesture")
         attempt.phone.gestureFailure = VideoOperationCancelled()
@@ -256,6 +276,8 @@ class VideoScenarioFailureTest {
         var time = 1_000_000_000L
         var preparedKind = "FEED_READY"
         var inspectedKind = "FEED_READY"
+        var preparedViewport = VideoViewport(0, 100, 1200, 2400)
+        var inspectedViewport = VideoViewport(0, 100, 1200, 2400)
         var networkAfterSwipe = "wifi-network-1"
         var gestureAccepted = true
         var gestureFailure: Exception? = null
@@ -266,15 +288,15 @@ class VideoScenarioFailureTest {
         val gestures = mutableListOf<VideoSwipe>()
         val boundaryOperations = mutableListOf<String>()
 
-        private fun page(kind: String) = VideoPage(
+        private fun page(kind: String, viewport: VideoViewport) = VideoPage(
             "com.ss.android.ugc.aweme", 100L, kind,
             if (gestures.isEmpty()) "wifi-network-1" else networkAfterSwipe,
-            VideoViewport(0, 100, 1200, 2400), "offline-boundary-not-real-android",
+            viewport, "offline-boundary-not-real-android",
         )
 
         override fun prepare(deadlineNs: Long): VideoPage {
             boundaryOperations += "prepare"
-            return page(preparedKind)
+            return page(preparedKind, preparedViewport)
         }
 
         override fun startRecording(deadlineNs: Long) {
@@ -284,7 +306,7 @@ class VideoScenarioFailureTest {
 
         override fun inspect(): VideoPage {
             boundaryOperations += "inspect"
-            return page(inspectedKind)
+            return page(inspectedKind, inspectedViewport)
         }
 
         override fun swipeOnce(swipe: VideoSwipe): Boolean {
