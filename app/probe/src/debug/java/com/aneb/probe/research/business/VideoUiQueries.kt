@@ -12,6 +12,20 @@ data class VideoUiQuery(val selector: String, val kind: String, val value: Strin
 object VideoUiQueries {
     const val LEGACY_METHOD = "legacy-public-tree-1"
     const val TARGETED_METHOD = "targeted-public-selectors-1"
+    const val PREPARATION_METHOD = "friends-invite-public-source-1"
+
+    /** Fixed recall from already observed invitation text, never semantic admission or an action selector. */
+    fun preparationQueries(requested: String, executionMode: String): List<VideoUiQuery> {
+        require(requested == PREPARATION_METHOD && executionMode == "SOURCE_PREPARATION") {
+            "VIDEO_SOURCE_QUERY_SCOPE_REQUIRED"
+        }
+        return listOf(
+            VideoUiQuery("source.friends_invite.title", "TEXT", "发现抖音朋友"),
+            VideoUiQuery("source.friends_invite.body", "TEXT", "登录后"),
+            VideoUiQuery("source.friends_invite.decline", "TEXT", "拒绝"),
+            VideoUiQuery("source.friends_invite.continue", "TEXT", "继续"),
+        )
+    }
 
     fun selectMethod(requested: String?, source: String?): String {
         val selected = requested ?: LEGACY_METHOD

@@ -142,6 +142,13 @@ SNIFF资格必须复制而非阻断且永不Send副本。限速保留原始包�
 
 普通命令只开放plan及非阻断inspect候选，不开放limit执行。inspect仅在已批准的升权console内启动自有匿名Job监督的worker；不自动升权、不代点系统确认。正常TTL与父取消/错误/未join分开，正常截止无包只报NO_MATCHING_PACKETS，未定发送不重发。独立监督的预算为请求TTL加固定5秒启动/清理余量、总上限120秒，故inspect请求TTL最多115秒；不是延长业务研究窗口。Job创建→挂起进程Assign之前若父退出，仍可能留未执行的挂起进程；Assign之后才有kill-on-close保证，父冻结/同步OS API卡住不承诺硬墙钟截止。完整原始失败和未知项必须保留。
 
+### D-48 — 零手势前置来源不申请录屏、与测量准入分离（2026-10-25）
+
+修正既有Native SOURCE_PREPARATION仅因UI绑定存在就触发Projection授权的边界；source-only始终不申请录屏，REFERENCE_QUALIFICATION仍在准备内取得原系统授权，原20秒ready/30秒观察/360准备/210清理预算不变。
+沿PO已批准的单App场景纵切复用原prepare、PID/UID/start身份、自有Shell、公开查询/截图/cleanup；不是新采集框架、账户登录或业务手势。新增显式source_observation_method=friends-invite-public-source-1，只能用于SOURCE_PREPARATION/max_gestures=0且不能与feed UI绑定/方法混用。
+本方法固定查询已见邀请原片中的“发现抖音朋友”“登录后”“拒绝”“继续”，仅作同App/同窗口可见公开节点召回；保留逐查询elapsed/返回数/异常/部分来源和一张原截图，不使用uiautomator idle，不fallback/重查，不操作这些按钮。它不进入feed分类、不产生业务样本/录制/指标；空返回不证明没有弹窗，命中不证明必须登录或账号健康。
+原feed准入/targeted方法、严格选择器、旧资格/前置机会及失败/NA均不变，不借新名称恢复已停止的全树idle准备路线。固定候选完整门/CI/APK及新鲜AGENTS前置之后，才可另立该新来源路径的一次有限准备卡；本代码决定自身不释放实机或研究quota。同步公开provider调用仍不能承诺可中断硬截止，失败须保留并停止，不加预算。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

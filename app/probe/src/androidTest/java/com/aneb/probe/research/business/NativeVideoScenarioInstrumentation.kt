@@ -51,13 +51,19 @@ class NativeVideoScenarioInstrumentation {
         check(parent.isDirectory || parent.mkdirs())
         val root = File(parent, runId)
         val uiText = arguments.getString("ui_binding_b64")?.let { String(Base64.decode(it, Base64.DEFAULT), Charsets.UTF_8) }
-        val observationMethod = VideoUiQueries.selectMethod(arguments.getString("ui_observation_method"), uiText)
+        val sourceMethod = arguments.getString("source_observation_method")
+        sourceMethod?.let {
+            check(uiText == null && arguments.getString("ui_observation_method") == null &&
+                arguments.getString("ui_binding_sha256") == null) { "VIDEO_SOURCE_QUERY_BINDING_CONFLICT" }
+            VideoUiQueries.preparationQueries(it, checkNotNull(mode))
+        }
+        val observationMethod = sourceMethod ?: VideoUiQueries.selectMethod(arguments.getString("ui_observation_method"), uiText)
         if (mode == "REFERENCE_QUALIFICATION" || observationMethod == VideoUiQueries.TARGETED_METHOD) {
             check(uiText != null && sha(uiText.toByteArray()) == arguments.getString("ui_binding_sha256")) { "VIDEO_UI_BINDING_REQUIRED" }
         }
         val network = if (mode == "REFERENCE_QUALIFICATION")
             checkNotNull(arguments.getString("network_key")?.takeIf { it.isNotBlank() }) else null
-        val phone = NativeVideoPhone(instrumentation, root, version, uiText, network, observationMethod)
+        val phone = NativeVideoPhone(instrumentation, root, version, uiText, network, observationMethod, checkNotNull(mode))
         val clockId = "android-elapsed:$runId"
         if (mode == "SOURCE_PREPARATION") {
             check(root.mkdir()) { "VIDEO_SOURCE_OPPORTUNITY_ALREADY_CONSUMED" }
@@ -74,6 +80,7 @@ class NativeVideoScenarioInstrumentation {
                 clean = phone.cleanupOwned(SystemClock.elapsedRealtimeNanos() + 210_000_000_000L)
                 writeJson(root, "source-terminal.json", JSONObject().put("format", "video-profile-source-1")
                     .put("run_id", runId).put("clock_id", clockId).put("gestures", 0)
+                    .put("ui_observation_method", observationMethod)
                     .put("state", if (failure == null) "SOURCE_RETAINED_NOT_SEMANTIC_ADMISSION" else "SOURCE_STOPPED")
                     .put("reference_accepted", false)
                     .put("sample_executed", false).put("metrics", JSONObject.NULL)
@@ -114,12 +121,16 @@ private class NativeVideoPhone(
     private val uiText: String?,
     private val expectedNetworkKey: String?,
     private val observationMethod: String,
+    private val executionMode: String,
 ) : VideoScenarioExecution.Phone {
     private val context: Context = instrumentation.targetContext
     private val automation = instrumentation.uiAutomation
     private val ui = uiText?.let(::JSONObject)
-    private val targetedQueries = if (observationMethod == VideoUiQueries.TARGETED_METHOD)
-        VideoUiQueries.compile(checkNotNull(uiText)) else null
+    private val targetedQueries = when (observationMethod) {
+        VideoUiQueries.PREPARATION_METHOD -> VideoUiQueries.preparationQueries(observationMethod, executionMode)
+        VideoUiQueries.TARGETED_METHOD -> VideoUiQueries.compile(checkNotNull(uiText))
+        else -> null
+    }
     private val shell by lazy { VideoOwnerShell(automation, root.canonicalFile, SystemClock::elapsedRealtimeNanos) }
     private var owner: OwnedProcessLifecycle.Owner? = null
     private var launched = false
@@ -158,7 +169,8 @@ private class NativeVideoPhone(
             expectedViewport = VideoUiAdmission.compile(checkNotNull(uiText))
             NativeVideoScenarioInstrumentation.writeOriginal(root, "ui-binding.json", uiText)
         }
-        if (ui != null) {
+        VideoPreparationCapture.requestIfRequired(executionMode) {
+            check(ui != null) { "VIDEO_QUALIFICATION_UI_BINDING_REQUIRED" }
             // The normal OS grant belongs to preparation, not the separate 20-second encoder-ready budget.
             val session = TongyiProjectionCaptureService.createSession(context, root, preparationEnd)
             projection = session
@@ -255,7 +267,7 @@ private class NativeVideoPhone(
         var queryMode = "full_public_tree"
         if (currentPackage == packageName && currentRoot != null) {
             if (targetedQueries != null) {
-                queryMode = VideoUiQueries.TARGETED_METHOD
+                queryMode = observationMethod
                 val observed = linkedSetOf<AccessibilityNodeInfo>()
                 try {
                     for (query in targetedQueries) {

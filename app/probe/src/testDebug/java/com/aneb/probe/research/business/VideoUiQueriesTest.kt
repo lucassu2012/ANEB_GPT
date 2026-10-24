@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VideoUiQueriesTest {
+    @Test fun `fixed invitation source queries are source only and never a feed admission method`() {
+        val queries = VideoUiQueries.preparationQueries("friends-invite-public-source-1", "SOURCE_PREPARATION")
+        assertEquals(listOf(
+            VideoUiQuery("source.friends_invite.title", "TEXT", "发现抖音朋友"),
+            VideoUiQuery("source.friends_invite.body", "TEXT", "登录后"),
+            VideoUiQuery("source.friends_invite.decline", "TEXT", "拒绝"),
+            VideoUiQuery("source.friends_invite.continue", "TEXT", "继续"),
+        ), queries)
+        assertThrows(IllegalArgumentException::class.java) {
+            VideoUiQueries.preparationQueries("friends-invite-public-source-1", "REFERENCE_QUALIFICATION")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VideoUiQueries.preparationQueries("unknown-source-method", "SOURCE_PREPARATION")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VideoUiQueries.selectMethod("friends-invite-public-source-1", null)
+        }
+    }
+
     @Test fun `method selection requires agreement with the binding and never silently changes legacy`() {
         val legacy = binding().replace("\"observation_method\":\"targeted-public-selectors-1\",", "")
         assertEquals(VideoUiQueries.LEGACY_METHOD, VideoUiQueries.selectMethod(null, legacy))
