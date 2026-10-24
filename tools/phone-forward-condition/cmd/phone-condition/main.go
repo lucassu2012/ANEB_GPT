@@ -20,8 +20,8 @@ func main() {
 	}
 }
 func run(args []string, output io.Writer) error {
-	if len(args) == 0 || (args[0] != "plan" && args[0] != "inspect" && args[0] != "_worker-inspect") {
-		return errors.New("usage: phone-condition plan|inspect -config <request.json>; limit execution is not released")
+	if len(args) == 0 || (args[0] != "plan" && args[0] != "inspect" && args[0] != "limit" && args[0] != "_worker-inspect" && args[0] != "_worker-limit") {
+		return errors.New("usage: phone-condition plan|inspect|limit -config <request.json>; execution requires a fixed, approved candidate")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	config := flags.String("config", "", "fixed request JSON path")
@@ -29,7 +29,8 @@ func run(args []string, output io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *config == "" || flags.NArg() != 0 || (args[0] == "_worker-inspect") != (*requestSHA != "") {
+	privateWorker := args[0] == "_worker-inspect" || args[0] == "_worker-limit"
+	if *config == "" || flags.NArg() != 0 || privateWorker != (*requestSHA != "") {
 		return errors.New("a fixed config and no extra arguments are required")
 	}
 	f, err := os.Open(*config)
@@ -44,8 +45,14 @@ func run(args []string, output io.Writer) error {
 	if args[0] == "inspect" {
 		return executeInspection(data, output)
 	}
+	if args[0] == "limit" {
+		return executeLimit(data, output)
+	}
 	if args[0] == "_worker-inspect" {
 		return inspectWorker(data, *requestSHA)
+	}
+	if args[0] == "_worker-limit" {
+		return limitWorker(data, *requestSHA)
 	}
 	request, plan, err := condition.ParseRequest(data)
 	if err != nil {

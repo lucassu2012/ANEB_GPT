@@ -150,6 +150,21 @@ SNIFF资格必须复制而非阻断且永不Send副本。限速保留原始包�
 原feed准入/targeted方法、严格选择器、旧资格/前置机会及失败/NA均不变，不借新名称恢复已停止的全树idle准备路线。固定候选完整门/CI/APK及新鲜AGENTS前置之后，才可另立该新来源路径的一次有限准备卡；本代码决定自身不释放实机或研究quota。同步公开provider调用仍不能承诺可中断硬截止，失败须保留并停止，不加预算。
 准入卡反审核出85990cd在同步查询迟到返回后仍可继续查询/截图，故该卡从未放行。修正沿用同一preparationEnd：新source路径在查询前后和截图前后检查，迟到结果先保留再抛错，禁止下一项UI工作并进入原210秒清理。截止后保留返回节点的已有属性，但不新发祖先查询；可见性未评估写null而非false。source旋转在查询前取得，原截止写入独立诊断；REFERENCE旧测量时钟和数据不替换，不以加预算或重试换通过。
 
+### D-49 — 复用单一监督器的显式Limit候选接线（2026-10-25）
+
+沿PO已批准的单App业务Profile/单因素网络条件主线，补D-47刻意未开放的命令接线；
+复用既有pacer、收包队列、原包恢复和匿名Job，不重建通用流量框架或再套监管层。
+新增显式limit与_worker-limit候选；inspect命令只接收inspect请求，limit只接收limit，
+private worker还须同一模式及原始请求SHA。两者沿用原TTL≤115秒、固定5秒余量和
+总监督120秒上限，先获批准的升权console前置不变，不自动提权、不绕安全策略。
+Run真实核心通过可替换的OS授权/时钟/native-link系统边界离线验证；不mock内部算法，
+不加载有效驱动、不配置热点/共享、不开P40业务App，不增加研究或发送额度。
+原始失败、create-once输出及未确认清理保留；结果仍NO_MATCHING_PACKETS/
+NO_PACED_PACKETS/INJECTED_NOT_CALIBRATED，不升级手机收到、已校准或业务达标。
+固定候选完整门/CI/二进制与配置、可恢复实际转发路径、系统批准及手机校准仍先于任何
+现场Limit；旧工作负载/RPI/schema/评分/时钟、失败/NA、生产签名、上传关闭和云端边界不变。
+本条只替代D-47中“命令尚未接入limit”的历史实现状态，不替代其安全/事实准入。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

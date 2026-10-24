@@ -22,6 +22,8 @@ Implemented and locally exercised so far:
 - a plan CLI that works without opening a driver or creating runtime output;
 - a Windows owned-process Job supervisor, actual suspended-child/normal-exit/
   timeout/close tests, and a create-once supervised inspection command.
+- explicit `limit`/private worker routing through the same parent, Job and
+  existing core; fixed request mode cannot be inferred by an `inspect` command.
 
 The public limits (at most16 host addresses, nonzero interface, TTL up to120s,
 0<rate<=1,000,000,000 IP bytes/s, packets up to65575 bytes) are implementation
@@ -31,14 +33,16 @@ the actual ICS/NAT/interface mapping and completeness of IPv4/IPv6 routing.
 
 ## Not implemented / not accepted yet
 
-There is **no released or qualified phone limiter**. The CLI accepts `plan` and
-the `inspect` qualification candidate, **never a live limit action**. Inspection
-requires an already approved elevated console; there is no auto-elevation or
+There is **no released or qualified phone limiter**. The CLI now accepts `plan`,
+the `inspect` qualification candidate and an explicit `limit` candidate. Neither
+execution command is a live release: it needs its own fixed configuration,
+approved system preflight, verified topology and calibration before use. Both
+require an already approved elevated console; there is no auto-elevation or
 security-policy change. No test loads the valid vendor library or driver. Packet
 tests use synthetic links/clocks; process tests run only the module's own test
 binary. No APK, hotspot or network setting was operated by these tests. The
-standard local gate and Windows CI now include the module, but inclusion is not
-a passed receipt: the previous e173 gate does not cover this uncommitted code.
+standard local gate and Windows CI include the module, but an earlier passed
+gate does not cover a later dirty candidate or prove real network behavior.
 
 Real qualification must use SNIFF|RECV_ONLY (0x5)
 and never Send copies. A blocking mode uses the bounded independent receiver and
@@ -67,6 +71,14 @@ candidate; **do not invoke it before the fixed-candidate gates, scoped system
 approval and fresh network/device preflight**. The caller must first establish
 actual driver/service provenance and absence of an unknown conflicting filter;
 source DLL/SYS hashes do not identify an already loaded kernel image.
+
+`phone-condition limit -config <fixed-request.json>` is the blocking-mode
+candidate and requires a request whose mode is exactly `limit`. `inspect` only
+accepts `inspect`. The private worker entry likewise pins its own mode and the
+original request hash. Successful core receipts remain `NO_MATCHING_PACKETS`,
+`NO_PACED_PACKETS` or `INJECTED_NOT_CALIBRATED`; none proves phone delivery or
+calibrated quality. Missing/failed/unjoined results stay failures. Existing
+synthetic packet tests and the real-core worker test do not load a driver.
 
 The parent read-locks its own executable, creates a new output directory, keeps
 the exact request bytes and hashes, then creates a suspended copy of itself.

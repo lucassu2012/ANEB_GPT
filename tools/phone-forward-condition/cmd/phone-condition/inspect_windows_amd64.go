@@ -31,6 +31,21 @@ type inspectionOutcome struct {
 }
 
 func executeInspection(data []byte, output io.Writer) error {
+	return executeCandidate(data, output, condition.Inspect)
+}
+
+func executeLimit(data []byte, output io.Writer) error {
+	return executeCandidate(data, output, condition.Limit)
+}
+
+func executeCandidate(data []byte, output io.Writer, expectedMode condition.Mode) error {
+	request, _, err := condition.ParseRequest(data)
+	if err != nil {
+		return err
+	}
+	if request.Mode != expectedMode {
+		return fmt.Errorf("%s command requires a %s request; never infers a different forwarding mode", expectedMode, expectedMode)
+	}
 	return inspectRequest(data, output, func() error { return inspectionPreflight(false) }, supervisor.RunOwnedProcess)
 }
 
@@ -72,7 +87,7 @@ func inspectionPreflight(requireJob bool) (err error) {
 		return err
 	}
 	if returned != 4 || elevated == 0 {
-		return errors.New("inspection requires an already approved elevated console; no automatic elevation or policy bypass")
+		return errors.New("forwarding execution requires an already approved elevated console; no automatic elevation or policy bypass")
 	}
 	if requireJob {
 		process, err := syscall.GetCurrentProcess()
@@ -85,7 +100,7 @@ func inspectionPreflight(requireJob bool) (err error) {
 			return fmt.Errorf("IsProcessInJob: %w", callErr)
 		}
 		if contained == 0 {
-			return errors.New("private inspection worker is not in a Job")
+			return errors.New("private forwarding worker is not in a Job")
 		}
 	}
 	return nil
@@ -108,15 +123,16 @@ func lockExecutable(path string) (*os.File, string, error) {
 	return f, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// inspectRequest is the one-shot parent. It never opens WinDivert, runs a
-// shell, captures payload, elevates itself, or reuses an output directory.
+// inspectRequest is the historical one-shot parent, reused for both explicit
+// modes. It never opens WinDivert, runs a shell, captures payload, elevates
+// itself, or reuses an output directory. Command wrappers pin their own mode.
 func inspectRequest(data []byte, output io.Writer, eligible func() error, launch func(string, []string, time.Duration) (supervisor.ProcessResult, error)) (err error) {
 	request, _, err := condition.ParseRequest(data)
 	if err != nil {
 		return err
 	}
-	if request.Mode != condition.Inspect || request.TTLSeconds > 115 {
-		return errors.New("only inspect is executable; TTL must be <=115s to fit the fixed 5s worker margin in the 120s supervisor cap")
+	if request.TTLSeconds > 115 {
+		return errors.New("TTL must be <=115s to fit the fixed 5s worker margin in the 120s supervisor cap")
 	}
 	if err = eligible(); err != nil {
 		return err
@@ -143,7 +159,7 @@ func inspectRequest(data []byte, output io.Writer, eligible func() error, launch
 	if err = writeNewJSON(filepath.Join(request.OutputDirectory, "parent-start.json"), map[string]any{"format": "phone-forward-parent-start-1", "state": "STARTING_NOT_A_RESULT", "request_sha256": requestSHA, "binary_sha256": binarySHA, "pid": os.Getpid(), "worker_margin_seconds": 5, "network_qualified": false}); err != nil {
 		return err
 	}
-	process, launchErr := launch(executable, []string{"_worker-inspect", "-config", requestPath, "-request-sha256", requestSHA}, time.Duration(request.TTLSeconds+5)*time.Second)
+	process, launchErr := launch(executable, []string{"_worker-" + string(request.Mode), "-config", requestPath, "-request-sha256", requestSHA}, time.Duration(request.TTLSeconds+5)*time.Second)
 	var worker inspectionOutcome
 	workerFile, readErr := os.Open(filepath.Join(request.OutputDirectory, "worker.json"))
 	if readErr == nil {
@@ -154,16 +170,19 @@ func inspectRequest(data []byte, output io.Writer, eligible func() error, launch
 		} else if readErr == nil {
 			readErr = json.Unmarshal(workerData, &worker)
 		}
-		if readErr == nil && (worker.Format != "phone-forward-inspect-result-1" || worker.RequestSHA256 != requestSHA) {
+		if readErr == nil && (worker.Format != "phone-forward-"+string(request.Mode)+"-result-1" || worker.RequestSHA256 != requestSHA) {
 			readErr = errors.New("worker result identity mismatch")
 		}
 	}
 	err = errors.Join(launchErr, readErr)
 	if err == nil && (process.PID == 0 || process.ExitCode == nil || *process.ExitCode != 0 || !process.ExitConfirmed || !process.OwnedTreeEmpty || !process.AssignedToOwnedJob || !process.DeadlineArmedBeforeResume || !process.Resumed || !process.JobClosed || !process.ProcessHandleClosed || !process.ThreadHandleClosed || !process.TimerHandleClosed || process.TimedOut) {
-		err = errors.New("owned inspection worker did not finish with complete supervision receipts")
+		err = errors.New("owned forwarding worker did not finish with complete supervision receipts")
 	}
-	if err == nil && (worker.PID != int(process.PID) || !worker.DriverOpenAttempted || !worker.OwnedHandleReturned || worker.Failure != "" || worker.Receipt.Mode != condition.Inspect || worker.Receipt.UnconfirmedUserPackets != 0 || !worker.Receipt.DriverDrained || !worker.Receipt.OwnedHandleClosed || !worker.Receipt.WorkersJoined || (worker.Receipt.State != "NO_MATCHING_PACKETS" && worker.Receipt.State != "OBSERVED_NOT_QUALIFIED")) {
-		err = errors.New("worker did not return a completed, unqualified inspection")
+	completedState := worker.Receipt.State == "NO_MATCHING_PACKETS" ||
+		(request.Mode == condition.Inspect && worker.Receipt.State == "OBSERVED_NOT_QUALIFIED") ||
+		(request.Mode == condition.Limit && (worker.Receipt.State == "NO_PACED_PACKETS" || worker.Receipt.State == "INJECTED_NOT_CALIBRATED"))
+	if err == nil && (worker.PID != int(process.PID) || !worker.DriverOpenAttempted || !worker.OwnedHandleReturned || worker.Failure != "" || worker.Receipt.Mode != request.Mode || worker.Receipt.UnconfirmedUserPackets != 0 || !worker.Receipt.DriverDrained || !worker.Receipt.OwnedHandleClosed || !worker.Receipt.WorkersJoined || !completedState) {
+		err = errors.New("worker did not return a completed, unqualified condition receipt")
 	}
 	summary := map[string]any{"format": "phone-forward-supervision-1", "request_sha256": requestSHA, "binary_sha256": binarySHA, "process": process, "network_qualified": false, "worker": worker}
 	if err != nil {
@@ -175,7 +194,17 @@ func inspectRequest(data []byte, output io.Writer, eligible func() error, launch
 }
 
 func inspectWorker(data []byte, expectedSHA string) (err error) {
-	if err := inspectionPreflight(true); err != nil {
+	return workerRequest(data, expectedSHA, condition.Inspect, func() error { return inspectionPreflight(true) }, condition.SystemClock{}, condition.OpenNative)
+}
+
+func limitWorker(data []byte, expectedSHA string) error {
+	return workerRequest(data, expectedSHA, condition.Limit, func() error { return inspectionPreflight(true) }, condition.SystemClock{}, condition.OpenNative)
+}
+
+// The injectable boundaries are OS approval, time, and the native forwarding
+// link. The real request parsing, core execution and evidence writing stay here.
+func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode, eligible func() error, clock condition.Clock, open func(condition.Plan, condition.Mode, string) (condition.Link, error)) (err error) {
+	if err := eligible(); err != nil {
 		return err
 	}
 	request, plan, err := condition.ParseRequest(data)
@@ -183,16 +212,16 @@ func inspectWorker(data []byte, expectedSHA string) (err error) {
 		return err
 	}
 	hash := sha256.Sum256(data)
-	if request.Mode != condition.Inspect || request.TTLSeconds > 115 || expectedSHA != hex.EncodeToString(hash[:]) {
-		return errors.New("private worker requires the exact fixed inspection request")
+	if (expectedMode != condition.Inspect && expectedMode != condition.Limit) || request.Mode != expectedMode || request.TTLSeconds > 115 || expectedSHA != hex.EncodeToString(hash[:]) {
+		return errors.New("private worker requires the exact fixed request and explicit entry mode")
 	}
 	if err := writeNewJSON(filepath.Join(request.OutputDirectory, "worker-start.json"), map[string]any{"format": "phone-forward-worker-start-1", "state": "RUNNING_NOT_A_RESULT", "pid": os.Getpid(), "request_sha256": expectedSHA}); err != nil {
 		return err
 	}
-	result := inspectionOutcome{Format: "phone-forward-inspect-result-1", RequestSHA256: expectedSHA, PID: os.Getpid()}
-	result.Receipt, err = condition.Run(context.Background(), plan.Config, condition.Inspect, condition.SystemClock{}, func(plan condition.Plan, mode condition.Mode) (condition.Link, error) {
+	result := inspectionOutcome{Format: "phone-forward-" + string(expectedMode) + "-result-1", RequestSHA256: expectedSHA, PID: os.Getpid()}
+	result.Receipt, err = condition.Run(context.Background(), plan.Config, expectedMode, clock, func(plan condition.Plan, mode condition.Mode) (condition.Link, error) {
 		result.DriverOpenAttempted = true
-		link, openErr := condition.OpenNative(plan, mode, request.DriverDirectory)
+		link, openErr := open(plan, mode, request.DriverDirectory)
 		result.OwnedHandleReturned = link != nil
 		return link, openErr
 	})
