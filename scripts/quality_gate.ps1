@@ -60,6 +60,23 @@ if (-not $SkipServer) {
     finally {
         Pop-Location
     }
+
+    Push-Location (Join-Path $repo 'tools/phone-forward-condition')
+    try {
+        # Synthetic links/clocks and owned local child processes only. These
+        # tests never load a valid WinDivert dependency or capture traffic.
+        & $goExe test -count=1 ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "Private forwarding helper tests failed with exit code $LASTEXITCODE."
+        }
+        & $goExe vet ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "Private forwarding helper vet failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 Write-Host 'ANEB Probe Codex quality gate: PASS'
