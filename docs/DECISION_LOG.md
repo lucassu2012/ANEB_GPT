@@ -69,6 +69,41 @@
 | DN-4A | Null output has deterministic `primary_null_reason` plus ordered, deduplicated `all_null_reasons`; raw-event-to-report recomputation is the verifier authority. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-5A | VERSION/package binds exactly the four existing machine contracts; no `evidence-schema.json` artifact is invented. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 
+### D-39 — 负载下响应性独立纵切（2026-10-23）
+
+PO 批准先查重、复用既有引擎及导出，固定候选通过质量门后一次 P40/本地节点验收。
+历史 ANEB 已有合并 loaded RTT，本次不重复建设综合引擎。当前产品只新增显式隔离模式，
+留存 idle/download/upload 各阶段 raw 与客户端观测传输重叠，旁列 P50/P95/增量。
+旧 Basic、Token、Prototype、postLoadPingMs、AQS/RPI、门限和冻结合同均不改变。
+详细固定口径和验收见 [LOADED_RESPONSIVENESS_V1.md](LOADED_RESPONSIVENESS_V1.md)。
+缺失/失败保持 null，上传写入字节不冒充远端接收；不作网络因果或运营商结论。
+不恢复千问、不追加云端/生产签名/上传权限。
+
+### D-41 — 手机端业务Profile与条件体验基线主线（2026-10-24）
+
+PO将下一阶段主线改为手机端Profile驱动的真人行为模拟与业务网络体验基线；完整回答耗时不再是全部能力前置。
+先一个App一个场景，复用现有Android执行/证据/Reader/导出，不重建通用框架。
+新视频方法候选为抖音一次上划后的30秒观察；新版本身份、内容规则、可观测端点、条件与重复先冻结再执行。
+参考与少量单因素网络条件分离，未经全路径施加/手机验证不能称受控网络；自然波动仅条件关联。
+v1旧指标、旧Completion、评分、旧数据/耗尽attempt、冻结正式合同均不改；未完成v2留原工作区，不混入新候选。
+不把计划批准当成无限发送、账号/协议同意或网络安全设置更改。实施与验收见[首个视频纵切](business-baseline/PLAN.md)。
+
+### D-42 — 视频业务操作与同钟截图观察（2026-10-24）
+
+现有Debug MediaRecorder只提供MP4与操作状态，无逐帧PTS桥，禁止把start调用时间当PTS=0。
+本新业务Profile选择同手机elapsedRealtimeNanos的公开截图观察作为独立新来源，记录调用区间/原图/序号/缺口；不改变原V0/VF或Completion。
+新指标只描述首次被采集器观察到可辨播放的等待，含采样与观察器影响，不是播放器首帧、物理上屏或真实卡顿。独立复核前所有体验值仍null。
+另一条同帧编码器PTS桥路线暂不前置，避免为首个业务纵切重建录制器；原片仍保存并可辅助内容/运动复核。
+本方法固定500ms计划采样、最多64张、PNG总256MiB、操作后30秒，超限停止保留部分，不延长或补采。
+
+### D-43 — 同片可见切换等待与已知页面准入（2026-10-24）
+
+修正D-42的依赖范围：缺elapsed↔PTS桥只阻止跨时钟输入→画面耗时，不阻止同一SHA原片内两个可见事件的真实PTS区间差。
+新方法`visible_switch_wait`单独说明为“记录中可见切换等待”：feed切换开始A→新目标可辨内在动态B，保留边界帧/真实PTS/判据；不得混同物理输入、播放器内部首帧或网络耗时，不回填原raw或旧V0/VF/Completion。
+独立复核先检查原片/时间轴、内容身份与内在运动；原件/采集链通过与指标可计算分开，缺源继续NA，原30秒操作窗不变。
+已取零手势来源只证明当前推荐页/容器；首资格使用已知正向锚点、精确viewport与显式非穷尽blocker覆盖，不为凑表虚构异常selector。未知页面停止；正向匹配不证明无广告、账号正常或正在播放。
+资格条件标`QUAL_REFERENCE`，不混入R/B六次。将来R/B保持相同网关拓扑，仅改变单一已校准约束，并检查蜂窝/多链路旁路。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。

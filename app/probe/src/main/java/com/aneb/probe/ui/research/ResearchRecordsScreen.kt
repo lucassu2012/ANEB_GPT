@@ -106,6 +106,7 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
     var requestedAttemptLocator by remember { mutableStateOf<ResearchAttemptLocator?>(null) }
     var offlineReportConfirmation by remember { mutableStateOf(ResearchOfflineReportConfirmation()) }
     var videoReportConfirmation by remember { mutableStateOf(ResearchVideoOfflineReportConfirmation()) }
+    var businessRawReportId by remember { mutableStateOf<String?>(null) }
 
     fun selectedOfflineReportTarget(): ResearchOfflineReportTarget? {
         val card = selectedConclusion ?: return null
@@ -450,6 +451,20 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        } else if (current.isBusinessVideo) {
+            ResearchBusinessVideoRawPane(current, pending != null, busy, Modifier.weight(1f),
+                onSave = {
+                    val bytes = pending
+                    if (bytes != null) action {
+                        val saved = withContext(Dispatchers.IO) { store.save(bytes) }
+                        pending = null; selectedId = saved.id; document = saved
+                        refresh()
+                        notice = "采集原文已保存，可重开或导出；播放与计时仍待独立复核。"
+                    }
+                },
+                onExportJson = { confirmExport = true },
+                onExportReport = { businessRawReportId = current.id },
+            )
         } else {
             var appFilter by remember(current.id) { mutableStateOf(requestedAppFilter?.takeIf { it.sourceId == current.id }) }
             var readerScopeFilter by remember(current.id) { mutableStateOf(requestedScopeFilter) }
@@ -755,6 +770,27 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
             }
         }
     }
+    businessRawReportId?.let { sourceId ->
+        val sameSavedSource = pending == null && selectedId == sourceId && document?.id == sourceId && document?.isBusinessVideo == true
+        AlertDialog(
+            onDismissRequest = { if (!busy) businessRawReportId = null },
+            title = { Text("导出业务视频采集原文") },
+            text = { Text("仅把已保存的原始 JSON、可读说明和 SHA 清单保存到 Downloads/ANEB；不附媒体、不打开引用、不上传。不是旧 V0/VF 分析，也不是播放成功或网络结论。") },
+            confirmButton = { TextButton(enabled = !busy && sameSavedSource, onClick = {
+                businessRawReportId = null
+                action {
+                    val result = withContext(Dispatchers.IO) {
+                        Exporter.exportToDownloads(context, "ANEB-private-business-raw-${sourceId.take(12)}.zip", "application/zip") {
+                            videoReportExporter.writeRawTo(sourceId, it)
+                        }
+                    }
+                    notice = if (result.ok) "采集原文报告已保存到 Downloads/ANEB；未附媒体，未上传。"
+                        else "导出失败，未发布不完整文件；原记录仍保留。"
+                }
+            }) { Text("确认仅本机导出") } },
+            dismissButton = { TextButton(enabled = !busy, onClick = { businessRawReportId = null }) { Text("取消") } },
+        )
+    }
     videoReportConfirmation.pending?.let { target ->
         AlertDialog(
             onDismissRequest = { if (!busy) videoReportConfirmation = videoReportConfirmation.cancel() },
@@ -982,8 +1018,63 @@ fun ResearchRecordsScreen(onBack: () -> Unit) {
 
 @Composable
 private fun ResearchBatchHeading(document: ResearchDocument) {
+    if (document.isBusinessVideo) {
+        Text("业务视频采集原文 · ${document.root.text("runId")}", style = MaterialTheme.typography.titleMedium)
+        Text("${document.root.text("state")} · 未核验，不等于播放成功", style = MaterialTheme.typography.bodySmall)
+        return
+    }
     document.batchSummaryLines.forEachIndexed { index, line ->
         Text(line, style = if (index == 0) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun ResearchBusinessVideoRawPane(
+    document: ResearchDocument,
+    preview: Boolean,
+    busy: Boolean,
+    modifier: Modifier,
+    onSave: () -> Unit,
+    onExportJson: () -> Unit,
+    onExportReport: () -> Unit,
+) {
+    val raw = document.root
+    val frames = (raw["frames"] as? JsonArray).orEmpty()
+    var showOriginal by remember(document.id) { mutableStateOf(false) }
+    LazyColumn(modifier, contentPadding = PaddingValues(bottom = 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            ResearchBatchHeading(document)
+            Text(document.sourceLabel)
+            Text(document.sourceNotice)
+            Text(if (preview) "预览 · 未保存" else "本机已保存 · 原字节可重开与导出")
+            if (preview) Button(enabled = !busy, onClick = onSave) { Text("确认保存未核验采集原文") }
+            else {
+                OutlinedButton(enabled = !busy, onClick = onExportReport) { Text("导出采集原文报告 ZIP") }
+                TextButton(enabled = !busy, onClick = onExportJson) { Text("导出原始 JSON") }
+            }
+            SelectionContainer { Text("原文 SHA-256：${document.id}", style = MaterialTheme.typography.bodySmall) }
+            Text("这是一个运行内的 ${frames.size} 张采样引用，不是 ${frames.size} 个独立样本。")
+            listOf("conditionId" to "条件声明", "clockId" to "同机时钟声明", "category" to "执行类别",
+                "reason" to "停止原因", "swipeCalls" to "上划调用数", "ownedCleanup" to "自有清理声明").forEach { (key, label) ->
+                Text("$label：${displayValue(raw[key])}")
+            }
+            Text("首次采集器观察播放等待：NA（待独立复核）；播放器首帧：NA；卡顿：not_computed。")
+            Text("不是旧 V0/VF；不从录制就绪推算 PTS。App版本、实际网络与内容身份须回到 binding/app-identity/界面及媒体原件核对，不能由本摘要推断。", style = MaterialTheme.typography.bodySmall)
+            Text("此入口不附媒体、不自动打开路径、不计算评分或网络归因。", style = MaterialTheme.typography.bodySmall)
+        }
+        item {
+            Text("操作时间原文 · elapsed纳秒，不是MP4 PTS", style = MaterialTheme.typography.titleSmall)
+            SelectionContainer { Text(displayValue(raw["events"]), style = MaterialTheme.typography.bodySmall) }
+        }
+        items(frames) { frame ->
+            Card(Modifier.fillMaxWidth()) {
+                SelectionContainer { Text(frame.toString(), Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall) }
+            }
+        }
+        item {
+            TextButton(onClick = { showOriginal = !showOriginal }) { Text(if (showOriginal) "收起完整原文" else "查看完整原文") }
+            if (showOriginal) SelectionContainer { Text(raw.toString(), style = MaterialTheme.typography.bodySmall) }
+        }
     }
 }
 
