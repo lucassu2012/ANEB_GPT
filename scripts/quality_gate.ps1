@@ -28,6 +28,7 @@ try {
         ':probe:testDebugUnitTest' `
         ':probe:lintDebug' `
         ':probe:assembleDebug' `
+        ':probe:assembleDebugAndroidTest' `
         '--no-daemon' `
         '--no-parallel' `
         '--max-workers=1'
@@ -54,6 +55,23 @@ if (-not $SkipServer) {
         & $goExe test -count=1 ./...
         if ($LASTEXITCODE -ne 0) {
             throw "Go server tests failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Push-Location (Join-Path $repo 'tools/phone-forward-condition')
+    try {
+        # Synthetic links/clocks and owned local child processes only. These
+        # tests never load a valid WinDivert dependency or capture traffic.
+        & $goExe test -count=1 ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "Private forwarding helper tests failed with exit code $LASTEXITCODE."
+        }
+        & $goExe vet ./...
+        if ($LASTEXITCODE -ne 0) {
+            throw "Private forwarding helper vet failed with exit code $LASTEXITCODE."
         }
     }
     finally {

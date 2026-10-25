@@ -252,7 +252,7 @@ private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) 
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                "基础测速 · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
+                "${if (result.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID) "负载响应性" else "基础测速"} · ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = colors.ink,

@@ -10,6 +10,20 @@ import org.junit.rules.TemporaryFolder
 class ResearchAnalysisStoreTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun legacyAnalysisExtensionFieldCannotSelectTheBusinessReviewRenderer() {
+        val source = ResearchRecordStore.decode(resource("r1-sample.json"))
+        val bytes = resource("r1-analysis-sample.json")
+        val original = ResearchAnalysisStore.decode(source, bytes)
+        val root = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
+        val extended = JsonObject(root + ("format" to JsonPrimitive("business-video-review-1"))).toString().toByteArray()
+
+        val analysis = ResearchAnalysisStore.decode(source, extended)
+
+        assertFalse(analysis.isBusinessVideo)
+        assertEquals(original.summaryLines, analysis.summaryLines)
+        source.records.forEach { assertEquals(original.attemptLines(it.attemptId), analysis.attemptLines(it.attemptId)) }
+    }
+
     @Test fun sourceConfirmedCompletionCountDoesNotImplyUsableDurationAndMissingConditionsSurviveImport() {
         // TEST ONLY: three fabricated attempts; mirrors the two-yes/one-uncertain pattern, not private evidence.
         val raw = Json.parseToJsonElement(resource("r1-sample.json").toString(Charsets.UTF_8)).jsonObject

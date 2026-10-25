@@ -35,6 +35,7 @@ internal object ProbeSettingsCodec {
             ?: ProbeSettings.DEFAULT_SERVER_URL,
         testMode = when (testMode) {
             AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
+            AnebTestMode.NETWORK_RESPONSIVENESS.name -> AnebTestMode.NETWORK_RESPONSIVENESS
             else -> AnebTestMode.TOKEN_EXPERIENCE
         },
         mode = when (mode) {

@@ -247,6 +247,7 @@ class MainActivity : ComponentActivity() {
         }
         intentTestModeOverride = when (ordinaryProbeIntent?.getStringExtra("test_mode")?.lowercase()) {
             "network_basic", "basic" -> AnebTestMode.NETWORK_BASIC
+            "loaded_responsiveness", "network_responsiveness" -> AnebTestMode.NETWORK_RESPONSIVENESS
             "token_experience", "token" -> AnebTestMode.TOKEN_EXPERIENCE
             else -> null
         }
@@ -401,7 +402,7 @@ class MainActivity : ComponentActivity() {
                             !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
                             acceptManualSessions = true
-                            screen = if (testMode == AnebTestMode.NETWORK_BASIC) Screen.BasicTesting else Screen.Testing
+                            screen = if (testMode.isBasic) Screen.BasicTesting else Screen.Testing
                         }
                         ProbeRunService.start(
                             context = applicationContext,
@@ -423,7 +424,7 @@ class MainActivity : ComponentActivity() {
                             return
                         }
                         val state = radioPermissionState()
-                        if (testMode == AnebTestMode.NETWORK_BASIC || state.hasFullRadioEvidence) {
+                        if (testMode.isBasic || state.hasFullRadioEvidence) {
                             requestRunNotificationPermission { startRun(fromAutorun = false) }
                         } else {
                             permissionPrompt = RadioPermissionPrompt(
@@ -636,7 +637,7 @@ class MainActivity : ComponentActivity() {
                                 if (acceptManualSessions && !session.autorun) {
                                     radioEvidenceLimited = session.testMode == AnebTestMode.TOKEN_EXPERIENCE &&
                                         !radioPermissionState().hasFullRadioEvidence
-                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
+                                    screen = if (session.testMode.isBasic) {
                                         Screen.BasicTesting
                                     } else {
                                         Screen.Testing
@@ -645,7 +646,7 @@ class MainActivity : ComponentActivity() {
                             }
                             is ProbeRunSession.Completed -> {
                                 if (acceptManualSessions && !session.autorun) {
-                                    screen = if (session.testMode == AnebTestMode.NETWORK_BASIC) {
+                                    screen = if (session.testMode.isBasic) {
                                         Screen.BasicResult(session.runId)
                                     } else {
                                         Screen.Result(session.runId, fromHistory = false)
@@ -1048,9 +1049,12 @@ class MainActivity : ComponentActivity() {
                 db.testRunDao().all().maxByOrNull { it.startedAtEpochMs }
             }
         }
-        val lastBasicRun by produceState<BasicSpeedResultEntity?>(initialValue = null, running) {
+        val lastBasicRun by produceState<BasicSpeedResultEntity?>(initialValue = null, running, testMode) {
             value = withContext(Dispatchers.IO) {
-                db.basicSpeedResultDao().all().maxByOrNull { it.startedAtEpochMs }
+                val profileId = if (testMode == AnebTestMode.NETWORK_RESPONSIVENESS)
+                    com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID
+                    else com.aneb.probe.engine.NetworkSpeedEngine.PROFILE_ID
+                db.basicSpeedResultDao().all().filter { it.profileId == profileId }.maxByOrNull { it.startedAtEpochMs }
             }
         }
         HomeScreen(
@@ -1073,7 +1077,13 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BasicResultRoute(runId: String, onBack: () -> Unit) {
         val result by produceState<com.aneb.probe.engine.BasicSpeedResult?>(initialValue = null, runId) {
-            value = withContext(Dispatchers.IO) { db.basicSpeedResultDao().byId(runId)?.toDomain() }
+            value = withContext(Dispatchers.IO) {
+                db.basicSpeedResultDao().byId(runId)?.toDomain()?.copy(
+                    responsivenessJson = db.reportBodyDao().forRun(runId)?.body?.takeIf {
+                        runCatching { com.aneb.probe.engine.LoadedResponsiveness.decode(it).runId == runId }.getOrDefault(false)
+                    },
+                )
+            }
         }
         val loaded = result
         if (loaded != null) {

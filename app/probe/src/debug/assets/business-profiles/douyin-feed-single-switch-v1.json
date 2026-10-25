@@ -1,0 +1,23 @@
+{
+  "contractVersion": "aneb-video-business-profile-1",
+  "profileId": "douyin-feed-single-switch",
+  "version": "1.0.0",
+  "packageName": "com.ss.android.ugc.aweme",
+  "appVersionPolicy": "PIN_AT_FIRST_ADMISSION",
+  "scenario": "SINGLE_FEED_SWITCH",
+  "initialState": "FEED_READY",
+  "accountPolicy": "EXISTING_ACCOUNT_NO_LOGIN_FLOW",
+  "contentSelection": "ONE_NEXT_ITEM_BIND_NO_RETRY",
+  "contentAdmission": "NEW_TO_CAMPAIGN_NO_DELIBERATE_PREVIEW",
+  "cachePolicy": "NO_CLEAR_NO_PREWATCH_RECORD_UNKNOWN",
+  "swipe": {"x": 0.5, "fromY": 0.8, "toY": 0.2, "durationMs": 400},
+  "observeMs": 30000,
+  "frameIntervalMs": 500,
+  "maxFrames": 64,
+  "maxFrameBytes": 268435456,
+  "visualMetric": "FIRST_OBSERVED_PLAYBACK_NOT_PLAYER_FIRST_FRAME",
+  "firstFrameTargetMs": 3000,
+  "blockedStates": ["LOGIN_REQUIRED", "PAYMENT_REQUIRED", "PROTOCOL_REQUIRED", "AD_PRESENT", "UNKNOWN"],
+  "recovery": "STOP_NO_RETRY",
+  "exitPolicy": "OWNED_ONLY_LAUNCHER_RESTORE"
+}

@@ -69,6 +69,102 @@
 | DN-4A | Null output has deterministic `primary_null_reason` plus ordered, deduplicated `all_null_reasons`; raw-event-to-report recomputation is the verifier authority. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 | DN-5A | VERSION/package binds exactly the four existing machine contracts; no `evidence-schema.json` artifact is invented. | Product Owner binding receipt, Issue #14 comment `5449399284` |
 
+### D-39 — 负载下响应性独立纵切（2026-10-23）
+
+PO 批准先查重、复用既有引擎及导出，固定候选通过质量门后一次 P40/本地节点验收。
+历史 ANEB 已有合并 loaded RTT，本次不重复建设综合引擎。当前产品只新增显式隔离模式，
+留存 idle/download/upload 各阶段 raw 与客户端观测传输重叠，旁列 P50/P95/增量。
+旧 Basic、Token、Prototype、postLoadPingMs、AQS/RPI、门限和冻结合同均不改变。
+详细固定口径和验收见 [LOADED_RESPONSIVENESS_V1.md](LOADED_RESPONSIVENESS_V1.md)。
+缺失/失败保持 null，上传写入字节不冒充远端接收；不作网络因果或运营商结论。
+不恢复千问、不追加云端/生产签名/上传权限。
+
+### D-41 — 手机端业务Profile与条件体验基线主线（2026-10-24）
+
+PO将下一阶段主线改为手机端Profile驱动的真人行为模拟与业务网络体验基线；完整回答耗时不再是全部能力前置。
+先一个App一个场景，复用现有Android执行/证据/Reader/导出，不重建通用框架。
+新视频方法候选为抖音一次上划后的30秒观察；新版本身份、内容规则、可观测端点、条件与重复先冻结再执行。
+参考与少量单因素网络条件分离，未经全路径施加/手机验证不能称受控网络；自然波动仅条件关联。
+v1旧指标、旧Completion、评分、旧数据/耗尽attempt、冻结正式合同均不改；未完成v2留原工作区，不混入新候选。
+不把计划批准当成无限发送、账号/协议同意或网络安全设置更改。实施与验收见[首个视频纵切](business-baseline/PLAN.md)。
+
+### D-42 — 视频业务操作与同钟截图观察（2026-10-24）
+
+现有Debug MediaRecorder只提供MP4与操作状态，无逐帧PTS桥，禁止把start调用时间当PTS=0。
+本新业务Profile选择同手机elapsedRealtimeNanos的公开截图观察作为独立新来源，记录调用区间/原图/序号/缺口；不改变原V0/VF或Completion。
+新指标只描述首次被采集器观察到可辨播放的等待，含采样与观察器影响，不是播放器首帧、物理上屏或真实卡顿。独立复核前所有体验值仍null。
+另一条同帧编码器PTS桥路线暂不前置，避免为首个业务纵切重建录制器；原片仍保存并可辅助内容/运动复核。
+本方法固定500ms计划采样、最多64张、PNG总256MiB、操作后30秒，超限停止保留部分，不延长或补采。
+
+### D-43 — 同片可见切换等待与已知页面准入（2026-10-24）
+
+修正D-42的依赖范围：缺elapsed↔PTS桥只阻止跨时钟输入→画面耗时，不阻止同一SHA原片内两个可见事件的真实PTS区间差。
+新方法`visible_switch_wait`单独说明为“记录中可见切换等待”：feed切换开始A→新目标可辨内在动态B，保留边界帧/真实PTS/判据；不得混同物理输入、播放器内部首帧或网络耗时，不回填原raw或旧V0/VF/Completion。
+独立复核先检查原片/时间轴、内容身份与内在运动；原件/采集链通过与指标可计算分开，缺源继续NA，原30秒操作窗不变。
+已取零手势来源只证明当前推荐页/容器；首资格使用已知正向锚点、精确viewport与显式非穷尽blocker覆盖，不为凑表虚构异常selector。未知页面停止；正向匹配不证明无广告、账号正常或正在播放。
+资格条件标`QUAL_REFERENCE`，不混入R/B六次。将来R/B保持相同网关拓扑，仅改变单一已校准约束，并检查蜂窝/多链路旁路。
+
+### D-44 — 业务视频输入前拒绝的原件关联诊断（2026-10-24）
+
+唯一参考机会`video-qual-20261024-5e7829c`已失败并消耗：最后公开UI缺推荐锚点，原件仍为OPERATION_UNKNOWN，不能回填或重开。
+本次仅离线修正诊断：Native的既有选择器分类移入可回放纯函数，同包/祖先可见性过滤仍由Native执行，未知页面、viewport、App/网络和一次机会守卫不放宽。
+Native在ACTION_DOWN前的专门拒绝可报告PRE_INPUT_REJECTED；必须保留确切UI引用和SHA，才声明此适配器零次注入。任意普通/输入后异常、原件不可关联仍为UNKNOWN，不等于设备全局无输入证明。
+`business-video-raw-1`仅兼容增加可空preInputRejection诊断；旧原件不重写，原始时延null/stalls not_computed、30秒窗、360/210预算及冻结正式schema/指标/评分不变。
+新的UI原件逐行记录实际classification_eligible和值，分类器使用同一组采集值；这些依然是先后公开观察，不宣称原子页面快照。旧ui2/ui3回放缺每节点包/祖先来源，只证明选择器与执行拒绝兼容，不重新证明Android可见性过滤。
+此修正不开放实机重试、R/B条件对照或网络设置变更；稳定页面准入仍须单独解决，不能只把失败改成更好看的分类。
+
+### D-45 — 显式版本化的公开定点UI读取候选（2026-10-24）
+
+沿PO已授权的单App/单场景主线解决页面读取可靠性，不把D-44诊断通过当业务通过，也不重开5e旧机会。
+新观察策略`targeted-public-selectors-1`必须同时由执行参数`ui_observation_method`与固定UI binding声明；缺省仍是旧`legacy-public-tree-1`策略，二者不一致即拒绝。方法声明只表示实际选择的观察策略，不证明来源或指标有效。
+查询词“推荐”仅从已观察的严格description派生，用Android公开文本查询召回，再用原有逐字description/唯一性/同包/当前根与祖先可见性/精确geometry分类；不将query_text改为最终text条件，不采用更弱的FEED_CONTINUATION，不在新策略失败后回退全树或补查。
+Native逐次记录实际查询、手机elapsed请求/返回或异常、返回数、节点值/根关联和最终拒绝；每次最多32个固定查询、最多2048个不同返回节点，本绑定实际仅2查询。原截图/30秒观察窗和360/210预算不变。查询时长不是App/网络耗时，返回数不是召回完整性证明。
+后续查询/原件保留失败或CANCEL仍保存已有有界候选，来源分类保持UNKNOWN且传播原错误/取消，运行取消仍为CANCELLED；不因部分命中放行。输入前再核录制健康、准备截止与当前App/窗口，不能对变化的前台注入。
+新raw/binding仅增加可空uiObservationMethod声明；旧数据、旧NA/V0/VF/Completion、指标/评分、冻结正式schema与原时钟不改。实机provider兼容性尚未证明；固定候选完整门/CI/APK后，须另定明确方法资格卡，不因本条自动授权重试或R/B对照。
+
+### D-46 — 原始业务视频与独立复核副本分离交接（2026-10-25）
+
+沿PO已批准的Profile纵切复用已有Reader/报告/证据，不把结果交接组件替代一个有效真实场景或受控网络基线。1d03公开定点方法已实机进入一次输入，但其唯一资格在同包新窗口/空查询后停止，账号相关模态另有媒体证据；两项既定V2数值仍NA，原始ownedCleanup=false与稍后Root全局清场分开保留。一次独立前置准备也未取得可共同确认的提示，未点击/滑动或新增研究样本，不重开旧机会。
+
+仅新增私有导入sidecar `business-video-review-1`，复用ResearchAnalysisStore、原始业务pane与现有视频ZIP/Downloads流程；不改旧正式evidence schema、workload、RPI、评分、V0/VF/Completion或原始采集字段。
+复核必须绑定原文SHA、完整原文和唯一run；类型由业务校验成功分支显式赋值，不由旧分析中的未知format字段推断。原始STOPPED/清理未确认不能被声明为QUALIFIED；导入声明本身依然不是Android媒体、时钟或真实性认证。
+两项新方法区间或NA、原因/限制及来源文本单独保存/重开/展示，不计算端点或达标结论、不改rawnull。引用不读取/打开；ZIP只含原文/复核原字节、可读首页与校验清单，不附媒体、不上传或自动聚合。
+此变更不开放业务采集/重试、账号登录或新协议处理、网络规则/驱动操作；产品Reader QA与研究资格分开授权/记录。使用说明见business-baseline/REVIEWED_RESULTS.md。
+
+### D-47 — 单手机转发条件的有界Windows工程候选（2026-10-25）
+
+沿PO已批准的手机业务Profile/单因素条件基线，补覆盖第三方App流量的控制点；不是新KPI、评分、旧测量协议或已施加网络条件的证明。
+复用现有手机执行/采集/Reader；Linux节点netem和本机进程QoS不冒充手机转发控制。新独立host工具仅处理一个手机地址集合、一个实际确认的NETWORK_FORWARD接口和有限寿命；不配置热点、路由、防火墙、VPN或安全策略。转发内存暂存原包，不解析或落盘payload。
+工程边界为最多16个同一手机的host地址、0<TTL≤120秒、0<下行IP字节速率≤10^9B/s；这不是B条件选择、业务体验门限或网络能力事实。参考/B仍须同拓扑、完整IPv4/IPv6/蜂窝旁路准入、真实施加/恢复和手机校准后另行冻结。
+SNIFF资格必须复制而非阻断且永不Send副本。限速保留原始包与完整80字节地址，接收与节流分离、有界队列；溢出、时钟故障、截断、注入失败等中止条件，不隐藏丢包或扩大过滤范围。主机注入成功不是手机收到，driver丢弃计数与手机收包缺证仍null。
+寿命在驱动Open前由独立本地监督器约束；正常/失败退出先停止新增接管，再限时处理已接管包并关闭自有句柄。确定尚未派发的发送可在清理阶段恢复，已派发而结果未知不重发。不能把未join/未排空洗成清理成功；不泛化停止/卸载未知driver或服务。
+固定源码/二进制/依赖/配置、完整质量门及实际系统批准先于现场调用；本决定不自动放行driver/热点/手机操作或研究quota。旧5e/1d03/prep失败、NA、frozen workload/RPI/schema/时钟、上传关闭、生产签名和E01/Aliyun边界均不变。当前实现/准入状态见tools/phone-forward-condition/README.md。
+
+普通命令只开放plan及非阻断inspect候选，不开放limit执行。inspect仅在已批准的升权console内启动自有匿名Job监督的worker；不自动升权、不代点系统确认。正常TTL与父取消/错误/未join分开，正常截止无包只报NO_MATCHING_PACKETS，未定发送不重发。独立监督的预算为请求TTL加固定5秒启动/清理余量、总上限120秒，故inspect请求TTL最多115秒；不是延长业务研究窗口。Job创建→挂起进程Assign之前若父退出，仍可能留未执行的挂起进程；Assign之后才有kill-on-close保证，父冻结/同步OS API卡住不承诺硬墙钟截止。完整原始失败和未知项必须保留。
+
+### D-48 — 零手势前置来源不申请录屏、与测量准入分离（2026-10-25）
+
+修正既有Native SOURCE_PREPARATION仅因UI绑定存在就触发Projection授权的边界；source-only始终不申请录屏，REFERENCE_QUALIFICATION仍在准备内取得原系统授权，原20秒ready/30秒观察/360准备/210清理预算不变。
+沿PO已批准的单App场景纵切复用原prepare、PID/UID/start身份、自有Shell、公开查询/截图/cleanup；不是新采集框架、账户登录或业务手势。新增显式source_observation_method=friends-invite-public-source-1，只能用于SOURCE_PREPARATION/max_gestures=0且不能与feed UI绑定/方法混用。
+本方法固定查询已见邀请原片中的“发现抖音朋友”“登录后”“拒绝”“继续”，仅作同App/同窗口可见公开节点召回；保留逐查询elapsed/返回数/异常/部分来源和一张原截图，不使用uiautomator idle，不fallback/重查，不操作这些按钮。它不进入feed分类、不产生业务样本/录制/指标；空返回不证明没有弹窗，命中不证明必须登录或账号健康。
+原feed准入/targeted方法、严格选择器、旧资格/前置机会及失败/NA均不变，不借新名称恢复已停止的全树idle准备路线。固定候选完整门/CI/APK及新鲜AGENTS前置之后，才可另立该新来源路径的一次有限准备卡；本代码决定自身不释放实机或研究quota。同步公开provider调用仍不能承诺可中断硬截止，失败须保留并停止，不加预算。
+准入卡反审核出85990cd在同步查询迟到返回后仍可继续查询/截图，故该卡从未放行。修正沿用同一preparationEnd：新source路径在查询前后和截图前后检查，迟到结果先保留再抛错，禁止下一项UI工作并进入原210秒清理。截止后保留返回节点的已有属性，但不新发祖先查询；可见性未评估写null而非false。source旋转在查询前取得，原截止写入独立诊断；REFERENCE旧测量时钟和数据不替换，不以加预算或重试换通过。
+
+### D-49 — 复用单一监督器的显式Limit候选接线（2026-10-25）
+
+沿PO已批准的单App业务Profile/单因素网络条件主线，补D-47刻意未开放的命令接线；
+复用既有pacer、收包队列、原包恢复和匿名Job，不重建通用流量框架或再套监管层。
+新增显式limit与_worker-limit候选；inspect命令只接收inspect请求，limit只接收limit，
+private worker还须同一模式及原始请求SHA。两者沿用原TTL≤115秒、固定5秒余量和
+总监督120秒上限，先获批准的升权console前置不变，不自动提权、不绕安全策略。
+Run真实核心通过可替换的OS授权/时钟/native-link系统边界离线验证；不mock内部算法，
+不加载有效驱动、不配置热点/共享、不开P40业务App，不增加研究或发送额度。
+原始失败、create-once输出及未确认清理保留；结果仍NO_MATCHING_PACKETS/
+NO_PACED_PACKETS/INJECTED_NOT_CALIBRATED，不升级手机收到、已校准或业务达标。
+固定候选完整门/CI/二进制与配置、可恢复实际转发路径、系统批准及手机校准仍先于任何
+现场Limit；旧工作负载/RPI/schema/评分/时钟、失败/NA、生产签名、上传关闭和云端边界不变。
+本条只替代D-47中“命令尚未接入limit”的历史实现状态，不替代其安全/事实准入。
+
 ## 否决记录（评估后明确不采纳）
 
 - **Cronet 逐请求 bindToNetwork**：OkHttp 主栈无此 API；改用 `requestNetwork` + `socketFactory`/`Dns` 双绑定，保留其 fail-closed 语义（绑定不可得即不出数）。
