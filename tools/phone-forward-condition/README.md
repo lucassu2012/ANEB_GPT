@@ -96,6 +96,34 @@ of losses. Copies seen successfully are still `OBSERVED_NOT_QUALIFIED`.
 These receive totals include shutdown drain; they do not delimit an App window.
 `PhoneReceivedBytes` and `DriverDroppedPackets` remain unknown/null.
 
+### Bounded burst repair candidate (offline, 2026-10-27)
+
+The consumed P40 calibration reached the forwarding point but its limited worker
+reported `INVALID / USER_QUEUE_OVERFLOW` with the old16-item user queue. A complete
+phone body after cleanup was not an accepted limited condition. Its original
+exit2, raw bodies and missing recovery remain unchanged.
+
+The new internal resource budget is fixed at256 pending frames and4MiB of packet
+backing-buffer capacity. It charges `cap(Packet)`, including held and in-flight
+frames, until a complete native send is confirmed; dequeue is not release. This
+matters because the native receiver retains65575 bytes even for a short packet.
+Consequently63 such native allocations fit,64 do not. These are engineering
+resource bounds, not an empirical TCP burst bound or a new network-quality band.
+
+Normal over-budget receive still invalidates immediately. Its already-owned
+original occupies one acknowledged excess slot: the producer cannot Receive
+again until disposal or bounded cleanup abandonment. Shutdown precedes original
+restoration; failed/unknown sends are not acknowledged as successful or replayed.
+Sniff copies are discarded/acknowledged, never injected. This bounds unresolved
+reservations plus one received frame, not total process WorkingSet/Go GC memory.
+
+FIFO, serial IP-byte pacing/no catch-up, original TTL/cleanup budgets, filter,
+request/receipt schemas and nullable evidence fields are unchanged. The prior
+40-packet overflow challenge is now an accepted burst; its rejection/restoration
+assertions move transparently to258 compact frames above the new packet bound.
+64 native-sized backings independently exercise the byte bound. No existing live
+card is edited or reopened, and this candidate has not been deployed/calibrated.
+
 The private `_worker-inspect` entry checks elevation, request identity and Job
 membership, but membership alone is not identity of the parent's Job. It prevents
 accidental uncontained use, not a privileged local caller intentionally invoking

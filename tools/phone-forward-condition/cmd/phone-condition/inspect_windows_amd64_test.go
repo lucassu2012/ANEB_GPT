@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -129,6 +130,88 @@ func (l *onePacketWorkerLink) ShutdownReceive() error {
 }
 
 func (l *onePacketWorkerLink) Close() error { l.closed.Store(true); return nil }
+
+func TestWorkerPublishesReadinessOnlyAfterSuccessfulOwnedOpen(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			root := t.TempDir()
+			request := condition.Request{Format: "phone-forward-condition-1", Mode: condition.Inspect, PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTLSeconds: 1, DownlinkBytesPerSecond: 125000, DriverDirectory: root, OutputDirectory: root}
+			data, _ := json.Marshal(request)
+			hash := sha256.Sum256(data)
+			readyPath := filepath.Join(root, "native-ready.json")
+			link := &onePacketWorkerLink{stop: make(chan struct{})}
+			// An immediate EOF avoids waiting or generating any real traffic.
+			link.once.Do(func() { close(link.stop) })
+			link.read = true
+			err := workerRequest(data, hex.EncodeToString(hash[:]), condition.Inspect, func() error { return nil }, condition.SystemClock{}, func(condition.Plan, condition.Mode, string) (condition.Link, error) {
+				if _, err := os.Stat(readyPath); !os.IsNotExist(err) {
+					t.Fatal("readiness published before owned Open returned")
+				}
+				if failure {
+					return link, errors.New("owned setup failure")
+				}
+				return link, nil
+			})
+			if !link.closed.Load() {
+				t.Fatal("owned link not cleaned")
+			}
+			if failure {
+				if err == nil {
+					t.Fatal("setup failure hidden")
+				}
+				if _, err := os.Stat(readyPath); !os.IsNotExist(err) {
+					t.Fatal("failed Open published ready")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := os.ReadFile(readyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ready struct {
+				Format     string         `json:"format"`
+				Mode       condition.Mode `json:"mode"`
+				PID        int            `json:"pid"`
+				RequestSHA string         `json:"request_sha256"`
+				Origin     int64          `json:"run_origin_qpc"`
+				Opened     int64          `json:"ready_qpc"`
+				Frequency  int64          `json:"qpc_frequency"`
+				Deadline   int64          `json:"deadline_qpc"`
+			}
+			if err := json.Unmarshal(stored, &ready); err != nil {
+				t.Fatal(err)
+			}
+			if ready.Format != "phone-forward-native-ready-1" || ready.Mode != condition.Inspect || ready.PID != os.Getpid() || ready.RequestSHA != hex.EncodeToString(hash[:]) || ready.Origin <= 0 || ready.Frequency <= 0 || ready.Opened < ready.Origin || ready.Deadline != ready.Origin+ready.Frequency {
+				t.Fatalf("readiness lost identity or original deadline: %+v", ready)
+			}
+		})
+	}
+}
+
+func TestReadinessWriteFailureRetainsAndClosesOwnedLink(t *testing.T) {
+	root := t.TempDir()
+	request := condition.Request{Format: "phone-forward-condition-1", Mode: condition.Inspect, PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTLSeconds: 1, DownlinkBytesPerSecond: 125000, DriverDirectory: root, OutputDirectory: root}
+	data, _ := json.Marshal(request)
+	hash := sha256.Sum256(data)
+	marker := []byte("existing evidence: do not overwrite")
+	path := filepath.Join(root, "native-ready.json")
+	if err := os.WriteFile(path, marker, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := &onePacketWorkerLink{stop: make(chan struct{}), read: true}
+	link.once.Do(func() { close(link.stop) })
+	err := workerRequest(data, hex.EncodeToString(hash[:]), condition.Inspect, func() error { return nil }, condition.SystemClock{}, func(condition.Plan, condition.Mode, string) (condition.Link, error) { return link, nil })
+	if err == nil || !link.closed.Load() {
+		t.Fatalf("readiness write failure lost ownership: err=%v closed=%v", err, link.closed.Load())
+	}
+	stored, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(stored, marker) {
+		t.Fatal("existing readiness overwritten")
+	}
+}
 
 func TestLimitWorkerExercisesRealCoreAndRetainsUnmodifiedPacket(t *testing.T) {
 	root := t.TempDir()

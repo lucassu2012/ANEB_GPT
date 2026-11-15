@@ -201,6 +201,21 @@ func limitWorker(data []byte, expectedSHA string) error {
 	return workerRequest(data, expectedSHA, condition.Limit, func() error { return inspectionPreflight(true) }, condition.SystemClock{}, condition.OpenNative)
 }
 
+// QPC is a shared monotonic host clock. It is only orchestration evidence;
+// Android elapsedRealtimeNanos remains the phone interval clock.
+func hostQPC() (tick, frequency int64, err error) {
+	kernel := syscall.NewLazyDLL("kernel32.dll")
+	ok, _, callErr := kernel.NewProc("QueryPerformanceFrequency").Call(uintptr(unsafe.Pointer(&frequency)))
+	if ok == 0 || frequency <= 0 {
+		return 0, 0, fmt.Errorf("QueryPerformanceFrequency: %w", callErr)
+	}
+	ok, _, callErr = kernel.NewProc("QueryPerformanceCounter").Call(uintptr(unsafe.Pointer(&tick)))
+	if ok == 0 || tick <= 0 {
+		return 0, 0, fmt.Errorf("QueryPerformanceCounter: %w", callErr)
+	}
+	return tick, frequency, nil
+}
+
 // The injectable boundaries are OS approval, time, and the native forwarding
 // link. The real request parsing, core execution and evidence writing stay here.
 func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode, eligible func() error, clock condition.Clock, open func(condition.Plan, condition.Mode, string) (condition.Link, error)) (err error) {
@@ -219,10 +234,26 @@ func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode,
 		return err
 	}
 	result := inspectionOutcome{Format: "phone-forward-" + string(expectedMode) + "-result-1", RequestSHA256: expectedSHA, PID: os.Getpid()}
+	origin, frequency, err := hostQPC()
+	if err != nil {
+		return err
+	}
 	result.Receipt, err = condition.Run(context.Background(), plan.Config, expectedMode, clock, func(plan condition.Plan, mode condition.Mode) (condition.Link, error) {
 		result.DriverOpenAttempted = true
 		link, openErr := open(plan, mode, request.DriverDirectory)
 		result.OwnedHandleReturned = link != nil
+		if openErr == nil && link != nil {
+			opened, currentFrequency, clockErr := hostQPC()
+			deadline := origin + int64(request.TTLSeconds)*frequency
+			if clockErr != nil || currentFrequency != frequency || opened >= deadline {
+				return link, errors.Join(clockErr, errors.New("native readiness outside original monotonic window"))
+			}
+			// A write failure returns the owned link with its error so Run still
+			// drains, closes and joins it through the existing open-error path.
+			if readyErr := writeNewJSON(filepath.Join(request.OutputDirectory, "native-ready.json"), map[string]any{"format": "phone-forward-native-ready-1", "state": "OWNED_OPEN_NOT_A_RESULT", "mode": mode, "pid": os.Getpid(), "request_sha256": expectedSHA, "run_origin_qpc": origin, "ready_qpc": opened, "qpc_frequency": frequency, "deadline_qpc": deadline, "network_qualified": false}); readyErr != nil {
+				return link, readyErr
+			}
+		}
 		return link, openErr
 	})
 	if err != nil {

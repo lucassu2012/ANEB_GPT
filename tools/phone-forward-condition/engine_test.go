@@ -209,7 +209,9 @@ func TestInspectNeverInjectsCopiesAndDoesNotClaimPhoneDelivery(t *testing.T) {
 
 func TestQueueOverflowInvalidatesConditionInsteadOfSilentlyBackpressuringDriver(t *testing.T) {
 	clock := &heldClock{now: time.Unix(0, 0), entered: make(chan struct{}, 1), release: make(chan struct{})}
-	frames := make([]Frame, 40)
+	// This remains an overflow/restoration challenge at the explicit new packet
+	// limit. The former 40-packet input is retained as an accepted burst below.
+	frames := make([]Frame, maxPendingPackets+2)
 	for i := range frames {
 		frames[i] = testForwardFrame(100)
 	}
@@ -236,7 +238,7 @@ func TestQueueOverflowInvalidatesConditionInsteadOfSilentlyBackpressuringDriver(
 	if got.e == nil || got.r.StopReason != "USER_QUEUE_OVERFLOW" || got.r.State != "INVALID" {
 		t.Fatalf("overflow hidden: %+v err%v", got.r, got.e)
 	}
-	if got.r.ReceivedPackets != 40 || got.r.UnconfirmedUserPackets != 0 || got.r.CleanupInjectedPackets != 40 {
+	if got.r.ReceivedPackets != uint64(len(frames)) || got.r.UnconfirmedUserPackets != 0 || got.r.CleanupInjectedPackets != uint64(len(frames)) || got.r.CleanupInjectedBytes != uint64(len(frames)*100) {
 		t.Fatalf("pending originals not restored: %+v", got.r)
 	}
 }

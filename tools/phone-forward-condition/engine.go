@@ -82,17 +82,28 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	}
 	openErr := err
 	type received struct {
-		frame Frame
-		err   error
+		frame        Frame
+		err          error
+		reserved     bool
+		overflowDone chan struct{}
 	}
-	packets := make(chan received, 16)
+	packets := make(chan received, maxPendingPackets)
+	var pending pendingBudget
+	settled := func(item received) {
+		if item.reserved {
+			pending.release(cap(item.frame.Packet))
+		}
+		if item.overflowDone != nil {
+			close(item.overflowDone)
+		}
+	}
 	done := make(chan struct{})
 	abandon := make(chan struct{})
 	var receivedCount, receivedBytes, ownedReceivedCount atomic.Uint64
 	var driverDrained atomic.Bool
 	var stopping atomic.Bool
 	var activeCalls atomic.Int32
-	var held *Frame
+	var held *received
 	go func() {
 		defer close(done)
 		defer close(packets)
@@ -108,19 +119,29 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			if errors.Is(e, io.EOF) {
 				driverDrained.Store(true)
 			}
-			item := received{frame, e}
-			if e == nil && !stopping.Load() {
-				select {
-				case packets <- item:
-					continue
-				default:
-					cancel(ErrQueueOverflow)
+			item := received{frame: frame, err: e}
+			if e == nil {
+				item.reserved = pending.reserve(cap(frame.Packet))
+				if !item.reserved {
+					if !stopping.Load() {
+						cancel(ErrQueueOverflow)
+					}
+					// Receive already transferred this original. Keep exactly one
+					// excess frame, and do not receive again before its disposal.
+					item.overflowDone = make(chan struct{})
 				}
 			}
 			select {
 			case packets <- item:
 			case <-abandon:
 				return
+			}
+			if item.overflowDone != nil {
+				select {
+				case <-item.overflowDone:
+				case <-abandon:
+					return
+				}
 			}
 			if e != nil {
 				return
@@ -136,8 +157,10 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		if e := shutdownErr; e != nil {
 			err = errors.Join(err, e)
 		}
-		restore := func(frame Frame) {
+		restore := func(item received) {
+			frame := item.frame
 			if mode != Limit || frame.Address.IsSniffed() {
+				settled(item)
 				return
 			}
 			n, e, _ := boundedCall(cleanupCtx, &activeCalls, func() (int, error) { return link.Inject(frame) })
@@ -150,6 +173,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 			if e == nil && n == len(frame.Packet) {
 				receipt.CleanupInjectedPackets++
+				settled(item)
 			} else {
 				if e == nil {
 					e = io.ErrShortWrite
@@ -177,7 +201,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 						}
 						continue
 					}
-					restore(item.frame)
+					restore(item)
 				}
 			}
 		}
@@ -251,12 +275,15 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		}
 		if e := plan.CheckFrame(mode, frame); e != nil {
 			if mode == Limit && !frame.Address.IsSniffed() {
-				held = &frame
+				held = &current
+			} else {
+				settled(current)
 			}
 			receipt.StopReason = "PACKET_SCOPE_MISMATCH"
 			return receipt, e
 		}
 		if mode == Inspect {
+			settled(current)
 			continue
 		}
 		attempted := false
@@ -276,12 +303,15 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 			if sendErr == nil {
 				receipt.InjectedPackets++
+				// Confirmed send is the release boundary, not dequeue or the
+				// later Pacer TTL/clock verdict. An uncertain send keeps its lease.
+				settled(current)
 			}
 			return sendErr
 		})
 		if e != nil {
 			if !attempted {
-				held = &frame
+				held = &current
 				// A not-yet-dispatched packet that cannot fit is retained until
 				// the original cutoff, then restored in cleanup, not paced early.
 				// Never normalize an admitted/uncertain native send or parent stop.
