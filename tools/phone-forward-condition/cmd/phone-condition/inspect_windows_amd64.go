@@ -27,6 +27,7 @@ type inspectionOutcome struct {
 	DriverOpenAttempted bool              `json:"driver_open_attempted"`
 	OwnedHandleReturned bool              `json:"owned_handle_returned"`
 	Receipt             condition.Receipt `json:"receipt"`
+	UplinkProof         *UplinkProof      `json:"uplink_proof,omitempty"`
 	Failure             string            `json:"failure,omitempty"`
 }
 
@@ -184,6 +185,9 @@ func inspectRequest(data []byte, output io.Writer, eligible func() error, launch
 	if err == nil && (worker.PID != int(process.PID) || !worker.DriverOpenAttempted || !worker.OwnedHandleReturned || worker.Failure != "" || worker.Receipt.Mode != request.Mode || worker.Receipt.UnconfirmedUserPackets != 0 || !worker.Receipt.DriverDrained || !worker.Receipt.OwnedHandleClosed || !worker.Receipt.WorkersJoined || !completedState) {
 		err = errors.New("worker did not return a completed, unqualified condition receipt")
 	}
+	if err == nil {
+		err = validateCompletedUplinkProof(request, worker.UplinkProof)
+	}
 	summary := map[string]any{"format": "phone-forward-supervision-1", "request_sha256": requestSHA, "binary_sha256": binarySHA, "process": process, "network_qualified": false, "worker": worker}
 	if err != nil {
 		summary["failure"] = err.Error()
@@ -219,6 +223,10 @@ func hostQPC() (tick, frequency int64, err error) {
 // The injectable boundaries are OS approval, time, and the native forwarding
 // link. The real request parsing, core execution and evidence writing stay here.
 func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode, eligible func() error, clock condition.Clock, open func(condition.Plan, condition.Mode, string) (condition.Link, error)) (err error) {
+	return workerRequestWithNet(data, expectedSHA, expectedMode, eligible, clock, open, iphlpapiReader{})
+}
+
+func workerRequestWithNet(data []byte, expectedSHA string, expectedMode condition.Mode, eligible func() error, clock condition.Clock, open func(condition.Plan, condition.Mode, string) (condition.Link, error), netReader netTableReader) (err error) {
 	if err := eligible(); err != nil {
 		return err
 	}
@@ -238,6 +246,7 @@ func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode,
 	if err != nil {
 		return err
 	}
+	var uplinkProof *UplinkProof
 	result.Receipt, err = condition.Run(context.Background(), plan.Config, expectedMode, clock, func(plan condition.Plan, mode condition.Mode) (condition.Link, error) {
 		result.DriverOpenAttempted = true
 		link, openErr := open(plan, mode, request.DriverDirectory)
@@ -248,14 +257,38 @@ func workerRequest(data []byte, expectedSHA string, expectedMode condition.Mode,
 			if clockErr != nil || currentFrequency != frequency || opened >= deadline {
 				return link, errors.Join(clockErr, errors.New("native readiness outside original monotonic window"))
 			}
+			readyPayload := map[string]any{
+				"format":            "phone-forward-native-ready-1",
+				"state":             "OWNED_OPEN_NOT_A_RESULT",
+				"mode":              mode,
+				"pid":               os.Getpid(),
+				"request_sha256":    expectedSHA,
+				"run_origin_qpc":    origin,
+				"ready_qpc":         opened,
+				"qpc_frequency":     frequency,
+				"deadline_qpc":      deadline,
+				"network_qualified": false,
+			}
+			if request.ExpectedUplinkInterfaceIndex != 0 {
+				proof, proofErr := verifyUplinkOpen(request, netReader)
+				if proofErr != nil {
+					return link, proofErr
+				}
+				uplinkProof = proof
+				readyPayload["uplink_proof"] = proof
+			}
 			// A write failure returns the owned link with its error so Run still
 			// drains, closes and joins it through the existing open-error path.
-			if readyErr := writeNewJSON(filepath.Join(request.OutputDirectory, "native-ready.json"), map[string]any{"format": "phone-forward-native-ready-1", "state": "OWNED_OPEN_NOT_A_RESULT", "mode": mode, "pid": os.Getpid(), "request_sha256": expectedSHA, "run_origin_qpc": origin, "ready_qpc": opened, "qpc_frequency": frequency, "deadline_qpc": deadline, "network_qualified": false}); readyErr != nil {
+			if readyErr := writeNewJSON(filepath.Join(request.OutputDirectory, "native-ready.json"), readyPayload); readyErr != nil {
 				return link, readyErr
 			}
 		}
 		return link, openErr
 	})
+	if uplinkProof != nil {
+		err = errors.Join(err, completeUplinkClose(uplinkProof, netReader))
+		result.UplinkProof = uplinkProof
+	}
 	if err != nil {
 		result.Failure = err.Error()
 	}

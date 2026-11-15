@@ -124,6 +124,27 @@ assertions move transparently to258 compact frames above the new packet bound.
 64 native-sized backings independently exercise the byte bound. No existing live
 card is edited or reopened, and this candidate has not been deployed/calibrated.
 
+### Optional native uplink/route/unicast proof (offline, 2026-11-15)
+
+Modern WinRT `NetworkOperatorTetheringManager` Mobile Hotspot uses transient soft
+NAT without setting legacy `HNetCfg.HNetShare` persistent connection-sharing flags.
+When `expected_uplink_interface_index` (nonzero, distinct from `interface_index`)
+and optional `probe_remote_addresses` (up to 16 global unicast host addresses) are
+set in `request.json`, the private worker queries `iphlpapi.dll` read-only before
+publishing `native-ready.json`:
+
+- `GetIpInterfaceEntry` proves IP forwarding is enabled on `interface_index` (AP);
+- `GetBestRoute2` proves each entry in `probe_remote_addresses` resolves to
+  `best_interface_index == expected_uplink_interface_index` (refusing readiness
+  on any WLAN/VPN/tunnel bypass before any phone GET is dispatched);
+- `GetIfEntry2` records operational `uplink_open` / `ap_open` unicast counters in
+  `native-ready.json` (`uplink_proof`) and `uplink_close` / `ap_close` / `*_delta`
+  after owned drain/close in `worker.json` and `supervisor.json`.
+
+Omitting both optional fields preserves legacy schemas and behavior unchanged.
+Offline unit tests use injected stubs plus read-only loopback ABI smoke checks;
+no live hotspot, WinDivert driver or P40 device was operated.
+
 The private `_worker-inspect` entry checks elevation, request identity and Job
 membership, but membership alone is not identity of the parent's Job. It prevents
 accidental uncontained use, not a privileged local caller intentionally invoking

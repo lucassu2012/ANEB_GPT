@@ -60,12 +60,14 @@ func run(args []string, output io.Writer) error {
 	}
 	hash := sha256.Sum256(data)
 	return json.NewEncoder(output).Encode(struct {
-		Format          string         `json:"format"`
-		State           string         `json:"state"`
-		Mode            condition.Mode `json:"mode"`
-		Filter          string         `json:"filter"`
-		RequestSHA256   string         `json:"request_sha256"`
-		DriverOpened    bool           `json:"driver_opened"`
-		TrafficCaptured bool           `json:"traffic_captured"`
-	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false})
+		Format                       string         `json:"format"`
+		State                        string         `json:"state"`
+		Mode                         condition.Mode `json:"mode"`
+		Filter                       string         `json:"filter"`
+		RequestSHA256                string         `json:"request_sha256"`
+		DriverOpened                 bool           `json:"driver_opened"`
+		TrafficCaptured              bool           `json:"traffic_captured"`
+		ExpectedUplinkInterfaceIndex uint32         `json:"expected_uplink_interface_index,omitempty"`
+		ProbeRemoteAddresses         []string       `json:"probe_remote_addresses,omitempty"`
+	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
 }

@@ -38,3 +38,38 @@ func TestPlanCommandDoesNotNeedExistingDriverOrOutput(t *testing.T) {
 		t.Fatal("planning created runtime output")
 	}
 }
+
+func TestPlanCommandEchoesOptionalUplinkFieldsWhenConfigured(t *testing.T) {
+	root := t.TempDir()
+	request := condition.Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         condition.Limit,
+		PhoneAddresses:               []string{"192.168.137.42"},
+		InterfaceIndex:               14,
+		TTLSeconds:                   35,
+		DownlinkBytesPerSecond:       125000,
+		DriverDirectory:              filepath.Join(root, "unavailable-driver"),
+		OutputDirectory:              filepath.Join(root, "must-not-create"),
+		ExpectedUplinkInterfaceIndex: 10,
+		ProbeRemoteAddresses:         []string{"198.51.100.20"},
+	}
+	data, _ := json.Marshal(request)
+	path := filepath.Join(root, "request.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := run([]string{"plan", "-config", path}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		ExpectedUplinkInterfaceIndex uint32   `json:"expected_uplink_interface_index"`
+		ProbeRemoteAddresses         []string `json:"probe_remote_addresses"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.ExpectedUplinkInterfaceIndex != 10 || len(plan.ProbeRemoteAddresses) != 1 || plan.ProbeRemoteAddresses[0] != "198.51.100.20" {
+		t.Fatalf("plan lost uplink config: %+v", plan)
+	}
+}
