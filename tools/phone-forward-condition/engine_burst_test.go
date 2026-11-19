@@ -57,6 +57,7 @@ func TestBoundedBurstRetainsFIFOWhileFirstPacketIsPaced(t *testing.T) {
 	}{
 		{"original-26-compact", 26, 100},
 		{"previous-40-native-backing", 40, 65575},
+		{"compact-mtu-512", 512, 1400},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertPacedBurst(t, tc.count, tc.backing, false) })
 	}
@@ -87,8 +88,12 @@ func assertPacedBurst(t *testing.T, count, backing int, cancelBeforeRelease bool
 	done := make(chan outcome, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ttl := 10 * time.Second
+	if need := time.Duration(count+10) * 100 * time.Millisecond; need > ttl {
+		ttl = need
+	}
 	go func() {
-		r, e := Run(ctx, Config{PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTL: 10 * time.Second, DownlinkBytesPerSecond: 1000}, Limit, clock, func(Plan, Mode) (Link, error) { return link, nil })
+		r, e := Run(ctx, Config{PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTL: ttl, DownlinkBytesPerSecond: 1000}, Limit, clock, func(Plan, Mode) (Link, error) { return link, nil })
 		done <- outcome{r, e}
 	}()
 	select {
@@ -155,8 +160,12 @@ func TestBackingBufferLimitIncludesHeldPacketAndRestoresOverflow(t *testing.T) {
 	done := make(chan outcome, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ttl := 10 * time.Second
+	if need := time.Duration(count+10) * 100 * time.Millisecond; need > ttl {
+		ttl = need
+	}
 	go func() {
-		r, e := Run(ctx, Config{PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTL: 10 * time.Second, DownlinkBytesPerSecond: 1000}, Limit, clock, func(Plan, Mode) (Link, error) { return link, nil })
+		r, e := Run(ctx, Config{PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTL: ttl, DownlinkBytesPerSecond: 1000}, Limit, clock, func(Plan, Mode) (Link, error) { return link, nil })
 		done <- outcome{r, e}
 	}()
 	select {

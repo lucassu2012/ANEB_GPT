@@ -4,10 +4,10 @@ import "sync"
 
 // Fixed engineering resource limits, not calibrated network quality. The
 // budget includes queued, held and in-flight frames until a send is confirmed.
-// cap, not len, charges the native receiver's full backing buffer (65575 bytes
-// even for a short IP packet). One just-received overflow frame is handled by
-// an acknowledged producer slot; it cannot turn into an unbounded extra queue.
-const maxPendingPackets = 256
+// cap, not len, charges actual allocated backing capacity; native Receive
+// right-sizes each frame so 4 MiB covers realistic multi-flow video bursts
+// up to maxPendingPackets without exceeding the fixed 4 MiB memory bound.
+const maxPendingPackets = 2048
 const maxPendingBufferBytes = 4 << 20
 
 type pendingBudget struct {

@@ -24,6 +24,7 @@ type nativeLink struct {
 	dll                                                   *syscall.DLL // Kept mapped until the one-shot worker process exits.
 	pins                                                  []*os.File
 	recv, send, shutdown, closeHandle, setParam, getParam *syscall.Proc
+	recvBuf                                               []byte
 	closed                                                atomic.Bool
 }
 
@@ -53,11 +54,15 @@ func (l *nativeLink) Receive() (Frame, error) {
 	if l.closed.Load() || l.handle == 0 || l.recv == nil {
 		return Frame{}, io.ErrClosedPipe
 	}
-	packet := make([]byte, 65575)
+	buf := l.recvBuf
+	if len(buf) < 65575 {
+		buf = make([]byte, 65575)
+		l.recvBuf = buf
+	}
 	var received uint32
 	var address Address
-	ok, _, callErr := l.recv.Call(l.handle, uintptr(unsafe.Pointer(&packet[0])), uintptr(len(packet)), uintptr(unsafe.Pointer(&received)), uintptr(unsafe.Pointer(&address)))
-	runtime.KeepAlive(packet)
+	ok, _, callErr := l.recv.Call(l.handle, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&received)), uintptr(unsafe.Pointer(&address)))
+	runtime.KeepAlive(buf)
 	runtime.KeepAlive(&address)
 	if ok == 0 {
 		if errors.Is(callErr, syscall.Errno(232)) {
@@ -65,10 +70,14 @@ func (l *nativeLink) Receive() (Frame, error) {
 		}
 		return Frame{}, fmt.Errorf("WinDivertRecv returned %d bytes: %w", received, callErr)
 	}
-	if received == 0 || int(received) > len(packet) {
+	if received == 0 || int(received) > len(buf) {
 		return Frame{}, fmt.Errorf("invalid receive length: %d", received)
 	}
-	return Frame{Packet: packet[:received], Address: address}, nil
+	// Copy into a right-sized slice so pendingBudget charges true backing capacity
+	// (~MTU) instead of 65575 bytes per received frame.
+	exact := make([]byte, received)
+	copy(exact, buf[:received])
+	return Frame{Packet: exact, Address: address}, nil
 }
 
 func (l *nativeLink) ShutdownReceive() error {
@@ -191,7 +200,7 @@ func OpenNative(plan Plan, mode Mode, driverDirectory string) (Link, error) {
 	if handle == 0 || handle == ^uintptr(0) {
 		return nil, fmt.Errorf("WinDivertOpen NETWORK_FORWARD: %w", openErr)
 	}
-	link := &nativeLink{mode: mode, handle: handle, dll: dll, pins: pins, recv: procs["WinDivertRecv"], send: procs["WinDivertSend"], shutdown: procs["WinDivertShutdown"], closeHandle: procs["WinDivertClose"], setParam: procs["WinDivertSetParam"], getParam: procs["WinDivertGetParam"]}
+	link := &nativeLink{mode: mode, handle: handle, dll: dll, pins: pins, recv: procs["WinDivertRecv"], send: procs["WinDivertSend"], shutdown: procs["WinDivertShutdown"], closeHandle: procs["WinDivertClose"], setParam: procs["WinDivertSetParam"], getParam: procs["WinDivertGetParam"], recvBuf: make([]byte, 65575)}
 	handedOff = true
 	// If any setup fails after Open, return the owned link with the error. Run
 	// still shuts down, drains and closes it; never abandon an active filter.
