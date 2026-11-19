@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -88,5 +90,50 @@ func TestProfilesEndpoint(t *testing.T) {
 		if p.ProfileID == "" || p.Version == "" {
 			t.Fatalf("profile missing id/version: %+v", p)
 		}
+	}
+}
+
+func TestLoadS4ThroughputAdaptiveWindowPhases(t *testing.T) {
+	dir := t.TempDir()
+	s4JSON := `{
+  "profile_id": "s4_throughput",
+  "version": "0.1.0",
+  "kpi_set": "agent-qoe-kpi-v0.3",
+  "est_duration_s": 12,
+  "phases": [
+    { "type": "clock_sync", "samples": 20 },
+    { "type": "adaptive_download_window", "window_ms": 4000, "bytes": 536870912, "chunk_kb": 256 },
+    { "type": "adaptive_upload_window", "window_ms": 4000, "bytes": 50331648, "chunk_kb": 64 },
+    { "type": "clock_sync", "samples": 20 }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "s4_throughput.json"), []byte(s4JSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := loadProfiles(dir)
+	if err != nil {
+		t.Fatalf("loadProfiles: %v", err)
+	}
+	s4, ok := profiles["s4_throughput"]
+	if !ok {
+		t.Fatal("s4_throughput profile not found")
+	}
+	var down, up *Phase
+	for i := range s4.Phases {
+		switch s4.Phases[i].Type {
+		case "adaptive_download_window":
+			down = &s4.Phases[i]
+		case "adaptive_upload_window":
+			up = &s4.Phases[i]
+		}
+	}
+	if down == nil || up == nil {
+		t.Fatalf("s4_throughput missing adaptive window phases: %+v", s4.Phases)
+	}
+	if down.WindowMs != 4000 || down.Bytes != 536870912 {
+		t.Fatalf("adaptive_download_window wrong: %+v", down)
+	}
+	if up.WindowMs != 4000 || up.Bytes != 50331648 {
+		t.Fatalf("adaptive_upload_window wrong: %+v", up)
 	}
 }

@@ -73,11 +73,15 @@ func (a *app) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	// R-20: prelude 注释帧——响应头后、首 token 前的服务端时戳锚点。
-	prelude := make([]byte, 0, 128)
+	prelude := make([]byte, 0, 160)
 	prelude = append(prelude, `: prelude {"srv_ts_us":`...)
 	prelude = strconv.AppendInt(prelude, nowMicros(), 10)
 	prelude = append(prelude, `,"anchor_wall_unix_ns":`...)
 	prelude = strconv.AppendInt(prelude, anchorWallUnixNs, 10)
+	// 注入的 TTFT 驻留（§3.4）：首 token 前的确定性服务端 dwell，供 APP 从 T1 减去
+	// （补"减法项恒为 0"缺口）。0 = 无注入。additive 字段，旧客户端忽略未知键。
+	prelude = append(prelude, `,"ttft_inject_us":`...)
+	prelude = strconv.AppendInt(prelude, params.TtftInjectUs, 10)
 	prelude = append(prelude, `,"observed":`...)
 	// strconv.AppendQuote 做 JSON 兼容转义（RemoteAddr 正常不含特殊字符，
 	// 但手拼 JSON 不做转义是脆弱模式，防御性统一）。
@@ -101,6 +105,16 @@ func (a *app) handleStream(w http.ResponseWriter, r *http.Request) {
 	buf := make([]byte, 0, 4096)
 	payloadRaw := make([]byte, tokenBytesMax)
 	payloadB64 := make([]byte, base64.StdEncoding.EncodedLen(tokenBytesMax))
+
+	// frame-batching（§3.2）：每 K 个 token 合并进一个 SSE 帧（一次 w.Write+Flush）——客户端在同一次
+	// socket read 读到整批、标 sameReadBatch(coalesced)，T2 主口径剔除批内伪 0 间隔。K=1 即每 token 一帧（原行为）。
+	frameK := params.TokensPerFrame
+	if frameK < 1 {
+		frameK = 1
+	}
+	frame := make([]byte, 0, 8192) // 跨至多 K 个 event 的批累积缓冲
+	frameStart := 0                // 当前未 flush 帧内首 token 下标
+	framesFlushed := 0             // 已 flush 的 token 帧数（诊断/测试可观测）
 
 	ctx := r.Context()
 	for i := 0; i < n; i++ {
@@ -174,16 +188,27 @@ func (a *app) handleStream(w http.ResponseWriter, r *http.Request) {
 			buf = append(buf, "\"}\n\n"...)
 		}
 
-		if _, err := w.Write(buf); err != nil {
-			return // 客户端断开
-		}
-		flushStart := time.Now()
-		flusher.Flush()
-		flushBlockUs[i] = time.Since(flushStart).Microseconds() // R-06：回压证据，与调度误差分开
-		flushReturnUs[i] = nowMicros()                          // R-17：语义固定为 Flush() 返回之后
+		// 累积进批帧；非边界 token 暂记写入缓冲时刻为 flush_return（边界处以真 flush 后时刻覆盖）。
+		frame = append(frame, buf...)
+		flushReturnUs[i] = nowMicros()
 
-		if inj != nil && inj.kind == injectTruncate && i+1 == inj.n {
-			return // truncate:N——第 N 个 event 之后直接关流，summary 不发
+		isTruncate := inj != nil && inj.kind == injectTruncate && i+1 == inj.n
+		// 边界：本帧已满 K、或最后一个 token、或 truncate 到点（截断也要把同批已积攒者一并发出）。
+		if i-frameStart+1 >= frameK || i == n-1 || isTruncate {
+			if _, err := w.Write(frame); err != nil {
+				return // 客户端断开
+			}
+			flushStart := time.Now()
+			flusher.Flush()
+			flushBlockUs[i] = time.Since(flushStart).Microseconds() // R-06：回压证据，记在触发 flush 的边界 token
+			flushReturnUs[i] = nowMicros()                          // R-17：语义固定为 Flush() 返回之后
+			framesFlushed++
+			frame = frame[:0]
+			frameStart = i + 1
+		}
+
+		if isTruncate {
+			return // truncate:N——第 N 个 event（含同批已积攒者）发出后直接关流，summary 不发
 		}
 	}
 
@@ -194,6 +219,24 @@ func (a *app) handleStream(w http.ResponseWriter, r *http.Request) {
 	buf = strconv.AppendInt(buf, int64(n), 10)
 	buf = append(buf, `,"stream_start_us":`...)
 	buf = strconv.AppendInt(buf, startUs, 10)
+	// frame-batching 诊断（§3.2）：本流实际使用的每帧 token 数与已发出的 token 帧数
+	// （frames_flushed = ceil(n/K)，客户端/离线分析据此核对合帧结构）。additive。
+	buf = append(buf, `,"tokens_per_frame":`...)
+	buf = strconv.AppendInt(buf, int64(frameK), 10)
+	buf = append(buf, `,"frames_flushed":`...)
+	buf = strconv.AppendInt(buf, int64(framesFlushed), 10)
+	// 流内 think 驻留透出（§3.2）：注入的 seq 与 dwell，供 APP 归为 pause（不计网络 stall）。
+	// 仅注入非空时输出（additive，默认 summary 字节级不变）。
+	if len(params.ThinkInjections) > 0 {
+		thinkSeqs := make([]int64, len(params.ThinkInjections))
+		thinkDwells := make([]int64, len(params.ThinkInjections))
+		for i, in := range params.ThinkInjections {
+			thinkSeqs[i] = int64(in.AtSeq)
+			thinkDwells[i] = in.DwellUs
+		}
+		buf = appendInt64Array(buf, `,"think_seqs":`, thinkSeqs)
+		buf = appendInt64Array(buf, `,"think_dwells_us":`, thinkDwells)
+	}
 	buf = appendInt64Array(buf, `,"flush_return_us":`, flushReturnUs)
 	buf = appendInt64Array(buf, `,"timer_late_us":`, timerLateUs)
 	buf = appendInt64Array(buf, `,"flush_block_us":`, flushBlockUs)
@@ -253,10 +296,39 @@ func (a *app) streamParamsFromRequest(r *http.Request) (StreamParams, error) {
 		params.RateTps = ph.RateTps
 		params.Seed = ph.Seed
 		params.Burst = ph.Burst
+		params.TtftInjectUs = ph.TtftInjectUs
+		params.RateSchedule = ph.RateSchedule
+		params.TokensPerFrame = ph.TokensPerFrame
+		params.ThinkInjections = ph.ThinkInjections
 		if ph.TokenBytes != nil {
 			params.Median = ph.TokenBytes.Median
 			params.Sigma = ph.TokenBytes.Sigma
+			params.SizeHistogram = ph.TokenBytes.Histogram
 		}
+	}
+	// 非平稳解码曲线（§3.2）只由 profile 声明（非平稳性是模型属性，非 URL 临时旋钮）。
+	if err := validateRateSchedule(params.RateSchedule, params.Burst != nil); err != nil {
+		return params, err
+	}
+	// 每模型字节直方图（§3.2）：桶字节须在 clamp 区间内、权重为正。
+	if err := validateSizeHistogram(params.SizeHistogram); err != nil {
+		return params, err
+	}
+	// 流内 think 驻留（§3.2）：at_seq∈[1,tokens)、dwell_us∈(0,maxThinkDwellUs]。
+	if err := validateThinkInjections(params.ThinkInjections, params.Tokens); err != nil {
+		return params, err
+	}
+	if s := q.Get("tokens_per_frame"); s != "" {
+		// SSE frame-batching（§3.2）：每帧 token 数。上限 64（防单帧过大内存/时延突刺）。
+		v, err := strconv.Atoi(s)
+		if err != nil || v < 1 || v > 64 {
+			return params, errBadParam("invalid tokens_per_frame (want 1..64): " + s)
+		}
+		params.TokensPerFrame = v
+	}
+	// profile 声明的 tokens_per_frame 也须在界内（0=省略=默认每 token 一帧）。
+	if params.TokensPerFrame < 0 || params.TokensPerFrame > 64 {
+		return params, errBadParam("tokens_per_frame out of range [0,64]")
 	}
 	// 显式参数覆盖（无 profile 时即直接指定路径）。
 	if s := q.Get("tokens"); s != "" {
@@ -287,12 +359,82 @@ func (a *app) streamParamsFromRequest(r *http.Request) (StreamParams, error) {
 		}
 		params.Seed = v
 	}
+	if s := q.Get("ttft_inject_us"); s != "" {
+		// 首 token 前注入的 TTFT 驻留（§3.4）。上限 10s：防单请求 goroutine 长挂
+		// （慢速拒绝服务面），与 rate_tps 下限同款纪律。负值无意义。
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || v < 0 || v > 10_000_000 {
+			return params, errBadParam("invalid ttft_inject_us: " + s)
+		}
+		params.TtftInjectUs = v
+	}
 	return params, nil
 }
 
 type errBadParam string
 
 func (e errBadParam) Error() string { return string(e) }
+
+// validateRateSchedule 校验非平稳解码 TPS 曲线（§3.2）：AtFrac∈[0,1] 非递减、
+// Tps∈[0.1,100000]（下限同 rate_tps，防慢速 DoS）。空曲线视为合法（=常速）。
+// burst 模式自有节奏，声明 rate_schedule 是矛盾配置，直接拒绝。
+func validateRateSchedule(sched []RatePoint, isBurst bool) error {
+	if len(sched) == 0 {
+		return nil
+	}
+	if isBurst {
+		return errBadParam("rate_schedule not supported for burst phases")
+	}
+	prevFrac := -1.0
+	for i, pt := range sched {
+		if pt.AtFrac < 0 || pt.AtFrac > 1 {
+			return errBadParam("rate_schedule[" + strconv.Itoa(i) + "].at_frac must be in [0,1]")
+		}
+		if pt.AtFrac < prevFrac {
+			return errBadParam("rate_schedule.at_frac must be non-decreasing")
+		}
+		if pt.Tps < 0.1 || pt.Tps > 100000 {
+			return errBadParam("rate_schedule[" + strconv.Itoa(i) + "].tps must be in [0.1,100000]")
+		}
+		prevFrac = pt.AtFrac
+	}
+	return nil
+}
+
+// maxThinkDwellUs 是单次流内 think 驻留上限（10s，防单请求长挂）。
+const maxThinkDwellUs int64 = 10_000_000
+
+// validateThinkInjections 校验流内 think 驻留（§3.2）：at_seq∈[1,tokens)（seq 0 前的驻留归 TTFT）、
+// dwell_us∈(0,maxThinkDwellUs]。空合法（=无 think）。
+func validateThinkInjections(injs []ThinkInjection, tokens int) error {
+	for i, in := range injs {
+		if in.AtSeq < 1 || in.AtSeq >= tokens {
+			return errBadParam("think_injections[" + strconv.Itoa(i) + "].at_seq must be in [1," + strconv.Itoa(tokens) + ")")
+		}
+		if in.DwellUs <= 0 || in.DwellUs > maxThinkDwellUs {
+			return errBadParam("think_injections[" + strconv.Itoa(i) + "].dwell_us must be in (0," + strconv.FormatInt(maxThinkDwellUs, 10) + "]")
+		}
+	}
+	return nil
+}
+
+// validateSizeHistogram 校验每模型字节直方图（§3.2）：桶字节 ∈ [tokenBytesMin,tokenBytesMax]、
+// 权重 > 0。空直方图合法（=沿用 lognormal）。
+func validateSizeHistogram(bins []SizeBin) error {
+	if len(bins) == 0 {
+		return nil
+	}
+	for i, b := range bins {
+		if b.Size < tokenBytesMin || b.Size > tokenBytesMax {
+			return errBadParam("size_histogram[" + strconv.Itoa(i) + "].size must be in [" +
+				strconv.Itoa(tokenBytesMin) + "," + strconv.Itoa(tokenBytesMax) + "]")
+		}
+		if b.Weight <= 0 {
+			return errBadParam("size_histogram[" + strconv.Itoa(i) + "].weight must be > 0")
+		}
+	}
+	return nil
+}
 
 // 故障注入类型（P0-C13 前置；语义见 handleStream 循环内注释）。
 const (
