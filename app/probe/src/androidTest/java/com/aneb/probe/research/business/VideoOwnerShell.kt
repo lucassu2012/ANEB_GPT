@@ -180,21 +180,13 @@ internal class VideoOwnerShell(
 
     /** Complete process-list evidence, including this package's colon-suffixed processes. */
     fun requirePackageAbsent(packageName: String, deadlineNanos: Long) {
-        requirePackage(packageName)
-        val result = execute("ps -A -o PID,NAME", deadlineNanos)
-        requireComplete(result, deadlineNanos)
-        check(result.exitCode == 0) { "VIDEO_PACKAGE_PROCESS_LIST_UNKNOWN" }
-        val lines = result.stdout.trim().lines().map(String::trim)
-        check(lines.size >= 2 && lines.first().split(Regex("\\s+")) == listOf("PID", "NAME")) {
-            "VIDEO_PACKAGE_PROCESS_LIST_UNKNOWN"
-        }
-        val rows = lines.drop(1).map { line ->
-            line.split(Regex("\\s+"), limit = 2).also {
-                check(it.size == 2 && PID.matches(it[0]) && it[1].isNotEmpty()) { "VIDEO_PACKAGE_PROCESS_LIST_UNKNOWN" }
-            }
-        }
-        check(rows.map { it[0] }.distinct().size == rows.size) { "VIDEO_PACKAGE_PROCESS_LIST_UNKNOWN" }
-        check(rows.none { it[1] == PACKAGE || it[1].startsWith("$PACKAGE:") }) { "VIDEO_PACKAGE_STILL_PRESENT" }
+        VideoOwnedStopConfirmation.requirePackageAbsentOnce(
+            shell = this,
+            nowNs = nowNs,
+            readersHealthy = ::readersClosed,
+            packageName = packageName,
+            deadlineNanos = deadlineNanos,
+        )
     }
 
     /** null means pidof found no MAIN process, not proof that every package process is absent. */
@@ -216,39 +208,17 @@ internal class VideoOwnerShell(
 
     /** One mutation at most. Read/compare/action is not an atomic kernel identity-and-stop operation. */
     fun stopOwnedPackage(owner: OwnedProcessLifecycle.Owner, packageName: String, deadlineNanos: Long): Boolean {
-        requirePackage(packageName)
-        check(PID.matches(owner.pid) && owner.uid >= 0 && owner.commandLine == listOf(PACKAGE)) {
-            "VIDEO_STOP_OWNER_NOT_ADMITTED"
-        }
-        var stopped = false
-        var reason = "VIDEO_STOP_UNKNOWN"
-        try {
-            when (val current = lifecycle.observe(owner.pid, deadlineNanos)) {
-                OwnedProcessLifecycle.Observation.Absent -> {
-                    requirePackageAbsent(packageName, deadlineNanos)
-                    stopped = true
-                    reason = "MAIN_AND_PACKAGE_ALREADY_ABSENT_NO_STOP"
-                }
-                is OwnedProcessLifecycle.Observation.Unknown -> reason = "OWNER_UNKNOWN_NOT_STOPPED"
-                is OwnedProcessLifecycle.Observation.Alive -> {
-                    if (current.owner != owner) {
-                        reason = "OWNER_REPLACED_NOT_STOPPED"
-                    } else {
-                        val result = execute("am force-stop $PACKAGE", deadlineNanos)
-                        requireComplete(result, deadlineNanos)
-                        check(result.exitCode == 0 && result.stdout.isBlank()) { "VIDEO_FORCE_STOP_RESULT_UNKNOWN" }
-                        check(lifecycle.observe(owner.pid, deadlineNanos) == OwnedProcessLifecycle.Observation.Absent) {
-                            "VIDEO_STOP_MAIN_EXIT_UNKNOWN_OR_REPLACED_NO_RETRY"
-                        }
-                        requirePackageAbsent(packageName, deadlineNanos)
-                        stopped = true
-                        reason = "EXACT_OWNER_PRECHECK_AND_PACKAGE_ABSENCE_OBSERVED"
-                    }
-                }
-            }
-        } catch (error: Exception) {
-            reason = error.javaClass.simpleName + ":" + error.message.orEmpty()
-        }
+        val outcome = VideoOwnedStopConfirmation.stopOwnedPackage(
+            shell = this,
+            lifecycle = lifecycle,
+            nowNs = nowNs,
+            readersHealthy = ::readersClosed,
+            owner = owner,
+            packageName = packageName,
+            deadlineNanos = deadlineNanos,
+        )
+        val stopped = outcome.stopped
+        val reason = outcome.reason
         val receipt = JSONObject().put("schema_version", "aneb_video_owner_stop_v1")
             .put("package", packageName).put("pid", owner.pid).put("uid", owner.uid)
             .put("start_ticks", owner.startTicks).put("confirmed_absent", stopped).put("reason", reason)

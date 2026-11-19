@@ -176,6 +176,143 @@ class BusinessVideoReviewTest {
         assertArrayEquals(raw, ByteArrayOutputStream().also { originals.export(source.id, it) }.toByteArray())
     }
 
+    @Test fun qualifiedCapturedObservationSupportsPostSettleUpperBoundTargetEvaluationAndHostNetworkProvenance() {
+        val raw = """{
+          "format":"business-video-raw-1","runId":"TEST-CAPTURED-B-01",
+          "profileSha256":"${"a".repeat(64)}","conditionId":"B","clockId":"TEST-elapsed",
+          "state":"CAPTURED_AWAITING_REVIEW","category":"OBSERVATION_CAPTURED","reason":null,
+          "swipeCalls":"1","ownedCleanup":true,
+          "events":[{"name":"swipe_returned","atNs":1000000000},{"name":"observation_window_ended","atNs":31000000000}],
+          "frames":[{"sequence":0,"requestedNs":1500000000,"returnedNs":1510000000,"writtenNs":1520000000,"relativePath":"frames/frame-0000.png","sha256":"${"c".repeat(64)}","bytes":1024}],
+          "firstObservedPlaybackWaitMs":null,"playerFirstFrameMs":null,"stallStatus":"not_computed",
+          "hostNetworkCondition":{
+            "topologyId":"ethernet-winrt-hotspot-20261119",
+            "conditionMode":"limit",
+            "requestSha256":"${"d".repeat(64)}",
+            "uplinkInterfaceIndex":12,
+            "apInterfaceIndex":14,
+            "downlinkIpBytesPerSecond":125000
+          }
+        }""".toByteArray(Charsets.UTF_8)
+        val originals = ResearchRecordStore(temporary.newFolder())
+        val source = originals.save(raw)
+        val review = buildJsonObject {
+            put("format", "business-video-review-1")
+            put("record_kind", source.recordKind)
+            put("source_sha256", source.id)
+            put("method_id", "TEST-visible-dynamics-v3-upper-bound")
+            put("input_record", source.root)
+            putJsonArray("records") {
+                addJsonObject {
+                    put("attempt_id", "TEST-CAPTURED-B-01")
+                    put("qualification", "QUALIFIED")
+                    putJsonObject("metrics") {
+                        putJsonObject("visible_pointer_to_target_wait") {
+                            put("status", "interval")
+                            putJsonArray("interval_s") { add(0.45); add(0.62) }
+                            put("endpoint_b_kind", "CONFIRMED_POST_SETTLE_UPPER_BOUND")
+                            put("target_s", 3)
+                            put("target_evaluation", "MET")
+                            put("reason", "TEST-panel-settled-before-confirmed-hand-motion")
+                        }
+                        putJsonObject("visible_switch_wait") {
+                            put("status", "interval")
+                            putJsonArray("interval_s") { add(2.85); add(3.20) }
+                            put("endpoint_b_kind", "CONFIRMED_POST_SETTLE_UPPER_BOUND")
+                            put("target_s", 3)
+                            put("target_evaluation", "UNCERTAIN")
+                            put("reason", "TEST-conservative-interval-straddles-target")
+                        }
+                    }
+                    putJsonObject("network_condition_review") {
+                        put("topology_id", "ethernet-winrt-hotspot-20261119")
+                        put("mode", "limit")
+                        put("host_request_sha256", "d".repeat(64))
+                        put("summary", "TEST-only 125000 IP B/s WinDivert forward pacing over Ethernet->WinRT AP")
+                    }
+                    put("stall_status", "not_computed")
+                    putJsonArray("observations") { add("TEST-only 30s observation window captured") }
+                    putJsonArray("limitations") { add("TEST-only post-settle upper bound, not exact first frame") }
+                    putJsonArray("evidence_references") {
+                        addJsonObject { put("reference", "supervisor.json"); put("sha256", "e".repeat(64)) }
+                    }
+                }
+            }
+        }.toString().toByteArray(Charsets.UTF_8)
+        val reviews = ResearchAnalysisStore(temporary.newFolder())
+        val saved = reviews.save(source, review)
+        val output = ByteArrayOutputStream()
+        ResearchVideoOfflineReportExporter(originals, reviews).writeTo(source.id, saved.id, output)
+        val zipEntries = linkedMapOf<String, ByteArray>()
+        ZipInputStream(ByteArrayInputStream(output.toByteArray()), Charsets.UTF_8).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                zipEntries[entry.name] = zip.readBytes()
+            }
+        }
+        val html = zipEntries.getValue("index.html").toString(Charsets.UTF_8)
+        listOf(
+            "QUALIFIED",
+            "CONFIRMED_POST_SETTLE_UPPER_BOUND",
+            "MET",
+            "UNCERTAIN",
+            "ethernet-winrt-hotspot-20261119",
+            "d".repeat(64),
+            "word-break:break-word",
+            "overflow-wrap:anywhere",
+            "本机未读取或重验媒体",
+        ).forEach { expected ->
+            assertTrue("missing report token: $expected", html.contains(expected))
+        }
+        assertEquals(JsonNull, originals.open(source.id).root["firstObservedPlaybackWaitMs"])
+    }
+
+    @Test fun dishonestTargetEvaluationOrObservedEndpointBOnNaIsRejected() {
+        val source = ResearchRecordStore.decode(rawBytes())
+        val base = reviewBytes(source)
+        fun mutateSwitchMetric(extra: Map<String, JsonElement>): ByteArray = changeRow(base) { row ->
+            val metrics = row.getValue("metrics").jsonObject
+            val sw = metrics.getValue("visible_switch_wait").jsonObject
+            JsonObject(row + ("metrics" to JsonObject(metrics + ("visible_switch_wait" to JsonObject(sw + extra)))))
+        }
+        val rejected = listOf(
+            // NA claiming MET
+            mutateSwitchMetric(mapOf("target_s" to JsonPrimitive(3), "target_evaluation" to JsonPrimitive("MET"))),
+            // NA claiming observed post-settle upper bound
+            mutateSwitchMetric(mapOf("endpoint_b_kind" to JsonPrimitive("CONFIRMED_POST_SETTLE_UPPER_BOUND"))),
+            // Straddling [2.8, 3.2] vs 3s claiming MET
+            mutateSwitchMetric(
+                mapOf(
+                    "status" to JsonPrimitive("interval"),
+                    "interval_s" to JsonArray(listOf(JsonPrimitive(2.8), JsonPrimitive(3.2))),
+                    "target_s" to JsonPrimitive(3),
+                    "target_evaluation" to JsonPrimitive("MET"),
+                ),
+            ),
+            // Exceeding [3.1, 3.5] vs 3s claiming MET instead of NOT_MET
+            mutateSwitchMetric(
+                mapOf(
+                    "status" to JsonPrimitive("interval"),
+                    "interval_s" to JsonArray(listOf(JsonPrimitive(3.1), JsonPrimitive(3.5))),
+                    "target_s" to JsonPrimitive(3),
+                    "target_evaluation" to JsonPrimitive("MET"),
+                ),
+            ),
+        )
+        rejected.forEach { bad ->
+            assertThrows(ResearchImportException::class.java) { ResearchAnalysisStore.decode(source, bad) }
+        }
+        val honestNotMet = mutateSwitchMetric(
+            mapOf(
+                "status" to JsonPrimitive("interval"),
+                "interval_s" to JsonArray(listOf(JsonPrimitive(3.1), JsonPrimitive(3.5))),
+                "target_s" to JsonPrimitive(3),
+                "target_evaluation" to JsonPrimitive("NOT_MET"),
+            ),
+        )
+        assertNotNull(ResearchAnalysisStore.decode(source, honestNotMet))
+    }
+
     private fun changeRow(bytes: ByteArray, update: (JsonObject) -> JsonObject): ByteArray {
         val root = Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject
         val row = root.getValue("records").jsonArray.single().jsonObject

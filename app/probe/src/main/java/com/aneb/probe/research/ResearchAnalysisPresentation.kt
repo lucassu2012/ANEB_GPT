@@ -87,13 +87,17 @@ val ResearchAnalysis.groupLines: List<String> get() {
 private val ResearchAnalysis.businessSummaryLines: List<String> get() {
     val raw = root.getValue("input_record").jsonObject
     val row = records.values.single()
-    return listOf(
-        "业务视频复核 · 导入声明，本机未读取或重验媒体、时钟或数值。",
-        "原始执行：${raw.text("state")} / ${raw.text("category")} / ${raw["reason"]}",
-        "原始自有清理声明：${raw["ownedCleanup"]}；复核不能覆盖原始状态。",
-        "复核声明：${row.text("qualification")}；方法（输入声明）：${root.text("method_id")}",
-        "以下是独立的新方法结果，不回填采集原文或旧 V0/VF、Completion，不代表网络因果。",
-    )
+    val host = raw["hostNetworkCondition"] as? JsonObject
+    return buildList {
+        add("业务视频复核 · 导入声明，本机未读取或重验媒体、时钟或数值。")
+        add("原始执行：${raw.text("state")} / ${raw.text("category")} / ${raw["reason"]}")
+        add("原始自有清理声明：${raw["ownedCleanup"]}；复核不能覆盖原始状态。")
+        if (host != null) {
+            add("原始宿主网络绑定声明：conditionId=${raw.text("conditionId")}；拓扑=${host.text("topologyId")}；模式=${host.text("conditionMode")}；请求 SHA-256=${host.text("requestSha256")}")
+        }
+        add("复核声明：${row.text("qualification")}；方法（输入声明）：${root.text("method_id")}")
+        add("以下是独立的新方法结果，不回填采集原文或旧 V0/VF、Completion，不代表网络因果。")
+    }
 }
 
 private fun ResearchAnalysis.businessAttemptLines(attemptId: String): List<String> {
@@ -109,6 +113,22 @@ private fun ResearchAnalysis.businessAttemptLines(attemptId: String): List<Strin
                 else -> "NA（不可计算，不补 0）"
             }
             add("$label（$key）：$value；复核提供的依据/原因：${metric.text("reason")}")
+            metric.text("endpoint_b_kind")?.let { bKind ->
+                val bLabel = when (bKind) {
+                    "EXACT_ADJACENT_PAIR" -> "精确相邻阴/阳帧对首帧（EXACT_ADJACENT_PAIR）"
+                    "CONFIRMED_POST_SETTLE_UPPER_BOUND" -> "面板停稳后首次确认内在动态上界（CONFIRMED_POST_SETTLE_UPPER_BOUND；非精确首帧）"
+                    "UNAVAILABLE" -> "无可用内在动态边界（UNAVAILABLE）"
+                    else -> bKind
+                }
+                add("$label 端点 B 类型声明：$bLabel")
+            }
+            metric.text("target_evaluation")?.let { eval ->
+                val targetText = number(metric["target_s"], "未提供")
+                add("$label 目标判定（阈值 ${targetText}s）：$eval")
+            }
+        }
+        (row["network_condition_review"] as? JsonObject)?.let { net ->
+            add("受控网络条件复核声明（仅文本溯源，本机未验驱动）：拓扑=${net.text("topology_id")}；模式=${net.text("mode")}；宿主请求 SHA-256=${net.text("host_request_sha256")}；摘要=${net.text("summary")}")
         }
         add(intervalDisplayNotice)
         add("卡顿：not_computed；不是没有卡顿。")

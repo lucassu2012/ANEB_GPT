@@ -19,20 +19,39 @@ object VideoUiAdmission {
         val binding = Json.parseToJsonElement(source).jsonObject
         val expected = compile(source)
         val keys = listOf("resource_id", "text", "description")
+        fun value(selector: JsonObject, key: String) =
+            selector[key]?.takeUnless { it == JsonNull }?.jsonPrimitive?.content.orEmpty()
         fun matches(selector: JsonObject): List<VideoUiPublicNode> {
-            fun value(key: String) = selector[key]?.takeUnless { it == JsonNull }?.jsonPrimitive?.content.orEmpty()
-            check(keys.any { value(it).isNotBlank() }) { "VIDEO_PUBLIC_SELECTOR_REQUIRED" }
-            return visibleNodes.filter { node -> keys.all { field ->
-                field !in selector || value(field) == when (field) {
-                    "resource_id" -> node.resourceId.orEmpty()
-                    "text" -> node.text.orEmpty()
-                    else -> node.description.orEmpty()
-                }
-            } }
+            val textContains = value(selector, "text_contains")
+            check(keys.any { value(selector, it).isNotBlank() } || textContains.isNotBlank()) {
+                "VIDEO_PUBLIC_SELECTOR_REQUIRED"
+            }
+            return visibleNodes.filter { node ->
+                keys.all { field ->
+                    field !in selector || value(selector, field) == when (field) {
+                        "resource_id" -> node.resourceId.orEmpty()
+                        "text" -> node.text.orEmpty()
+                        else -> node.description.orEmpty()
+                    }
+                } && (textContains.isEmpty() || textContains in node.text.orEmpty())
+            }
         }
-        val blocked = binding.getValue("blockers").jsonObject.filterValues { selectors ->
-            selectors.jsonArray.any { matches(it.jsonObject).isNotEmpty() }
-        }.keys
+        val matchedReasons = linkedMapOf<String, String>()
+        binding.getValue("blockers").jsonObject.forEach { (blockerKind, selectors) ->
+            val matchedRule = selectors.jsonArray.map { it.jsonObject }.firstOrNull { rule ->
+                val allOf = rule["all_of"]?.jsonArray
+                if (allOf != null) {
+                    check(allOf.isNotEmpty()) { "VIDEO_COMPOSITE_BLOCKER_EMPTY" }
+                    allOf.all { sub -> matches(sub.jsonObject).isNotEmpty() }
+                } else {
+                    matches(rule).isNotEmpty()
+                }
+            }
+            if (matchedRule != null) {
+                matchedReasons[blockerKind] = value(matchedRule, "reason").ifBlank { blockerKind }
+            }
+        }
+        val blocked = matchedReasons.keys
         val regions = matches(binding.getValue("gesture_viewport").jsonObject)
         val region = regions.singleOrNull()
         val viewport = region?.bounds ?: VideoViewport(0, 0, 0, 0)
@@ -55,7 +74,7 @@ object VideoUiAdmission {
         val reason = when {
             kind == "FEED_READY" -> null
             blocked.size > 1 -> "MULTIPLE_BLOCKER_KINDS"
-            blocked.size == 1 -> blocked.single()
+            blocked.size == 1 -> matchedReasons.getValue(blocked.single())
             region == null -> if (regions.isEmpty()) "VIDEO_VIEWPORT_MISSING" else "VIDEO_VIEWPORT_NOT_UNIQUE"
             viewport != expected -> "VIDEO_VIEWPORT_CHANGED"
             kind == "VIDEO_LOADING" -> "VIDEO_LOADING"

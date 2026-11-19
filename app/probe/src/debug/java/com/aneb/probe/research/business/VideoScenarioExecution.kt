@@ -3,6 +3,8 @@ package com.aneb.probe.research.business
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -50,6 +52,22 @@ data class VideoFrameObservation(
 )
 
 @Serializable
+data class VideoHostNetworkBinding(
+    val topologyId: String,
+    val conditionMode: String,
+    val requestSha256: String,
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val uplinkInterfaceIndex: Int? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val apInterfaceIndex: Int? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val downlinkIpBytesPerSecond: Long? = null,
+)
+
+@Serializable
 data class VideoRunBinding(
     val runId: String,
     val profileSha256: String,
@@ -58,6 +76,9 @@ data class VideoRunBinding(
     val networkKey: String,
     val clockId: String,
     val uiObservationMethod: String? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val hostNetworkCondition: VideoHostNetworkBinding? = null,
 )
 
 @Serializable
@@ -82,6 +103,9 @@ data class VideoScenarioResult(
     val format: String = "business-video-raw-1",
     val preInputRejection: VideoInputRejectionSource? = null,
     val uiObservationMethod: String? = null,
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val hostNetworkCondition: VideoHostNetworkBinding? = null,
 )
 
 /** One phone scenario, not an App automation framework. Android/OS is the only replaceable boundary. */
@@ -102,6 +126,17 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
         require(binding.runId.matches(Regex("[A-Za-z0-9_-]{1,64}")) && directory.name == binding.runId)
         require(binding.profileSha256 == plan.profileSourceSha256 && binding.appVersionCode > 0L)
         require(binding.conditionId.matches(Regex("[A-Za-z0-9_-]{1,64}")) && binding.networkKey.isNotBlank() && binding.clockId.isNotBlank())
+        binding.hostNetworkCondition?.let { host ->
+            require(host.topologyId.matches(Regex("[A-Za-z0-9._-]{1,64}"))) { "VIDEO_HOST_TOPOLOGY_ID_INVALID" }
+            require(host.conditionMode in setOf("inspect", "limit")) { "VIDEO_HOST_CONDITION_MODE_INVALID" }
+            require(host.requestSha256.matches(Regex("[0-9a-f]{64}"))) { "VIDEO_HOST_REQUEST_SHA_INVALID" }
+            host.uplinkInterfaceIndex?.let { require(it > 0) { "VIDEO_HOST_UPLINK_IF_INVALID" } }
+            host.apInterfaceIndex?.let { require(it > 0) { "VIDEO_HOST_AP_IF_INVALID" } }
+            if (host.uplinkInterfaceIndex != null && host.apInterfaceIndex != null) {
+                require(host.uplinkInterfaceIndex != host.apInterfaceIndex) { "VIDEO_HOST_UPLINK_EQUALS_AP_IF" }
+            }
+            host.downlinkIpBytesPerSecond?.let { require(it in 1L..1_000_000_000L) { "VIDEO_HOST_RATE_INVALID" } }
+        }
         check(directory.mkdir()) { "VIDEO_ATTEMPT_ALREADY_CONSUMED" }
         val codec = Json { encodeDefaults = true; prettyPrint = true }
         fun writeNew(name: String, text: String) {
@@ -139,7 +174,12 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
                     "BUSINESS_ERROR" -> "BUSINESS_ERROR"
                     else -> "PAGE_MISMATCH"
                 }
-                stop(kind, page.kind)
+                val stopCode = if (page.kind != "UNKNOWN" && !page.admissionReason.isNullOrBlank()) {
+                    page.admissionReason
+                } else {
+                    page.kind
+                }
+                stop(kind, stopCode)
             }
             val expectedViewport = admittedViewport
             if (expectedViewport == null) admittedViewport = page.viewport
@@ -251,7 +291,8 @@ class VideoScenarioExecution(private val phone: Phone, private val nowNs: () -> 
             if (captured && cleaned) "CAPTURED_AWAITING_REVIEW" else "STOPPED",
             category, reason ?: if (!cleaned) "OWNED_CLEANUP_UNCONFIRMED" else null,
             calls, cleaned, events, frames, preInputRejection = preInputRejection,
-            uiObservationMethod = binding.uiObservationMethod)
+            uiObservationMethod = binding.uiObservationMethod,
+            hostNetworkCondition = binding.hostNetworkCondition)
         writeNew("result.json", codec.encodeToString(VideoScenarioResult.serializer(), result))
         return result
     }

@@ -17,6 +17,7 @@
 |---|---|---|
 | `SOURCE_PREPARATION` | 启动本轮自有抖音；0 手势 | 当前公开页面树、截图和 App 身份。不是参考样本，不产生指标，不自动认定内容或账号合格 |
 | `REFERENCE_QUALIFICATION` | 仅一次固定上划，观察30秒 | 原始 MP4、带手机时钟的 PNG、操作/界面/网络事实、结果及自有清理；仍待独立内容与媒体复核 |
+| `CONTROLLED_CONDITION_RUN` | 同拓扑受控 R/B 下一次固定上划，观察30秒 | 强制绑定 `condition_id`（`R` 对应宿主 `inspect`、`B` 对应宿主 `limit`）及宿主 `phone-condition` 的 `host_topology_id` / `host_request_sha256`；采集与复核边界同上 |
 
 共同必需参数：`feature_release=video-business-profile-1`、`live_authorized=true`、新 `run_id`、
 `execution_mode`、精确 `profile_sha256`、实际正整数 `app_version_code`。
@@ -33,7 +34,8 @@ gesture viewport及其精确 `viewport_bounds`。容器可能包括覆盖控件�
 
 ### 可选新观察策略（须明确选择，尚未实机合格）
 
-`ui_observation_method`缺省为旧`legacy-public-tree-1`，保留上述旧接线。新值`targeted-public-selectors-1`必须与UI binding的`observation_method`完全一致，且另核该文件原字节SHA；不声明或不一致不能悄悄切换。
+`ui_observation_method`缺省为旧`legacy-public-tree-1`，保留上述旧接线。新值`targeted-public-selectors-1`（及显式支持复合模态阻断规则的`targeted-public-selectors-2`）必须与UI binding的`observation_method`完全一致，且另核该文件原字节SHA；不声明或不一致不能悄悄切换。
+`targeted-public-selectors-2`额外允许在`blockers`中使用`all_of`复合子选择器与`text_contains`（须显式附带同源`query_text`）对已见“发现抖音朋友 / 登录后 / 拒绝 / 继续”四要素模态作同包同窗结构化识别（如`LOGIN_REQUIRED` / `FRIENDS_INVITE_LOGIN_MODAL`），而不放宽严格推荐锚点、不将纯空窗口猜作登录框、不在采集器内自动点击任何按钮。独立前置准备若使用`VideoFriendsInviteModalGuard`辅助判据，仅允许同包同窗唯一可点击“拒绝”且无输入框/密码框时通过，`account_state`仍保持`UNKNOWN_NOT_REAUTHENTICATED`。
 新策略在输入前后均只执行固定有界查询：resource_id走公开ID查询；显式query_text（或已有text）走公开文本查询，查询词必须是绑定text/description中的原样非空子串。它只是召回提示，最终仍用原选择器严格分类。没有全树fallback、模糊放行、补手势或跳过无法查询的selector。
 每次最多32个固定selector查询/2048个不同返回节点；当前真实绑定为“推荐”文本查询和原viewport ID查询共2项。`query_traces`保存每次方式/词/请求与返回手机elapsed/原返回数或异常；节点保存node_package/node_window_id及实际classification_eligible。部分查询/原件保留失败仍写UNKNOWN来源并传播，不使用已命中的部分分类；CANCEL在查询间也可停止。
 binding/result的可空`uiObservationMethod`记录选择值，旧无字段数据不被赋予新方法。单次API时长不等于App响应，API可能漏掉provider/嵌套内容，空返回不等于画面为空。策略可编译/离线通过不表示P40可用。

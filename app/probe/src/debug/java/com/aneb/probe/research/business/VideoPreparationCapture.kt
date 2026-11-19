@@ -18,7 +18,7 @@ object VideoPreparationCapture {
     fun requestIfRequired(mode: String, requestSystemConsent: () -> Unit) {
         when (mode) {
             "SOURCE_PREPARATION" -> Unit
-            "REFERENCE_QUALIFICATION" -> requestSystemConsent()
+            "REFERENCE_QUALIFICATION", "CONTROLLED_CONDITION_RUN" -> requestSystemConsent()
             else -> throw IllegalArgumentException("VIDEO_MODE_UNSUPPORTED")
         }
     }

@@ -28,6 +28,19 @@ internal object BusinessVideoRawFormat {
         // Raw capture has no reviewed playback classifier or MP4/clock bridge.
         require(root["firstObservedPlaybackWaitMs"] == JsonNull && root["playerFirstFrameMs"] == JsonNull)
         require(root.text("stallStatus") == "not_computed")
+        val hostCondition = root["hostNetworkCondition"]
+        if (hostCondition != null && hostCondition != JsonNull) {
+            val host = hostCondition as? JsonObject ?: error("hostNetworkCondition")
+            require(host.text("topologyId")?.matches(Regex("[A-Za-z0-9._-]{1,64}")) == true)
+            require(host.text("conditionMode") in setOf("inspect", "limit"))
+            require(host.text("requestSha256")?.matches(SHA256) == true)
+            val uplinkIf = host["uplinkInterfaceIndex"]?.takeUnless { it == JsonNull }?.let { host.positiveLong("uplinkInterfaceIndex") }
+            val apIf = host["apInterfaceIndex"]?.takeUnless { it == JsonNull }?.let { host.positiveLong("apInterfaceIndex") }
+            if (uplinkIf != null && apIf != null) require(uplinkIf != apIf)
+            host["downlinkIpBytesPerSecond"]?.takeUnless { it == JsonNull }?.let {
+                require(host.positiveLong("downlinkIpBytesPerSecond") <= 1_000_000_000L)
+            }
+        }
         val events = root["events"] as? JsonArray ?: error("events")
         var previousEventNs = -1L
         events.forEach { element ->
@@ -66,6 +79,8 @@ internal object BusinessVideoRawFormat {
         require(!primitive.isString)
         return (primitive.longOrNull ?: error(key)).also { require(it >= 0L) }
     }
+
+    private fun JsonObject.positiveLong(key: String): Long = nonNegativeLong(key).also { require(it > 0L) }
 
     private val SHA256 = Regex("[0-9a-f]{64}")
 }

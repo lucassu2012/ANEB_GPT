@@ -38,7 +38,7 @@ class NativeVideoScenarioInstrumentation {
         check(BuildConfig.DEBUG && arguments.getString("feature_release") == "video-business-profile-1" &&
             arguments.getString("live_authorized") == "true") { "EXPLICIT_NEW_VIDEO_RELEASE_REQUIRED" }
         val mode = arguments.getString("execution_mode")
-        check(mode in setOf("SOURCE_PREPARATION", "REFERENCE_QUALIFICATION")) { "VIDEO_MODE_UNSUPPORTED" }
+        check(mode in setOf("SOURCE_PREPARATION", "REFERENCE_QUALIFICATION", "CONTROLLED_CONDITION_RUN")) { "VIDEO_MODE_UNSUPPORTED" }
         val runId = checkNotNull(arguments.getString("run_id"))
         check(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
         check(arguments.getString("max_gestures") == if (mode == "SOURCE_PREPARATION") "0" else "1")
@@ -58,11 +58,32 @@ class NativeVideoScenarioInstrumentation {
             VideoUiQueries.preparationQueries(it, checkNotNull(mode))
         }
         val observationMethod = sourceMethod ?: VideoUiQueries.selectMethod(arguments.getString("ui_observation_method"), uiText)
-        if (mode == "REFERENCE_QUALIFICATION" || observationMethod == VideoUiQueries.TARGETED_METHOD) {
+        if (mode != "SOURCE_PREPARATION" || observationMethod in setOf(VideoUiQueries.TARGETED_METHOD, VideoUiQueries.TARGETED_MODAL_AWARE_METHOD)) {
             check(uiText != null && sha(uiText.toByteArray()) == arguments.getString("ui_binding_sha256")) { "VIDEO_UI_BINDING_REQUIRED" }
         }
-        val network = if (mode == "REFERENCE_QUALIFICATION")
+        val network = if (mode != "SOURCE_PREPARATION")
             checkNotNull(arguments.getString("network_key")?.takeIf { it.isNotBlank() }) else null
+        val conditionId: String
+        val hostCondition: VideoHostNetworkBinding?
+        if (mode == "CONTROLLED_CONDITION_RUN") {
+            conditionId = checkNotNull(arguments.getString("condition_id"))
+            check(conditionId in setOf("R", "B")) { "VIDEO_CONTROLLED_CONDITION_ID_INVALID" }
+            val hostMode = checkNotNull(arguments.getString("host_condition_mode"))
+            check((conditionId == "R" && hostMode == "inspect") || (conditionId == "B" && hostMode == "limit")) {
+                "VIDEO_CONTROLLED_CONDITION_MODE_MISMATCH"
+            }
+            hostCondition = VideoHostNetworkBinding(
+                topologyId = checkNotNull(arguments.getString("host_topology_id")?.takeIf { it.isNotBlank() }),
+                conditionMode = hostMode,
+                requestSha256 = checkNotNull(arguments.getString("host_request_sha256")),
+                uplinkInterfaceIndex = arguments.getString("host_uplink_if_index")?.toIntOrNull(),
+                apInterfaceIndex = arguments.getString("host_ap_if_index")?.toIntOrNull(),
+                downlinkIpBytesPerSecond = arguments.getString("host_downlink_ip_bytes_per_second")?.toLongOrNull(),
+            )
+        } else {
+            conditionId = "QUAL_REFERENCE"
+            hostCondition = null
+        }
         val phone = NativeVideoPhone(instrumentation, root, version, uiText, network, observationMethod, checkNotNull(mode))
         val clockId = "android-elapsed:$runId"
         if (mode == "SOURCE_PREPARATION") {
@@ -90,8 +111,8 @@ class NativeVideoScenarioInstrumentation {
             check(failure == null) { "VIDEO_SOURCE_STOPPED" }
             return
         }
-        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, "QUAL_REFERENCE", checkNotNull(network), clockId,
-            uiObservationMethod = observationMethod)
+        val binding = VideoRunBinding(runId, plan.profileSourceSha256, version, conditionId, checkNotNull(network), clockId,
+            uiObservationMethod = observationMethod, hostNetworkCondition = hostCondition)
         val result = VideoScenarioExecution(phone, SystemClock::elapsedRealtimeNanos).runOnce(source, binding, root)
         check(result.ownedCleanup) { "VIDEO_OWNED_CLEANUP_UNCONFIRMED" }
         // CAPTURED means pending independent media/content review, not successful playback or a valid metric.
@@ -128,7 +149,7 @@ private class NativeVideoPhone(
     private val ui = uiText?.let(::JSONObject)
     private val targetedQueries = when (observationMethod) {
         VideoUiQueries.PREPARATION_METHOD -> VideoUiQueries.preparationQueries(observationMethod, executionMode)
-        VideoUiQueries.TARGETED_METHOD -> VideoUiQueries.compile(checkNotNull(uiText))
+        VideoUiQueries.TARGETED_METHOD, VideoUiQueries.TARGETED_MODAL_AWARE_METHOD -> VideoUiQueries.compile(checkNotNull(uiText))
         else -> null
     }
     private val shell by lazy { VideoOwnerShell(automation, root.canonicalFile, SystemClock::elapsedRealtimeNanos) }

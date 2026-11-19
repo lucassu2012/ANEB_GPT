@@ -22,7 +22,8 @@
 该项含：
 
 - `qualification` 为 `NOT_QUALIFIED` 或 `QUALIFIED`。停止或清理未确认的原文不能被声明为合格；即使原文允许该声明，也只是导入复核意见，不是 App 验收/媒体认证。
-- `metrics` 恰含 `visible_pointer_to_target_wait`、`visible_switch_wait`。每项包括 `status`、`interval_s` 和非空 `reason`；`interval` 为非负有序数字秒区间，`NA`/`uncertain` 必须携带 null 而非伪造的零区间。只核结构，不重算端点、达标结论或网络原因。
+- `metrics` 恰含 `visible_pointer_to_target_wait`、`visible_switch_wait`。每项包括 `status`、`interval_s` 和非空 `reason`；`interval` 为非负有序数字秒区间，`NA`/`uncertain` 必须携带 null 而非伪造的零区间。可选声明 `endpoint_b_kind`（`EXACT_ADJACENT_PAIR` / `CONFIRMED_POST_SETTLE_UPPER_BOUND` / `UNAVAILABLE`）区分精确首帧与面板停稳后首次确认内在动态的保守上界，以及可选 `target_s` + `target_evaluation`（`MET` / `NOT_MET` / `UNCERTAIN` / `NA`，强校验区间上下界与目标阈值数学一致性）。只核结构与边界一致性，不重算端点或网络原因。
+- 可选记录级 `network_condition_review`（`topology_id`、`mode` 限 `inspect`/`limit`、`host_request_sha256`、`summary`）仅作为宿主受控转发原件的文本溯源绑定，不打开外部文件或验真驱动。
 - `stall_status` 必须为 `not_computed`。
 - `observations`、`limitations` 是文本数组；`evidence_references` 是 `reference` 文本与声明 SHA-256 的列表。引用不解析、不读取、不链接到外部媒体，也不证明对应文件存在或来源真实。
 
