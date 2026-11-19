@@ -54,6 +54,8 @@ import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.PrototypeCampaignRoomRepository
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
+import com.aneb.probe.data.VoiceResultEntity
+import com.aneb.probe.data.VoiceResultRepository
 import com.aneb.probe.engine.AbRunner
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.ContinuityRunner
@@ -65,6 +67,7 @@ import com.aneb.probe.engine.PrototypeReleaseProbeBoundary
 import com.aneb.probe.engine.ScenarioProfile
 import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.engine.VoiceRunner
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.prototype.AnebClientPrototypeRawPostTransport
@@ -94,6 +97,7 @@ import com.aneb.probe.ui.prototype.PrototypeZipShareLauncher
 import com.aneb.probe.ui.theme.AnebTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -200,6 +204,7 @@ class MainActivity : ComponentActivity() {
         data object ApiProbe : Screen
         data object ReachBoard : Screen
         data object Profiles : Screen
+        data object Voice : Screen
         data object Servers : Screen
         data object PrototypeMode : Screen
         data class PrototypeResult(val campaignId: String) : Screen
@@ -364,8 +369,19 @@ class MainActivity : ComponentActivity() {
                         PrototypeCampaignService.session.collectAsStateWithLifecycle()
                     val prototypeCampaignProgress by
                         PrototypeCampaignService.progress.collectAsStateWithLifecycle()
+                    var voiceRunning by remember { mutableStateOf(false) }
+                    var voiceSample by remember { mutableStateOf<VoiceRunner.Sample?>(null) }
+                    var voiceJob by remember { mutableStateOf<Job?>(null) }
+                    var voiceFellBack by remember { mutableStateOf(false) }
+                    var voiceStatusNotice by remember { mutableStateOf<String?>(null) }
+                    var voiceHistoryVersion by remember { mutableIntStateOf(0) }
+                    var voiceContRunning by remember { mutableStateOf(false) }
+                    var voiceContSample by remember { mutableStateOf<VoiceRunner.Sample?>(null) }
+                    var voiceContJob by remember { mutableStateOf<Job?>(null) }
+                    var voiceExportStatus by remember { mutableStateOf<String?>(null) }
+                    val voiceActive = voiceRunning || voiceContRunning
                     val auxiliaryRunning = specialRunSession is SpecialRunSession.Running
-                    val nonPrototypeRunning = runSession is ProbeRunSession.Running || auxiliaryRunning
+                    val nonPrototypeRunning = runSession is ProbeRunSession.Running || auxiliaryRunning || voiceActive
                     val prototypePresentation = remember(
                         prototypeCampaignSession,
                         prototypeCampaignProgress,
@@ -467,7 +483,8 @@ class MainActivity : ComponentActivity() {
                         checkingNode = prototypeNodeChecking,
                         otherRunActive =
                             ProbeRunService.session.value is ProbeRunSession.Running ||
-                                ProbeSpecialRunService.session.value is SpecialRunSession.Running,
+                                ProbeSpecialRunService.session.value is SpecialRunSession.Running ||
+                                voiceActive,
                         session = PrototypeCampaignService.session.value,
                     )
 
@@ -588,6 +605,111 @@ class MainActivity : ComponentActivity() {
                             pairs = intentAbPairs,
                             netlog = intentAbNetlog,
                         )
+                    }
+
+                    fun startVoiceRun() {
+                        if (running) return
+                        if (!hasActiveNetwork()) {
+                            voiceStatusNotice = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                            return
+                        }
+                        voiceRunning = true
+                        voiceSample = null
+                        voiceFellBack = false
+                        voiceStatusNotice = null
+                        android.util.Log.i("AnebProbe", "VOICE_START server=$serverUrl")
+                        val repo = VoiceResultRepository(db.voiceResultDao())
+                        val runner = VoiceRunner()
+                        voiceJob = lifecycleScope.launch {
+                            try {
+                                val outcome = repo.runWithFallbackAndPersist(runner, serverUrl) { sample ->
+                                    voiceSample = sample
+                                }
+                                voiceFellBack = outcome.fellBackToPacedProxy
+                                val savedId = outcome.persistedRowId
+                                if (savedId != null) {
+                                    voiceHistoryVersion += 1
+                                    android.util.Log.i(
+                                        "AnebProbe",
+                                        "VOICE_SAVED id=$savedId caliber=${outcome.finalSample?.caliber ?: "null"} " +
+                                            "fallback=${outcome.fellBackToPacedProxy}",
+                                    )
+                                } else {
+                                    voiceStatusNotice = "语音测量未生成完成样本，未入库。"
+                                }
+                            } catch (e: CancellationException) {
+                                voiceStatusNotice = "语音测量已取消，未入库。"
+                                android.util.Log.i("AnebProbe", "VOICE_CANCELLED")
+                                throw e
+                            } catch (e: Exception) {
+                                voiceStatusNotice = RunFailureMessage.forError(e)
+                                android.util.Log.i("AnebProbe", "VOICE_FAILED error=${e.javaClass.simpleName}")
+                            } finally {
+                                voiceRunning = false
+                                voiceJob = null
+                            }
+                        }
+                    }
+
+                    fun startVoiceContinuityRun() {
+                        if (running) return
+                        if (!hasActiveNetwork()) {
+                            voiceStatusNotice = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                            return
+                        }
+                        voiceContRunning = true
+                        voiceContSample = null
+                        voiceStatusNotice = null
+                        android.util.Log.i("AnebProbe", "VOICE_CONT_START server=$serverUrl")
+                        val runner = VoiceRunner()
+                        voiceContJob = lifecycleScope.launch {
+                            try {
+                                runner.runSimContinuity(serverUrl).collect { sample ->
+                                    voiceContSample = sample
+                                    if (sample.phase == VoiceRunner.Phase.Done) {
+                                        android.util.Log.i(
+                                            "AnebProbe",
+                                            "VOICE_CONT_DONE detect_ms=${sample.continuityDetectMs ?: "null"} " +
+                                                "resume_ms=${sample.continuityResumeMs ?: "null"}",
+                                        )
+                                    }
+                                }
+                            } catch (e: CancellationException) {
+                                android.util.Log.i("AnebProbe", "VOICE_CONT_CANCELLED")
+                                throw e
+                            } catch (e: Exception) {
+                                voiceStatusNotice = "连续性子测失败：${RunFailureMessage.forError(e)}"
+                                android.util.Log.i("AnebProbe", "VOICE_CONT_FAILED error=${e.javaClass.simpleName}")
+                            } finally {
+                                voiceContRunning = false
+                                voiceContJob = null
+                            }
+                        }
+                    }
+
+                    fun exportVoiceRecords(format: String, mime: String, build: (List<VoiceResultEntity>) -> String) {
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val records = db.voiceResultDao().recent(200)
+                            if (records.isEmpty()) {
+                                withContext(Dispatchers.Main) { voiceExportStatus = "暂无可导出的语音落库记录。" }
+                                return@launch
+                            }
+                            val content = build(records)
+                            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                            val fileName = "aneb_voice_$ts.$format"
+                            val outcome = Exporter.exportToDownloads(applicationContext, fileName, mime, content)
+                            val line =
+                                "VOICE_EXPORT format=$format count=${records.size} file=$fileName " +
+                                    "bytes=${outcome.bytes} status=${if (outcome.ok) "ok" else "fail"} " +
+                                    "error=${outcome.error?.replace(' ', '_') ?: "none"}"
+                            android.util.Log.i("AnebProbe", line)
+                            val display = if (outcome.ok) {
+                                "已保存 ${records.size} 条语音记录到 Downloads/ANEB/$fileName（${outcome.bytes} B）"
+                            } else {
+                                "导出失败：${outcome.error ?: "unknown"}"
+                            }
+                            withContext(Dispatchers.Main) { voiceExportStatus = display }
+                        }
                     }
 
                     LaunchedEffect(prototypeCampaignSession) {
@@ -727,6 +849,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenBasicResult = { runId ->
                                             screen = Screen.BasicResult(runId)
                                         },
+                                        onOpenVoice = { screen = Screen.Voice },
                                     )
                                     MainTab.Probe -> ApiProbeRoute(
                                         onBack = { tab = MainTab.Test },
@@ -740,6 +863,8 @@ class MainActivity : ComponentActivity() {
                                         onOpenBasic = { runId ->
                                             screen = Screen.BasicResult(runId)
                                         },
+                                        onOpenVoice = { screen = Screen.Voice },
+                                        voiceHistoryVersion = voiceHistoryVersion,
                                         onGenerateReport = { screen = Screen.Report },
                                         onBack = { tab = MainTab.Test },
                                         showBack = false,
@@ -790,6 +915,7 @@ class MainActivity : ComponentActivity() {
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
                                         onOpenProfiles = { screen = Screen.Profiles },
+                                        onOpenVoice = { screen = Screen.Voice },
                                         onBack = { tab = MainTab.Test },
                                         showBack = false,
                                     )
@@ -934,6 +1060,31 @@ class MainActivity : ComponentActivity() {
                                     serverUrl = serverUrl,
                                     onBack = { screen = Screen.Home },
                                 )
+                                is Screen.Voice -> VoiceRoute(
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    sample = voiceSample,
+                                    running = voiceRunning,
+                                    otherRunActive = (runSession is ProbeRunSession.Running) ||
+                                        auxiliaryRunning ||
+                                        prototypePresentation.quickRunning,
+                                    fellBackToPacedProxy = voiceFellBack,
+                                    statusNotice = voiceStatusNotice,
+                                    historyVersion = voiceHistoryVersion,
+                                    onStart = ::startVoiceRun,
+                                    onCancel = { voiceJob?.cancel() },
+                                    contSample = voiceContSample,
+                                    contRunning = voiceContRunning,
+                                    onStartContinuity = ::startVoiceContinuityRun,
+                                    onCancelContinuity = { voiceContJob?.cancel() },
+                                    exportStatus = voiceExportStatus,
+                                    onExportJson = {
+                                        exportVoiceRecords("json", "application/json", VoiceFormat::buildJson)
+                                    },
+                                    onExportCsv = {
+                                        exportVoiceRecords("csv", "text/csv", VoiceFormat::buildCsv)
+                                    },
+                                    onBack = { screen = Screen.Home },
+                                )
                                 is Screen.Servers -> ServerScreen(
                                     currentUrl = serverUrl,
                                     reach = nodeReach,
@@ -1042,6 +1193,7 @@ class MainActivity : ComponentActivity() {
         onOpenPrototype: () -> Unit,
         onOpenResult: (String) -> Unit,
         onOpenBasicResult: (String) -> Unit,
+        onOpenVoice: () -> Unit,
     ) {
         // 最近一次 run（run 结束 running→false 时刷新，带出上次结果 chip）
         val lastRun by produceState<TestRun?>(initialValue = null, running) {
@@ -1071,6 +1223,7 @@ class MainActivity : ComponentActivity() {
             onOpenPrototype = onOpenPrototype,
             onOpenLastResult = onOpenResult,
             onOpenLastBasicResult = onOpenBasicResult,
+            onOpenVoice = onOpenVoice,
         )
     }
 
@@ -1099,6 +1252,8 @@ class MainActivity : ComponentActivity() {
     private fun HistoryRoute(
         onOpen: (String) -> Unit,
         onOpenBasic: (String) -> Unit,
+        onOpenVoice: () -> Unit,
+        voiceHistoryVersion: Int,
         onGenerateReport: () -> Unit,
         onBack: () -> Unit,
         showBack: Boolean = true,
@@ -1111,11 +1266,12 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        val history by produceState(initialValue = HistoryData()) {
+        val history by produceState(initialValue = HistoryData(), voiceHistoryVersion) {
             value = withContext(Dispatchers.IO) {
                 HistoryData(
                     tokenRuns = db.testRunDao().all(),
                     basicRuns = db.basicSpeedResultDao().all(),
+                    voiceResults = db.voiceResultDao().recent(50),
                 )
             }
         }
@@ -1128,12 +1284,61 @@ class MainActivity : ComponentActivity() {
             onBack = onBack,
             showBack = showBack,
             onOpenResearch = { researchOpen = true },
+            voiceResults = history.voiceResults,
+            onOpenVoice = onOpenVoice,
+        )
+    }
+
+    @Composable
+    private fun VoiceRoute(
+        nodeLabel: String,
+        sample: VoiceRunner.Sample?,
+        running: Boolean,
+        otherRunActive: Boolean,
+        fellBackToPacedProxy: Boolean,
+        statusNotice: String?,
+        historyVersion: Int,
+        onStart: () -> Unit,
+        onCancel: () -> Unit,
+        contSample: VoiceRunner.Sample?,
+        contRunning: Boolean,
+        onStartContinuity: () -> Unit,
+        onCancelContinuity: () -> Unit,
+        exportStatus: String?,
+        onExportJson: () -> Unit,
+        onExportCsv: () -> Unit,
+        onBack: () -> Unit,
+    ) {
+        val recentVoice by produceState<List<VoiceResultEntity>>(initialValue = emptyList(), historyVersion) {
+            value = withContext(Dispatchers.IO) {
+                VoiceResultRepository(db.voiceResultDao()).recent(20)
+            }
+        }
+        VoiceScreen(
+            nodeLabel = nodeLabel,
+            sample = sample,
+            running = running,
+            otherRunActive = otherRunActive,
+            fellBackToPacedProxy = fellBackToPacedProxy,
+            statusNotice = statusNotice,
+            onStart = onStart,
+            onCancel = onCancel,
+            contSample = contSample,
+            contRunning = contRunning,
+            onStartContinuity = onStartContinuity,
+            onCancelContinuity = onCancelContinuity,
+            recentVoice = recentVoice,
+            exportStatus = exportStatus,
+            onExportJson = onExportJson,
+            onExportCsv = onExportCsv,
+            onBack = onBack,
         )
     }
 
     private data class HistoryData(
         val tokenRuns: List<TestRun> = emptyList(),
         val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
+        val voiceResults: List<VoiceResultEntity> = emptyList(),
     )
 
     @Composable

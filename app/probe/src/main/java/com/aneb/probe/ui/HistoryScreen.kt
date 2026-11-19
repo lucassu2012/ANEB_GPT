@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.ui.components.AnebGradientCard
 import com.aneb.probe.ui.components.AnebPageIntro
 import com.aneb.probe.ui.components.AnebSectionTitle
@@ -53,12 +54,15 @@ fun HistoryScreen(
     onBack: () -> Unit,
     showBack: Boolean = true,
     onOpenResearch: (() -> Unit)? = null,
+    voiceResults: List<VoiceResultEntity> = emptyList(),
+    onOpenVoice: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
-    val ordered = remember(runs, basicRuns) {
+    val ordered = remember(runs, basicRuns, voiceResults) {
         buildList<HistoryEntry> {
             runs.forEach { add(HistoryEntry.Token(it)) }
             basicRuns.forEach { add(HistoryEntry.Basic(it)) }
+            voiceResults.forEach { add(HistoryEntry.Voice(it)) }
         }.sortedByDescending { it.startedAtEpochMs }
     }
     val scored = remember(runs) { runs.mapNotNull { it.aqsScore }.filter { it.isFinite() } }
@@ -112,6 +116,7 @@ fun HistoryScreen(
                     when (val item = ordered[index]) {
                         is HistoryEntry.Token -> HistoryRecord(item.run, onOpen)
                         is HistoryEntry.Basic -> BasicHistoryRecord(item.result, onOpenBasic)
+                        is HistoryEntry.Voice -> VoiceHistoryRecord(item.result, onOpenVoice)
                     }
                 }
             }
@@ -131,6 +136,11 @@ private sealed interface HistoryEntry {
     data class Basic(val result: BasicSpeedResultEntity) : HistoryEntry {
         override val startedAtEpochMs = result.startedAtEpochMs
         override val key = "basic:${result.runId}"
+    }
+
+    data class Voice(val result: VoiceResultEntity) : HistoryEntry {
+        override val startedAtEpochMs = result.tsEpochMs
+        override val key = "voice:${result.id}"
     }
 }
 
@@ -269,5 +279,53 @@ private fun BasicHistoryRecord(result: BasicSpeedResultEntity, onOpen: (String) 
             )
         }
         Text("›", fontSize = 18.sp, color = colors.faint)
+    }
+}
+
+@Composable
+private fun VoiceHistoryRecord(result: VoiceResultEntity, onOpenVoice: (() -> Unit)?) {
+    val colors = AnebTheme.colors
+    val accent = if (result.lowConfidence) colors.fair else colors.brand2
+    val fmt = remember { SimpleDateFormat("MM-dd HH:mm", Locale.US) }
+    val (mouthEar, _) = VoiceFormat.primaryMouthEar(result.mouthEarProxyMs, result.mouthEarBudgetMs)
+    val m7Suffix = result.m7MaxFrameGapMs?.let { " · M7 ${VoiceFormat.msOrDash(it, decimals = 0)}ms" } ?: ""
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(61.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(androidx.compose.ui.graphics.Color(0xB811162C))
+            .border(1.dp, colors.hairline, RoundedCornerShape(14.dp))
+            .then(if (onOpenVoice != null) Modifier.pressable(onClick = onOpenVoice) else Modifier)
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(41.dp).clip(CircleShape).border(1.dp, accent.copy(alpha = 0.48f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("语", style = AnebType.StatValue, fontSize = 14.sp, color = accent)
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "实时语音 · ${VoiceFormat.caliberLabel(result.caliber)}" +
+                    if (result.lowConfidence) " · 低置信" else "",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = colors.ink,
+                maxLines = 1,
+            )
+            Text(
+                "${fmt.format(Date(result.tsEpochMs))} · 口到耳 ${VoiceFormat.msOrDash(mouthEar, decimals = 0)} ms$m7Suffix",
+                fontSize = 10.sp,
+                color = colors.muted,
+                modifier = Modifier.padding(top = 3.dp),
+                maxLines = 1,
+            )
+        }
+        if (onOpenVoice != null) {
+            Text("›", fontSize = 18.sp, color = colors.faint)
+        }
     }
 }

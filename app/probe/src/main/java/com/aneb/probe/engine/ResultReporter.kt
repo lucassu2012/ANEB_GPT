@@ -29,6 +29,7 @@ object ResultReporter {
         run: TestRun,
         scenarios: List<Pair<ScenarioResultEntity, ItlHistogram>>,
         aqs: AqsScorer.AqsResult,
+        voice: VoiceSummary.Voice? = null,
     ): String = buildJsonObject {
         // ---- 合同字段（顶层，const/枚举锁定） ----
         put("claim_scope", CLAIM_SCOPE)
@@ -59,6 +60,17 @@ object ResultReporter {
                     aqs.subScores.forEach { (k, v) -> put(k, v) }
                 })
             })
+            // run 级 voice 摘要（additive；六键恒在块内，可空字段原样输出 JSON null，遵守 R-10）。
+            if (voice != null) {
+                put("voice", buildJsonObject {
+                    put("caliber", voice.caliber)
+                    put("m7_max_frame_gap_ms", voice.m7MaxFrameGapMs)
+                    put("mouth_ear_proxy_p50_ms", voice.mouthEarProxyP50Ms)
+                    put("low_confidence", voice.lowConfidence)
+                    put("turns_ok", voice.turnsOk)
+                    put("ts_epoch_ms", voice.tsEpochMs)
+                })
+            }
         })
 
         // ---- 各场景 KPI + ITL 直方图 ----

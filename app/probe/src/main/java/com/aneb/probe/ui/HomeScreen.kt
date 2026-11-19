@@ -79,6 +79,7 @@ fun HomeScreen(
     onOpenPrototype: () -> Unit,
     onOpenLastResult: (String) -> Unit,
     onOpenLastBasicResult: (String) -> Unit,
+    onOpenVoice: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
     var sheetSnap by remember { mutableStateOf(SheetSnap.Collapsed) }
@@ -291,6 +292,15 @@ fun HomeScreen(
                         },
                         action = null,
                         onAction = {},
+                    )
+                }
+                if (sheetSnap == SheetSnap.Expanded && onOpenVoice != null) {
+                    SheetDetailRow(
+                        symbol = "◉",
+                        label = "实时语音测量（Profile 4）",
+                        value = "口到耳 · 帧抖动 · M7 静默",
+                        action = "进入",
+                        onAction = onOpenVoice,
                     )
                 }
             }
