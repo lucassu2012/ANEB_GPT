@@ -313,6 +313,12 @@ class AnebClient private constructor(
     suspend fun downloadThroughput(
         url: String,
         onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
+    ): TransferResult = downloadThroughputRequest(url, null, onBytes)
+
+    private suspend fun downloadThroughputRequest(
+        url: String,
+        observation: ThroughputObservation?,
+        onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
     ): TransferResult {
         val call = client.newCall(
             Request.Builder()
@@ -324,13 +330,14 @@ class AnebClient private constructor(
         )
         val startNanos = SystemClock.elapsedRealtimeNanos()
         return try {
-            executeCancellable(call) { resp ->
+            executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
                 if (!resp.isSuccessful) {
                     resp.body?.string()
                     TransferResult(startNanos, null, 0L, resp.code, "http ${resp.code}", timing)
                 } else {
                     val source = checkNotNull(resp.body) { "empty body for 2xx" }.source()
+                    observation?.bodyStarted()
                     val sink = Buffer()
                     var total = 0L
                     while (true) {
@@ -338,8 +345,10 @@ class AnebClient private constructor(
                         if (n == -1L) break
                         sink.skip(n)
                         total += n
+                        observation?.bytes(n.toInt())
                         onBytes(n.toInt(), SystemClock.elapsedRealtimeNanos())
                     }
+                    observation?.bodyCompleted()
                     TransferResult(
                         startNanos = startNanos,
                         endNanos = SystemClock.elapsedRealtimeNanos(),
@@ -357,6 +366,12 @@ class AnebClient private constructor(
         }
     }
 
+    internal suspend fun downloadObservedThroughput(
+        url: String,
+        observation: ThroughputObservation,
+        onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
+    ): TransferResult = downloadThroughputRequest(url, observation, onBytes)
+
     /**
      * 流式写入固定长度大对象上传。动态回调表示应用写入 OkHttp 网络 sink 的字节，
      * 最终 goodput 仍以上层“成功响应的传输字节/阶段时长”口径收束。
@@ -366,6 +381,14 @@ class AnebClient private constructor(
         totalBytes: Long,
         chunkBytes: Int,
         onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
+    ): TransferResult = uploadThroughputRequest(url, totalBytes, chunkBytes, null, onBytes)
+
+    private suspend fun uploadThroughputRequest(
+        url: String,
+        totalBytes: Long,
+        chunkBytes: Int,
+        observation: ThroughputObservation?,
+        onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
     ): TransferResult {
         require(totalBytes > 0L) { "totalBytes must be positive" }
         require(chunkBytes > 0) { "chunkBytes must be positive" }
@@ -374,11 +397,13 @@ class AnebClient private constructor(
             override fun contentLength(): Long = totalBytes
 
             override fun writeTo(sink: BufferedSink) {
+                observation?.bodyStarted()
                 val chunk = ByteArray(chunkBytes) { index -> ((index * 31 + 17) and 0xff).toByte() }
                 var remaining = totalBytes
                 while (remaining > 0L) {
                     val n = minOf(chunk.size.toLong(), remaining).toInt()
                     sink.write(chunk, 0, n)
+                    observation?.bytes(n)
                     onBytes(n, SystemClock.elapsedRealtimeNanos())
                     remaining -= n
                 }
@@ -388,9 +413,10 @@ class AnebClient private constructor(
         val call = client.newCall(Request.Builder().url(url).post(body).build())
         val startNanos = SystemClock.elapsedRealtimeNanos()
         return try {
-            executeCancellable(call) { resp ->
+            executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
                 resp.body?.string()
+                if (resp.isSuccessful) observation?.bodyCompleted()
                 TransferResult(
                     startNanos = startNanos,
                     endNanos = SystemClock.elapsedRealtimeNanos(),
@@ -406,6 +432,14 @@ class AnebClient private constructor(
             TransferResult(startNanos, null, 0L, null, e.toString(), timingFactory.recordFor(call))
         }
     }
+
+    internal suspend fun uploadObservedThroughput(
+        url: String,
+        totalBytes: Long,
+        chunkBytes: Int,
+        observation: ThroughputObservation,
+        onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
+    ): TransferResult = uploadThroughputRequest(url, totalBytes, chunkBytes, observation, onBytes)
 
     // ------------------------------------------- continuity stream（阶段 2 C 组）
 
@@ -724,27 +758,45 @@ class AnebClient private constructor(
     private suspend fun <T> executeCancellable(
         call: Call,
         beforeDispatch: () -> Unit,
+        observation: ThroughputObservation? = null,
         consume: (Response) -> T,
     ): T =
         suspendCancellableCoroutine { cont ->
-            cont.invokeOnCancellation { call.cancel() }
+            cont.invokeOnCancellation { cause ->
+                if (observation == null) call.cancel() else observation.cancelCall(cause, call)
+            }
             try {
                 beforeDispatch()
             } catch (error: Exception) {
+                observation?.failure(error, call.isCanceled())
+                observation?.callbackFinished()
                 cont.resumeWithException(error)
                 return@suspendCancellableCoroutine
             }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    observation?.failure(e, call.isCanceled())
+                    observation?.callbackFinished()
                     if (!cont.isCancelled) cont.resumeWithException(e)
                 }
 
                 override fun onResponse(call: Call, response: Response) {
+                    observation?.headers(response.code)
                     val result = try {
-                        response.use(consume)
+                        response.use {
+                            try {
+                                consume(it)
+                            } catch (error: Exception) {
+                                observation?.failure(error, call.isCanceled())
+                                throw error
+                            }
+                        }
                     } catch (e: Exception) {
+                        observation?.failure(e, call.isCanceled())
                         if (!cont.isCancelled) cont.resumeWithException(e)
                         return
+                    } finally {
+                        observation?.callbackFinished()
                     }
                     if (!cont.isCancelled) cont.resume(result)
                 }

@@ -1,5 +1,6 @@
 package com.aneb.probe.engine
 
+import com.aneb.probe.net.ThroughputRequestEvidence
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +26,9 @@ data class ResponsivenessEcho(
 data class ResponsivenessByteObservation(
     val atUs: Long,
     val totalBytes: Long,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val requestId: String? = null,
 )
 
 @Serializable
@@ -36,6 +40,18 @@ data class ResponsivenessStage(
     val errors: List<String> = emptyList(),
     val samples: List<ResponsivenessEcho> = emptyList(),
     val byteObservations: List<ResponsivenessByteObservation> = emptyList(),
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val executionV2: ResponsivenessExecutionV2? = null,
+)
+
+@Serializable
+data class ResponsivenessExecutionV2(
+    val plannedEndUs: Long,
+    val stopRequestedUs: Long?,
+    val stopReason: String,
+    val snapshotUs: Long,
+    val requests: List<ThroughputRequestEvidence>,
 )
 
 @Serializable
@@ -106,12 +122,14 @@ object LoadedResponsiveness {
         val stages = report.stages.map { stage ->
             val stageReason = when {
                 report.status != "completed" -> "run_not_completed:${report.status}"
-                report.methodVersion != "loaded-responsiveness-v1" -> "unsupported_method_version"
+                report.methodVersion !in setOf("loaded-responsiveness-v1", "loaded-responsiveness-v2") -> "unsupported_method_version"
                 report.clockSource != "android.os.SystemClock.elapsedRealtimeNanos" || report.clockUnit != "us" -> "unsupported_clock"
                 stage.stage !in setOf("idle", "download", "upload") -> "unsupported_stage"
                 stage.startUs < 0L || stage.endUs < stage.startUs -> "invalid_stage_bounds"
-                stage.stage != "idle" && "no_transfer_completed_before_phase_deadline" in stage.errors -> "no_completed_transfer"
+                stage.stage != "idle" && report.methodVersion == "loaded-responsiveness-v1" &&
+                    "no_transfer_completed_before_phase_deadline" in stage.errors -> "no_completed_transfer"
                 stage.stage != "idle" && stage.transferBytes <= 0L -> "no_transfer_bytes"
+                stage.stage != "idle" && report.methodVersion == "loaded-responsiveness-v2" -> v2StageReason(stage)
                 else -> null
             }
             val samples = stage.samples.map { sample ->
@@ -145,6 +163,77 @@ object LoadedResponsiveness {
             if (upload != null && idle != null) upload - idle else null,
             stages,
         )
+    }
+
+    private fun v2StageReason(stage: ResponsivenessStage): String? {
+        val execution = stage.executionV2 ?: return "missing_execution_evidence"
+        val stop = execution.stopRequestedUs ?: return "missing_stop_evidence"
+        if (execution.stopReason != "phase_deadline" || execution.plannedEndUs != stage.endUs ||
+            stop < execution.plannedEndUs || execution.snapshotUs < stop) return "phase_not_normally_closed"
+        if (stage.errors.isNotEmpty()) return "transfer_error"
+        val requests = execution.requests
+        if (requests.isEmpty() || requests.map { it.requestId }.distinct().size != requests.size ||
+            requests.any { it.requestId.isBlank() || it.workerId < 0 || it.direction != stage.stage ||
+                it.startUs < stage.startUs || it.startUs >= stage.endUs || it.requestedBytes <= 0L || it.observedBytes < 0L }) {
+            return "invalid_request_identity"
+        }
+        if (requests.sumOf { it.observedBytes } != stage.transferBytes) return "request_byte_mismatch"
+        for (request in requests) {
+            val finished = request.callbackFinishedUs ?: return "callback_drain_unconfirmed"
+            if (finished < request.startUs || finished > execution.snapshotUs) return "invalid_request_times"
+            if (request.failure != null || request.failureUs != null || request.outcome == "failed") return "transfer_error"
+            if (request.httpCode != null && request.httpCode !in 200..299) return "transfer_http_not_successful"
+            if (request.observedBytes > 0L) {
+                val bodyStart = request.bodyStartedUs ?: return "missing_body_start"
+                if (bodyStart < request.startUs || bodyStart > finished) return "invalid_request_times"
+                if (stage.stage == "download") {
+                    val headers = request.headersUs ?: return "missing_transfer_headers"
+                    if (request.httpCode == null || headers < request.startUs || headers > bodyStart) return "missing_transfer_headers"
+                }
+            }
+            when (request.outcome) {
+                "completed" -> {
+                    val completed = request.bodyCompletedUs ?: return "missing_transfer_completion"
+                    if (request.httpCode == null || completed < request.startUs || completed > finished) return "invalid_request_times"
+                }
+                "cancelled" -> {
+                    val requested = request.cancelRequestedUs ?: return "missing_cancel_evidence"
+                    val invoked = request.cancelInvokedUs ?: return "missing_cancel_evidence"
+                    val returned = request.cancelReturnedUs ?: return "missing_cancel_evidence"
+                    if (request.cancelCause != "phase_deadline" || requested < execution.plannedEndUs ||
+                        invoked < requested || returned < invoked || returned > execution.snapshotUs || finished < invoked) {
+                        return "unconfirmed_deadline_cancellation"
+                    }
+                    if (request.ioAfterCancel != null && (request.ioAfterCancelSawCancelled != true ||
+                            request.ioAfterCancelUs == null || request.ioAfterCancelUs < invoked || request.ioAfterCancelUs > finished)) {
+                        return "unconfirmed_cancel_io"
+                    }
+                }
+                else -> return "unknown_request_termination"
+            }
+        }
+        val byId = requests.associateBy { it.requestId }
+        val byteTotals = mutableMapOf<String, Long>()
+        var previous = 0L
+        var previousAt = stage.startUs
+        for (observation in stage.byteObservations) {
+            if (observation.atUs < previousAt || observation.totalBytes < previous ||
+                observation.totalBytes > stage.transferBytes) return "invalid_byte_observations"
+            val added = observation.totalBytes - previous
+            if (added > 0L) {
+                val source = byId[observation.requestId] ?: return "missing_byte_source"
+                val bodyStart = source.bodyStartedUs ?: return "missing_body_start"
+                if (observation.atUs < bodyStart || observation.atUs > checkNotNull(source.callbackFinishedUs) ||
+                    (source.bodyCompletedUs != null && observation.atUs > source.bodyCompletedUs)) return "byte_source_time_mismatch"
+                byteTotals[source.requestId] = (byteTotals[source.requestId] ?: 0L) + added
+            }
+            previous = observation.totalBytes
+            previousAt = observation.atUs
+        }
+        if (previous != stage.transferBytes || requests.any { (byteTotals[it.requestId] ?: 0L) != it.observedBytes }) {
+            return "request_byte_mismatch"
+        }
+        return null
     }
 
     private fun exclusionReason(stage: ResponsivenessStage, sample: ResponsivenessEcho): String? {
