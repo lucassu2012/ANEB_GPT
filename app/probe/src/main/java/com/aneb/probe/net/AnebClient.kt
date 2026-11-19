@@ -637,6 +637,80 @@ class AnebClient private constructor(
         }
     }
 
+    /**
+     * 语音帧节奏上行（M3，观测口径，PROFILE_FRAMEWORK §4.1）：按 [intervalMs] 节奏逐帧写入并 flush，
+     * 服务端 /upload 的 chunk_us 权威到达序列供上行帧间抖动计算。复用 [UploadResult]。
+     */
+    suspend fun uploadPaced(
+        url: String,
+        frames: Int,
+        frameBytes: Int,
+        intervalMs: Long,
+        onFrame: ((Int, Long) -> Unit)? = null,
+    ): UploadResult {
+        val stamps = ArrayList<ChunkStamp>(frames)
+        val frame = ByteArray(frameBytes) { 'V'.code.toByte() }
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength(): Long = (frames * frameBytes).toLong()
+            override fun writeTo(sink: BufferedSink) {
+                for (i in 0 until frames) {
+                    sink.write(frame)
+                    sink.flush()
+                    val ns = SystemClock.elapsedRealtimeNanos()
+                    stamps.add(ChunkStamp(i, frameBytes, ns))
+                    onFrame?.invoke(i + 1, ns)
+                    if (i < frames - 1) Thread.sleep(intervalMs)
+                }
+            }
+        }
+        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val startNanos = SystemClock.elapsedRealtimeNanos()
+        return try {
+            executeCancellable(call) { resp ->
+                val responseNanos = SystemClock.elapsedRealtimeNanos()
+                val timing = timingFactory.recordFor(call)
+                val bodyText = resp.body?.string()
+                val serverView = if (resp.isSuccessful && bodyText != null) {
+                    try {
+                        json.decodeFromString(UploadServerView.serializer(), bodyText)
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+                val error = if (resp.isSuccessful) null else "http ${resp.code}"
+                UploadResult(
+                    startNanos, responseNanos, stamps, frames * frameBytes, resp.code, error, timing,
+                    serverView = serverView,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            UploadResult(startNanos, null, stamps, frames * frameBytes, null, e.toString(), timingFactory.recordFor(call))
+        }
+    }
+
+    /**
+     * `/realtime-sim` 会话工厂（D-38，语音 server-sim 口径）：复用本 client 的 OkHttpClient，
+     * 自动继承 NO_PROXY、绑定网 socketFactory/Dns 与 retryOnConnectionFailure(false)。
+     */
+    fun realtimeSim(
+        base: String,
+        plan: RealtimeWire.SessionPlan,
+        disconnectAfterTurn: Int? = null,
+    ): RealtimeSimSession {
+        val wsUrl = base.trim().trimEnd('/')
+            .replaceFirst("https://", "wss://")
+            .replaceFirst("http://", "ws://") +
+            "/api/v1/realtime-sim" +
+            (disconnectAfterTurn?.let { "?controlled_disconnect_after_turn=$it" } ?: "")
+        val planJson = RealtimeWire.jsonOut.encodeToString(RealtimeWire.SessionPlan.serializer(), plan)
+        return RealtimeSimSession(client, wsUrl, planJson)
+    }
+
     // -------------------------------------------------------------- toolloop
 
     /**

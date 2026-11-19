@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0.0",
+  "profile_id": "voice_realtime",
+  "exported_from": "app/probe/src/main/java/com/aneb/probe/engine/VoiceRunner.kt (companion object)",
+  "form": "export-and-parity",
+  "note": [
+    "Profile 4 的执行计划常量导出。承 D-390 §5.1 与大脑 2026-08-01 裁示。",
+    "刻意【无生产码读者】：引擎仍从 VoiceRunner companion 读常量，本文件不被运行时解析。",
+    "形态与 spec/scoring/radio_bands.yaml (D-367)、spec/scoring/*.yaml (D-48 对齐-1) 相同：",
+    "先『导出+对拍』防漂移，『代码反向读 spec』是铁律 1 的终态，留待后续。",
+    "防漂移由 app/probe/src/test/.../VoiceExecutionPlanParityTest.kt 逐值钉住。",
+    "【为什么不并入 client_profiles.json】TestModeProfileLoader 用严格模式 Json（未知键即抛，",
+    "见 TestModeProfileLoader.kt:30 与其 KDoc），补子对象会让运行时解析失败并回退硬编码兜底，",
+    "且 ClientProfileDataParityTest 用例 1 同时红——那需要改 DTO，属 :probe 生产码改动。",
+    "【本文件不含的东西】CODEC_JB_BUDGET_MS 是 M1 的推导常数不是执行参数，属评分侧，未收录；",
+    "它是 Profile 4 最大的未实测量（见 PROFILE4_VOICE_LOOPBACK_SPEC.md §3/§4.1），另行处置。"
+  ],
+  "frame": {
+    "interval_ms": 20,
+    "bytes": 160,
+    "derived_nominal_kbps": 64.0,
+    "derived_note": "bytes * 8 / (interval_ms / 1000) / 1000；由对拍测试重算，不手填"
+  },
+  "v1_paced_proxy": {
+    "caliber": null,
+    "caliber_note": "v1 的 VoiceRunner.Sample.caliber 为 null（无 SIM_CALIBER 标注）",
+    "uplink_frames": 200,
+    "downlink_frames": 200,
+    "endpoints": ["/api/v1/upload", "/api/v1/stream"],
+    "endpoints_note": "零服务端部署（D-31）：复用 token 流端点。与 PROFILE_FRAMEWORK §4.1『音频需独立媒体端点』的差集见规格 §5.7(a)"
+  },
+  "v2_server_sim": {
+    "caliber": "server-sim(aneb-realtime-session-v1)",
+    "m3_frames": 150,
+    "m3_frames_note": "v2 中 M3 专用 uploadPaced 帧数（3s 短段）；M3 权威仍是 /upload 的 chunk_us",
+    "endpoint": "/api/v1/realtime-sim",
+    "endpoint_note": "handler 不在本树，权威在 Codex 树 handlers_realtime_sim.go（见规格 §5.5）",
+    "default_plan": {
+      "session_id_prefix": "voice-sim-",
+      "setup_ms": 200.0,
+      "frame_ms": 20,
+      "turns": 8,
+      "start_after_previous_ms": 0,
+      "uplink_frames_per_turn": 75,
+      "uplink_frame_bytes": 160,
+      "response_wait_ms": 300,
+      "planned_downlink_frames_per_turn": 100,
+      "downlink_frame_bytes": 160,
+      "interrupted_turn_indices": [3, 6],
+      "barge_in_after_frames": 25,
+      "expected_stop_within_ms": 250
+    },
+    "continuity_plan": {
+      "session_id_prefix": "voice-cont-",
+      "setup_ms": 200.0,
+      "frame_ms": 20,
+      "turns": 3,
+      "disconnect_after_turn": 1,
+      "uplink_frames_per_turn": 25,
+      "downlink_frames_per_turn": 40,
+      "uplink_frame_bytes": 160,
+      "downlink_frame_bytes": 160,
+      "response_wait_ms": 300,
+      "interrupted": false,
+      "note": "轮 2 仅为保证断连点非计划末轮——服务端在轮 1 summary 发出后裸关，轮 2 永不运行"
+    }
+  },
+  "wire_limits": {
+    "max_turns": 32,
+    "frame_ms_range": [10, 100],
+    "note": "合同限额，defaultSimPlan/continuitySimPlan 的字段逐项在界（VoiceRunner KDoc）"
+  }
+}

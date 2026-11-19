@@ -23,6 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PrototypeCampaignEntity::class,
         PrototypeRunEntity::class,
         PrototypeEvidenceEventEntity::class,
+        VoiceResultEntity::class,
     ],
     // v3：P1-C05/C06 接线——TestRun 扩 run 级字段；新增 scenario_result / echo_sample；
     // token_event 增 scenarioKey/streamIndex 维度
@@ -41,7 +42,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     // v12：B 阶段——新增 basic_speed_result 独立表；不并入 TestRun/AQS。
     // v13：Prototype 0.1——新增 normalized campaign/run/evidence exact3 表。
     // v14：Prototype G4——campaign/run 各增一个可空 exact authority JSON；历史行保持 null。
-    version = 14,
+    // v15：Profile 4 实时语音测量——新增独立 voice_result 表（20 列，零外键，既有表零改动）。
+    version = 15,
     exportSchema = true,
 )
 abstract class AnebDatabase : RoomDatabase() {
@@ -57,6 +59,7 @@ abstract class AnebDatabase : RoomDatabase() {
     abstract fun abResultDao(): AbResultDao
     abstract fun basicSpeedResultDao(): BasicSpeedResultDao
     abstract fun prototypeCampaignDao(): PrototypeCampaignDao
+    abstract fun voiceResultDao(): VoiceResultDao
 
     companion object {
         @Volatile
@@ -317,6 +320,37 @@ abstract class AnebDatabase : RoomDatabase() {
             }
         }
 
+        /** v14→v15：仅新增独立 Profile 4 实时语音结果表 voice_result，不触碰任何既有 v1..v14 表。 */
+        internal val MIGRATION_14_15_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `voice_result` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`tsEpochMs` INTEGER NOT NULL, " +
+                "`caliber` TEXT, " +
+                "`lowConfidence` INTEGER NOT NULL, " +
+                "`rttMs` REAL, " +
+                "`jitterMs` REAL, " +
+                "`upFrameJitterMs` REAL, " +
+                "`downFrameJitterMs` REAL, " +
+                "`mouthEarBudgetMs` REAL, " +
+                "`framesSent` INTEGER, " +
+                "`framesRecv` INTEGER, " +
+                "`ttfbP50Ms` REAL, " +
+                "`ttfbP95Ms` REAL, " +
+                "`downNetJitterMs` REAL, " +
+                "`mouthEarProxyMs` REAL, " +
+                "`turnSwitchP50Ms` REAL, " +
+                "`bargeStopMaxMs` REAL, " +
+                "`turnsOk` INTEGER, " +
+                "`m7MaxFrameGapMs` REAL, " +
+                "`voiceNearZeroArrivalRatio` REAL)",
+        )
+
+        internal val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_14_15_SQL.forEach(db::execSQL)
+            }
+        }
+
         private val PRODUCTION_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_6_7,
             MIGRATION_7_8,
@@ -326,6 +360,7 @@ abstract class AnebDatabase : RoomDatabase() {
             MIGRATION_11_12,
             MIGRATION_12_13,
             MIGRATION_13_14,
+            MIGRATION_14_15,
         )
 
         private val LEGACY_DESTRUCTIVE_FROM = intArrayOf(1, 2, 3, 4, 5)

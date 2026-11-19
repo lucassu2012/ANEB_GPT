@@ -44,6 +44,10 @@ object AqsScorer {
      * 无 C 数据一律走 v0.1 默认（additive，不改 v0.1 语义）。
      */
     const val AQS_VERSION_V02: String = "aqs-v0.2"
+    const val AQS_VERSION_VOICE: String = "aqs-voice-v0.1"
+    const val AQS_VERSION_VOICE_SIM: String = "aqs-voice-sim-v0.1"
+    const val AQS_VERSION_VOICE_V02: String = "aqs-voice-v0.2"
+    const val AQS_VERSION_VOICE_SIM_V02: String = "aqs-voice-sim-v0.2"
     const val KPI_SET_VERSION: String = KpiCalculator.KPI_SET_VERSION
 
     /** T4 一票否决线（比率），KPI 文档 5.4 */
@@ -51,6 +55,9 @@ object AqsScorer {
 
     /** T4 否决时的 AQS 封顶分 */
     const val T4_VETO_CAP: Double = 54.0
+
+    /** M1 口到耳预算硬否决（语音模式，§4.1）：>400ms 封顶 54 */
+    const val M1_VETO_THRESHOLD_MS: Double = 400.0
 
     /** 权重表（合计 1.0），KPI 文档 5.4 */
     val WEIGHTS: Map<String, Double> = mapOf(
@@ -69,6 +76,53 @@ object AqsScorer {
      */
     val WEIGHTS_V02: Map<String, Double> =
         WEIGHTS.mapValues { it.value * 0.8 } + mapOf("C1" to 0.10, "C2" to 0.10)
+
+    val WEIGHTS_VOICE: Map<String, Double> = mapOf(
+        "M1" to 0.30,
+        "M2" to 0.20,
+        "M3" to 0.15,
+        "N1" to 0.15,
+        "N2" to 0.20,
+    )
+
+    val WEIGHTS_VOICE_SIM: Map<String, Double> = mapOf(
+        "M1" to 0.20,
+        "M2" to 0.15,
+        "M3" to 0.10,
+        "M4" to 0.15,
+        "M5" to 0.10,
+        "M6" to 0.10,
+        "N1" to 0.10,
+        "N2" to 0.10,
+    )
+
+    val WEIGHTS_VOICE_V02: Map<String, Double> = mapOf(
+        "M1" to 0.30,
+        "M2" to 0.15,
+        "M3" to 0.10,
+        "M7" to 0.10,
+        "N1" to 0.15,
+        "N2" to 0.20,
+    )
+
+    val WEIGHTS_VOICE_SIM_V02: Map<String, Double> = mapOf(
+        "M1" to 0.20,
+        "M2" to 0.12,
+        "M3" to 0.08,
+        "M4" to 0.15,
+        "M5" to 0.10,
+        "M6" to 0.10,
+        "M7" to 0.05,
+        "N1" to 0.10,
+        "N2" to 0.10,
+    )
+
+    val VOICE_WEIGHTS_TABLE_BY_VERSION: Map<String, String> = mapOf(
+        AQS_VERSION_VOICE to "WEIGHTS_VOICE",
+        AQS_VERSION_VOICE_V02 to "WEIGHTS_VOICE_V02",
+        AQS_VERSION_VOICE_SIM to "WEIGHTS_VOICE_SIM",
+        AQS_VERSION_VOICE_SIM_V02 to "WEIGHTS_VOICE_SIM_V02",
+    )
 
     /**
      * 单调锚点表：(KPI 值, 分数) 对，按值升序。端点外 clamp。
@@ -114,6 +168,14 @@ object AqsScorer {
     // "失败"（恢复不成功）按 R-10 记 null → v0.2 不可计算（KPI_MISSING:C2），绝不以封顶值顶替
     internal val C2_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 1000.0 to 85.0, 3000.0 to 70.0, 10000.0 to 55.0, 30000.0 to 0.0))
 
+    // ---- M 组门限锚点（语音实时交互，PROFILE_FRAMEWORK §4.1 / D-38 / D-390）----
+    internal val M1_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 150.0 to 85.0, 300.0 to 70.0, 400.0 to 55.0, 1200.0 to 0.0))
+    internal val M_FRAME_JITTER_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 10.0 to 85.0, 30.0 to 70.0, 80.0 to 55.0, 240.0 to 0.0))
+    internal val M4_TTFB_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 100.0 to 85.0, 250.0 to 70.0, 500.0 to 55.0, 1500.0 to 0.0))
+    internal val M5_TURN_SWITCH_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 150.0 to 85.0, 300.0 to 70.0, 600.0 to 55.0, 2000.0 to 0.0))
+    internal val M6_STOP_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 80.0 to 85.0, 150.0 to 70.0, 250.0 to 55.0, 1000.0 to 0.0))
+    internal val M7_MAX_GAP_ANCHORS = AnchorMap(listOf(0.0 to 100.0, 60.0 to 85.0, 150.0 to 70.0, 400.0 to 40.0, 1000.0 to 0.0))
+
     /**
      * AQS 评分结果。
      *
@@ -147,7 +209,7 @@ object AqsScorer {
     )
 
     fun score(kpi: KpiResult): AqsResult =
-        scoreWith(kpi, extraInputs = emptyMap(), version = AQS_VERSION)
+        scoreWith(kpi, extraInputs = emptyMap(), weights = WEIGHTS, version = AQS_VERSION)
 
     /**
      * aqs v0.2 出分入口（additive）：仅当 [continuity] 非 null 时按 v0.2 权重
@@ -163,16 +225,128 @@ object AqsScorer {
                 "C1" to continuity.c1SessionDropRate,
                 "C2" to continuity.c2RecoveryMs,
             ),
+            weights = WEIGHTS_V02,
             version = AQS_VERSION_V02,
         )
     }
 
+    fun scoreVoice(
+        n1RttMs: KpiValue,
+        n2JitterMs: KpiValue,
+        m1BudgetMs: KpiValue,
+        m2DownFrameJitterMs: KpiValue,
+        m3UpFrameJitterMs: KpiValue,
+    ): AqsResult = scoreWith(
+        voiceKpiShell(n1RttMs, n2JitterMs),
+        extraInputs = mapOf(
+            "M1" to m1BudgetMs,
+            "M2" to m2DownFrameJitterMs,
+            "M3" to m3UpFrameJitterMs,
+        ),
+        weights = WEIGHTS_VOICE,
+        version = AQS_VERSION_VOICE,
+        applyM1Veto = true,
+    )
+
+    fun scoreVoice(
+        n1RttMs: KpiValue,
+        n2JitterMs: KpiValue,
+        m1BudgetMs: KpiValue,
+        m2DownFrameJitterMs: KpiValue,
+        m3UpFrameJitterMs: KpiValue,
+        m7MaxFrameGapMs: KpiValue,
+    ): AqsResult = scoreWith(
+        voiceKpiShell(n1RttMs, n2JitterMs),
+        extraInputs = mapOf(
+            "M1" to m1BudgetMs,
+            "M2" to m2DownFrameJitterMs,
+            "M3" to m3UpFrameJitterMs,
+            "M7" to m7MaxFrameGapMs,
+        ),
+        weights = WEIGHTS_VOICE_V02,
+        version = AQS_VERSION_VOICE_V02,
+        applyM1Veto = true,
+    )
+
+    fun scoreVoiceSim(
+        n1RttMs: KpiValue,
+        n2JitterMs: KpiValue,
+        m1MouthEarProxyMs: KpiValue,
+        m2DownNetJitterMs: KpiValue,
+        m3UpFrameJitterMs: KpiValue,
+        m4TtfbMs: KpiValue,
+        m5TurnSwitchMs: KpiValue,
+        m6BargeStopMs: KpiValue,
+    ): AqsResult = scoreWith(
+        voiceKpiShell(n1RttMs, n2JitterMs),
+        extraInputs = mapOf(
+            "M1" to m1MouthEarProxyMs,
+            "M2" to m2DownNetJitterMs,
+            "M3" to m3UpFrameJitterMs,
+            "M4" to m4TtfbMs,
+            "M5" to m5TurnSwitchMs,
+            "M6" to m6BargeStopMs,
+        ),
+        weights = WEIGHTS_VOICE_SIM,
+        version = AQS_VERSION_VOICE_SIM,
+        applyM1Veto = true,
+    )
+
+    fun scoreVoiceSim(
+        n1RttMs: KpiValue,
+        n2JitterMs: KpiValue,
+        m1MouthEarProxyMs: KpiValue,
+        m2DownNetJitterMs: KpiValue,
+        m3UpFrameJitterMs: KpiValue,
+        m4TtfbMs: KpiValue,
+        m5TurnSwitchMs: KpiValue,
+        m6BargeStopMs: KpiValue,
+        m7MaxFrameGapMs: KpiValue,
+    ): AqsResult = scoreWith(
+        voiceKpiShell(n1RttMs, n2JitterMs),
+        extraInputs = mapOf(
+            "M1" to m1MouthEarProxyMs,
+            "M2" to m2DownNetJitterMs,
+            "M3" to m3UpFrameJitterMs,
+            "M4" to m4TtfbMs,
+            "M5" to m5TurnSwitchMs,
+            "M6" to m6BargeStopMs,
+            "M7" to m7MaxFrameGapMs,
+        ),
+        weights = WEIGHTS_VOICE_SIM_V02,
+        version = AQS_VERSION_VOICE_SIM_V02,
+        applyM1Veto = true,
+    )
+
+    private fun voiceKpiShell(n1RttMs: KpiValue, n2JitterMs: KpiValue): KpiResult = KpiResult(
+        validity = Validity.VALID,
+        invalidReasons = emptyList(),
+        seqMissingCount = 0,
+        seqDupCount = 0,
+        seqGapCount = 0,
+        expectedTokenCount = 0,
+        t1TtftMs = KpiValue.empty("ms"),
+        t2ItlP95Ms = KpiValue.empty("ms"),
+        t2ItlP95InclCoalescedMs = KpiValue.empty("ms"),
+        t3StallRate = KpiValue.empty("ratio"),
+        t3StallRateInclResume = KpiValue.empty("ratio"),
+        t4SevereStallRate = KpiValue.empty("ratio"),
+        t5ResumeP95Ms = KpiValue.empty("ms"),
+        t5ResumeLatenciesMs = emptyList(),
+        n1RttP50Ms = n1RttMs,
+        n2JitterMs = n2JitterMs,
+        u1GoodputMbps = KpiValue.empty("Mbps"),
+        u1GoodputExclSlowStartMbps = KpiValue.empty("Mbps"),
+        u2ToolLoopP95Ms = KpiValue.empty("ms"),
+    )
+
     private fun scoreWith(
         kpi: KpiResult,
         extraInputs: Map<String, KpiValue>,
+        weights: Map<String, Double>,
         version: String,
+        applyM1Veto: Boolean = false,
     ): AqsResult {
-        val weights = if (version == AQS_VERSION_V02) WEIGHTS_V02 else WEIGHTS
         if (kpi.validity == Validity.INVALID) {
             return AqsResult(
                 aqsVersion = version,
@@ -185,8 +359,7 @@ object AqsScorer {
             )
         }
 
-        // 进入评分的权重项取值（口径见类 KDoc）
-        val inputs: Map<String, KpiValue> = mapOf(
+        val candidateInputs: Map<String, KpiValue> = mapOf(
             "T1" to kpi.t1TtftMs,
             "T2" to kpi.t2ItlP95Ms,
             "T3" to kpi.t3StallRate,
@@ -195,6 +368,7 @@ object AqsScorer {
             "N1" to kpi.n1RttP50Ms,
             "N2" to kpi.n2JitterMs,
         ) + extraInputs
+        val inputs = candidateInputs.filterKeys { it in weights.keys }
         val missing = inputs.filterValues { it.value == null }.keys.sorted()
         if (missing.isNotEmpty()) {
             // 任一权重项缺失 → AQS 不可计算（R-10：绝不以 0 分顶替失败样本）
@@ -219,13 +393,23 @@ object AqsScorer {
             "N2" to N2_ANCHORS,
             "C1" to C1_ANCHORS,
             "C2" to C2_ANCHORS,
+            "M1" to M1_ANCHORS,
+            "M2" to M_FRAME_JITTER_ANCHORS,
+            "M3" to M_FRAME_JITTER_ANCHORS,
+            "M4" to M4_TTFB_ANCHORS,
+            "M5" to M5_TURN_SWITCH_ANCHORS,
+            "M6" to M6_STOP_ANCHORS,
+            "M7" to M7_MAX_GAP_ANCHORS,
         )
         val subScores = inputs.mapValues { (id, v) -> anchorMaps.getValue(id).score(v.value!!) }
         var total = subScores.entries.sumOf { (id, s) -> s * weights.getValue(id) }
 
-        // T4 一票否决：>1% 时封顶 54（T4 缺失时不触发否决，但 T4 属流式场景必备诊断项）
         val t4 = kpi.t4SevereStallRate.value
-        val veto = t4 != null && t4 > T4_VETO_THRESHOLD
+        var veto = t4 != null && t4 > T4_VETO_THRESHOLD
+        if (applyM1Veto) {
+            val m1 = extraInputs["M1"]?.value
+            if (m1 != null && m1 > M1_VETO_THRESHOLD_MS) veto = true
+        }
         if (veto) total = min(total, T4_VETO_CAP)
 
         val lowConf = kpi.validity == Validity.VALID_LOW_CONFIDENCE ||

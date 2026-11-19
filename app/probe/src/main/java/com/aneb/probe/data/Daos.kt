@@ -172,3 +172,12 @@ interface PrototypeCampaignDao {
         runId: String,
     ): List<PrototypeEvidenceEventEntity>
 }
+
+@Dao
+interface VoiceResultDao {
+    @Insert
+    suspend fun insert(result: VoiceResultEntity): Long
+
+    @Query("SELECT * FROM voice_result ORDER BY tsEpochMs DESC, id DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<VoiceResultEntity>
+}
