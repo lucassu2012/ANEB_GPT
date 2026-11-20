@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	condition "aneb-phone-forward-condition"
@@ -71,5 +72,54 @@ func TestPlanCommandEchoesOptionalUplinkFieldsWhenConfigured(t *testing.T) {
 	}
 	if plan.ExpectedUplinkInterfaceIndex != 10 || len(plan.ProbeRemoteAddresses) != 1 || plan.ProbeRemoteAddresses[0] != "198.51.100.20" {
 		t.Fatalf("plan lost uplink config: %+v", plan)
+	}
+}
+
+func TestPlanCommandEchoesQueuePolicyAndLimitWhenConfiguredAndOmitsDefault(t *testing.T) {
+	root := t.TempDir()
+	base := condition.Request{
+		Format:                 "phone-forward-condition-1",
+		Mode:                   condition.Limit,
+		PhoneAddresses:         []string{"192.168.137.42"},
+		InterfaceIndex:         14,
+		TTLSeconds:             35,
+		DownlinkBytesPerSecond: 125000,
+		DriverDirectory:        filepath.Join(root, "unavailable-driver"),
+		OutputDirectory:        filepath.Join(root, "must-not-create"),
+	}
+	defData, _ := json.Marshal(base)
+	defPath := filepath.Join(root, "default-request.json")
+	if err := os.WriteFile(defPath, defData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var defOutput bytes.Buffer
+	if err := run([]string{"plan", "-config", defPath}, &defOutput); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(defOutput.String(), "queue_overflow_policy") || strings.Contains(defOutput.String(), "queue_limit_bytes") {
+		t.Fatalf("unset queue fields leaked into default plan output: %s", defOutput.String())
+	}
+
+	configured := base
+	configured.QueueOverflowPolicy = condition.QueueTailDrop
+	configured.QueueLimitBytes = 64 << 10
+	cfgData, _ := json.Marshal(configured)
+	cfgPath := filepath.Join(root, "taildrop-request.json")
+	if err := os.WriteFile(cfgPath, cfgData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var cfgOutput bytes.Buffer
+	if err := run([]string{"plan", "-config", cfgPath}, &cfgOutput); err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		QueueOverflowPolicy condition.QueueOverflowPolicy `json:"queue_overflow_policy"`
+		QueueLimitBytes     uint32                        `json:"queue_limit_bytes"`
+	}
+	if err := json.Unmarshal(cfgOutput.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.QueueOverflowPolicy != condition.QueueTailDrop || plan.QueueLimitBytes != 64<<10 {
+		t.Fatalf("plan lost queue config: %+v", plan)
 	}
 }

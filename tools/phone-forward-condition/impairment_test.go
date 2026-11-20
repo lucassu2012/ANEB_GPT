@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,5 +149,71 @@ func TestEngineDeterministicLossMaintainsExactPacketConservation(t *testing.T) {
 	r2 := runOnce()
 	if r1.DroppedPackets != r2.DroppedPackets || r1.InjectedPackets != r2.InjectedPackets {
 		t.Fatalf("deterministic seed produced non-identical drop counts: r1=%+v r2=%+v", r1, r2)
+	}
+}
+
+func TestEngineTailDropPolicyPreservesValidityAndExactConservation(t *testing.T) {
+	// 40 frames x 1,000 B = 40,000 B burst against a 16 KiB queue limit at 16 KB/s:
+	// with QueueTailDrop, excess frames drop at queue entry without invalidating the run,
+	// and exact packet conservation (UnconfirmedUserPackets == 0) still holds.
+	frames := make([]Frame, 40)
+	for i := range frames {
+		frames[i] = testForwardFrame(1000)
+	}
+	link := &memoryLink{frames: frames}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			TTL:                    1 * time.Second,
+			DownlinkBytesPerSecond: 16_000,
+			QueueOverflowPolicy:    QueueTailDrop,
+			QueueLimitBytes:        16 << 10,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("tail_drop should not invalidate condition: %v receipt=%+v", err, receipt)
+	}
+	if receipt.State != "INJECTED_NOT_CALIBRATED" || receipt.QueueDroppedPackets == 0 {
+		t.Fatalf("expected valid state with nonzero queue drops: %+v", receipt)
+	}
+	if receipt.UnconfirmedUserPackets != 0 ||
+		receipt.InjectedPackets+receipt.DroppedPackets+receipt.QueueDroppedPackets+receipt.CleanupInjectedPackets != receipt.OwnedReceivedPackets {
+		t.Fatalf("tail_drop conservation violated: %+v", receipt)
+	}
+	if receipt.QueueDroppedBytes != receipt.QueueDroppedPackets*1000 {
+		t.Fatalf("queue dropped byte mismatch: %+v", receipt)
+	}
+}
+
+func TestEngineInvalidatePolicyWithSmallQueueLimitFailsClosedOnBurst(t *testing.T) {
+	frames := make([]Frame, 40)
+	for i := range frames {
+		frames[i] = testForwardFrame(1000)
+	}
+	link := &memoryLink{frames: frames}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			TTL:                    1 * time.Second,
+			DownlinkBytesPerSecond: 16_000,
+			QueueOverflowPolicy:    QueueInvalidate,
+			QueueLimitBytes:        16 << 10,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if !errors.Is(err, ErrQueueOverflow) {
+		t.Fatalf("expected ErrQueueOverflow, got err=%v receipt=%+v", err, receipt)
+	}
+	if receipt.StopReason != "USER_QUEUE_OVERFLOW" || receipt.UnconfirmedUserPackets != 0 || receipt.QueueDroppedPackets != 0 {
+		t.Fatalf("unexpected invalidate overflow receipt: %+v", receipt)
 	}
 }

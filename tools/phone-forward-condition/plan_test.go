@@ -34,6 +34,9 @@ func TestPlanRejectsUnboundedOrAmbiguousCondition(t *testing.T) {
 		"multicast":        func(c *Config) { c.PhoneAddresses = []string{"ff02::1"} },
 		"zero_rate":        func(c *Config) { c.DownlinkBytesPerSecond = 0 },
 		"unbounded_rate":   func(c *Config) { c.DownlinkBytesPerSecond = 1 << 63 },
+		"bad_queue_policy": func(c *Config) { c.QueueOverflowPolicy = QueueOverflowPolicy("drop_head") },
+		"queue_too_small":  func(c *Config) { c.QueueLimitBytes = 1024 },
+		"queue_too_large":  func(c *Config) { c.QueueLimitBytes = (4 << 20) + 1 },
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -43,5 +46,28 @@ func TestPlanRejectsUnboundedOrAmbiguousCondition(t *testing.T) {
 				t.Fatal("unsafe condition accepted")
 			}
 		})
+	}
+}
+
+func TestPlanAcceptsBoundedTailDropPolicyAndDefaultsEmptyToInvalidate(t *testing.T) {
+	base := Config{PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTL: 30 * time.Second, DownlinkBytesPerSecond: 125000}
+	def, err := NewPlan(base)
+	if err != nil {
+		t.Fatalf("default policy rejected: %v", err)
+	}
+	if def.Config.QueueOverflowPolicy != QueueInvalidate || def.Config.QueueLimitBytes != 0 {
+		t.Fatalf("unexpected default queue config: %+v", def.Config)
+	}
+	for _, limit := range []uint32{0, 16 << 10, 4 << 20} {
+		cfg := base
+		cfg.QueueOverflowPolicy = QueueTailDrop
+		cfg.QueueLimitBytes = limit
+		plan, err := NewPlan(cfg)
+		if err != nil {
+			t.Fatalf("tail_drop with limit %d rejected: %v", limit, err)
+		}
+		if plan.Config.QueueOverflowPolicy != QueueTailDrop || plan.Config.QueueLimitBytes != limit {
+			t.Fatalf("lost tail_drop queue config: %+v", plan.Config)
+		}
 	}
 }

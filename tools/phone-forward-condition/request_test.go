@@ -12,8 +12,9 @@ func TestRequestProducesBoundedPlanWithoutOpeningMissingDriverDirectory(t *testi
 	root := t.TempDir()
 	want := Request{Format: "phone-forward-condition-1", Mode: Inspect, PhoneAddresses: []string{"192.0.2.8"}, InterfaceIndex: 12, TTLSeconds: 30, DownlinkBytesPerSecond: 125000, DriverDirectory: filepath.Join(root, "driver-not-created"), OutputDirectory: filepath.Join(root, "run-not-created")}
 	data, _ := json.Marshal(want)
-	if strings.Contains(string(data), "expected_uplink_interface_index") || strings.Contains(string(data), "probe_remote_addresses") {
-		t.Fatalf("optional uplink fields leaked into legacy marshaled request: %s", data)
+	if strings.Contains(string(data), "expected_uplink_interface_index") || strings.Contains(string(data), "probe_remote_addresses") ||
+		strings.Contains(string(data), "queue_overflow_policy") || strings.Contains(string(data), "queue_limit_bytes") {
+		t.Fatalf("optional fields leaked into legacy marshaled request: %s", data)
 	}
 	got, plan, err := ParseRequest(data)
 	if err != nil {
@@ -84,5 +85,33 @@ func TestRequestValidatesOptionalUplinkAndProbeRemoteAddresses(t *testing.T) {
 				t.Fatalf("expected invalid uplink request %s to fail", tc.name)
 			}
 		})
+	}
+}
+
+func TestRequestRoundTripsQueueOverflowPolicyAndLimitBytes(t *testing.T) {
+	root := t.TempDir()
+	req := Request{
+		Format:                 "phone-forward-condition-1",
+		Mode:                   Limit,
+		PhoneAddresses:         []string{"192.168.137.42"},
+		InterfaceIndex:         14,
+		TTLSeconds:             35,
+		DownlinkBytesPerSecond: 125000,
+		QueueOverflowPolicy:    QueueTailDrop,
+		QueueLimitBytes:        64 << 10,
+		DriverDirectory:        filepath.Join(root, "driver"),
+		OutputDirectory:        filepath.Join(root, "out"),
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, plan, err := ParseRequest(data)
+	if err != nil {
+		t.Fatalf("valid queue policy request rejected: %v", err)
+	}
+	if got.QueueOverflowPolicy != QueueTailDrop || got.QueueLimitBytes != 64<<10 ||
+		plan.Config.QueueOverflowPolicy != QueueTailDrop || plan.Config.QueueLimitBytes != 64<<10 {
+		t.Fatalf("queue config not preserved: req=%+v plan=%+v", got, plan.Config)
 	}
 }
