@@ -36,7 +36,7 @@ import kotlin.coroutines.resumeWithException
  */
 class AnebClient private constructor(
     bound: BoundNetwork?,
-    clock: MonotonicNanosClock,
+    private val clock: MonotonicNanosClock,
     private val loadedLocal: Boolean = false,
 ) {
 
@@ -65,6 +65,12 @@ class AnebClient private constructor(
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
         .socketFactory(TcpNoDelaySocketFactory(bound?.socketFactory ?: javax.net.SocketFactory.getDefault()))
         .apply {
+            if (loadedLocal && !prototypePrivate) {
+                dispatcher(okhttp3.Dispatcher().apply {
+                    maxRequests = 64
+                    maxRequestsPerHost = 16
+                })
+            }
             if (bound != null) {
                 dns(bound.dns)
             }
@@ -858,12 +864,7 @@ class AnebClient private constructor(
                     observation?.headers(response.code)
                     val result = try {
                         response.use {
-                            try {
-                                consume(it)
-                            } catch (error: Exception) {
-                                observation?.failure(error, call.isCanceled())
-                                throw error
-                            }
+                            consume(it)
                         }
                     } catch (e: Exception) {
                         observation?.failure(e, call.isCanceled())
@@ -877,11 +878,14 @@ class AnebClient private constructor(
             })
         }
 
-    private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
+    private fun nowUs(): Long = clock.now() / 1_000L
 
     internal companion object {
-        internal fun forLoadedResponsiveness(bound: BoundNetwork?): AnebClient =
-            AnebClient(bound, AndroidMonotonicNanosClock, loadedLocal = true)
+        internal fun forLoadedResponsiveness(
+            bound: BoundNetwork?,
+            clock: MonotonicNanosClock = AndroidMonotonicNanosClock,
+        ): AnebClient =
+            AnebClient(bound, clock, loadedLocal = true)
 
         /** Construct a clock-injected client without exposing a public overload. */
         @JvmStatic

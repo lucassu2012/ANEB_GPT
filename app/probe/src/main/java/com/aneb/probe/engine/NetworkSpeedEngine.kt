@@ -3,17 +3,20 @@ package com.aneb.probe.engine
 import android.content.Context
 import android.net.NetworkCapabilities
 import android.net.ConnectivityManager
-import android.os.SystemClock
 import androidx.room.withTransaction
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.data.ReportBodyEntity
+import com.aneb.probe.net.AndroidMonotonicNanosClock
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
+import com.aneb.probe.net.MonotonicNanosClock
 import com.aneb.probe.net.NetGuard
+import com.aneb.probe.net.ObservedTransferCancellation
 import com.aneb.probe.net.ReachabilityProbe
 import com.aneb.probe.net.PathMonitor
+import com.aneb.probe.net.ThroughputObservation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -79,7 +82,11 @@ data class BasicSpeedResult(
 )
 
 /** SpeedTest 同项目的基本网络性能引擎；与 Token/AQS 引擎独立，避免口径串扰。 */
-class NetworkSpeedEngine(private val context: Context) {
+class NetworkSpeedEngine internal constructor(
+    private val context: Context,
+    private val clock: MonotonicNanosClock,
+) {
+    constructor(context: Context) : this(context, AndroidMonotonicNanosClock)
     data class Config(
         val serverBase: String,
         val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
@@ -113,7 +120,9 @@ class NetworkSpeedEngine(private val context: Context) {
                 responsivenessJson = LoadedResponsiveness.encode(LoadedResponsivenessReport(
                     runId = runId, serverBase = result.serverBase, transport = observedTransport,
                     status = observedStatus,
-                    stages = stages.toList(), sourceProfileId = PROFILE_ID,
+                    stages = stages.toList(),
+                    methodVersion = "loaded-responsiveness-v2",
+                    sourceProfileId = PROFILE_ID,
                     sourceProfileVersion = sourceProfileVersion,
                 )),
             ) else result
@@ -167,7 +176,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 pathMonitor = PathMonitor(context, checkNotNull(bound), onInvalidate = { pathFailure.compareAndSet(null, it) })
                 pathMonitor?.start()
             }
-            val client = if (config.captureResponsiveness) AnebClient.forLoadedResponsiveness(bound) else AnebClient(bound)
+            val client = if (config.captureResponsiveness) AnebClient.forLoadedResponsiveness(bound, clock) else AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
@@ -334,9 +343,11 @@ class NetworkSpeedEngine(private val context: Context) {
         return BasicSpeedMath.summarizeEcho(results)
     }
 
-    private enum class TransferDirection { DOWNLOAD, UPLOAD }
+    private class CallbackDrainTimeoutException(stage: String) : IllegalStateException("callback_drain_timeout:$stage")
 
-    private data class TransferSummary(
+    internal enum class TransferDirection { DOWNLOAD, UPLOAD }
+
+    internal data class TransferSummary(
         val averageMbps: Double?,
         val totalBytes: Long,
         val errors: List<String>,
@@ -383,7 +394,7 @@ class NetworkSpeedEngine(private val context: Context) {
         )
     }
 
-    private suspend fun runTransferPhase(
+    internal suspend fun runTransferPhase(
         client: AnebClient,
         base: String,
         runId: String,
@@ -393,128 +404,247 @@ class NetworkSpeedEngine(private val context: Context) {
         progressEnd: Double,
         onResponsivenessStage: ((ResponsivenessStage) -> Unit)? = null,
         verifyPath: () -> Unit = {},
-    ): TransferSummary = coroutineScope {
-        verifyPath()
-        val durationMs = phase.durationMs.coerceAtLeast(1_000)
-        val parallel = phase.parallel.coerceIn(1, MAX_PARALLEL)
-        val transferBytes = phase.bytes.coerceAtLeast(1L)
-        val chunkBytes = (phase.chunkKb.coerceAtLeast(16) * 1024).coerceAtMost(1 shl 20)
-        val totalBytes = LongAdder()
-        val completedTransfers = AtomicInteger(0)
-        val errors = ConcurrentLinkedQueue<String>()
-        val byteObservations = ArrayList<ResponsivenessByteObservation>()
-        val byteLock = Any()
-        fun observeBytes(count: Int) {
-            if (onResponsivenessStage == null) {
-                totalBytes.add(count.toLong())
-            } else synchronized(byteLock) {
-                totalBytes.add(count.toLong())
-                byteObservations += ResponsivenessByteObservation(nowUs(), totalBytes.sum())
-            }
-        }
-        val startNanos = SystemClock.elapsedRealtimeNanos()
-        val deadlineNanos = startNanos + durationMs * 1_000_000L
-        val rateWindow = ByteRateWindow()
-        val history = ArrayDeque<Double>()
-        val uiPhase = if (direction == TransferDirection.DOWNLOAD) BasicSpeedPhase.DOWNLOAD else BasicSpeedPhase.UPLOAD
-
-        val sampler: Job = launch(Dispatchers.Default) {
-            while (isActive) {
-                val now = SystemClock.elapsedRealtimeNanos()
-                val bytes = totalBytes.sum()
-                val live = rateWindow.add(now, bytes)
-                if (live != null) {
-                    history.addLast(live)
-                    while (history.size > HISTORY_POINTS) history.removeFirst()
-                }
-                val phaseProgress = ((now - startNanos).toDouble() / (durationMs * 1_000_000.0)).coerceIn(0.0, 1.0)
-                _telemetry.value = _telemetry.value.copy(
-                    phase = uiPhase,
-                    currentMbps = live,
-                    phaseAverageMbps = BasicSpeedMath.mbps(bytes, now - startNanos),
-                    progress = progressStart + (progressEnd - progressStart) * phaseProgress,
-                    historyMbps = history.toList(),
-                )
-                delay(TELEMETRY_MS)
-            }
-        }
-
-        val workers = List(parallel) { workerIndex ->
-            launch(Dispatchers.IO) {
-                while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
-                    verifyPath()
-                    val result = when (direction) {
-                        TransferDirection.DOWNLOAD -> client.downloadThroughput(
-                            "$base/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}",
-                        ) { count, _ -> observeBytes(count) }
-                        TransferDirection.UPLOAD -> client.uploadThroughput(
-                            "$base/api/v1/upload?run=$runId-basic-$workerIndex",
-                            totalBytes = transferBytes,
-                            chunkBytes = chunkBytes,
-                        ) { count, _ -> observeBytes(count) }
-                    }
-                    if (result.error == null) {
-                        completedTransfers.incrementAndGet()
-                    } else {
-                        errors.add(result.error)
-                        break
-                    }
-                }
-            }
-        }
-
-        val echoSamples = mutableListOf<ResponsivenessEcho>()
+    ): TransferSummary {
+        var drainTimedOut = false
         val stageName = if (direction == TransferDirection.DOWNLOAD) "download" else "upload"
-        val echoJob = if (onResponsivenessStage != null) launch(Dispatchers.IO) {
-            while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
-                verifyPath()
-                val probeStart = nowUs()
-                try {
-                    val echo = boundedEcho(client, base)
-                    val counts = synchronized(byteLock) {
-                        val before = byteObservations.lastOrNull { it.atUs < echo.t0Us }?.totalBytes ?: 0L
-                        val after = echo.t3Us?.let { end ->
-                            byteObservations.lastOrNull { it.atUs <= end }?.totalBytes
-                        } ?: before
-                        before to after
-                    }
-                    echoSamples += echo.asResponsiveness(stageName, echoSamples.size, counts.first, counts.second)
-                } catch (cancel: CancellationException) {
-                    echoSamples += ResponsivenessEcho(stageName, echoSamples.size, probeStart,
-                        null, null, null, null, "cancelled_at_phase_boundary")
-                    throw cancel
+        val summary = coroutineScope {
+            verifyPath()
+            val durationMs = phase.durationMs.coerceAtLeast(1_000)
+            val parallel = phase.parallel.coerceIn(1, MAX_PARALLEL)
+            val transferBytes = phase.bytes.coerceAtLeast(1L)
+            val chunkBytes = (phase.chunkKb.coerceAtLeast(16) * 1024).coerceAtMost(1 shl 20)
+            val totalBytes = LongAdder()
+            val completedTransfers = AtomicInteger(0)
+            val errors = ConcurrentLinkedQueue<String>()
+            val startNanos = clock.now()
+            val stageStartUs = startNanos / 1_000L
+            val deadlineNanos = startNanos + durationMs * 1_000_000L
+            val plannedEndUs = deadlineNanos / 1_000L
+            val byteObservations = ArrayList<ResponsivenessByteObservation>()
+            val byteLock = Any()
+            if (onResponsivenessStage != null) {
+                byteObservations += ResponsivenessByteObservation(stageStartUs, 0L)
+            }
+            fun observeBytes(count: Int, requestId: String? = null) {
+                if (count <= 0) return
+                if (onResponsivenessStage == null) {
+                    totalBytes.add(count.toLong())
+                } else synchronized(byteLock) {
+                    totalBytes.add(count.toLong())
+                    byteObservations += ResponsivenessByteObservation(nowUs(), totalBytes.sum(), requestId)
                 }
-                delay(250L)
             }
-        } else null
-        try {
-            delay(durationMs.toLong())
-            workers.forEach { it.cancel() }
-            workers.forEach { it.cancelAndJoin() }
-            sampler.cancelAndJoin()
-        } finally {
-            if (onResponsivenessStage != null) withContext(NonCancellable) {
-                val closedUs = minOf(nowUs(), deadlineNanos / 1_000L)
-                workers.forEach { it.cancelAndJoin() }
-                sampler.cancelAndJoin()
-                echoJob?.cancelAndJoin()
-                val stageErrors = errors.toList() + if (totalBytes.sum() > 0L && completedTransfers.get() == 0)
-                    listOf("no_transfer_completed_before_phase_deadline") else emptyList()
-                onResponsivenessStage(ResponsivenessStage(
-                    stageName, startNanos / 1_000L, closedUs, totalBytes.sum(), stageErrors, echoSamples.toList(),
-                    byteObservations = synchronized(byteLock) { byteObservations.toList() },
-                ))
-            }
-        }
+            val stopLock = Any()
+            var stopRequested = false
+            var stopRequestedUs: Long? = null
+            var stopReason = "unknown"
+            val observations = ArrayList<ThroughputObservation>()
+            val reqSeq = AtomicInteger(0)
 
-        val endNanos = SystemClock.elapsedRealtimeNanos()
-        val bytes = totalBytes.sum()
-        // 至少收到/写入一个字节才有 goodput；0 表示失败/未测到，必须返回 null（R-10）。
-        val average = BasicSpeedMath.mbps(bytes, endNanos - startNanos)
-        if (bytes > 0L && completedTransfers.get() == 0) {
-            errors.add("no_transfer_completed_before_phase_deadline")
+            val rateWindow = ByteRateWindow()
+            val history = ArrayDeque<Double>()
+            val uiPhase = if (direction == TransferDirection.DOWNLOAD) BasicSpeedPhase.DOWNLOAD else BasicSpeedPhase.UPLOAD
+
+            val sampler: Job = launch(Dispatchers.Default) {
+                while (isActive) {
+                    val now = clock.now()
+                    val bytes = totalBytes.sum()
+                    val live = rateWindow.add(now, bytes)
+                    if (live != null) {
+                        history.addLast(live)
+                        while (history.size > HISTORY_POINTS) history.removeFirst()
+                    }
+                    val phaseProgress = ((now - startNanos).toDouble() / (durationMs * 1_000_000.0)).coerceIn(0.0, 1.0)
+                    _telemetry.value = _telemetry.value.copy(
+                        phase = uiPhase,
+                        currentMbps = live,
+                        phaseAverageMbps = BasicSpeedMath.mbps(bytes, now - startNanos),
+                        progress = progressStart + (progressEnd - progressStart) * phaseProgress,
+                        historyMbps = history.toList(),
+                    )
+                    delay(TELEMETRY_MS)
+                }
+            }
+
+            val workers = List(parallel) { workerIndex ->
+                launch(Dispatchers.IO) {
+                    while (isActive && clock.now() < deadlineNanos) {
+                        verifyPath()
+                        if (onResponsivenessStage == null) {
+                            val result = when (direction) {
+                                TransferDirection.DOWNLOAD -> client.downloadThroughput(
+                                    "$base/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}",
+                                ) { count, _ -> observeBytes(count) }
+                                TransferDirection.UPLOAD -> client.uploadThroughput(
+                                    "$base/api/v1/upload?run=$runId-basic-$workerIndex",
+                                    totalBytes = transferBytes,
+                                    chunkBytes = chunkBytes,
+                                ) { count, _ -> observeBytes(count) }
+                            }
+                            if (result.error == null) {
+                                completedTransfers.incrementAndGet()
+                            } else {
+                                errors.add(result.error)
+                                break
+                            }
+                        } else {
+                            val requestId = "$stageName-$workerIndex-${reqSeq.getAndIncrement()}"
+                            val obs = synchronized(stopLock) {
+                                if (stopRequested || !isActive || nowUs() >= plannedEndUs) {
+                                    null
+                                } else {
+                                    val candidate = ThroughputObservation(
+                                        requestId = requestId,
+                                        workerId = workerIndex,
+                                        direction = stageName,
+                                        requestedBytes = transferBytes,
+                                        clockUs = ::nowUs,
+                                    )
+                                    if (candidate.snapshot().startUs >= plannedEndUs) null
+                                    else candidate.also { observations += it }
+                                }
+                            } ?: break
+                            val result = when (direction) {
+                                TransferDirection.DOWNLOAD -> client.downloadObservedThroughput(
+                                    "$base/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}",
+                                    observation = obs,
+                                ) { count, _ -> observeBytes(count, requestId) }
+                                TransferDirection.UPLOAD -> client.uploadObservedThroughput(
+                                    "$base/api/v1/upload?run=$runId-basic-$workerIndex",
+                                    totalBytes = transferBytes,
+                                    chunkBytes = chunkBytes,
+                                    observation = obs,
+                                ) { count, _ -> observeBytes(count, requestId) }
+                            }
+                            if (result.error == null) {
+                                completedTransfers.incrementAndGet()
+                            } else {
+                                errors.add(result.error)
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+
+            val echoSamples = mutableListOf<ResponsivenessEcho>()
+            val echoJob = if (onResponsivenessStage != null) launch(Dispatchers.IO) {
+                while (isActive && clock.now() < deadlineNanos) {
+                    verifyPath()
+                    val probeStart = nowUs()
+                    try {
+                        val echo = boundedEcho(client, base)
+                        val counts = synchronized(byteLock) {
+                            val before = byteObservations.lastOrNull { it.atUs < echo.t0Us }?.totalBytes ?: 0L
+                            val after = echo.t3Us?.let { end ->
+                                byteObservations.lastOrNull { it.atUs <= end }?.totalBytes
+                            } ?: before
+                            before to after
+                        }
+                        echoSamples += echo.asResponsiveness(stageName, echoSamples.size, counts.first, counts.second)
+                    } catch (cancel: CancellationException) {
+                        echoSamples += ResponsivenessEcho(stageName, echoSamples.size, probeStart,
+                            null, null, null, null, "cancelled_at_phase_boundary")
+                        throw cancel
+                    }
+                    delay(250L)
+                }
+            } else null
+
+            try {
+                if (onResponsivenessStage == null) {
+                    delay(durationMs.toLong())
+                    workers.forEach { it.cancel() }
+                    workers.forEach { it.cancelAndJoin() }
+                    sampler.cancelAndJoin()
+                } else {
+                    val waitMs = ((deadlineNanos - clock.now()) / 1_000_000L).coerceAtLeast(0L)
+                    if (waitMs > 0L) delay(waitMs)
+                    while (nowUs() < plannedEndUs) {
+                        delay(1L)
+                    }
+                    synchronized(stopLock) {
+                        if (!stopRequested) {
+                            stopRequested = true
+                            stopReason = "phase_deadline"
+                            stopRequestedUs = nowUs()
+                        }
+                    }
+                    val cancelCause = ObservedTransferCancellation("phase_deadline")
+                    workers.forEach { it.cancel(cancelCause) }
+                    workers.forEach { it.join() }
+                    sampler.cancelAndJoin()
+                    echoJob?.cancelAndJoin()
+                }
+            } finally {
+                if (onResponsivenessStage != null) withContext(NonCancellable) {
+                    val activeReason = synchronized(stopLock) {
+                        if (!stopRequested) {
+                            stopRequested = true
+                            stopReason = "caller_cancelled"
+                            stopRequestedUs = nowUs()
+                        }
+                        stopReason
+                    }
+                    val cancelCause = ObservedTransferCancellation(activeReason)
+                    workers.forEach { it.cancel(cancelCause) }
+                    workers.forEach { it.join() }
+                    sampler.cancelAndJoin()
+                    echoJob?.cancelAndJoin()
+
+                    val tracked = synchronized(stopLock) { observations.toList() }
+                    val drained = withTimeoutOrNull(CALLBACK_DRAIN_TIMEOUT_MS) {
+                        tracked.forEach { it.awaitDrained() }
+                        true
+                    } == true
+                    if (!drained) {
+                        drainTimedOut = true
+                        errors.add("callback_drain_timeout")
+                    }
+                    val snapshotUs = nowUs()
+                    val frozenByteObs = synchronized(byteLock) { byteObservations.toList() }
+                    val inPhaseObs = frozenByteObs.filter { it.atUs >= stageStartUs && it.atUs <= plannedEndUs }
+                    val reconciledSamples = echoSamples.map { sample ->
+                        val t3 = sample.t3Us
+                        if (t3 == null || sample.error != null) sample
+                        else {
+                            val before = inPhaseObs.lastOrNull { it.atUs < sample.t0Us }?.totalBytes ?: 0L
+                            val after = inPhaseObs.lastOrNull { it.atUs <= t3 }?.totalBytes ?: before
+                            sample.copy(bytesBefore = before, bytesAfter = after)
+                        }
+                    }
+                    onResponsivenessStage(ResponsivenessStage(
+                        stage = stageName,
+                        startUs = stageStartUs,
+                        endUs = plannedEndUs,
+                        transferBytes = totalBytes.sum(),
+                        errors = errors.toList(),
+                        samples = reconciledSamples,
+                        byteObservations = frozenByteObs,
+                        executionV2 = ResponsivenessExecutionV2(
+                            plannedEndUs = plannedEndUs,
+                            stopRequestedUs = stopRequestedUs,
+                            stopReason = activeReason,
+                            snapshotUs = snapshotUs,
+                            requests = tracked.map { it.snapshot() },
+                        ),
+                    ))
+                }
+            }
+
+            val endNanos = clock.now()
+            val bytes = totalBytes.sum()
+            // 至少收到/写入一个字节才有 goodput；0 表示失败/未测到，必须返回 null（R-10）。
+            val average = BasicSpeedMath.mbps(bytes, endNanos - startNanos)
+            if (onResponsivenessStage == null && bytes > 0L && completedTransfers.get() == 0) {
+                errors.add("no_transfer_completed_before_phase_deadline")
+            }
+            TransferSummary(average, bytes, errors.toList())
         }
-        TransferSummary(average, bytes, errors.toList())
+        if (drainTimedOut) {
+            throw CallbackDrainTimeoutException(stageName)
+        }
+        return summary
     }
 
     companion object {
@@ -523,11 +653,12 @@ class NetworkSpeedEngine(private val context: Context) {
         const val BASIC_CLAIM_SCOPE = "application_end_to_end_to_probe_node"
         private const val ECHO_GAP_MS = 75L
         private const val TELEMETRY_MS = 100L
+        private const val CALLBACK_DRAIN_TIMEOUT_MS = 2_000L
         private const val HISTORY_POINTS = 40
         private const val MAX_PARALLEL = 8
     }
 
-    private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
+    private fun nowUs(): Long = clock.now() / 1_000L
 
     private suspend fun boundedEcho(client: AnebClient, base: String): AnebClient.EchoResult {
         val start = nowUs()
