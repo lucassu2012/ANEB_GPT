@@ -11,10 +11,18 @@ import java.security.MessageDigest
 import kotlinx.serialization.json.*
 
 /** R1 display projection only. Original input remains the evidence; no derived metrics. */
-data class ResearchAttempt(val raw: JsonObject, val isVideo: Boolean = false) {
-    val attemptId: String get() = raw.text(if (isVideo) "slot" else "attempt_id") ?: "UNKNOWN"
-    val status: String? get() = if (isVideo) raw.text("status") else (raw["outcome"] as? JsonObject)?.text("status")
-    val statusLabel: String get() = when (status) {
+data class ResearchAttempt(val raw: JsonObject, val isVideo: Boolean = false, val isBusinessVideo: Boolean = false) {
+    val attemptId: String get() = raw.text(when { isBusinessVideo -> "runId"; isVideo -> "slot"; else -> "attempt_id" }) ?: "UNKNOWN"
+    val status: String? get() = when {
+        isBusinessVideo -> raw.text("state")
+        isVideo -> raw.text("status")
+        else -> (raw["outcome"] as? JsonObject)?.text("status")
+    }
+    val statusLabel: String get() = if (isBusinessVideo) when (status) {
+        "CAPTURED_AWAITING_REVIEW" -> "采集已闭合 · 待复核"
+        "STOPPED" -> "采集已停止 · 原因见原文"
+        else -> "未知采集状态"
+    } else when (status) {
         "completed" -> "记录为完成"
         "failed" -> "失败"
         "cancelled" -> "已取消"
@@ -41,22 +49,28 @@ data class ResearchAttempt(val raw: JsonObject, val isVideo: Boolean = false) {
 
 data class ResearchDocument(val id: String, val root: JsonObject, val records: List<ResearchAttempt>) {
     val isVideo: Boolean get() = ResearchVideoFormat.matches(root)
+    val isBusinessVideo: Boolean get() = BusinessVideoRawFormat.matches(root)
     /** Display only; decode validates unanimity, and the original root/bytes remain untouched. */
-    val methodId: String? get() = if (isVideo) "research-video-1" else if (root.containsKey("method_id")) root.text("method_id")
+    val methodId: String? get() = if (isBusinessVideo) BusinessVideoRawFormat.FORMAT
+        else if (isVideo) "research-video-1" else if (root.containsKey("method_id")) root.text("method_id")
         else records.map { it.raw.text("method_id") }.distinct().singleOrNull()
-    val recordKind: String get() = if (isVideo && root.text("record_kind") == ResearchVideoFormat.BLOCKED_KIND) "OBSERVED"
+    val recordKind: String get() = if (isBusinessVideo) "UNVERIFIED_RAW"
+        else if (isVideo && root.text("record_kind") == ResearchVideoFormat.BLOCKED_KIND) "OBSERVED"
         else root.text("record_kind") ?: "UNKNOWN"
     val sourceLabel: String get() = when (recordKind) {
+        "UNVERIFIED_RAW" -> "UNVERIFIED_RAW · 未核验原始采集（待复核）"
         "SAMPLE" -> "SAMPLE · 虚构样例（非实测）"
         "OBSERVED" -> "OBSERVED · 输入声明为实际观察（未核验）"
         else -> "未确认来源"
     }
-    val sourceNotice: String get() = if (recordKind == "OBSERVED") {
+    val sourceNotice: String get() = if (isBusinessVideo) {
+        "仅为未核验原始采集摘要，不是旧 V0/VF 视频标注，不证明播放成功、播放器首帧或网络因果。详细 App / 版本 / 网络身份在 binding / app-identity 原件中，本摘要未提供的字段不推测；不会自动打开帧引用或媒体，也不补算指标。"
+    } else if (recordKind == "OBSERVED") {
         "实际观察仅为输入声明，不表示成功或验收通过；不会自动打开引用路径。显式选择、确认保存后的本机原片仅核对声明 SHA-256；文件匹配不证明观察真实性或计时准确，不能据此归因为网络问题。"
     } else {
         "虚构样例仅用于演示，不计作实际观察或实测结果。"
     }
-    val exportFileName: String get() = "ANEB-R1-$recordKind-$id.json"
+    val exportFileName: String get() = if (isBusinessVideo) "ANEB-business-video-raw-$id.json" else "ANEB-R1-$recordKind-$id.json"
 }
 data class ResearchEntry(val id: String, val document: ResearchDocument?, val error: String?)
 
@@ -148,6 +162,9 @@ class ResearchRecordStore(private val directory: File) {
                 val text = validatedResearchInputText(bytes)
                 val root = Json.parseToJsonElement(text) as? JsonObject
                     ?: throw IllegalArgumentException("需要批量 JSON 对象")
+                if (BusinessVideoRawFormat.matches(root)) {
+                    return ResearchDocument(hash(bytes), root, BusinessVideoRawFormat.readAttempts(root))
+                }
                 if (ResearchVideoFormat.matches(root)) {
                     return ResearchDocument(hash(bytes), root, ResearchVideoFormat.readAttempts(root))
                 }

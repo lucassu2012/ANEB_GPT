@@ -502,7 +502,21 @@ class TestEngine(private val context: Context) {
                 ipReachable = reach?.ip?.status,
                 ipReachMs = reach?.ip?.elapsedMs,
             )
-            val body = ResultReporter.build(runEntity, scenarioReports, aqsResult)
+            // ---------------- run 级 voice 摘要（24h 窗口内最近一条 Done 行，additive） ----------------
+            val voiceSummary = VoiceSummary.select(
+                runCatching { db.voiceResultDao().recent(1) }.getOrElse { emptyList() },
+                nowEpochMs = startedAtEpochMs,
+            )
+            if (voiceSummary != null) {
+                log(
+                    "VOICE_SUMMARY run_id=$runId ts_epoch_ms=${voiceSummary.tsEpochMs} " +
+                        "caliber=${voiceSummary.caliber ?: "null"} " +
+                        "low_confidence=${voiceSummary.lowConfidence}",
+                )
+            } else {
+                log("VOICE_SUMMARY run_id=$runId available=false reason=no_done_row_in_24h")
+            }
+            val body = ResultReporter.build(runEntity, scenarioReports, aqsResult, voice = voiceSummary)
             val bodyBytes = body.toByteArray(Charsets.UTF_8).size
             if (bodyBytes > ResultReporter.MAX_REPORT_BYTES) {
                 log("REPORT_SIZE_WARN bytes=$bodyBytes limit=${ResultReporter.MAX_REPORT_BYTES}")

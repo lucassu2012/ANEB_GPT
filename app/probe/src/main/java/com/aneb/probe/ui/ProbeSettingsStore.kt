@@ -15,7 +15,7 @@ internal data class ProbeSettings(
     val driveTest: Boolean = false,
 ) {
     companion object {
-        const val DEFAULT_SERVER_URL = "https://120-79-148-0.sslip.io:8443"
+        const val DEFAULT_SERVER_URL = "https://120.77.174.207:8443"
     }
 }
 
@@ -35,6 +35,7 @@ internal object ProbeSettingsCodec {
             ?: ProbeSettings.DEFAULT_SERVER_URL,
         testMode = when (testMode) {
             AnebTestMode.NETWORK_BASIC.name -> AnebTestMode.NETWORK_BASIC
+            AnebTestMode.NETWORK_RESPONSIVENESS.name -> AnebTestMode.NETWORK_RESPONSIVENESS
             else -> AnebTestMode.TOKEN_EXPERIENCE
         },
         mode = when (mode) {

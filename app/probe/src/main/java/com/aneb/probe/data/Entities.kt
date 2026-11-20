@@ -567,3 +567,31 @@ data class PrototypeEvidenceEventEntity(
     val eventOrdinal: Int,
     val eventJson: String,
 )
+
+/**
+ * Profile 4 实时语音测量单次结果（Room v15 新增表，additive；观测口径独立于 token AQS 各表）。
+ * 指标字段全部可空：未测/样本不足记 null，严禁以 0/哨兵值替代（R-10）。
+ */
+@Entity(tableName = "voice_result")
+data class VoiceResultEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val tsEpochMs: Long,
+    val caliber: String?,
+    val lowConfidence: Boolean,
+    val rttMs: Double?,
+    val jitterMs: Double?,
+    val upFrameJitterMs: Double?,
+    val downFrameJitterMs: Double?,
+    val mouthEarBudgetMs: Double?,
+    val framesSent: Int?,
+    val framesRecv: Int?,
+    val ttfbP50Ms: Double?,
+    val ttfbP95Ms: Double?,
+    val downNetJitterMs: Double?,
+    val mouthEarProxyMs: Double?,
+    val turnSwitchP50Ms: Double?,
+    val bargeStopMaxMs: Double?,
+    val turnsOk: Int?,
+    val m7MaxFrameGapMs: Double? = null,
+    val voiceNearZeroArrivalRatio: Double? = null,
+)

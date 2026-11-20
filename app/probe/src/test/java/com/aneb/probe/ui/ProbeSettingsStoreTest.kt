@@ -8,6 +8,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProbeSettingsStoreTest {
+    @Test fun `loaded responsiveness selection survives restart without changing legacy defaults`() {
+        assertEquals(AnebTestMode.NETWORK_RESPONSIVENESS,
+            ProbeSettingsCodec.decode(null, null, null, false, "NETWORK_RESPONSIVENESS").testMode)
+        assertEquals(AnebTestMode.TOKEN_EXPERIENCE,
+            ProbeSettingsCodec.decode(null, null, null, false).testMode)
+    }
+
     @Test
     fun `decode restores valid settings and trims server`() {
         val decoded = ProbeSettingsCodec.decode(

@@ -223,7 +223,7 @@ class ProbeRunService : Service() {
                                 ),
                             )
                         }
-                        AnebTestMode.NETWORK_BASIC -> {
+                        AnebTestMode.NETWORK_BASIC, AnebTestMode.NETWORK_RESPONSIVENESS -> {
                             val engine = NetworkSpeedEngine(applicationContext)
                             telemetryJob = serviceScope.launch {
                                 engine.telemetry.collect { _basicTelemetry.value = it }
@@ -231,7 +231,8 @@ class ProbeRunService : Service() {
                             resultJob = serviceScope.launch {
                                 engine.result.collect { _basicResult.value = it }
                             }
-                            engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport))
+                            engine.run(NetworkSpeedEngine.Config(config.serverBase, config.transport,
+                                captureResponsiveness = config.testMode == AnebTestMode.NETWORK_RESPONSIVENESS))
                         }
                     }
                     lines.collect { line ->

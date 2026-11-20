@@ -8,8 +8,14 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import kotlinx.serialization.json.*
 
-/** Imported 3a output, not Android-computed or independently verified measurements. */
-data class ResearchAnalysis(val id: String, val sourceId: String, val root: JsonObject, val isVideo: Boolean = false) {
+/** Imported analysis/review output, not Android-computed or independently verified measurements. */
+data class ResearchAnalysis(
+    val id: String,
+    val sourceId: String,
+    val root: JsonObject,
+    val isVideo: Boolean = false,
+    val isBusinessVideo: Boolean = false,
+) {
     val records: Map<String, JsonObject> get() = root[if (isVideo) "attempts" else "records"]!!.jsonArray.associate {
         val row = it.jsonObject
         row.text(if (isVideo) "slot" else "attempt_id")!! to row
@@ -75,6 +81,10 @@ class ResearchAnalysisStore(private val directory: File) {
                 val root = Json.parseToJsonElement(text) as? JsonObject ?: error("分析需要对象")
                 require(root.text("source_sha256") == source.id) { "原文 SHA-256 不匹配" }
                 require(root.text("record_kind") == source.recordKind) { "来源类型不匹配" }
+                if (source.isBusinessVideo) {
+                    BusinessVideoReviewFormat.validate(source, root)
+                    return ResearchAnalysis(hash(bytes), source.id, root, isBusinessVideo = true)
+                }
                 if (source.isVideo) {
                     ResearchVideoFormat.validateAnalysis(source, root)
                     return ResearchAnalysis(hash(bytes), source.id, root, isVideo = true)
@@ -98,6 +108,7 @@ class ResearchAnalysisStore(private val directory: File) {
                 require(root["counts"] is JsonObject && root["groups"] is JsonArray) { "缺少分析汇总" }
                 return ResearchAnalysis(hash(bytes), source.id, root)
             } catch (e: Exception) {
+                if (source.isBusinessVideo) throw ResearchImportException("无法关联业务视频复核：请核对 business-video-review-1、原文 SHA-256、完整原文和唯一运行身份（最多 1 MiB）。整份未保存，原始采集未更改。")
                 if (source.isVideo) throw ResearchImportException("无法关联视频分析：请核对原文 SHA-256、来源类型、App 及完整唯一的 slot/执行状态。仅支持该视频原文的分析（最多 1 MiB）；整份未保存，原文不变。")
                 throw ResearchImportException("无法关联分析：请核对原文 SHA-256、来源类型及完整且唯一的 attempt_id；仅支持 alignment-1 分析（最多 1 MiB）。整份未保存，原文不变。")
             }

@@ -48,7 +48,7 @@ class MigrationV13FileTest {
         sentinels: V12Sentinels,
     ) {
         val writable = database.openHelper.writableDatabase
-        assertEquals(14, writable.version)
+        assertEquals(15, writable.version)
         assertEquals(
             setOf("prototype_campaign", "prototype_run", "prototype_evidence_event"),
             writable.query(

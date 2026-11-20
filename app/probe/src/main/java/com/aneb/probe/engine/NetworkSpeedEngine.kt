@@ -2,17 +2,22 @@ package com.aneb.probe.engine
 
 import android.content.Context
 import android.net.NetworkCapabilities
+import android.net.ConnectivityManager
 import android.os.SystemClock
+import androidx.room.withTransaction
 import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.ReportBodyEntity
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
 import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.ReachabilityProbe
+import com.aneb.probe.net.PathMonitor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -24,13 +29,20 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.LongAdder
 
 enum class AnebTestMode(val label: String) {
     NETWORK_BASIC("基本测速"),
+    NETWORK_RESPONSIVENESS("负载响应性"),
     TOKEN_EXPERIENCE("Token 体验"),
+
+    ;
+    val isBasic: Boolean get() = this == NETWORK_BASIC || this == NETWORK_RESPONSIVENESS
 }
 
 enum class BasicSpeedPhase { IDLE, PREPARING, LATENCY, DOWNLOAD, UPLOAD, FINALIZING, COMPLETE, FAILED }
@@ -62,6 +74,8 @@ data class BasicSpeedResult(
     val downloadBytes: Long,
     val uploadBytes: Long,
     val transferErrors: List<String>,
+    val profileId: String = NetworkSpeedEngine.PROFILE_ID,
+    val responsivenessJson: String? = null,
 )
 
 /** SpeedTest 同项目的基本网络性能引擎；与 Token/AQS 引擎独立，避免口径串扰。 */
@@ -69,6 +83,7 @@ class NetworkSpeedEngine(private val context: Context) {
     data class Config(
         val serverBase: String,
         val transport: TestEngine.TransportMode = TestEngine.TransportMode.AUTO,
+        val captureResponsiveness: Boolean = false,
     )
 
     private val _telemetry = MutableStateFlow(BasicSpeedTelemetry())
@@ -83,6 +98,27 @@ class NetworkSpeedEngine(private val context: Context) {
         val startedAtEpochMs = System.currentTimeMillis()
         val configuredBase = config.serverBase.trim().trimEnd('/')
         val transport = config.transport.name.lowercase()
+        val stages = mutableListOf<ResponsivenessStage>()
+        var sourceProfileVersion = "unknown"
+        var observedTransport = transport
+        val pathFailure = AtomicReference<String?>(null)
+        var pathMonitor: PathMonitor? = null
+        suspend fun publishObserved(result: BasicSpeedResult, emit: suspend (String) -> Unit = log) {
+            val observedStatus = pathFailure.get()?.let { "invalid:$it" }
+                ?: if (result.status == "completed" && stages.any { it.stage != "idle" && it.errors.isNotEmpty() })
+                    "partial" else result.status
+            val observed = if (config.captureResponsiveness) result.copy(
+                profileId = RESPONSIVENESS_PROFILE_ID,
+                status = observedStatus,
+                responsivenessJson = LoadedResponsiveness.encode(LoadedResponsivenessReport(
+                    runId = runId, serverBase = result.serverBase, transport = observedTransport,
+                    status = observedStatus,
+                    stages = stages.toList(), sourceProfileId = PROFILE_ID,
+                    sourceProfileVersion = sourceProfileVersion,
+                )),
+            ) else result
+            publishResult(observed, emit)
+        }
         _result.value = null
         _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.PREPARING)
         log("BASIC_START run_id=$runId transport=$transport server=$configuredBase")
@@ -91,33 +127,47 @@ class NetworkSpeedEngine(private val context: Context) {
         if (!guard.ok) {
             val reason = guard.reasons.joinToString(",")
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
-            publishResult(BasicSpeedResult(
+            publishObserved(BasicSpeedResult(
                 runId, startedAtEpochMs, configuredBase, "unknown", "guard_rejected:$reason",
                 null, null, null, null, null, null, 0L, 0L, emptyList(),
-            ), log)
+            ))
             log("BASIC_END run_id=$runId status=guard_rejected reasons=$reason")
             return@channelFlow
         }
 
         var bound: BoundNetwork? = null
         try {
-            bound = when (config.transport) {
+            val selectedTransport = if (config.captureResponsiveness && config.transport == TestEngine.TransportMode.AUTO) {
+                val cm = context.getSystemService(ConnectivityManager::class.java)
+                val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
+                when {
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> TestEngine.TransportMode.WIFI
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> TestEngine.TransportMode.CELLULAR
+                    else -> throw GuardException("no_supported_active_transport")
+                }
+            } else config.transport
+            observedTransport = selectedTransport.name.lowercase()
+            bound = when (selectedTransport) {
                 TestEngine.TransportMode.AUTO -> null
                 TestEngine.TransportMode.WIFI -> NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_WIFI)
                 TestEngine.TransportMode.CELLULAR -> NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_CELLULAR)
             }
         } catch (e: GuardException) {
             _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.FAILED)
-            publishResult(BasicSpeedResult(
+            publishObserved(BasicSpeedResult(
                 runId, startedAtEpochMs, configuredBase, "unknown", "bind_failed",
                 null, null, null, null, null, null, 0L, 0L, listOf(e.toString()),
-            ), log)
+            ))
             log("BASIC_END run_id=$runId status=bind_failed")
             return@channelFlow
         }
 
         try {
-            val client = AnebClient(bound)
+            if (config.captureResponsiveness) {
+                pathMonitor = PathMonitor(context, checkNotNull(bound), onInvalidate = { pathFailure.compareAndSet(null, it) })
+                pathMonitor?.start()
+            }
+            val client = if (config.captureResponsiveness) AnebClient.forLoadedResponsiveness(bound) else AnebClient(bound)
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
@@ -133,6 +183,7 @@ class NetworkSpeedEngine(private val context: Context) {
             require(profile.modeId == ScenarioProfile.MODE_NETWORK_BASIC) {
                 "profile_mode_mismatch:${profile.modeId}"
             }
+            sourceProfileVersion = profile.version
             log(
                 "BASIC_PROFILE id=${profile.profileId} version=${profile.version} " +
                     "source=${loaded.source} live_metric=${profile.presentation.liveMetricId}"
@@ -149,12 +200,23 @@ class NetworkSpeedEngine(private val context: Context) {
 
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.LATENCY, progress = 0.03)
             log("BASIC_PHASE run_id=$runId phase=latency samples=${baselinePhase.samples}")
-            val baseline = measureEcho(client, measureBase, baselinePhase.samples) { index, summary ->
+            val idleSamples = mutableListOf<ResponsivenessEcho>()
+            val idleStartUs = nowUs()
+            val baseline = try { measureEcho(client, measureBase, baselinePhase.samples,
+                onSample = if (config.captureResponsiveness) ({ echo ->
+                    idleSamples += echo.asResponsiveness("idle", idleSamples.size, 0L, 0L)
+                    pathFailure.get()?.let { throw GuardException(it) }
+                }) else null,
+            ) { index, summary ->
                 _telemetry.value = _telemetry.value.copy(
                     pingMs = summary.rttP50Ms,
                     jitterMs = summary.jitterMs,
                     requestLossRate = summary.requestLossRate,
                     progress = 0.03 + 0.14 * index / baselinePhase.samples.coerceAtLeast(1),
+                )
+            } } finally {
+                if (config.captureResponsiveness) stages += ResponsivenessStage(
+                    "idle", idleStartUs, nowUs(), 0L, samples = idleSamples.toList(),
                 )
             }
 
@@ -167,6 +229,8 @@ class NetworkSpeedEngine(private val context: Context) {
                 direction = TransferDirection.DOWNLOAD,
                 progressStart = 0.18,
                 progressEnd = 0.54,
+                onResponsivenessStage = if (config.captureResponsiveness) ({ stages += it }) else null,
+                verifyPath = { if (config.captureResponsiveness) pathFailure.get()?.let { throw GuardException(it) } },
             )
 
             log("BASIC_PHASE run_id=$runId phase=upload")
@@ -178,6 +242,8 @@ class NetworkSpeedEngine(private val context: Context) {
                 direction = TransferDirection.UPLOAD,
                 progressStart = 0.56,
                 progressEnd = 0.90,
+                onResponsivenessStage = if (config.captureResponsiveness) ({ stages += it }) else null,
+                verifyPath = { if (config.captureResponsiveness) pathFailure.get()?.let { throw GuardException(it) } },
             )
 
             _telemetry.value = _telemetry.value.copy(
@@ -214,7 +280,7 @@ class NetworkSpeedEngine(private val context: Context) {
                 uploadBytes = upload.totalBytes,
                 transferErrors = errors,
             )
-            publishResult(finalResult, log)
+            publishObserved(finalResult)
             _telemetry.value = _telemetry.value.copy(
                 phase = if (status == "failed") BasicSpeedPhase.FAILED else BasicSpeedPhase.COMPLETE,
                 currentMbps = null,
@@ -229,16 +295,23 @@ class NetworkSpeedEngine(private val context: Context) {
             )
             log("BASIC_END run_id=$runId status=$status")
         } catch (e: CancellationException) {
+            if (config.captureResponsiveness) withContext(NonCancellable) {
+                publishObserved(BasicSpeedResult(
+                    runId, startedAtEpochMs, configuredBase, sourceProfileVersion, "cancelled",
+                    null, null, null, null, null, null, 0L, 0L, listOf("cancelled"),
+                ), emit = {})
+            }
             throw e
         } catch (e: Exception) {
             _telemetry.value = _telemetry.value.copy(phase = BasicSpeedPhase.FAILED, currentMbps = null)
-            publishResult(BasicSpeedResult(
+            publishObserved(BasicSpeedResult(
                 runId, startedAtEpochMs, configuredBase, "unknown", "error:${e.javaClass.simpleName}",
                 null, null, null, null, null, null, 0L, 0L, listOf(e.toString()),
-            ), log)
+            ))
             log("BASIC_FAILED run_id=$runId error=${e.toString().replace(' ', '_')}")
             log("BASIC_END run_id=$runId status=error")
         } finally {
+            pathMonitor?.stop()
             bound?.release()
         }
     }.flowOn(Dispatchers.IO)
@@ -247,11 +320,13 @@ class NetworkSpeedEngine(private val context: Context) {
         client: AnebClient,
         base: String,
         samples: Int,
+        onSample: ((AnebClient.EchoResult) -> Unit)? = null,
         onProgress: (Int, BasicSpeedMath.EchoSummary) -> Unit,
     ): BasicSpeedMath.EchoSummary {
         val results = ArrayList<Double?>(samples)
         repeat(samples.coerceAtLeast(1)) { index ->
-            val echo = client.echo("$base/api/v1/echo")
+            val echo = if (onSample == null) client.echo("$base/api/v1/echo") else boundedEcho(client, base)
+            onSample?.invoke(echo)
             results += echo.rttUs?.takeIf { echo.error == null }?.div(1_000.0)
             onProgress(index + 1, BasicSpeedMath.summarizeEcho(results))
             if (index + 1 < samples) delay(ECHO_GAP_MS)
@@ -273,15 +348,17 @@ class NetworkSpeedEngine(private val context: Context) {
     ) {
         _result.value = result
         val write = runCatching {
-            AnebDatabase.get(context).basicSpeedResultDao().insert(
+            val db = AnebDatabase.get(context)
+            db.withTransaction {
+            db.basicSpeedResultDao().insert(
                 BasicSpeedResultEntity(
                     runId = result.runId,
                     startedAtEpochMs = result.startedAtEpochMs,
                     serverBase = result.serverBase,
                     claimScope = BASIC_CLAIM_SCOPE,
-                    profileId = PROFILE_ID,
+                    profileId = result.profileId,
                     profileVersion = result.profileVersion,
-                    conclusionPolicyId = "network-basic-conclusions-v1",
+                    conclusionPolicyId = if (result.responsivenessJson == null) "network-basic-conclusions-v1" else "none",
                     status = result.status,
                     downloadMbps = result.downloadMbps,
                     uploadMbps = result.uploadMbps,
@@ -294,6 +371,8 @@ class NetworkSpeedEngine(private val context: Context) {
                     transferErrors = result.transferErrors.joinToString("\n") { it.replace("\u0000", "") },
                 ),
             )
+            result.responsivenessJson?.let { db.reportBodyDao().insert(ReportBodyEntity(result.runId, it)) }
+            }
         }
         log(
             if (write.isSuccess) {
@@ -312,7 +391,10 @@ class NetworkSpeedEngine(private val context: Context) {
         direction: TransferDirection,
         progressStart: Double,
         progressEnd: Double,
+        onResponsivenessStage: ((ResponsivenessStage) -> Unit)? = null,
+        verifyPath: () -> Unit = {},
     ): TransferSummary = coroutineScope {
+        verifyPath()
         val durationMs = phase.durationMs.coerceAtLeast(1_000)
         val parallel = phase.parallel.coerceIn(1, MAX_PARALLEL)
         val transferBytes = phase.bytes.coerceAtLeast(1L)
@@ -320,6 +402,16 @@ class NetworkSpeedEngine(private val context: Context) {
         val totalBytes = LongAdder()
         val completedTransfers = AtomicInteger(0)
         val errors = ConcurrentLinkedQueue<String>()
+        val byteObservations = ArrayList<ResponsivenessByteObservation>()
+        val byteLock = Any()
+        fun observeBytes(count: Int) {
+            if (onResponsivenessStage == null) {
+                totalBytes.add(count.toLong())
+            } else synchronized(byteLock) {
+                totalBytes.add(count.toLong())
+                byteObservations += ResponsivenessByteObservation(nowUs(), totalBytes.sum())
+            }
+        }
         val startNanos = SystemClock.elapsedRealtimeNanos()
         val deadlineNanos = startNanos + durationMs * 1_000_000L
         val rateWindow = ByteRateWindow()
@@ -350,15 +442,16 @@ class NetworkSpeedEngine(private val context: Context) {
         val workers = List(parallel) { workerIndex ->
             launch(Dispatchers.IO) {
                 while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
+                    verifyPath()
                     val result = when (direction) {
                         TransferDirection.DOWNLOAD -> client.downloadThroughput(
                             "$base/api/v1/download?bytes=$transferBytes&chunk_kb=${phase.chunkKb}",
-                        ) { count, _ -> totalBytes.add(count.toLong()) }
+                        ) { count, _ -> observeBytes(count) }
                         TransferDirection.UPLOAD -> client.uploadThroughput(
                             "$base/api/v1/upload?run=$runId-basic-$workerIndex",
                             totalBytes = transferBytes,
                             chunkBytes = chunkBytes,
-                        ) { count, _ -> totalBytes.add(count.toLong()) }
+                        ) { count, _ -> observeBytes(count) }
                     }
                     if (result.error == null) {
                         completedTransfers.incrementAndGet()
@@ -370,10 +463,49 @@ class NetworkSpeedEngine(private val context: Context) {
             }
         }
 
-        delay(durationMs.toLong())
-        workers.forEach { it.cancel() }
-        workers.forEach { it.cancelAndJoin() }
-        sampler.cancelAndJoin()
+        val echoSamples = mutableListOf<ResponsivenessEcho>()
+        val stageName = if (direction == TransferDirection.DOWNLOAD) "download" else "upload"
+        val echoJob = if (onResponsivenessStage != null) launch(Dispatchers.IO) {
+            while (isActive && SystemClock.elapsedRealtimeNanos() < deadlineNanos) {
+                verifyPath()
+                val probeStart = nowUs()
+                try {
+                    val echo = boundedEcho(client, base)
+                    val counts = synchronized(byteLock) {
+                        val before = byteObservations.lastOrNull { it.atUs < echo.t0Us }?.totalBytes ?: 0L
+                        val after = echo.t3Us?.let { end ->
+                            byteObservations.lastOrNull { it.atUs <= end }?.totalBytes
+                        } ?: before
+                        before to after
+                    }
+                    echoSamples += echo.asResponsiveness(stageName, echoSamples.size, counts.first, counts.second)
+                } catch (cancel: CancellationException) {
+                    echoSamples += ResponsivenessEcho(stageName, echoSamples.size, probeStart,
+                        null, null, null, null, "cancelled_at_phase_boundary")
+                    throw cancel
+                }
+                delay(250L)
+            }
+        } else null
+        try {
+            delay(durationMs.toLong())
+            workers.forEach { it.cancel() }
+            workers.forEach { it.cancelAndJoin() }
+            sampler.cancelAndJoin()
+        } finally {
+            if (onResponsivenessStage != null) withContext(NonCancellable) {
+                val closedUs = minOf(nowUs(), deadlineNanos / 1_000L)
+                workers.forEach { it.cancelAndJoin() }
+                sampler.cancelAndJoin()
+                echoJob?.cancelAndJoin()
+                val stageErrors = errors.toList() + if (totalBytes.sum() > 0L && completedTransfers.get() == 0)
+                    listOf("no_transfer_completed_before_phase_deadline") else emptyList()
+                onResponsivenessStage(ResponsivenessStage(
+                    stageName, startNanos / 1_000L, closedUs, totalBytes.sum(), stageErrors, echoSamples.toList(),
+                    byteObservations = synchronized(byteLock) { byteObservations.toList() },
+                ))
+            }
+        }
 
         val endNanos = SystemClock.elapsedRealtimeNanos()
         val bytes = totalBytes.sum()
@@ -387,12 +519,24 @@ class NetworkSpeedEngine(private val context: Context) {
 
     companion object {
         const val PROFILE_ID = "basic_network"
+        const val RESPONSIVENESS_PROFILE_ID = "network_loaded_responsiveness_v1"
         const val BASIC_CLAIM_SCOPE = "application_end_to_end_to_probe_node"
         private const val ECHO_GAP_MS = 75L
         private const val TELEMETRY_MS = 100L
         private const val HISTORY_POINTS = 40
         private const val MAX_PARALLEL = 8
     }
+
+    private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
+
+    private suspend fun boundedEcho(client: AnebClient, base: String): AnebClient.EchoResult {
+        val start = nowUs()
+        return withTimeoutOrNull(2_000L) { client.echo("$base/api/v1/echo") }
+            ?: AnebClient.EchoResult(start, null, null, null, null, null, null, "probe_timeout", null)
+    }
+
+    private fun AnebClient.EchoResult.asResponsiveness(stage: String, sequence: Int, before: Long, after: Long) =
+        ResponsivenessEcho(stage, sequence, t0Us, t1Us, t2Us, t3Us, httpCode, error, before, after)
 }
 
 /** 基本测速纯计算口径，JVM 可单测。 */

@@ -37,7 +37,7 @@ class MigrationV14FileTest {
 
         val database = AnebDatabase.openUncached(context, databaseName)
         val writable = database.openHelper.writableDatabase
-        assertEquals(14, writable.version)
+        assertEquals(15, writable.version)
         writable.query(
             "SELECT summaryJson, captureAuthorityJson FROM prototype_campaign WHERE campaignId = ?",
             arrayOf(CAMPAIGN_ID),

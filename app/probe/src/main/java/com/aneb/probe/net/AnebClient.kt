@@ -37,6 +37,7 @@ import kotlin.coroutines.resumeWithException
 class AnebClient private constructor(
     bound: BoundNetwork?,
     clock: MonotonicNanosClock,
+    private val loadedLocal: Boolean = false,
 ) {
 
     /** Preserve the existing public default-argument constructor and Android clock behavior. */
@@ -59,7 +60,8 @@ class AnebClient private constructor(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
-        .addInterceptor(EngineeringCleartextPolicy.interceptor(prototypePrivate))
+        .addInterceptor(if (loadedLocal && !prototypePrivate) LoadedNodePolicy.interceptor()
+            else EngineeringCleartextPolicy.interceptor(prototypePrivate))
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
         .apply {
             if (bound != null) {
@@ -311,6 +313,12 @@ class AnebClient private constructor(
     suspend fun downloadThroughput(
         url: String,
         onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
+    ): TransferResult = downloadThroughputRequest(url, null, onBytes)
+
+    private suspend fun downloadThroughputRequest(
+        url: String,
+        observation: ThroughputObservation?,
+        onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
     ): TransferResult {
         val call = client.newCall(
             Request.Builder()
@@ -322,13 +330,14 @@ class AnebClient private constructor(
         )
         val startNanos = SystemClock.elapsedRealtimeNanos()
         return try {
-            executeCancellable(call) { resp ->
+            executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
                 if (!resp.isSuccessful) {
                     resp.body?.string()
                     TransferResult(startNanos, null, 0L, resp.code, "http ${resp.code}", timing)
                 } else {
                     val source = checkNotNull(resp.body) { "empty body for 2xx" }.source()
+                    observation?.bodyStarted()
                     val sink = Buffer()
                     var total = 0L
                     while (true) {
@@ -336,8 +345,10 @@ class AnebClient private constructor(
                         if (n == -1L) break
                         sink.skip(n)
                         total += n
+                        observation?.bytes(n.toInt())
                         onBytes(n.toInt(), SystemClock.elapsedRealtimeNanos())
                     }
+                    observation?.bodyCompleted()
                     TransferResult(
                         startNanos = startNanos,
                         endNanos = SystemClock.elapsedRealtimeNanos(),
@@ -355,6 +366,12 @@ class AnebClient private constructor(
         }
     }
 
+    internal suspend fun downloadObservedThroughput(
+        url: String,
+        observation: ThroughputObservation,
+        onBytes: (byteCount: Int, arrivalNanos: Long) -> Unit,
+    ): TransferResult = downloadThroughputRequest(url, observation, onBytes)
+
     /**
      * 流式写入固定长度大对象上传。动态回调表示应用写入 OkHttp 网络 sink 的字节，
      * 最终 goodput 仍以上层“成功响应的传输字节/阶段时长”口径收束。
@@ -364,6 +381,14 @@ class AnebClient private constructor(
         totalBytes: Long,
         chunkBytes: Int,
         onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
+    ): TransferResult = uploadThroughputRequest(url, totalBytes, chunkBytes, null, onBytes)
+
+    private suspend fun uploadThroughputRequest(
+        url: String,
+        totalBytes: Long,
+        chunkBytes: Int,
+        observation: ThroughputObservation?,
+        onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
     ): TransferResult {
         require(totalBytes > 0L) { "totalBytes must be positive" }
         require(chunkBytes > 0) { "chunkBytes must be positive" }
@@ -372,11 +397,13 @@ class AnebClient private constructor(
             override fun contentLength(): Long = totalBytes
 
             override fun writeTo(sink: BufferedSink) {
+                observation?.bodyStarted()
                 val chunk = ByteArray(chunkBytes) { index -> ((index * 31 + 17) and 0xff).toByte() }
                 var remaining = totalBytes
                 while (remaining > 0L) {
                     val n = minOf(chunk.size.toLong(), remaining).toInt()
                     sink.write(chunk, 0, n)
+                    observation?.bytes(n)
                     onBytes(n, SystemClock.elapsedRealtimeNanos())
                     remaining -= n
                 }
@@ -386,9 +413,10 @@ class AnebClient private constructor(
         val call = client.newCall(Request.Builder().url(url).post(body).build())
         val startNanos = SystemClock.elapsedRealtimeNanos()
         return try {
-            executeCancellable(call) { resp ->
+            executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
                 resp.body?.string()
+                if (resp.isSuccessful) observation?.bodyCompleted()
                 TransferResult(
                     startNanos = startNanos,
                     endNanos = SystemClock.elapsedRealtimeNanos(),
@@ -404,6 +432,14 @@ class AnebClient private constructor(
             TransferResult(startNanos, null, 0L, null, e.toString(), timingFactory.recordFor(call))
         }
     }
+
+    internal suspend fun uploadObservedThroughput(
+        url: String,
+        totalBytes: Long,
+        chunkBytes: Int,
+        observation: ThroughputObservation,
+        onBytes: (byteCount: Int, writtenAtNanos: Long) -> Unit,
+    ): TransferResult = uploadThroughputRequest(url, totalBytes, chunkBytes, observation, onBytes)
 
     // ------------------------------------------- continuity stream（阶段 2 C 组）
 
@@ -601,6 +637,80 @@ class AnebClient private constructor(
         }
     }
 
+    /**
+     * 语音帧节奏上行（M3，观测口径，PROFILE_FRAMEWORK §4.1）：按 [intervalMs] 节奏逐帧写入并 flush，
+     * 服务端 /upload 的 chunk_us 权威到达序列供上行帧间抖动计算。复用 [UploadResult]。
+     */
+    suspend fun uploadPaced(
+        url: String,
+        frames: Int,
+        frameBytes: Int,
+        intervalMs: Long,
+        onFrame: ((Int, Long) -> Unit)? = null,
+    ): UploadResult {
+        val stamps = ArrayList<ChunkStamp>(frames)
+        val frame = ByteArray(frameBytes) { 'V'.code.toByte() }
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength(): Long = (frames * frameBytes).toLong()
+            override fun writeTo(sink: BufferedSink) {
+                for (i in 0 until frames) {
+                    sink.write(frame)
+                    sink.flush()
+                    val ns = SystemClock.elapsedRealtimeNanos()
+                    stamps.add(ChunkStamp(i, frameBytes, ns))
+                    onFrame?.invoke(i + 1, ns)
+                    if (i < frames - 1) Thread.sleep(intervalMs)
+                }
+            }
+        }
+        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val startNanos = SystemClock.elapsedRealtimeNanos()
+        return try {
+            executeCancellable(call) { resp ->
+                val responseNanos = SystemClock.elapsedRealtimeNanos()
+                val timing = timingFactory.recordFor(call)
+                val bodyText = resp.body?.string()
+                val serverView = if (resp.isSuccessful && bodyText != null) {
+                    try {
+                        json.decodeFromString(UploadServerView.serializer(), bodyText)
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+                val error = if (resp.isSuccessful) null else "http ${resp.code}"
+                UploadResult(
+                    startNanos, responseNanos, stamps, frames * frameBytes, resp.code, error, timing,
+                    serverView = serverView,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            UploadResult(startNanos, null, stamps, frames * frameBytes, null, e.toString(), timingFactory.recordFor(call))
+        }
+    }
+
+    /**
+     * `/realtime-sim` 会话工厂（D-38，语音 server-sim 口径）：复用本 client 的 OkHttpClient，
+     * 自动继承 NO_PROXY、绑定网 socketFactory/Dns 与 retryOnConnectionFailure(false)。
+     */
+    fun realtimeSim(
+        base: String,
+        plan: RealtimeWire.SessionPlan,
+        disconnectAfterTurn: Int? = null,
+    ): RealtimeSimSession {
+        val wsUrl = base.trim().trimEnd('/')
+            .replaceFirst("https://", "wss://")
+            .replaceFirst("http://", "ws://") +
+            "/api/v1/realtime-sim" +
+            (disconnectAfterTurn?.let { "?controlled_disconnect_after_turn=$it" } ?: "")
+        val planJson = RealtimeWire.jsonOut.encodeToString(RealtimeWire.SessionPlan.serializer(), plan)
+        return RealtimeSimSession(client, wsUrl, planJson)
+    }
+
     // -------------------------------------------------------------- toolloop
 
     /**
@@ -722,27 +832,45 @@ class AnebClient private constructor(
     private suspend fun <T> executeCancellable(
         call: Call,
         beforeDispatch: () -> Unit,
+        observation: ThroughputObservation? = null,
         consume: (Response) -> T,
     ): T =
         suspendCancellableCoroutine { cont ->
-            cont.invokeOnCancellation { call.cancel() }
+            cont.invokeOnCancellation { cause ->
+                if (observation == null) call.cancel() else observation.cancelCall(cause, call)
+            }
             try {
                 beforeDispatch()
             } catch (error: Exception) {
+                observation?.failure(error, call.isCanceled())
+                observation?.callbackFinished()
                 cont.resumeWithException(error)
                 return@suspendCancellableCoroutine
             }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
+                    observation?.failure(e, call.isCanceled())
+                    observation?.callbackFinished()
                     if (!cont.isCancelled) cont.resumeWithException(e)
                 }
 
                 override fun onResponse(call: Call, response: Response) {
+                    observation?.headers(response.code)
                     val result = try {
-                        response.use(consume)
+                        response.use {
+                            try {
+                                consume(it)
+                            } catch (error: Exception) {
+                                observation?.failure(error, call.isCanceled())
+                                throw error
+                            }
+                        }
                     } catch (e: Exception) {
+                        observation?.failure(e, call.isCanceled())
                         if (!cont.isCancelled) cont.resumeWithException(e)
                         return
+                    } finally {
+                        observation?.callbackFinished()
                     }
                     if (!cont.isCancelled) cont.resume(result)
                 }
@@ -752,6 +880,9 @@ class AnebClient private constructor(
     private fun nowUs(): Long = SystemClock.elapsedRealtimeNanos() / 1_000L
 
     internal companion object {
+        internal fun forLoadedResponsiveness(bound: BoundNetwork?): AnebClient =
+            AnebClient(bound, AndroidMonotonicNanosClock, loadedLocal = true)
+
         /** Construct a clock-injected client without exposing a public overload. */
         @JvmStatic
         @JvmSynthetic

@@ -166,6 +166,10 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 /** 基础测速结果页：分离“测量事实”与版本化产品结论。 */
 @Composable
 fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
+    if (result.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID) {
+        LoadedResponsivenessScreen(result, onBack)
+        return
+    }
     val colors = AnebTheme.colors
     val conclusions = BasicSpeedConclusions.build(result)
     Column(
@@ -277,4 +281,5 @@ internal fun BasicSpeedResultEntity.toDomain(): BasicSpeedResult = BasicSpeedRes
     downloadBytes = downloadBytes,
     uploadBytes = uploadBytes,
     transferErrors = transferErrors.lines().filter { it.isNotBlank() },
+    profileId = profileId,
 )

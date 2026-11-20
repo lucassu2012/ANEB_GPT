@@ -10,11 +10,13 @@ import (
 	"strings"
 )
 
-// TokenBytes 描述单 token 事件 payload 字节数的对数正态分布参数。
+// TokenBytes 描述单 token 事件 payload 字节数分布：默认对数正态(median,sigma)；
+// 若 Histogram 非空则改用每模型经验直方图（§3.2，取代全局 median=120/sigma=0.6）。
 type TokenBytes struct {
-	Dist   string  `json:"dist"`
-	Median float64 `json:"median"`
-	Sigma  float64 `json:"sigma"`
+	Dist      string    `json:"dist"`
+	Median    float64   `json:"median"`
+	Sigma     float64   `json:"sigma"`
+	Histogram []SizeBin `json:"histogram,omitempty"`
 }
 
 // Burst 描述突发簇节奏（S2 编码 Agent 流）。
@@ -51,17 +53,28 @@ type Phase struct {
 	DurationMs int `json:"duration_ms,omitempty"`
 
 	// token_stream
-	Tokens     int         `json:"tokens,omitempty"`
-	RateTps    float64     `json:"rate_tps,omitempty"`
-	TokenBytes *TokenBytes `json:"token_bytes,omitempty"`
-	Burst      *Burst      `json:"burst,omitempty"`
-	Seed       int64       `json:"seed,omitempty"`
+	Tokens          int              `json:"tokens,omitempty"`
+	RateTps         float64          `json:"rate_tps,omitempty"`
+	TokenBytes      *TokenBytes      `json:"token_bytes,omitempty"`
+	Burst           *Burst           `json:"burst,omitempty"`
+	Seed            int64            `json:"seed,omitempty"`
+	TtftInjectUs    int64            `json:"ttft_inject_us,omitempty"`
+	RateSchedule    []RatePoint      `json:"rate_schedule,omitempty"`
+	TokensPerFrame  int              `json:"tokens_per_frame,omitempty"`
+	ThinkInjections []ThinkInjection `json:"think_injections,omitempty"`
 
 	// tool_loop
 	Rounds       int   `json:"rounds,omitempty"`
 	UpBytes      int64 `json:"up_bytes,omitempty"`
 	DownBytes    int64 `json:"down_bytes,omitempty"`
 	ServerProcMs int   `json:"server_proc_ms,omitempty"`
+
+	// artifact_stream
+	CadenceBps    int64  `json:"cadence_bps,omitempty"`
+	ArtifactClass string `json:"artifact_class,omitempty"`
+
+	// adaptive_download_window / adaptive_upload_window (s4_throughput)
+	WindowMs int `json:"window_ms,omitempty"`
 }
 
 // Profile 是版本化场景定义（发布即冻结，修改必须升版本号）。
@@ -88,6 +101,34 @@ func (p *Profile) tokenStreamPhase(idx int) (*Phase, error) {
 		}
 	}
 	return nil, fmt.Errorf("profile %s: token_stream phase index %d not found (has %d)", p.ProfileID, idx, n)
+}
+
+// downloadBurstPhase 返回第 idx 个 download_burst phase（idx 从 0 计，只数 download_burst）。
+func (p *Profile) downloadBurstPhase(idx int) (*Phase, error) {
+	n := 0
+	for i := range p.Phases {
+		if p.Phases[i].Type == "download_burst" {
+			if n == idx {
+				return &p.Phases[i], nil
+			}
+			n++
+		}
+	}
+	return nil, fmt.Errorf("profile %s: download_burst phase index %d not found (has %d)", p.ProfileID, idx, n)
+}
+
+// artifactStreamPhase 返回第 idx 个 artifact_stream phase（idx 从 0 计，只数 artifact_stream）。
+func (p *Profile) artifactStreamPhase(idx int) (*Phase, error) {
+	n := 0
+	for i := range p.Phases {
+		if p.Phases[i].Type == "artifact_stream" {
+			if n == idx {
+				return &p.Phases[i], nil
+			}
+			n++
+		}
+	}
+	return nil, fmt.Errorf("profile %s: artifact_stream phase index %d not found (has %d)", p.ProfileID, idx, n)
 }
 
 // loadProfiles 读取目录下全部 *.json 并解析为 Profile。

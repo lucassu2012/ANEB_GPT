@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   windows-guidance:
-    name: Windows launcher guidance
+    name: Windows launcher and private host tooling
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -26,6 +26,20 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher_guidance.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_g3_launcher_package.ps1
+          exit $LASTEXITCODE
+      - name: Test private single-phone forwarding helper without a driver
+        working-directory: tools/phone-forward-condition
+        env:
+          GOTOOLCHAIN: local
+          GOPROXY: "off"
+          GOSUMDB: "off"
+        shell: powershell
+        run: |
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -o "$env:RUNNER_TEMP\phone-condition.exe" ./cmd/phone-condition
           exit $LASTEXITCODE
 
   android:
@@ -44,7 +58,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Test Android probe
         working-directory: app
-        run: ./gradlew :probe:testDebugUnitTest --no-parallel
+        run: ./gradlew :probe:testDebugUnitTest :probe:lintDebug :probe:assembleDebug :probe:assembleDebugAndroidTest --no-parallel --max-workers=1
 
   server:
     name: Go server tests

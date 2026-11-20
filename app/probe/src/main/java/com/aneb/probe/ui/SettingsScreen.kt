@@ -74,6 +74,7 @@ fun SettingsScreen(
     onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
+    onOpenVoice: () -> Unit = {},
     onBack: () -> Unit,
     showBack: Boolean = true,
 ) {
@@ -95,6 +96,7 @@ fun SettingsScreen(
             onOpenApiProbe = onOpenApiProbe,
             onOpenReachBoard = onOpenReachBoard,
             onOpenProfiles = onOpenProfiles,
+            onOpenVoice = onOpenVoice,
         )
         if (confirmDrive) {
             DriveTestConfirmation(
@@ -138,8 +140,8 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(10.dp))
         val presets = listOf(
-            ServerPreset("sslip.io（默认，自动旁路）", ProbeSettings.DEFAULT_SERVER_URL),
-            ServerPreset("bare-IP（运营商 SNI 旁路）", "https://120.79.148.0:8443"),
+            ServerPreset("现役主节点 miw2（默认，公网 IP 证书）", ProbeSettings.DEFAULT_SERVER_URL),
+            ServerPreset("旧 E-01 bare-IP（已迁移回滚备址）", "https://120.79.148.0:8443"),
         )
         GroupedCard {
             presets.forEachIndexed { i, p ->
@@ -179,6 +181,14 @@ fun SettingsScreen(
                 selected = false,
                 showChevron = true,
                 onClick = onOpenProfiles,
+            )
+            HairlineDivider()
+            OptionRow(
+                title = "实时语音测量（Profile 4）",
+                subtitle = "口到耳 · 帧抖动 · M7 静默 · 独立口径不进 Token AQS",
+                selected = false,
+                showChevron = true,
+                onClick = onOpenVoice,
             )
         }
 
@@ -321,6 +331,7 @@ private fun SettingsRootScreen(
     onOpenApiProbe: () -> Unit,
     onOpenReachBoard: () -> Unit,
     onOpenProfiles: () -> Unit,
+    onOpenVoice: () -> Unit,
 ) {
     val colors = AnebTheme.colors
     Column(
@@ -365,6 +376,14 @@ private fun SettingsRootScreen(
                 subtitle = "业务、动态指标与结论策略",
                 onClick = onOpenProfiles,
             ) { Text("查看  ›", fontSize = 10.sp, color = colors.muted) }
+            HairlineDivider()
+            SettingsDesignRow(
+                icon = "◉",
+                tint = colors.brand,
+                title = "实时语音测量（Profile 4）",
+                subtitle = "口到耳、M7 静默与受控断连子测",
+                onClick = onOpenVoice,
+            ) { Text("进入  ›", fontSize = 10.sp, color = colors.muted) }
             HairlineDivider()
             SettingsDesignRow(
                 icon = "◎",
