@@ -71,3 +71,68 @@ func TestPlanAcceptsBoundedTailDropPolicyAndDefaultsEmptyToInvalidate(t *testing
 		}
 	}
 }
+
+func TestPlanBuildsBidirectionalDualStackFilterAndRejectsInvalidUplinkBounds(t *testing.T) {
+	cfg := Config{
+		PhoneAddresses:         []string{"192.168.137.113", "2001:db8::8"},
+		InterfaceIndex:         16,
+		UplinkInterfaceIndex:   12,
+		TTL:                    30 * time.Second,
+		DownlinkBytesPerSecond: 250000,
+		UplinkBytesPerSecond:   62500,
+		UplinkDelay:            50 * time.Millisecond,
+		UplinkLossBasisPoints:  100,
+		UplinkImpairmentSeed:   99,
+	}
+	plan, err := NewPlan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "(ifIdx == 16 and (ip.DstAddr == 192.168.137.113 or ipv6.DstAddr == 2001:db8::8)) or (ifIdx == 12 and (ip.SrcAddr == 192.168.137.113 or ipv6.SrcAddr == 2001:db8::8))"
+	if plan.Filter != want {
+		t.Fatalf("filter = %q; want %q", plan.Filter, want)
+	}
+
+	cases := map[string]func(*Config){
+		"missing_uplink_if":      func(c *Config) { c.UplinkInterfaceIndex = 0 },
+		"colliding_uplink_if":    func(c *Config) { c.UplinkInterfaceIndex = c.InterfaceIndex },
+		"uplink_rate_too_high":   func(c *Config) { c.UplinkBytesPerSecond = 1_000_000_001 },
+		"negative_uplink_delay":  func(c *Config) { c.UplinkDelay = -time.Millisecond },
+		"excessive_uplink_delay": func(c *Config) { c.UplinkDelay = 2001 * time.Millisecond },
+		"excessive_uplink_loss":  func(c *Config) { c.UplinkLossBasisPoints = 5001 },
+		"missing_uplink_seed":    func(c *Config) { c.UplinkImpairmentSeed = 0 },
+		"uplink_delay_no_rate":   func(c *Config) { c.UplinkBytesPerSecond = 0; c.UplinkLossBasisPoints = 0; c.UplinkImpairmentSeed = 0 },
+		"uplink_seed_no_rate":    func(c *Config) { c.UplinkBytesPerSecond = 0; c.UplinkDelay = 0; c.UplinkLossBasisPoints = 0 },
+		"nat_no_uplink_rate": func(c *Config) {
+			c.UplinkBytesPerSecond = 0
+			c.UplinkDelay = 0
+			c.UplinkLossBasisPoints = 0
+			c.UplinkImpairmentSeed = 0
+			c.UplinkNatAddresses = []string{"10.10.8.9"}
+		},
+		"nat_overlaps_phone": func(c *Config) { c.UplinkNatAddresses = []string{"192.168.137.113"} },
+		"nat_invalid_cidr":   func(c *Config) { c.UplinkNatAddresses = []string{"10.10.8.0/24"} },
+		"nat_loopback":       func(c *Config) { c.UplinkNatAddresses = []string{"127.0.0.1"} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			bad := cfg
+			mutate(&bad)
+			if _, err := NewPlan(bad); err == nil {
+				t.Fatalf("invalid uplink config %s was accepted", name)
+			}
+		})
+	}
+
+	natCfg := cfg
+	natCfg.PhoneAddresses = []string{"192.168.137.113"}
+	natCfg.UplinkNatAddresses = []string{"10.10.8.9"}
+	natPlan, err := NewPlan(natCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNat := "(ifIdx == 16 and (ip.DstAddr == 192.168.137.113)) or (ifIdx == 12 and (ip.SrcAddr == 10.10.8.9))"
+	if natPlan.Filter != wantNat {
+		t.Fatalf("NAT filter = %q; want %q", natPlan.Filter, wantNat)
+	}
+}

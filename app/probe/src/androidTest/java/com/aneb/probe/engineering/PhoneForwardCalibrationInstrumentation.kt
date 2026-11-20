@@ -18,11 +18,15 @@ import okhttp3.Call
 import okhttp3.Connection
 import okhttp3.Dns
 import okhttp3.EventListener
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.Buffer
+import okio.BufferedSink
 import okio.BufferedSource
 import okio.Source
 import okio.Timeout
@@ -38,7 +42,9 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
 import java.security.MessageDigest
+import javax.net.SocketFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -255,12 +261,294 @@ class PhoneForwardCalibrationInstrumentation {
         check(termination == "EXPECTED_LENGTH_RECEIVED" && failure == null && invalid.get() == null && cleanupErrors.isEmpty()) { "CALIBRATION_PHASE_INVALID:$termination:$failure" }
     }
 
+    /** Bidirectional calibration against miw2 (120.77.174.207:8443): /echo RTT + /download DL + /upload UL. */
+    @Test fun runBidirPhase() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        val input = KEYS.associateWith { arguments.getString(it) }
+        require(BuildConfig.DEBUG) { "DEBUG_REQUIRED" }
+        require(!arguments.containsKey("url")) { "ARBITRARY_URL_FORBIDDEN" }
+        val spec = parseBidir(input)
+        val context = instrumentation.targetContext
+        val parent = File(checkNotNull(context.getExternalFilesDir(null)), "phone-forward-calibration")
+        check(parent.isDirectory || parent.mkdirs()) { "OUTPUT_PARENT_UNAVAILABLE" }
+        val root = File(parent, spec.runId)
+        check(root.mkdir()) { "CALIBRATION_RUN_ALREADY_CONSUMED" }
+        val started = SystemClock.elapsedRealtimeNanos()
+        val deadline = started + 55_000_000_000L
+        val state = ReadState()
+        val invalid = AtomicReference<String?>(null)
+        val currentCall = AtomicReference<Call?>(null)
+        val socket = AtomicReference<JSONObject?>(null)
+        val events = ArrayList<JSONObject>()
+        val connects = AtomicInteger()
+        val requests = AtomicInteger()
+        var bound: BoundNetwork? = null
+        var monitor: PathMonitor? = null
+        var client: OkHttpClient? = null
+        var failure: String? = null
+        var termination = "NOT_DISPATCHED"
+        val echoRttSamplesMs = ArrayList<Double>()
+        var uploadFirstWriteNanos: Long? = null
+        var uploadLastWriteNanos: Long? = null
+        var uploadAckNanos: Long? = null
+        var uploadServerBytes: Long? = null
+        var uploadServerRecvUs: Long? = null
+        val cleanup = JSONObject()
+        val cleanupErrors = ArrayList<String>()
+        val raw = JSONObject().put("format", "phone-forward-calibration-bidir-raw-1")
+            .put("run_id", spec.runId).put("phase", spec.phase)
+            .put("miw2_base_url", MIW2_BASE_URL)
+            .put("declared_card_sha256", spec.cardSha).put("declared_source_commit", spec.sourceCommit)
+            .put("clock", "android_elapsed_realtime_nanos").put("started_nanos", started)
+            .put("download_byte_limit", BYTES).put("upload_byte_limit", UPLOAD_BYTES)
+            .put("absolute_deadline_nanos", deadline)
+            .put("device_model", Build.MODEL).put("android_api", Build.VERSION.SDK_INT)
+            .put("business_sample", false).put("network_qualified", false)
+        fun event(name: String, detail: String = "") = synchronized(events) {
+            if (events.size < 128) {
+                events.add(JSONObject().put("name", name).put("nanos", SystemClock.elapsedRealtimeNanos()).put("detail", detail.take(512)))
+            }
+        }
+        fun admitted() {
+            invalid.get()?.let { throw Stop("PATH_INVALID:$it") }
+            if (SystemClock.elapsedRealtimeNanos() >= deadline) throw Stop("TIME_LIMIT")
+        }
+        try {
+            val actualTargetSha = sha(File(context.applicationInfo.sourceDir))
+            val actualTestSha = sha(File(instrumentation.context.applicationInfo.sourceDir))
+            raw.put("target_apk_sha256", actualTargetSha).put("test_apk_sha256", actualTestSha)
+            check(actualTargetSha == spec.targetSha && actualTestSha == spec.testSha) { "APK_PIN_MISMATCH" }
+            admitted()
+            @Suppress("DEPRECATION") val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            raw.put("package", context.packageName).put("version_code", info.longVersionCode).put("version_name", info.versionName)
+            val cm = checkNotNull(context.getSystemService(ConnectivityManager::class.java))
+            rejectUnknownOrVpnNetworks(cm)
+            admitted()
+            val guard = NetGuard.guardCheck(context)
+            raw.put("guard", JSONObject(guard.metadata)).put("guard_reasons", JSONArray(guard.reasons))
+            check(guard.ok) { "NETWORK_GUARD_REJECTED" }
+            admitted()
+            val acquired = runBlocking { NetGuard.acquireNetwork(context, NetworkCapabilities.TRANSPORT_WIFI,
+                minOf(15_000L, TimeUnit.NANOSECONDS.toMillis(deadline - SystemClock.elapsedRealtimeNanos())).coerceAtLeast(1)) }
+            bound = acquired
+            admitted()
+            val link = checkNotNull(cm.getLinkProperties(acquired.network))
+            val localIps = link.linkAddresses.map { it.address.hostAddress.orEmpty() }
+            check(cm.activeNetwork == acquired.network && link.interfaceName == "wlan0" && spec.phoneIp in localIps) { "WIFI_IDENTITY_MISMATCH" }
+            val caps = checkNotNull(cm.getNetworkCapabilities(acquired.network))
+            check(caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) { "WIFI_NOT_READY" }
+            check(link.httpProxy == null && cm.defaultProxy == null) { "PROXY_PRESENT" }
+            raw.put("network_handle", acquired.network.networkHandle.toString()).put("network_id", acquired.network.toString())
+                .put("interface", link.interfaceName).put("local_addresses", JSONArray(localIps))
+            monitor = PathMonitor(context, acquired, onEvent = { event(it.type.name, "${it.tsNanos}:${it.detail}") },
+                onInvalidate = { reason -> invalid.compareAndSet(null, reason); currentCall.get()?.cancel() })
+            monitor.start()
+            admitted()
+            val remote = ipv4(MIW2_HOST)
+            raw.put("fixed_remote_ipv4", MIW2_HOST)
+            val noDelayFactory = object : SocketFactory() {
+                override fun createSocket(): Socket = acquired.socketFactory.createSocket().apply { tcpNoDelay = true }
+                override fun createSocket(host: String, port: Int): Socket = acquired.socketFactory.createSocket(host, port).apply { tcpNoDelay = true }
+                override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+                    acquired.socketFactory.createSocket(host, port, localHost, localPort).apply { tcpNoDelay = true }
+                override fun createSocket(host: InetAddress, port: Int): Socket = acquired.socketFactory.createSocket(host, port).apply { tcpNoDelay = true }
+                override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+                    acquired.socketFactory.createSocket(address, port, localAddress, localPort).apply { tcpNoDelay = true }
+            }
+            client = OkHttpClient.Builder().socketFactory(noDelayFactory)
+                .dns(object : Dns {
+                    override fun lookup(hostname: String): List<InetAddress> {
+                        check(hostname == MIW2_HOST) { "UNEXPECTED_DNS_HOST" }
+                        return listOf(remote)
+                    }
+                })
+                .proxy(Proxy.NO_PROXY).protocols(listOf(Protocol.HTTP_1_1))
+                .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
+                .connectTimeout(15_000L, TimeUnit.MILLISECONDS)
+                .readTimeout(40_000L, TimeUnit.MILLISECONDS)
+                .writeTimeout(40_000L, TimeUnit.MILLISECONDS)
+                .callTimeout(maxOf(1, TimeUnit.NANOSECONDS.toMillis(deadline - SystemClock.elapsedRealtimeNanos())), TimeUnit.MILLISECONDS)
+                .eventListener(object : EventListener() {
+                    override fun connectStart(call: Call, address: InetSocketAddress, proxy: Proxy) {
+                        event("CONNECT_START", address.toString())
+                        connects.incrementAndGet()
+                    }
+                    override fun connectionAcquired(call: Call, connection: Connection) {
+                        val s = connection.socket()
+                        val local = s.localAddress?.hostAddress
+                        val peer = s.inetAddress?.hostAddress
+                        socket.set(JSONObject().put("local_ip", local).put("local_port", s.localPort).put("remote_ip", peer).put("remote_port", s.port))
+                        if (local != spec.phoneIp || peer != MIW2_HOST || s.inetAddress !is Inet4Address || s.port != 8443) {
+                            invalid.compareAndSet(null, "SOCKET_IDENTITY_MISMATCH"); call.cancel()
+                        }
+                    }
+                    override fun callFailed(call: Call, ioe: IOException) { event("CALL_FAILED", ioe.toString()) }
+                }).build()
+
+            termination = "DISPATCHED"
+            // 1. Warmup + 10 /api/v1/echo RTT probes
+            event("ECHO_START")
+            for (i in 0..10) {
+                admitted()
+                requests.incrementAndGet()
+                val echoReq = Request.Builder().url("$MIW2_BASE_URL/api/v1/echo")
+                    .post("{\"probe\":\"aneb-bidir\"}".toRequestBody("application/json".toMediaType()))
+                    .build()
+                val echoCall = client.newCall(echoReq)
+                currentCall.set(echoCall)
+                val t0Us = SystemClock.elapsedRealtimeNanos() / 1000L
+                echoCall.execute().use { resp ->
+                    val t3Us = SystemClock.elapsedRealtimeNanos() / 1000L
+                    check(resp.code == 200) { "ECHO_HTTP_${resp.code}" }
+                    val bodyStr = checkNotNull(resp.body).string()
+                    val obj = JSONObject(bodyStr)
+                    val t1Us = obj.getLong("t1_us")
+                    val t2Us = obj.getLong("t2_us")
+                    val rttUs = (t3Us - t0Us) - (t2Us - t1Us)
+                    if (i > 0) {
+                        echoRttSamplesMs.add(rttUs.coerceAtLeast(0L) / 1000.0)
+                    }
+                }
+            }
+            event("ECHO_END")
+
+            // 2. Downlink 2 MiB (/api/v1/download?bytes=2097152)
+            admitted()
+            requests.incrementAndGet()
+            event("DOWNLOAD_START")
+            val dlCall = client.newCall(
+                Request.Builder().url("$MIW2_BASE_URL/api/v1/download?bytes=$BYTES")
+                    .header("Accept", "application/octet-stream")
+                    .header("Accept-Encoding", "identity")
+                    .header("Cache-Control", "no-cache, no-store")
+                    .get().build()
+            )
+            currentCall.set(dlCall)
+            dlCall.execute().use { dlResp ->
+                raw.put("http_code", dlResp.code).put("http_protocol", dlResp.protocol.toString())
+                    .put("content_length", dlResp.body?.contentLength() ?: JSONObject.NULL)
+                    .put("content_encoding", dlResp.header("Content-Encoding") ?: JSONObject.NULL)
+                check(dlResp.code == 200 && dlResp.body?.contentLength() == BYTES.toLong()) { "DOWNLOAD_HTTP_MISMATCH:${dlResp.code}" }
+                readBounded(checkNotNull(dlResp.body).source(), state, deadline, SystemClock::elapsedRealtimeNanos, ::admitted)
+            }
+            event("DOWNLOAD_END")
+
+            // 3. Uplink 1 MiB (/api/v1/upload)
+            admitted()
+            requests.incrementAndGet()
+            event("UPLOAD_START")
+            val ulBody = object : RequestBody() {
+                override fun contentType() = "application/octet-stream".toMediaType()
+                override fun contentLength(): Long = UPLOAD_BYTES.toLong()
+                override fun writeTo(sink: BufferedSink) {
+                    val chunk = ByteArray(8192) { idx -> ((idx * 31 + 17) and 0xff).toByte() }
+                    var remaining = UPLOAD_BYTES.toLong()
+                    while (remaining > 0L) {
+                        admitted()
+                        val n = minOf(chunk.size.toLong(), remaining).toInt()
+                        if (uploadFirstWriteNanos == null) {
+                            uploadFirstWriteNanos = SystemClock.elapsedRealtimeNanos()
+                        }
+                        sink.write(chunk, 0, n)
+                        remaining -= n
+                    }
+                    sink.flush()
+                    uploadLastWriteNanos = SystemClock.elapsedRealtimeNanos()
+                }
+            }
+            val ulCall = client.newCall(Request.Builder().url("$MIW2_BASE_URL/api/v1/upload").post(ulBody).build())
+            currentCall.set(ulCall)
+            ulCall.execute().use { ulResp ->
+                uploadAckNanos = SystemClock.elapsedRealtimeNanos()
+                check(ulResp.code == 200) { "UPLOAD_HTTP_${ulResp.code}" }
+                val ulObj = JSONObject(checkNotNull(ulResp.body).string())
+                uploadServerBytes = ulObj.getLong("bytes")
+                check(uploadServerBytes == UPLOAD_BYTES.toLong()) { "UPLOAD_BYTES_MISMATCH:$uploadServerBytes" }
+                val recvStartUs = ulObj.getLong("recv_start_us")
+                val recvEndUs = ulObj.getLong("recv_end_us")
+                uploadServerRecvUs = (recvEndUs - recvStartUs).coerceAtLeast(1L)
+            }
+            event("UPLOAD_END")
+
+            admitted()
+            rejectUnknownOrVpnNetworks(cm)
+            val postLink = checkNotNull(cm.getLinkProperties(acquired.network)) { "POST_LINK_MISSING" }
+            val postCaps = checkNotNull(cm.getNetworkCapabilities(acquired.network)) { "POST_CAPABILITIES_MISSING" }
+            val postAddresses = postLink.linkAddresses.map { it.address.hostAddress.orEmpty() }
+            raw.put("post_network", JSONObject().put("observed_nanos", SystemClock.elapsedRealtimeNanos())
+                .put("network_handle", acquired.network.networkHandle.toString()).put("default_network_id", cm.activeNetwork?.toString() ?: JSONObject.NULL)
+                .put("interface", postLink.interfaceName).put("local_addresses", JSONArray(postAddresses))
+                .put("wifi", postCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+                .put("validated", postCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                .put("not_suspended", postCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))
+                .put("vpn", postCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)))
+            check(cm.activeNetwork == acquired.network && postLink.interfaceName == "wlan0" && spec.phoneIp in postAddresses &&
+                postCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && postCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+                postCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED) && !postCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                postLink.httpProxy == null && NetGuard.guardCheck(context).ok && !monitor.invalidated) { "POST_PATH_INVALID" }
+            check(socket.get() != null && connects.get() >= 1) { "SOCKET_EVIDENCE_MISSING" }
+            termination = "BIDIR_COMPLETED"
+        } catch (error: Throwable) {
+            termination = if (error is Stop) error.kind else if (invalid.get() != null) "PATH_INVALID" else "ERROR"
+            failure = (error.javaClass.name + ":" + error.message.orEmpty()).take(2048)
+        } finally {
+            fun cleanupStep(name: String, action: () -> Unit) {
+                cleanup.put(name + "_requested", true)
+                runCatching(action).onFailure { cleanupErrors.add(name + ":" + it.toString().take(512)) }
+            }
+            currentCall.get()?.let { cleanupStep("call_cancel") { it.cancel() } }
+            client?.let { cleanupStep("pool_evict") { it.connectionPool.evictAll() } }
+            monitor?.let { cleanupStep("monitor_stop") { it.stop() } }
+            bound?.let { cleanupStep("network_release") { it.release() } }
+            cleanup.put("errors", JSONArray(cleanupErrors))
+            state.last?.let { if (state.points.lastOrNull()?.optLong("bytes") != state.bytes)
+                state.points.add(JSONObject().put("nanos", it).put("bytes", state.bytes)) }
+            val valid = termination == "BIDIR_COMPLETED" && failure == null && invalid.get() == null && cleanupErrors.isEmpty()
+            val dlDur = state.last?.let { last -> state.first?.let { first -> last - first } }
+            val dlBps = if (valid && dlDur != null && dlDur > 0 && state.firstBytes != null)
+                (state.bytes - checkNotNull(state.firstBytes)) * 1_000_000_000.0 / dlDur else null
+            val ulFirst = uploadFirstWriteNanos
+            val ulAck = uploadAckNanos
+            val ulBps = if (valid && ulFirst != null && ulAck != null && ulAck > ulFirst)
+                UPLOAD_BYTES * 1_000_000_000.0 / (ulAck - ulFirst) else null
+            val sortedRtts = echoRttSamplesMs.sorted()
+            val rttP50 = if (sortedRtts.isNotEmpty()) sortedRtts[sortedRtts.size / 2] else null
+            val rttP95 = if (sortedRtts.isNotEmpty()) sortedRtts[((sortedRtts.size * 95) / 100).coerceAtMost(sortedRtts.size - 1)] else null
+            raw.put("termination", termination).put("failure", failure ?: JSONObject.NULL).put("path_invalid_reason", invalid.get() ?: JSONObject.NULL)
+                .put("body_bytes", state.bytes).put("upload_bytes", uploadServerBytes ?: 0L)
+                .put("first_body_read_nanos", state.first ?: JSONObject.NULL).put("last_body_read_nanos", state.last ?: JSONObject.NULL)
+                .put("upload_first_write_nanos", uploadFirstWriteNanos ?: JSONObject.NULL)
+                .put("upload_last_write_nanos", uploadLastWriteNanos ?: JSONObject.NULL)
+                .put("upload_ack_nanos", uploadAckNanos ?: JSONObject.NULL)
+                .put("upload_server_recv_us", uploadServerRecvUs ?: JSONObject.NULL)
+                .put("echo_rtt_samples_ms", JSONArray(echoRttSamplesMs))
+                .put("echo_rtt_p50_ms", rttP50 ?: JSONObject.NULL)
+                .put("echo_rtt_p95_ms", rttP95 ?: JSONObject.NULL)
+                .put("receiver_body_window_bytes_per_second", dlBps ?: JSONObject.NULL)
+                .put("sender_body_window_bytes_per_second", ulBps ?: JSONObject.NULL)
+                .put("download_mbps", dlBps?.let { it * 8.0 / 1_000_000.0 } ?: JSONObject.NULL)
+                .put("upload_mbps", ulBps?.let { it * 8.0 / 1_000_000.0 } ?: JSONObject.NULL)
+                .put("socket", socket.get() ?: JSONObject.NULL).put("connect_attempts", connects.get())
+                .put("http_request_permit_attempts", requests.get())
+                .put("events", synchronized(events) { JSONArray(events.toList()) }).put("cleanup", cleanup)
+                .put("finished_nanos", SystemClock.elapsedRealtimeNanos())
+            val file = File(root, "raw.json")
+            check(file.createNewFile()) { "RAW_ALREADY_EXISTS" }
+            FileOutputStream(file).use { it.write((raw.toString(2) + "\n").toByteArray(Charsets.UTF_8)); it.fd.sync() }
+        }
+        check(termination == "BIDIR_COMPLETED" && failure == null && invalid.get() == null && cleanupErrors.isEmpty()) { "CALIBRATION_BIDIR_INVALID:$termination:$failure" }
+    }
+
     /** No network request, DNS, real Call, network binding or output directory is created. */
     @Test fun validateOnly() {
         val valid = mapOf("feature_release" to RELEASE, "live_authorized" to "true", "phase" to "reference", "run_id" to "offline",
             "expected_phone_ipv4" to "192.168.137.113", "card_sha256" to "a".repeat(64), "source_commit" to "b".repeat(40),
             "target_apk_sha256" to "c".repeat(64), "test_apk_sha256" to "d".repeat(64))
         check(parse(valid).phase == "reference")
+        check(parseBidir(valid).remoteIp == MIW2_HOST)
+        reject("MIW2_HOST_PIN_MISMATCH") { parseBidir(valid + ("fixed_remote_ipv4" to "1.1.1.1")) }
         reject("RELEASE") { parse(valid + ("live_authorized" to "false")) }
         reject("PHASE") { parse(valid + ("phase" to "upload")) }
         reject("REMOTE") { parse(valid + ("phase" to "limited")) }
@@ -401,6 +689,19 @@ class PhoneForwardCalibrationInstrumentation {
         fun hex(key: String, size: Int): String { val value = a[key]; require(value != null && value.matches(Regex("[0-9a-f]{$size}"))) { "${key}_INVALID" }; return value }
         return Spec(run, checkNotNull(phase), phone, remote, hex("card_sha256", 64), hex("source_commit", 40), hex("target_apk_sha256", 64), hex("test_apk_sha256", 64))
     }
+    private fun parseBidir(a: Map<String, String?>): Spec {
+        require(!a.containsKey("url")) { "ARBITRARY_URL_FORBIDDEN" }
+        require(a["feature_release"] == RELEASE && a["live_authorized"] == "true") { "RELEASE_REQUIRED" }
+        val phase = a["phase"]; require(phase in setOf("reference", "limited", "recovery")) { "PHASE_INVALID" }
+        val run = a["run_id"]; require(run != null && run.matches(Regex("[A-Za-z0-9_-]{1,64}"))) { "RUN_ID_INVALID" }
+        val phone = a["expected_phone_ipv4"]; require(phone != null) { "IPV4_REQUIRED" }; ipv4(phone)
+        val remote = a["fixed_remote_ipv4"]
+        if (remote != null) {
+            require(remote == MIW2_HOST) { "MIW2_HOST_PIN_MISMATCH" }
+        }
+        fun hex(key: String, size: Int): String { val value = a[key]; require(value != null && value.matches(Regex("[0-9a-f]{$size}"))) { "${key}_INVALID" }; return value }
+        return Spec(run, checkNotNull(phase), phone, MIW2_HOST, hex("card_sha256", 64), hex("source_commit", 40), hex("target_apk_sha256", 64), hex("test_apk_sha256", 64))
+    }
     private fun ipv4(raw: String): Inet4Address {
         require(raw.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}"))) { "IPV4_LITERAL_REQUIRED" }
         val bytes = raw.split('.').map { it.toInt().also { n -> require(n in 0..255) { "IPV4_RANGE" } }.toByte() }.toByteArray()
@@ -422,7 +723,10 @@ class PhoneForwardCalibrationInstrumentation {
     companion object {
         private const val RELEASE = "phone-forward-calibration-1"
         private const val HOST = "speed.cloudflare.com"
+        private const val MIW2_HOST = "120.77.174.207"
+        private const val MIW2_BASE_URL = "https://120.77.174.207:8443"
         private const val BYTES = 2_097_152
+        private const val UPLOAD_BYTES = 1_048_576
         private const val URL = "https://speed.cloudflare.com/__down?bytes=2097152"
         private val KEYS = listOf("feature_release", "live_authorized", "phase", "run_id", "expected_phone_ipv4",
             "fixed_remote_ipv4", "card_sha256", "source_commit", "target_apk_sha256", "test_apk_sha256")

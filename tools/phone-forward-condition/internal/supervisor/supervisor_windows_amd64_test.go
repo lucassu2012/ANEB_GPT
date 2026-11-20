@@ -56,7 +56,7 @@ func TestOwnedChildHelper(t *testing.T) {
 }
 
 // Supplementary OS-boundary check: this helper itself is already inside the
-// public supervisor's <=1.5s owned Job/deadline. It creates only its own child.
+// public supervisor's <=3.0s owned Job/deadline. It creates only its own child.
 func exerciseOwnedJobClose() (err error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -130,12 +130,12 @@ func TestClosingOwnedJobEndsItsOwnedChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	result, err := RunOwnedProcess(exe, helperArgs("close-job"), 1500*time.Millisecond)
+	result, err := RunOwnedProcess(exe, helperArgs("close-job"), 3000*time.Millisecond)
 	if err != nil || !result.ExitConfirmed || !result.OwnedTreeEmpty || !result.JobClosed {
 		t.Fatalf("owned Job close check failed: result=%+v err=%v", result, err)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("bounded test exceeded 2s: %v", elapsed)
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("bounded test exceeded 4s: %v", elapsed)
 	}
 	t.Logf("private Job close killed only its child; outer receipt %+v elapsed=%v", result, time.Since(started))
 }

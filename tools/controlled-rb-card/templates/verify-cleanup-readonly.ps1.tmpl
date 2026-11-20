@@ -81,6 +81,9 @@ try {
   if (Test-Path -LiteralPath (Join-Path $root 'runtime/hotspot-start-intent.json')) {
    throw 'before.json missing despite hotspot-start-intent.json'
   }
+  if (($null -ne $terminal.phases -and @($terminal.phases | Where-Object { $null -ne $_ }).Count -gt 0) -or [int]$terminal.instrumentation_dispatch_permit_count -gt 0 -or (Test-Path -LiteralPath (Join-Path $root 'runtime/CARD.json'))) {
+   throw 'before.json missing despite captured phase, instrumentation dispatch permit, or CARD.json'
+  }
   if ($terminal.clean_state_verified -ne $true -or @($terminal.cleanup_errors).Count -gt 0) {
    throw 'Original early abort did not confirm clean_state_verified with zero cleanup_errors'
   }

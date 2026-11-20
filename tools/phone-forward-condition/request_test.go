@@ -2,6 +2,7 @@ package condition
 
 import (
 	"encoding/json"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,5 +114,165 @@ func TestRequestRoundTripsQueueOverflowPolicyAndLimitBytes(t *testing.T) {
 	if got.QueueOverflowPolicy != QueueTailDrop || got.QueueLimitBytes != 64<<10 ||
 		plan.Config.QueueOverflowPolicy != QueueTailDrop || plan.Config.QueueLimitBytes != 64<<10 {
 		t.Fatalf("queue config not preserved: req=%+v plan=%+v", got, plan.Config)
+	}
+}
+
+func TestRequestValidatesBidirectionalUplinkFieldsAndRejectsUnknownKeys(t *testing.T) {
+	root := t.TempDir()
+	base := Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         Limit,
+		PhoneAddresses:               []string{"192.168.137.113"},
+		InterfaceIndex:               16,
+		TTLSeconds:                   35,
+		DownlinkBytesPerSecond:       250000,
+		DriverDirectory:              filepath.Join(root, "driver"),
+		OutputDirectory:              filepath.Join(root, "out"),
+		ExpectedUplinkInterfaceIndex: 12,
+		ProbeRemoteAddresses:         []string{"120.77.174.207"},
+	}
+	legacyBytes, _ := json.Marshal(base)
+	for _, forbidden := range []string{"uplink_ip_bytes_per_second", "uplink_delay_ms", "uplink_loss_bps", "uplink_impairment_seed"} {
+		if strings.Contains(string(legacyBytes), forbidden) {
+			t.Fatalf("unset bidirectional field %s leaked into downlink-only JSON: %s", forbidden, legacyBytes)
+		}
+	}
+
+	bidir := base
+	bidir.UplinkBytesPerSecond = 62500
+	bidir.UplinkDelayMs = 45
+	bidir.UplinkLossBps = 150
+	bidir.UplinkImpairmentSeed = 20261120
+	raw, err := json.Marshal(bidir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, plan, err := ParseRequest(raw)
+	if err != nil {
+		t.Fatalf("valid bidirectional request rejected: %v", err)
+	}
+	wantFilter := "(ifIdx == 16 and (ip.DstAddr == 192.168.137.113)) or (ifIdx == 12 and (ip.SrcAddr == 192.168.137.113))"
+	if plan.Filter != wantFilter {
+		t.Fatalf("filter = %q; want %q", plan.Filter, wantFilter)
+	}
+	if !plan.Config.HasUplink() || plan.Config.UplinkInterfaceIndex != 12 ||
+		got.UplinkBytesPerSecond != 62500 || plan.Config.UplinkBytesPerSecond != 62500 ||
+		got.UplinkDelayMs != 45 || plan.Config.UplinkDelay != 45*time.Millisecond ||
+		got.UplinkLossBps != 150 || plan.Config.UplinkLossBasisPoints != 150 ||
+		got.UplinkImpairmentSeed != 20261120 || plan.Config.UplinkImpairmentSeed != 20261120 {
+		t.Fatalf("bidirectional fields lost: got=%+v cfg=%+v", got, plan.Config)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Request)
+	}{
+		{"uplink-delay-without-rate", func(r *Request) { r.UplinkDelayMs = 10 }},
+		{"uplink-loss-without-rate", func(r *Request) { r.UplinkLossBps = 50; r.UplinkImpairmentSeed = 1 }},
+		{"uplink-seed-without-rate", func(r *Request) { r.UplinkImpairmentSeed = 1 }},
+		{"uplink-loss-without-seed", func(r *Request) { r.UplinkBytesPerSecond = 62500; r.UplinkLossBps = 50 }},
+		{"uplink-without-expected-if", func(r *Request) {
+			r.UplinkBytesPerSecond = 62500
+			r.ExpectedUplinkInterfaceIndex = 0
+			r.ProbeRemoteAddresses = nil
+		}},
+		{"uplink-rate-too-high", func(r *Request) { r.UplinkBytesPerSecond = 1_000_000_001 }},
+		{"uplink-delay-too-high", func(r *Request) { r.UplinkBytesPerSecond = 62500; r.UplinkDelayMs = 2001 }},
+		{"uplink-loss-too-high", func(r *Request) { r.UplinkBytesPerSecond = 62500; r.UplinkLossBps = 5001; r.UplinkImpairmentSeed = 1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := base
+			tc.mutate(&bad)
+			b, _ := json.Marshal(bad)
+			if _, _, err := ParseRequest(b); err == nil {
+				t.Fatalf("expected invalid bidirectional request %s to fail", tc.name)
+			}
+		})
+	}
+
+	unknownJSON := strings.Replace(string(raw), `"uplink_delay_ms":45`, `"uplink_delay_ms":45,"unknown_field":1`, 1)
+	if _, _, err := ParseRequest([]byte(unknownJSON)); err == nil {
+		t.Fatal("DisallowUnknownFields failed to reject unknown key")
+	}
+
+	natReq := base
+	natReq.UplinkBytesPerSecond = 62500
+	natReq.UplinkNatAddresses = []string{"10.10.8.9"}
+	natRaw, _ := json.Marshal(natReq)
+	gotNat, natPlan, err := ParseRequest(natRaw)
+	if err != nil {
+		t.Fatalf("ParseRequest rejected valid uplink_nat_addresses: %v", err)
+	}
+	if len(gotNat.UplinkNatAddresses) != 1 || gotNat.UplinkNatAddresses[0] != "10.10.8.9" ||
+		!strings.Contains(natPlan.Filter, "ip.SrcAddr == 10.10.8.9") {
+		t.Fatalf("unexpected NAT plan: got=%+v filter=%q", gotNat.UplinkNatAddresses, natPlan.Filter)
+	}
+	badNat := base
+	badNat.UplinkNatAddresses = []string{"10.10.8.9"}
+	badNatRaw, _ := json.Marshal(badNat)
+	if _, _, err := ParseRequest(badNatRaw); err == nil {
+		t.Fatal("expected uplink_nat_addresses without uplink rate to fail")
+	}
+}
+
+func TestRequestRejectsDelayUint64OverflowWraparoundAndRespects2000msBound(t *testing.T) {
+	root := t.TempDir()
+	base := Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         Limit,
+		PhoneAddresses:               []string{"192.168.137.113"},
+		InterfaceIndex:               16,
+		TTLSeconds:                   35,
+		DownlinkBytesPerSecond:       250000,
+		UplinkBytesPerSecond:         62500,
+		ExpectedUplinkInterfaceIndex: 12,
+		DriverDirectory:              filepath.Join(root, "driver"),
+		OutputDirectory:              filepath.Join(root, "out"),
+	}
+
+	okMax := base
+	okMax.DownlinkDelayMs = 2000
+	okMax.UplinkDelayMs = 2000
+	okBytes, err := json.Marshal(okMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, okPlan, err := ParseRequest(okBytes)
+	if err != nil {
+		t.Fatalf("expected 2000ms delay boundary to succeed: %v", err)
+	}
+	if okPlan.Config.DownlinkDelay != 2000*time.Millisecond || okPlan.Config.UplinkDelay != 2000*time.Millisecond {
+		t.Fatalf("unexpected 2000ms boundary plan delays: dl=%v ul=%v", okPlan.Config.DownlinkDelay, okPlan.Config.UplinkDelay)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Request)
+	}{
+		{"downlink-2001ms", func(r *Request) { r.DownlinkDelayMs = 2001 }},
+		{"uplink-2001ms", func(r *Request) { r.UplinkDelayMs = 2001 }},
+		{"downlink-wraparound-18446744073710", func(r *Request) { r.DownlinkDelayMs = 18446744073710 }},
+		{"uplink-wraparound-18446744073710", func(r *Request) { r.UplinkDelayMs = 18446744073710 }},
+		{"uplink-zero-wrap-no-rate", func(r *Request) {
+			r.UplinkBytesPerSecond = 0
+			r.ExpectedUplinkInterfaceIndex = 0
+			r.UplinkDelayMs = 288230376151711744 // 2^58 * 1e6 == 0 mod 2^64
+		}},
+		{"downlink-max-uint64", func(r *Request) { r.DownlinkDelayMs = math.MaxUint64 }},
+		{"uplink-max-uint64", func(r *Request) { r.UplinkDelayMs = math.MaxUint64 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := base
+			tc.mutate(&bad)
+			raw, err := json.Marshal(bad)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, plan, err := ParseRequest(raw); err == nil {
+				t.Fatalf("expected invalid delay %s to fail, got plan=%+v", tc.name, plan.Config)
+			}
+		})
 	}
 }

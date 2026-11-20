@@ -1,0 +1,17 @@
+{
+  "observation_method": "doubao-public-selectors-1",
+  "binding_version": "ai-ui-binding-1",
+  "package_name": "com.larus.nova",
+  "app_version_code": 15080040,
+  "display_width": 1200,
+  "display_height": 2640,
+  "rotation": 0,
+  "selectors": {
+    "edit_text_id": "com.larus.nova:id/input_text",
+    "send_button_id": "com.larus.nova:id/action_send",
+    "send_button_desc": "发送",
+    "new_chat_id_contains": "create_new_cvs",
+    "message_list_id": "com.larus.nova:id/message_list"
+  },
+  "prompt": "Write ten short numbered sentences explaining how network latency and packet loss hurt mobile AI chat."
+}

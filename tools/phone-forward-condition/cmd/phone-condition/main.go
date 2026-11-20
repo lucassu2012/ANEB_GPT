@@ -70,9 +70,14 @@ func run(args []string, output io.Writer) error {
 		DownlinkDelayMs              uint64                        `json:"downlink_delay_ms,omitempty"`
 		DownlinkLossBps              uint32                        `json:"downlink_loss_bps,omitempty"`
 		ImpairmentSeed               uint64                        `json:"impairment_seed,omitempty"`
+		UplinkBytesPerSecond         uint64                        `json:"uplink_ip_bytes_per_second,omitempty"`
+		UplinkDelayMs                uint64                        `json:"uplink_delay_ms,omitempty"`
+		UplinkLossBps                uint32                        `json:"uplink_loss_bps,omitempty"`
+		UplinkImpairmentSeed         uint64                        `json:"uplink_impairment_seed,omitempty"`
+		UplinkNatAddresses           []string                      `json:"uplink_nat_addresses,omitempty"`
 		QueueOverflowPolicy          condition.QueueOverflowPolicy `json:"queue_overflow_policy,omitempty"`
 		QueueLimitBytes              uint32                        `json:"queue_limit_bytes,omitempty"`
 		ExpectedUplinkInterfaceIndex uint32                        `json:"expected_uplink_interface_index,omitempty"`
 		ProbeRemoteAddresses         []string                      `json:"probe_remote_addresses,omitempty"`
-	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.DownlinkDelayMs, request.DownlinkLossBps, request.ImpairmentSeed, request.QueueOverflowPolicy, request.QueueLimitBytes, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
+	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.DownlinkDelayMs, request.DownlinkLossBps, request.ImpairmentSeed, request.UplinkBytesPerSecond, request.UplinkDelayMs, request.UplinkLossBps, request.UplinkImpairmentSeed, request.UplinkNatAddresses, request.QueueOverflowPolicy, request.QueueLimitBytes, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
 }

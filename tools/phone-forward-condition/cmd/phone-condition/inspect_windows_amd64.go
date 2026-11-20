@@ -182,7 +182,14 @@ func inspectRequest(data []byte, output io.Writer, eligible func() error, launch
 	completedState := worker.Receipt.State == "NO_MATCHING_PACKETS" ||
 		(request.Mode == condition.Inspect && worker.Receipt.State == "OBSERVED_NOT_QUALIFIED") ||
 		(request.Mode == condition.Limit && (worker.Receipt.State == "NO_PACED_PACKETS" || worker.Receipt.State == "INJECTED_NOT_CALIBRATED"))
-	if err == nil && (worker.PID != int(process.PID) || !worker.DriverOpenAttempted || !worker.OwnedHandleReturned || worker.Failure != "" || worker.Receipt.Mode != request.Mode || worker.Receipt.UnconfirmedUserPackets != 0 || !worker.Receipt.DriverDrained || !worker.Receipt.OwnedHandleClosed || !worker.Receipt.WorkersJoined || !completedState) {
+	bidirectionalConservationOK := true
+	if request.UplinkBytesPerSecond > 0 {
+		bidirectionalConservationOK = worker.Receipt.Downlink != nil &&
+			worker.Receipt.Uplink != nil &&
+			worker.Receipt.Downlink.UnconfirmedUserPackets == 0 &&
+			worker.Receipt.Uplink.UnconfirmedUserPackets == 0
+	}
+	if err == nil && (worker.PID != int(process.PID) || !worker.DriverOpenAttempted || !worker.OwnedHandleReturned || worker.Failure != "" || worker.Receipt.Mode != request.Mode || worker.Receipt.UnconfirmedUserPackets != 0 || !bidirectionalConservationOK || !worker.Receipt.DriverDrained || !worker.Receipt.OwnedHandleClosed || !worker.Receipt.WorkersJoined || !completedState) {
 		err = errors.New("worker did not return a completed, unqualified condition receipt")
 	}
 	if err == nil {
