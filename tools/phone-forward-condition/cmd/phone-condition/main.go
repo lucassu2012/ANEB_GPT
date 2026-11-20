@@ -60,17 +60,19 @@ func run(args []string, output io.Writer) error {
 	}
 	hash := sha256.Sum256(data)
 	return json.NewEncoder(output).Encode(struct {
-		Format                       string         `json:"format"`
-		State                        string         `json:"state"`
-		Mode                         condition.Mode `json:"mode"`
-		Filter                       string         `json:"filter"`
-		RequestSHA256                string         `json:"request_sha256"`
-		DriverOpened                 bool           `json:"driver_opened"`
-		TrafficCaptured              bool           `json:"traffic_captured"`
-		DownlinkDelayMs              uint64         `json:"downlink_delay_ms,omitempty"`
-		DownlinkLossBps              uint32         `json:"downlink_loss_bps,omitempty"`
-		ImpairmentSeed               uint64         `json:"impairment_seed,omitempty"`
-		ExpectedUplinkInterfaceIndex uint32         `json:"expected_uplink_interface_index,omitempty"`
-		ProbeRemoteAddresses         []string       `json:"probe_remote_addresses,omitempty"`
-	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.DownlinkDelayMs, request.DownlinkLossBps, request.ImpairmentSeed, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
+		Format                       string                        `json:"format"`
+		State                        string                        `json:"state"`
+		Mode                         condition.Mode                `json:"mode"`
+		Filter                       string                        `json:"filter"`
+		RequestSHA256                string                        `json:"request_sha256"`
+		DriverOpened                 bool                          `json:"driver_opened"`
+		TrafficCaptured              bool                          `json:"traffic_captured"`
+		DownlinkDelayMs              uint64                        `json:"downlink_delay_ms,omitempty"`
+		DownlinkLossBps              uint32                        `json:"downlink_loss_bps,omitempty"`
+		ImpairmentSeed               uint64                        `json:"impairment_seed,omitempty"`
+		QueueOverflowPolicy          condition.QueueOverflowPolicy `json:"queue_overflow_policy,omitempty"`
+		QueueLimitBytes              uint32                        `json:"queue_limit_bytes,omitempty"`
+		ExpectedUplinkInterfaceIndex uint32                        `json:"expected_uplink_interface_index,omitempty"`
+		ProbeRemoteAddresses         []string                      `json:"probe_remote_addresses,omitempty"`
+	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.DownlinkDelayMs, request.DownlinkLossBps, request.ImpairmentSeed, request.QueueOverflowPolicy, request.QueueLimitBytes, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
 }
