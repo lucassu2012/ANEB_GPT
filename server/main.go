@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const serverVersion = "aneb-server/0.8.3"
+const serverVersion = "aneb-server/0.8.4"
 
 // app 汇集全部 handler 依赖（profile 表、数据目录、故障注入开关）。
 type app struct {
@@ -47,6 +47,7 @@ func (a *app) routes() http.Handler {
 	api.HandleFunc("/api/v1/token-sim", a.handleTokenSim)
 	api.HandleFunc("/api/v1/realtime-sim", a.handleRealtimeSim)
 	api.HandleFunc("/api/v1/download", a.handleDownload)
+	api.HandleFunc("/api/v1/artifact_stream", a.handleArtifactStream)
 	api.HandleFunc("/api/v1/upload", a.handleUpload)
 	api.HandleFunc("/api/v1/toolloop", a.handleToolLoop)
 	api.HandleFunc("/api/v1/results", a.handleResults)
@@ -193,17 +194,7 @@ func main() {
 		tlsConf = tc
 	}
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           a.tcpHandler(altSvc),
-		TLSConfig:         tlsConf,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		// P3-C05：把底层连接塞进每请求 context，供 /stream 流末尾对同一条
-		// 连接读 TCP_INFO（tcpinfo.go）。h3 侧无此机制（QUIC 无 TCP_INFO），
-		// summary 的 retrans_total 在 h3 上天然缺省（n/a）。
-		ConnContext: connContext,
-	}
+	srv := newTCPServer(a, *addr, altSvc, tlsConf)
 
 	log.Printf("%s listening on %s (profiles=%s execution-profiles=%s data=%s, mono-anchor wall=%d)",
 		serverVersion, *addr, *profilesDir, *executionProfilesDir, *dataDir, anchorWallUnixNs)
@@ -246,4 +237,22 @@ func main() {
 	}
 	auditSink.Close()
 	log.Fatal(serveErr)
+}
+
+// newTCPServer 构造 TCP 侧 http.Server，显式置空 TLSNextProto（非 nil 空映射）以禁用
+// TLS-over-TCP 上的 HTTP/2（防 h2 流控/多路复用污染测量时刻），同时不影响独立 UDP HTTP/3。
+func newTCPServer(a *app, addr, altSvc string, tlsConf *tls.Config) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           a.tcpHandler(altSvc),
+		TLSConfig:         tlsConf,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// P3-C05：把底层连接塞进每请求 context，供 /stream 流末尾对同一条
+		// 连接读 TCP_INFO（tcpinfo.go）。h3 侧无此机制（QUIC 无 TCP_INFO），
+		// summary 的 retrans_total 在 h3 上天然缺省（n/a）。
+		ConnContext:  connContext,
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+	}
+	return srv
 }
