@@ -15,7 +15,7 @@ internal data class ProbeSettings(
     val driveTest: Boolean = false,
 ) {
     companion object {
-        const val DEFAULT_SERVER_URL = "https://120-79-148-0.sslip.io:8443"
+        const val DEFAULT_SERVER_URL = "https://120.77.174.207:8443"
     }
 }
 

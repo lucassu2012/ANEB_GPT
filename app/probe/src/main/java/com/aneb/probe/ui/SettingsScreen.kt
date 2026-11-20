@@ -140,8 +140,8 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(10.dp))
         val presets = listOf(
-            ServerPreset("sslip.io（默认，自动旁路）", ProbeSettings.DEFAULT_SERVER_URL),
-            ServerPreset("bare-IP（运营商 SNI 旁路）", "https://120.79.148.0:8443"),
+            ServerPreset("现役主节点 miw2（默认，公网 IP 证书）", ProbeSettings.DEFAULT_SERVER_URL),
+            ServerPreset("旧 E-01 bare-IP（已迁移回滚备址）", "https://120.79.148.0:8443"),
         )
         GroupedCard {
             presets.forEachIndexed { i, p ->

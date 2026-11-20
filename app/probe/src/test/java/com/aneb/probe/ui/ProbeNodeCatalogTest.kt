@@ -6,7 +6,8 @@ import org.junit.Test
 
 class ProbeNodeCatalogTest {
     @Test
-    fun `both verified E01 routes map to one node`() {
+    fun `verified production miw2 and legacy E01 routes map to one node`() {
+        assertEquals("https://120.77.174.207:8443", ProbeSettings.DEFAULT_SERVER_URL)
         assertEquals(ProbeNodeCatalog.e01, ProbeNodeCatalog.nodeForUrl(ProbeSettings.DEFAULT_SERVER_URL))
         assertEquals(ProbeNodeCatalog.e01, ProbeNodeCatalog.nodeForUrl("https://120.79.148.0:8443"))
     }
