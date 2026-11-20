@@ -15,12 +15,13 @@ type Clock interface {
 }
 
 type Pacer struct {
-	config  Config
-	started time.Time
-	last    time.Time
-	clock   Clock
-	stopped atomic.Bool
-	busy    atomic.Bool
+	config    Config
+	started   time.Time
+	last      time.Time
+	serialEnd time.Time
+	clock     Clock
+	stopped   atomic.Bool
+	busy      atomic.Bool
 }
 type Injection struct {
 	Bytes            int
@@ -38,14 +39,21 @@ func NewPacer(config Config, clock Clock) (*Pacer, error) {
 		return nil, err
 	}
 	start := clock.Now()
-	return &Pacer{config: plan.Config, started: start, last: start, clock: clock}, nil
+	return &Pacer{config: plan.Config, started: start, last: start, serialEnd: start, clock: clock}, nil
 }
 
 // Inject paces one unchanged IP packet for a single owner. Overlapping calls
 // invalidate the condition rather than creating independent rate reservations.
 // A successful callback only means
 // injection into the host network stack, not receipt or goodput at the phone.
-func (p *Pacer) Inject(ctx context.Context, packet []byte, send func([]byte) error) (result Injection, err error) {
+func (p *Pacer) Inject(ctx context.Context, packet []byte, send func([]byte) error) (Injection, error) {
+	return p.InjectAt(ctx, time.Time{}, packet, send)
+}
+
+// InjectAt paces one unchanged IP packet using its capture arrival timestamp
+// so optional additive propagation delay (DownlinkDelay) operates as a FIFO
+// delay pipe after serialization without collapsing link throughput.
+func (p *Pacer) InjectAt(ctx context.Context, arrivedAt time.Time, packet []byte, send func([]byte) error) (result Injection, err error) {
 	if !p.busy.CompareAndSwap(false, true) {
 		p.stopped.Store(true)
 		return Injection{}, ErrConcurrent
@@ -69,14 +77,34 @@ func (p *Pacer) Inject(ctx context.Context, packet []byte, send func([]byte) err
 	if now.Before(p.last) {
 		return Injection{}, errors.New("local scheduling clock regressed")
 	}
-	delay := time.Duration((uint64(len(packet))*uint64(time.Second) + p.config.DownlinkBytesPerSecond - 1) / p.config.DownlinkBytesPerSecond)
-	due := now.Add(delay)
+	serialDur := time.Duration((uint64(len(packet))*uint64(time.Second) + p.config.DownlinkBytesPerSecond - 1) / p.config.DownlinkBytesPerSecond)
+	var due time.Time
+	var nextSerialEnd time.Time
+	if p.config.DownlinkDelay == 0 {
+		due = now.Add(serialDur)
+		nextSerialEnd = due
+	} else {
+		arrived := arrivedAt
+		if arrived.IsZero() || arrived.Before(p.started) || arrived.After(now) {
+			arrived = now
+		}
+		serialStart := arrived
+		if p.serialEnd.After(serialStart) {
+			serialStart = p.serialEnd
+		}
+		nextSerialEnd = serialStart.Add(serialDur)
+		due = nextSerialEnd.Add(p.config.DownlinkDelay)
+	}
 	deadline := p.started.Add(p.config.TTL)
 	if !due.Before(deadline) {
 		return Injection{}, ErrTTL
 	}
-	if err := p.clock.WaitUntil(ctx, due); err != nil {
-		return Injection{}, err
+	waited := false
+	if due.After(now) {
+		waited = true
+		if err := p.clock.WaitUntil(ctx, due); err != nil {
+			return Injection{}, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return Injection{}, err
@@ -85,8 +113,11 @@ func (p *Pacer) Inject(ctx context.Context, packet []byte, send func([]byte) err
 	if p.stopped.Load() {
 		return Injection{}, ErrStopped
 	}
-	if actual.Before(due) {
+	if waited && actual.Before(due) {
 		return Injection{}, errors.New("local wait returned before scheduled injection")
+	}
+	if actual.Before(p.last) {
+		return Injection{}, errors.New("local scheduling clock regressed")
 	}
 	if !actual.Before(deadline) {
 		return Injection{}, ErrTTL
@@ -102,6 +133,7 @@ func (p *Pacer) Inject(ctx context.Context, packet []byte, send func([]byte) err
 	if returned.Before(actual) {
 		return result, errors.New("local scheduling clock regressed during injection")
 	}
+	p.serialEnd = nextSerialEnd
 	p.last = returned
 	if !p.last.Before(deadline) {
 		return result, ErrTTL

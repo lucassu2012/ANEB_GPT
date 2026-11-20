@@ -9,10 +9,13 @@ import (
 )
 
 type Config struct {
-	PhoneAddresses         []string
-	InterfaceIndex         uint32
-	TTL                    time.Duration
-	DownlinkBytesPerSecond uint64
+	PhoneAddresses          []string
+	InterfaceIndex          uint32
+	TTL                     time.Duration
+	DownlinkBytesPerSecond  uint64
+	DownlinkDelay           time.Duration
+	DownlinkLossBasisPoints uint32
+	ImpairmentSeed          uint64
 }
 
 type Plan struct {
@@ -24,6 +27,15 @@ type Plan struct {
 func NewPlan(config Config) (Plan, error) {
 	if config.TTL <= 0 || config.TTL > 120*time.Second || config.InterfaceIndex == 0 || len(config.PhoneAddresses) == 0 || len(config.PhoneAddresses) > 16 || config.DownlinkBytesPerSecond == 0 || config.DownlinkBytesPerSecond > 1_000_000_000 {
 		return Plan{}, fmt.Errorf("condition requires one address set, a nonzero interface, 0<TTL<=120s and 0<IP-bytes/s<=1000000000")
+	}
+	if config.DownlinkDelay < 0 || config.DownlinkDelay > 2*time.Second {
+		return Plan{}, fmt.Errorf("downlink delay must be within 0..2000ms")
+	}
+	if config.DownlinkLossBasisPoints > 5000 {
+		return Plan{}, fmt.Errorf("downlink loss must be within 0..5000 bps (0..50%%)")
+	}
+	if config.DownlinkLossBasisPoints > 0 && config.ImpairmentSeed == 0 {
+		return Plan{}, fmt.Errorf("downlink loss requires a nonzero impairment_seed for deterministic replay")
 	}
 	terms := make([]string, 0, len(config.PhoneAddresses))
 	addresses := make([]string, 0, len(config.PhoneAddresses))
