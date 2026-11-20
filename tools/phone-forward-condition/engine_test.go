@@ -885,3 +885,184 @@ func TestAdmittedInjectDriverErrorFailsClosedWithUnconfirmedPacket(t *testing.T)
 		t.Fatalf("expected INVALID/INJECT_ERROR with Unconfirmed=1, got err=%v receipt=%+v", err, receipt)
 	}
 }
+
+func (c *syncManualClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func TestPostInjectErrTTLAfterConfirmedSendRemainsValid(t *testing.T) {
+	dl1 := testForwardFrame(90) // 90B @ 1000 B/s = 90ms < 100ms TTL
+	clock := &syncManualClock{now: time.Unix(0, 0)}
+	link := &stagedLink{
+		in:   make(chan Frame, 4),
+		stop: make(chan struct{}),
+		onInject: func(Frame) {
+			// Simulate Inject completing just past the 100ms TTL after confirmed send.
+			clock.Advance(15 * time.Millisecond)
+		},
+	}
+	link.in <- dl1
+
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			TTL:                    100 * time.Millisecond,
+			DownlinkBytesPerSecond: 1000,
+		},
+		Limit,
+		clock,
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("confirmed post-Inject ErrTTL must not fail run: err=%v receipt=%+v", err, receipt)
+	}
+	if receipt.State != "INJECTED_NOT_CALIBRATED" || receipt.StopReason != "TTL_EXPIRED" {
+		t.Fatalf("expected INJECTED_NOT_CALIBRATED/TTL_EXPIRED, got state=%q stopReason=%q receipt=%+v", receipt.State, receipt.StopReason, receipt)
+	}
+	if receipt.InjectedPackets != 1 || receipt.CleanupInjectedPackets != 0 || receipt.UnconfirmedUserPackets != 0 ||
+		!receipt.DriverDrained || !receipt.OwnedHandleClosed || !receipt.WorkersJoined || len(receipt.Failures) != 0 {
+		t.Fatalf("unexpected post-Inject ErrTTL receipt: %+v", receipt)
+	}
+}
+
+func TestBidirectionalPostInjectErrTTLDoesNotCancelConcurrentDirectionOrMaskScopeMismatch(t *testing.T) {
+	t.Run("concurrent_uplink_finishes_cleanly", func(t *testing.T) {
+		dl1 := testForwardFrame(90) // 90B @ 1000 B/s = 90ms < 120ms TTL
+		binary.LittleEndian.PutUint32(dl1.Address.Data[0:4], 16)
+		up1 := testUplinkForwardFrame(50, 12, true) // 50B @ 10_000 B/s = 5ms
+		up2 := testUplinkForwardFrame(50, 12, true) // queued/held after DL crosses TTL -> restored in cleanup
+
+		clock := &syncManualClock{now: time.Unix(0, 0)}
+		upEntered := make(chan struct{})
+		dlConfirmed := make(chan struct{})
+		up1Done := make(chan struct{})
+		var dlOnce, upOnce sync.Once
+
+		link := &stagedLink{
+			in:   make(chan Frame, 8),
+			stop: make(chan struct{}),
+			onInject: func(f Frame) {
+				if f.Packet[16] == 192 { // downlink frame
+					dlOnce.Do(func() {
+						// Cross 120ms TTL while confirmed send completes.
+						clock.Advance(40 * time.Millisecond)
+						close(dlConfirmed)
+					})
+				} else { // uplink frame
+					upOnce.Do(func() {
+						close(upEntered)
+						// Wait until DL has already hit post-Inject ErrTTL; if DL wrongly
+						// called cancel(ErrTTL), ctx would be cancelled before UL finishes.
+						<-dlConfirmed
+						time.Sleep(20 * time.Millisecond)
+						close(up1Done)
+					})
+				}
+			},
+		}
+
+		type outcome struct {
+			receipt Receipt
+			err     error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			r, err := Run(
+				context.Background(),
+				Config{
+					PhoneAddresses:         []string{"192.0.2.8"},
+					InterfaceIndex:         16,
+					UplinkInterfaceIndex:   12,
+					TTL:                    120 * time.Millisecond,
+					DownlinkBytesPerSecond: 1000,
+					UplinkBytesPerSecond:   10_000,
+				},
+				Limit,
+				clock,
+				func(Plan, Mode) (Link, error) { return link, nil },
+			)
+			done <- outcome{r, err}
+		}()
+
+		link.in <- up1
+		<-upEntered
+		link.in <- dl1
+		<-up1Done
+		link.in <- up2
+
+		got := <-done
+		if got.err != nil {
+			t.Fatalf("bidirectional post-Inject ErrTTL failed: err=%v receipt=%+v", got.err, got.receipt)
+		}
+		if got.receipt.State != "INJECTED_NOT_CALIBRATED" || got.receipt.StopReason != "TTL_EXPIRED" {
+			t.Fatalf("expected INJECTED_NOT_CALIBRATED/TTL_EXPIRED, got %+v", got.receipt)
+		}
+		if got.receipt.Downlink == nil || got.receipt.Uplink == nil ||
+			got.receipt.Downlink.InjectedPackets != 1 || got.receipt.Downlink.UnconfirmedUserPackets != 0 ||
+			got.receipt.Uplink.InjectedPackets != 1 || got.receipt.Uplink.CleanupInjectedPackets != 1 || got.receipt.Uplink.UnconfirmedUserPackets != 0 ||
+			got.receipt.UnconfirmedUserPackets != 0 || !got.receipt.DriverDrained || !got.receipt.OwnedHandleClosed || !got.receipt.WorkersJoined {
+			t.Fatalf("unexpected bidirectional conservation state: %+v down=%+v up=%+v", got.receipt, got.receipt.Downlink, got.receipt.Uplink)
+		}
+	})
+
+	t.Run("preserves_scope_mismatch_after_post_inject_errttl", func(t *testing.T) {
+		dl1 := testForwardFrame(90)
+		binary.LittleEndian.PutUint32(dl1.Address.Data[0:4], 16)
+		badIf := testForwardFrame(100)
+		binary.LittleEndian.PutUint32(badIf.Address.Data[0:4], 99)
+
+		clock := &syncManualClock{now: time.Unix(0, 0)}
+		dlConfirmed := make(chan struct{})
+		var dlOnce sync.Once
+
+		link := &stagedLink{
+			in:   make(chan Frame, 4),
+			stop: make(chan struct{}),
+			onInject: func(f Frame) {
+				dlOnce.Do(func() {
+					clock.Advance(120 * time.Millisecond)
+					close(dlConfirmed)
+				})
+			},
+		}
+
+		type outcome struct {
+			receipt Receipt
+			err     error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			r, err := Run(
+				context.Background(),
+				Config{
+					PhoneAddresses:         []string{"192.0.2.8"},
+					InterfaceIndex:         16,
+					UplinkInterfaceIndex:   12,
+					TTL:                    200 * time.Millisecond,
+					DownlinkBytesPerSecond: 1000,
+					UplinkBytesPerSecond:   100_000,
+				},
+				Limit,
+				clock,
+				func(Plan, Mode) (Link, error) { return link, nil },
+			)
+			done <- outcome{r, err}
+		}()
+
+		link.in <- dl1
+		<-dlConfirmed
+		link.in <- badIf
+
+		got := <-done
+		if got.err == nil || got.receipt.State != "INVALID" || got.receipt.StopReason != "PACKET_SCOPE_MISMATCH" {
+			t.Fatalf("scope mismatch masked after post-Inject ErrTTL: err=%v receipt=%+v", got.err, got.receipt)
+		}
+		if got.receipt.InjectedPackets != 1 || got.receipt.CleanupInjectedPackets != 1 || got.receipt.UnconfirmedUserPackets != 0 {
+			t.Fatalf("unexpected conservation state on post-Inject ErrTTL + scope mismatch: %+v", got.receipt)
+		}
+	})
+}

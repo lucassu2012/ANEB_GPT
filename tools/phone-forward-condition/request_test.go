@@ -2,6 +2,7 @@ package condition
 
 import (
 	"encoding/json"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,5 +213,66 @@ func TestRequestValidatesBidirectionalUplinkFieldsAndRejectsUnknownKeys(t *testi
 	badNatRaw, _ := json.Marshal(badNat)
 	if _, _, err := ParseRequest(badNatRaw); err == nil {
 		t.Fatal("expected uplink_nat_addresses without uplink rate to fail")
+	}
+}
+
+func TestRequestRejectsDelayUint64OverflowWraparoundAndRespects2000msBound(t *testing.T) {
+	root := t.TempDir()
+	base := Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         Limit,
+		PhoneAddresses:               []string{"192.168.137.113"},
+		InterfaceIndex:               16,
+		TTLSeconds:                   35,
+		DownlinkBytesPerSecond:       250000,
+		UplinkBytesPerSecond:         62500,
+		ExpectedUplinkInterfaceIndex: 12,
+		DriverDirectory:              filepath.Join(root, "driver"),
+		OutputDirectory:              filepath.Join(root, "out"),
+	}
+
+	okMax := base
+	okMax.DownlinkDelayMs = 2000
+	okMax.UplinkDelayMs = 2000
+	okBytes, err := json.Marshal(okMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, okPlan, err := ParseRequest(okBytes)
+	if err != nil {
+		t.Fatalf("expected 2000ms delay boundary to succeed: %v", err)
+	}
+	if okPlan.Config.DownlinkDelay != 2000*time.Millisecond || okPlan.Config.UplinkDelay != 2000*time.Millisecond {
+		t.Fatalf("unexpected 2000ms boundary plan delays: dl=%v ul=%v", okPlan.Config.DownlinkDelay, okPlan.Config.UplinkDelay)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Request)
+	}{
+		{"downlink-2001ms", func(r *Request) { r.DownlinkDelayMs = 2001 }},
+		{"uplink-2001ms", func(r *Request) { r.UplinkDelayMs = 2001 }},
+		{"downlink-wraparound-18446744073710", func(r *Request) { r.DownlinkDelayMs = 18446744073710 }},
+		{"uplink-wraparound-18446744073710", func(r *Request) { r.UplinkDelayMs = 18446744073710 }},
+		{"uplink-zero-wrap-no-rate", func(r *Request) {
+			r.UplinkBytesPerSecond = 0
+			r.ExpectedUplinkInterfaceIndex = 0
+			r.UplinkDelayMs = 288230376151711744 // 2^58 * 1e6 == 0 mod 2^64
+		}},
+		{"downlink-max-uint64", func(r *Request) { r.DownlinkDelayMs = math.MaxUint64 }},
+		{"uplink-max-uint64", func(r *Request) { r.UplinkDelayMs = math.MaxUint64 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := base
+			tc.mutate(&bad)
+			raw, err := json.Marshal(bad)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, plan, err := ParseRequest(raw); err == nil {
+				t.Fatalf("expected invalid delay %s to fail, got plan=%+v", tc.name, plan.Config)
+			}
+		})
 	}
 }

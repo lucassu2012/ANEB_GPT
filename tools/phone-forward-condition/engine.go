@@ -596,7 +596,15 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 					}
 				} else if sendFailed != nil {
 					recordUncertainSend(sendFailed)
-				} else if !errors.Is(injectErr, ErrTTL) {
+				} else if errors.Is(injectErr, ErrTTL) {
+					// link.Inject confirmed delivery (settled already ran), and pacer
+					// observed clock >= deadline afterward. Wait for the planned cutoff
+					// without cancelling concurrent directions or masking real causes.
+					<-ctx.Done()
+					if errors.Is(context.Cause(ctx), errPlannedTTL) {
+						return
+					}
+				} else {
 					recordWorkerErr(injectErr)
 				}
 				cancel(injectErr)

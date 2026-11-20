@@ -74,6 +74,12 @@ func ParseRequest(data []byte) (Request, Plan, error) {
 		}
 		request.ProbeRemoteAddresses = remotes
 	}
+	if request.DownlinkDelayMs > 2000 {
+		return request, Plan{}, errors.New("downlink delay must be within 0..2000ms")
+	}
+	if request.UplinkDelayMs > 2000 {
+		return request, Plan{}, errors.New("uplink delay must be within 0..2000ms")
+	}
 	plan, err := NewPlan(Config{
 		PhoneAddresses:          request.PhoneAddresses,
 		InterfaceIndex:          request.InterfaceIndex,
