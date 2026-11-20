@@ -26,6 +26,8 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_launcher_guidance.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_g3_launcher_package.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_controlled_rb_card_scripts.ps1
           exit $LASTEXITCODE
       - name: Test private single-phone forwarding helper without a driver
         working-directory: tools/phone-forward-condition
@@ -91,7 +93,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Test real-App research analysis and offline delivery
-        run: python -B -m unittest tests.test_analyze_research_records tests.test_research_report tests.test_research_bundle tests.test_research_video -v
+        run: python -B -m unittest tests.test_analyze_research_records tests.test_research_report tests.test_research_bundle tests.test_research_video tests.test_controlled_rb_card_templates -v
       - name: Test private Tongyi HOST network admission and cleanup
         run: python -B -m unittest scripts.test_tongyi_ordinary_text_engineering_runner -v
       - name: Test deterministic model
