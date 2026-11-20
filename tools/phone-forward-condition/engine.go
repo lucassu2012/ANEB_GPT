@@ -278,6 +278,9 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			case <-abandon:
 				return
 			}
+			if classErr != nil && item.reserved && !stopping.Load() {
+				cancel(scopeMismatchError{err: classErr})
+			}
 			if item.overflowDone != nil {
 				select {
 				case <-item.overflowDone:

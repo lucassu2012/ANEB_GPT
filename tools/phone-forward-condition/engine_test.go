@@ -560,3 +560,189 @@ func TestBidirectionalRunWithUplinkNatAddresses(t *testing.T) {
 		t.Fatalf("unexpected NAT receipt counts: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
 	}
 }
+
+type stagedLink struct {
+	mu       sync.Mutex
+	in       chan Frame
+	stop     chan struct{}
+	once     sync.Once
+	injected []Frame
+	onInject func(Frame)
+}
+
+func (l *stagedLink) Receive() (Frame, error) {
+	select {
+	case f := <-l.in:
+		return f, nil
+	case <-l.stop:
+		return Frame{}, io.EOF
+	}
+}
+
+func (l *stagedLink) Inject(f Frame) (int, error) {
+	l.mu.Lock()
+	l.injected = append(l.injected, Frame{Packet: append([]byte(nil), f.Packet...), Address: f.Address})
+	cb := l.onInject
+	l.mu.Unlock()
+	if cb != nil {
+		cb(f)
+	}
+	return len(f.Packet), nil
+}
+
+func (l *stagedLink) ShutdownReceive() error {
+	l.once.Do(func() { close(l.stop) })
+	return nil
+}
+
+func (l *stagedLink) Close() error { return nil }
+
+type syncManualClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *syncManualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *syncManualClock) WaitUntil(ctx context.Context, due time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if due.After(c.now) {
+		c.now = due
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+func TestScopeMismatchNotSwallowedBehindErrTTLDownlink(t *testing.T) {
+	firstInjected := make(chan struct{}, 1)
+	link := &stagedLink{
+		in:   make(chan Frame, 8),
+		stop: make(chan struct{}),
+		onInject: func(Frame) {
+			select {
+			case firstInjected <- struct{}{}:
+			default:
+			}
+		},
+	}
+	clock := &syncManualClock{now: time.Unix(0, 0)}
+
+	dl100 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl100.Address.Data[0:4], 16)
+	dl1000 := testForwardFrame(1000)
+	binary.LittleEndian.PutUint32(dl1000.Address.Data[0:4], 16)
+	badIf := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(badIf.Address.Data[0:4], 99)
+
+	type outcome struct {
+		receipt Receipt
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := Run(
+			context.Background(),
+			Config{
+				PhoneAddresses:         []string{"192.0.2.8"},
+				InterfaceIndex:         16,
+				UplinkInterfaceIndex:   12,
+				TTL:                    300 * time.Millisecond,
+				DownlinkBytesPerSecond: 1000,
+				UplinkBytesPerSecond:   100_000,
+			},
+			Limit,
+			clock,
+			func(Plan, Mode) (Link, error) { return link, nil },
+		)
+		done <- outcome{r, err}
+	}()
+
+	link.in <- dl100
+	select {
+	case <-firstInjected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first downlink injection")
+	}
+	link.in <- dl1000
+	time.Sleep(25 * time.Millisecond)
+	link.in <- badIf
+
+	got := <-done
+	if got.err == nil || got.receipt.State != "INVALID" || got.receipt.StopReason != "PACKET_SCOPE_MISMATCH" {
+		t.Fatalf("scope mismatch swallowed behind ErrTTL: err=%v receipt=%+v", got.err, got.receipt)
+	}
+	if got.receipt.InjectedPackets != 1 || got.receipt.CleanupInjectedPackets != 2 ||
+		got.receipt.UnconfirmedUserPackets != 0 ||
+		got.receipt.Downlink == nil || got.receipt.Uplink == nil ||
+		got.receipt.Downlink.UnconfirmedUserPackets != 0 || got.receipt.Uplink.UnconfirmedUserPackets != 0 ||
+		!got.receipt.DriverDrained || !got.receipt.OwnedHandleClosed || !got.receipt.WorkersJoined {
+		t.Fatalf("unexpected conservation/cleanup state after ErrTTL scope mismatch: %+v down=%+v up=%+v", got.receipt, got.receipt.Downlink, got.receipt.Uplink)
+	}
+}
+
+func TestScopeMismatchNotSwallowedBehindSlowDownlinkQueue(t *testing.T) {
+	clock := &heldClock{now: time.Unix(0, 0), entered: make(chan struct{}, 2), release: make(chan struct{})}
+	link := &stagedLink{
+		in:   make(chan Frame, 8),
+		stop: make(chan struct{}),
+	}
+
+	dl1 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl1.Address.Data[0:4], 16)
+	dl2 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl2.Address.Data[0:4], 16)
+	badIf := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(badIf.Address.Data[0:4], 99)
+
+	type outcome struct {
+		receipt Receipt
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := Run(
+			context.Background(),
+			Config{
+				PhoneAddresses:         []string{"192.0.2.8"},
+				InterfaceIndex:         16,
+				UplinkInterfaceIndex:   12,
+				TTL:                    250 * time.Millisecond,
+				DownlinkBytesPerSecond: 1000,
+				DownlinkDelay:          100 * time.Millisecond,
+				UplinkBytesPerSecond:   100_000,
+			},
+			Limit,
+			clock,
+			func(Plan, Mode) (Link, error) { return link, nil },
+		)
+		done <- outcome{r, err}
+	}()
+
+	link.in <- dl1
+	select {
+	case <-clock.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for slow downlink pacer entry")
+	}
+	link.in <- dl2
+	link.in <- badIf
+
+	got := <-done
+	if got.err == nil || got.receipt.State != "INVALID" || got.receipt.StopReason != "PACKET_SCOPE_MISMATCH" {
+		t.Fatalf("scope mismatch swallowed behind slow downlink queue: err=%v receipt=%+v", got.err, got.receipt)
+	}
+	if got.receipt.InjectedPackets != 0 || got.receipt.CleanupInjectedPackets != 3 ||
+		got.receipt.UnconfirmedUserPackets != 0 ||
+		got.receipt.Downlink == nil || got.receipt.Uplink == nil ||
+		got.receipt.Downlink.UnconfirmedUserPackets != 0 || got.receipt.Uplink.UnconfirmedUserPackets != 0 ||
+		!got.receipt.DriverDrained || !got.receipt.OwnedHandleClosed || !got.receipt.WorkersJoined {
+		t.Fatalf("unexpected conservation/cleanup state after slow-queue scope mismatch: %+v down=%+v up=%+v", got.receipt, got.receipt.Downlink, got.receipt.Uplink)
+	}
+}

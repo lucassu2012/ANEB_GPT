@@ -202,14 +202,19 @@ def validate_condition_args(args: argparse.Namespace) -> None:
         raise ValueError(f"version must be > 0, got {args.version}")
 
     # Validate optional uplink shaping parameters
+    if args.uplink_queue_overflow_policy is not None or args.uplink_queue_limit_bytes is not None:
+        raise ValueError(
+            "--uplink-queue-overflow-policy and --uplink-queue-limit-bytes are not supported: "
+            "phone-forward-condition applies the shared --queue-overflow-policy and "
+            "--queue-limit-bytes independently to both downlink and uplink directions, and "
+            "does not accept separate uplink_queue_* JSON fields"
+        )
     other_uplink_set = any(
         v is not None
         for v in (
             args.uplink_delay_ms,
             args.uplink_loss_bps,
             args.uplink_seed,
-            args.uplink_queue_overflow_policy,
-            args.uplink_queue_limit_bytes,
         )
     )
     if other_uplink_set and args.uplink_bps is None:
@@ -227,18 +232,6 @@ def validate_condition_args(args: argparse.Namespace) -> None:
         effective_uplink_seed = args.uplink_seed if args.uplink_seed is not None else args.seed
         if effective_uplink_seed is None or effective_uplink_seed <= 0:
             raise ValueError("uplink_seed (or --seed) must be > 0 when uplink_loss_bps > 0")
-    if args.uplink_queue_overflow_policy is not None and args.uplink_queue_overflow_policy not in ALLOWED_QUEUE_POLICIES:
-        raise ValueError(
-            f"uplink_queue_overflow_policy must be one of {ALLOWED_QUEUE_POLICIES}, "
-            f"got {args.uplink_queue_overflow_policy!r}"
-        )
-    if args.uplink_queue_limit_bytes is not None and args.uplink_queue_limit_bytes != 0 and not (
-        MIN_QUEUE_LIMIT_BYTES <= args.uplink_queue_limit_bytes <= MAX_QUEUE_LIMIT_BYTES
-    ):
-        raise ValueError(
-            f"uplink_queue_limit_bytes must be 0 or in {MIN_QUEUE_LIMIT_BYTES}..{MAX_QUEUE_LIMIT_BYTES}, "
-            f"got {args.uplink_queue_limit_bytes}"
-        )
 
 
 def resolve_input_file(explicit: str | None, fallbacks: list[Path | None], label: str) -> Path:
@@ -551,13 +544,14 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
     if emit_uplink:
         uplink_spec = {
             "uplink_ip_bytes_per_second": args.uplink_bps,
-            "uplink_delay_ms": args.uplink_delay_ms,
-            "uplink_loss_bps": args.uplink_loss_bps,
-            "uplink_impairment_seed": b_uplink_seed if (args.uplink_seed is not None or b_uplink_loss_bps > 0) else None,
-            "uplink_queue_overflow_policy": args.uplink_queue_overflow_policy,
-            "uplink_queue_limit_bytes": args.uplink_queue_limit_bytes,
             "emitted_to_request_json": True,
         }
+        if b_uplink_delay_ms > 0:
+            uplink_spec["uplink_delay_ms"] = b_uplink_delay_ms
+        if b_uplink_loss_bps > 0:
+            uplink_spec["uplink_loss_bps"] = b_uplink_loss_bps
+        if b_uplink_loss_bps > 0 or b_uplink_seed > 0:
+            uplink_spec["uplink_impairment_seed"] = b_uplink_seed
 
     # DAG Step 5: CARD_SPEC.json
     card_spec = {

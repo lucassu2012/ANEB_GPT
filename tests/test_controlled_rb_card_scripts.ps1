@@ -91,6 +91,8 @@ $brTokens = $null; $brErrors = $null
 $null = [Management.Automation.Language.Parser]::ParseInput($execBrRendered, [ref]$brTokens, [ref]$brErrors)
 Assert-Card ($brErrors.Count -eq 0 -and $execBrRendered.Contains("phases                            = @('B', 'R')") -and $execBrRendered.Contains("foreach (`$conditionId in @('B', 'R'))")) 'execute-once.ps1.tmpl renders B->R cleanly and parses'
 Assert-Card ($execTmpl.Contains('if ($bUplinkIpBytesPerSecond -gt 0)') -and $execTmpl.Contains("`$reqPayload['uplink_ip_bytes_per_second'] = `$bUplinkIpBytesPerSecond") -and (-not $execTmpl.Contains('uplink_queue_overflow_policy'))) 'execute-once.ps1.tmpl guards uplink_* request.json emission cleanly'
+$natLookupGuardOk = $execTmpl -match '(?s)\$uplinkNatAddrs = @\(\)\r?\n\s*if \(\$bUplinkIpBytesPerSecond -gt 0\) \{\r?\n\s*\$uplinkNatAddrs = @\(Get-NetIPAddress -InterfaceIndex \$uplinkIfIndex -AddressFamily IPv4'
+Assert-Card $natLookupGuardOk 'execute-once.ps1.tmpl guards Get-NetIPAddress for uplink_nat_addresses inside bUplinkIpBytesPerSecond > 0'
 
 # Part B: Unit test extracted Get-AnebPhaseInstrumentationConditionArgs, Assert-AnebPhaseResultConditionMatch & Assert-AnebDoubaoUiBinding
 $commonRendered = Render-DummyTemplate ([IO.File]::ReadAllText((Join-Path $tmplDir 'common.ps1.tmpl'), [Text.Encoding]::ASCII))

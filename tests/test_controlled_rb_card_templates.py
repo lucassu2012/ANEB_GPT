@@ -37,6 +37,10 @@ class ControlledRbCardTemplateTests(unittest.TestCase):
         self.assertIn("$reqPayload['uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond", execute_text)
         self.assertNotIn("uplink_queue_overflow_policy", execute_text)
         self.assertNotIn("uplink_queue_limit_bytes", execute_text)
+        nat_lookup = "Get-NetIPAddress -InterfaceIndex $uplinkIfIndex -AddressFamily IPv4"
+        self.assertIn(nat_lookup, execute_text)
+        nat_guard = "$uplinkNatAddrs = @()\n if ($bUplinkIpBytesPerSecond -gt 0) {\n  $uplinkNatAddrs = @(" + nat_lookup
+        self.assertIn(nat_guard, execute_text)
 
     def test_common_defines_condition_arg_and_provenance_helpers(self):
         common_text = (TEMPLATE_DIR / "common.ps1.tmpl").read_text(encoding="ascii")

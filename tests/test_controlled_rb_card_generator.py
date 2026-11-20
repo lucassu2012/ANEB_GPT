@@ -233,9 +233,14 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             self.assertIn("$reqPayload['uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond", exec_text)
 
             spec = json.loads((out_dir / "CARD_SPEC.json").read_text(encoding="utf-8"))
-            self.assertEqual(spec["condition_b"]["uplink"]["uplink_ip_bytes_per_second"], 16000)
-            self.assertEqual(spec["condition_b"]["uplink"]["uplink_delay_ms"], 100)
-            self.assertTrue(spec["condition_b"]["uplink"]["emitted_to_request_json"])
+            self.assertEqual(
+                spec["condition_b"]["uplink"],
+                {
+                    "uplink_ip_bytes_per_second": 16000,
+                    "uplink_delay_ms": 100,
+                    "emitted_to_request_json": True,
+                },
+            )
 
             # Verify --uplink-loss-bps defaults --uplink-seed to --seed and supports explicit --uplink-seed
             out_dir2 = tmp / "doubao-bidir-loss"
@@ -263,8 +268,15 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             self.assertIn("$bUplinkLossBps            = [uint32]150", common2)
             self.assertIn("$bUplinkImpairmentSeed     = [uint64]20261121", common2)
             spec2 = json.loads((out_dir2 / "CARD_SPEC.json").read_text(encoding="utf-8"))
-            self.assertEqual(spec2["condition_b"]["uplink"]["uplink_impairment_seed"], 20261121)
-            self.assertTrue(spec2["condition_b"]["uplink"]["emitted_to_request_json"])
+            self.assertEqual(
+                spec2["condition_b"]["uplink"],
+                {
+                    "uplink_ip_bytes_per_second": 62500,
+                    "uplink_loss_bps": 150,
+                    "uplink_impairment_seed": 20261121,
+                    "emitted_to_request_json": True,
+                },
+            )
 
     def test_invalid_arguments_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp_str:
@@ -296,6 +308,58 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             for label, extra in bad_cases:
                 res = self._run_new_card([*common, *extra])
                 self.assertNotEqual(res.returncode, 0, f"Expected failure for {label}")
+
+    def test_uplink_queue_flags_fail_closed_without_creating_out_dir(self):
+        sys.path.insert(0, str(NEW_CARD.parent))
+        try:
+            import new_card
+        finally:
+            sys.path.pop(0)
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            fx = self._make_fixtures(tmp)
+            common = [
+                "--app", "doubao",
+                "--downlink-bps", "250000",
+                "--uplink-bps", "62500",
+                "--case-root", str(tmp),
+                "--source-commit", SOURCE_COMMIT,
+                "--target-apk", str(fx["target_apk"]),
+                "--test-apk", str(fx["test_apk"]),
+                "--helper-exe", str(fx["helper_exe"]),
+                "--connection-admission", str(fx["conn_adm"]),
+                "--topology-admission", str(fx["topo_adm"]),
+            ]
+
+            cases = [
+                ("ul-policy", ["--card-id", "ul-q-pol", "--uplink-queue-overflow-policy", "tail_drop"]),
+                ("ul-limit", ["--card-id", "ul-q-lim", "--uplink-queue-limit-bytes", "65536"]),
+                (
+                    "ul-both",
+                    [
+                        "--card-id", "ul-q-both",
+                        "--uplink-queue-overflow-policy", "tail_drop",
+                        "--uplink-queue-limit-bytes", "65536",
+                    ],
+                ),
+            ]
+            for label, extra in cases:
+                out_dir = tmp / f"out-{label}"
+                args = new_card.parse_args([*common, *extra, "--out-dir", str(out_dir)])
+                args.version = 15080040
+                args.version_name = "15.8.0"
+                args.seed = 0
+                with self.assertRaises(ValueError) as ctx:
+                    new_card.validate_condition_args(args)
+                self.assertIn("--queue-overflow-policy", str(ctx.exception))
+                self.assertIn("--queue-limit-bytes", str(ctx.exception))
+
+                res = self._run_new_card([*common, *extra, "--out-dir", str(out_dir)])
+                self.assertNotEqual(res.returncode, 0, f"Expected CLI failure for {label}")
+                self.assertIn("ValueError", res.stderr)
+                self.assertIn("--queue-overflow-policy", res.stderr)
+                self.assertFalse(out_dir.exists(), f"--out-dir must not be created for {label}")
 
     def test_relative_out_dir_and_case_root_are_normalized_to_absolute(self):
         with tempfile.TemporaryDirectory() as tmp_str:

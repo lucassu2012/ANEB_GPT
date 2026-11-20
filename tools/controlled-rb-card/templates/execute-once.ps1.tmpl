@@ -280,9 +280,12 @@ try {
  $routeProof = Assert-AnebWinRtHotspotUplinkAndRoute $winrtSnapshot
  Save-New (Join-Path $runtime 'winrt-uplink-route-proof.json') $routeProof
  $uplinkIfIndex = [uint32]$routeProof.expected_uplink_interface_index
- $uplinkNatAddrs = @(Get-NetIPAddress -InterfaceIndex $uplinkIfIndex -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.AddressState -ceq 'Preferred' } | Select-Object -ExpandProperty IPAddress)
- if ($bUplinkIpBytesPerSecond -gt 0 -and $uplinkNatAddrs.Count -lt 1) {
-  throw ('Bidirectional uplink shaping requires a preferred non-APIPA IPv4 address on uplink interface ' + $uplinkIfIndex)
+ $uplinkNatAddrs = @()
+ if ($bUplinkIpBytesPerSecond -gt 0) {
+  $uplinkNatAddrs = @(Get-NetIPAddress -InterfaceIndex $uplinkIfIndex -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.AddressState -ceq 'Preferred' } | Select-Object -ExpandProperty IPAddress)
+  if ($uplinkNatAddrs.Count -lt 1) {
+   throw ('Bidirectional uplink shaping requires a preferred non-APIPA IPv4 address on uplink interface ' + $uplinkIfIndex)
+  }
  }
  Prepared; Hotspot-Within
 
