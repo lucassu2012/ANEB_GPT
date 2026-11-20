@@ -201,6 +201,29 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	var activeCalls atomic.Int32
 	var recvErrMu sync.Mutex
 	var recvErr error
+	var workerErrMu sync.Mutex
+	var uncertainSendErr error
+	var workerErr error
+	recordUncertainSend := func(e error) {
+		if e == nil {
+			return
+		}
+		workerErrMu.Lock()
+		if uncertainSendErr == nil {
+			uncertainSendErr = e
+		}
+		workerErrMu.Unlock()
+	}
+	recordWorkerErr := func(e error) {
+		if e == nil {
+			return
+		}
+		workerErrMu.Lock()
+		if workerErr == nil {
+			workerErr = e
+		}
+		workerErrMu.Unlock()
+	}
 	var mismatchMu sync.Mutex
 	var mismatchHeld *received
 	setMismatchHeld := func(item *received) {
@@ -429,6 +452,39 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		receipt.QueueDroppedBytes = queueDroppedBytes.Load()
 		receipt.DriverDrained = driverDrained.Load()
 		receipt.UnconfirmedUserPackets = receipt.OwnedReceivedPackets - receipt.InjectedPackets - receipt.DroppedPackets - receipt.QueueDroppedPackets - receipt.CleanupInjectedPackets
+		workerErrMu.Lock()
+		uErr := uncertainSendErr
+		wErr := workerErr
+		workerErrMu.Unlock()
+		if uErr != nil {
+			if err == nil {
+				err = uErr
+			} else if !errors.Is(err, uErr) {
+				err = errors.Join(err, uErr)
+			}
+			if receipt.StopReason == "" || receipt.StopReason == "TTL_EXPIRED" || receipt.StopReason == "LINK_EOF" {
+				receipt.StopReason = uncertainSendStopReason(uErr)
+			}
+		} else if wErr != nil {
+			if err == nil {
+				err = wErr
+			} else if !errors.Is(err, wErr) {
+				err = errors.Join(err, wErr)
+			}
+			if receipt.StopReason == "" || receipt.StopReason == "TTL_EXPIRED" || receipt.StopReason == "LINK_EOF" {
+				receipt.StopReason = wErr.Error()
+			}
+		}
+		if receipt.UnconfirmedUserPackets != 0 ||
+			(receipt.Downlink != nil && receipt.Downlink.UnconfirmedUserPackets != 0) ||
+			(receipt.Uplink != nil && receipt.Uplink.UnconfirmedUserPackets != 0) {
+			if err == nil {
+				err = fmt.Errorf("packet conservation failed: %d unconfirmed user packets", receipt.UnconfirmedUserPackets)
+			}
+			if receipt.StopReason == "" || receipt.StopReason == "TTL_EXPIRED" || receipt.StopReason == "LINK_EOF" {
+				receipt.StopReason = "UNCONFIRMED_USER_PACKETS"
+			}
+		}
 		if err != nil {
 			if errors.Is(err, ErrQueueOverflow) {
 				receipt.StopReason = "USER_QUEUE_OVERFLOW"
@@ -498,6 +554,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 			frame := current.frame
 			attempted := false
+			var sendFailed error
 			_, injectErr := d.pacer.InjectAt(ctx, current.receivedAt, frame.Packet, func(packet []byte) error {
 				frame.Packet = packet
 				n, sendErr, admitted := boundedCall(ctx, &activeCalls, func() (int, error) { return link.Inject(frame) })
@@ -517,6 +574,8 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 					// Confirmed send is the release boundary, not dequeue or the
 					// later Pacer TTL/clock verdict. An uncertain send keeps its lease.
 					settled(d, current)
+				} else if admitted {
+					sendFailed = sendErr
 				}
 				return sendErr
 			})
@@ -532,6 +591,13 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 							return
 						}
 					}
+					if !errors.Is(injectErr, ErrTTL) && !errors.Is(injectErr, context.DeadlineExceeded) && !errors.Is(injectErr, context.Canceled) {
+						recordWorkerErr(injectErr)
+					}
+				} else if sendFailed != nil {
+					recordUncertainSend(sendFailed)
+				} else if !errors.Is(injectErr, ErrTTL) {
+					recordWorkerErr(injectErr)
 				}
 				cancel(injectErr)
 				return
@@ -563,8 +629,20 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		receipt.StopReason = rErr.Error()
 		return receipt, rErr
 	}
+	workerErrMu.Lock()
+	uErr := uncertainSendErr
+	wErr := workerErr
+	workerErrMu.Unlock()
 	if cause := context.Cause(ctx); cause != nil {
 		if errors.Is(cause, errPlannedTTL) {
+			if uErr != nil {
+				receipt.StopReason = uncertainSendStopReason(uErr)
+				return receipt, uErr
+			}
+			if wErr != nil {
+				receipt.StopReason = wErr.Error()
+				return receipt, wErr
+			}
 			receipt.StopReason = "TTL_EXPIRED"
 			return receipt, nil
 		}
@@ -573,11 +651,30 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			receipt.StopReason = "PACKET_SCOPE_MISMATCH"
 			return receipt, sm.err
 		}
+		if uErr != nil {
+			receipt.StopReason = uncertainSendStopReason(uErr)
+			return receipt, cause
+		}
 		receipt.StopReason = cause.Error()
 		return receipt, cause
 	}
+	if uErr != nil {
+		receipt.StopReason = uncertainSendStopReason(uErr)
+		return receipt, uErr
+	}
+	if wErr != nil {
+		receipt.StopReason = wErr.Error()
+		return receipt, wErr
+	}
 	receipt.StopReason = "LINK_EOF"
 	return receipt, nil
+}
+
+func uncertainSendStopReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "INJECT_TIMEOUT"
+	}
+	return "INJECT_ERROR"
 }
 
 // A timed-out system call is unconfirmed, never retried. The independent worker

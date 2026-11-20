@@ -502,7 +502,7 @@ func TestBidirectionalQueueOverflowRestoresBothChannelsWithoutDeadlock(t *testin
 }
 
 func TestBidirectionalTTLRestoresUnpacedDownlinkWhileKeepingPacedUplink(t *testing.T) {
-	down := testForwardFrame(20)                // 20B @ 100 B/s = 200ms > 50ms TTL -> held & restored
+	down := testForwardFrame(20)               // 20B @ 100 B/s = 200ms > 50ms TTL -> held & restored
 	up := testUplinkForwardFrame(20, 16, true) // 20B @ 10000 B/s = 2ms < 50ms TTL -> injected
 	link := &idleLink{memoryLink: memoryLink{frames: []Frame{up, down}}, stop: make(chan struct{})}
 	receipt, err := Run(
@@ -744,5 +744,144 @@ func TestScopeMismatchNotSwallowedBehindSlowDownlinkQueue(t *testing.T) {
 		got.receipt.Downlink.UnconfirmedUserPackets != 0 || got.receipt.Uplink.UnconfirmedUserPackets != 0 ||
 		!got.receipt.DriverDrained || !got.receipt.OwnedHandleClosed || !got.receipt.WorkersJoined {
 		t.Fatalf("unexpected conservation/cleanup state after slow-queue scope mismatch: %+v down=%+v up=%+v", got.receipt, got.receipt.Downlink, got.receipt.Uplink)
+	}
+}
+
+type scriptedInjectLink struct {
+	idleLink
+	injectCalls atomic.Int32
+	onInject    func(call int32, f Frame) (int, error)
+}
+
+func (l *scriptedInjectLink) Inject(f Frame) (int, error) {
+	call := l.injectCalls.Add(1)
+	if l.onInject != nil {
+		return l.onInject(call, f)
+	}
+	return l.memoryLink.Inject(f)
+}
+
+func TestMidInjectTTLUncertainSendFailsClosedWithUnconfirmedPacket(t *testing.T) {
+	dl1 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl1.Address.Data[0:4], 16)
+	dl2 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl2.Address.Data[0:4], 16)
+	dl3 := testForwardFrame(100)
+	binary.LittleEndian.PutUint32(dl3.Address.Data[0:4], 16)
+
+	link := &scriptedInjectLink{
+		idleLink: idleLink{
+			memoryLink: memoryLink{frames: []Frame{dl1, dl2, dl3}},
+			stop:       make(chan struct{}),
+		},
+		onInject: func(call int32, f Frame) (int, error) {
+			switch call {
+			case 2:
+				// Stall past TTL=120ms while admitted inside boundedCall,
+				// then finish before cleanup restore completes so WorkersJoined==true.
+				time.Sleep(180 * time.Millisecond)
+			case 3:
+				// Cleanup restore of dl3 waits long enough for call #2 to finish.
+				time.Sleep(220 * time.Millisecond)
+			}
+			return len(f.Packet), nil
+		},
+	}
+
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         16,
+			UplinkInterfaceIndex:   12,
+			TTL:                    120 * time.Millisecond,
+			DownlinkBytesPerSecond: 10_000,
+			UplinkBytesPerSecond:   100_000,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("mid-Inject TTL uncertain send must fail closed with DeadlineExceeded, got err=%v receipt=%+v", err, receipt)
+	}
+	if receipt.State != "INVALID" || receipt.StopReason != "INJECT_TIMEOUT" {
+		t.Fatalf("expected INVALID/INJECT_TIMEOUT, got state=%q stopReason=%q receipt=%+v", receipt.State, receipt.StopReason, receipt)
+	}
+	if receipt.InjectedPackets != 1 || receipt.CleanupInjectedPackets != 1 || receipt.UnconfirmedUserPackets != 1 {
+		t.Fatalf("expected Injected=1 Cleanup=1 Unconfirmed=1, got %+v", receipt)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil ||
+		receipt.Downlink.UnconfirmedUserPackets != 1 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("expected Downlink.Unconfirmed=1 Uplink.Unconfirmed=0, got down=%+v up=%+v", receipt.Downlink, receipt.Uplink)
+	}
+	if !receipt.DriverDrained || !receipt.OwnedHandleClosed || !receipt.WorkersJoined || len(receipt.Failures) == 0 {
+		t.Fatalf("unexpected lifecycle/failures state: %+v", receipt)
+	}
+}
+
+func TestPreInjectErrTTLAfterInjectedPacketRemainsValid(t *testing.T) {
+	dl1 := testForwardFrame(100)  // 100B @ 10_000 B/s = 10ms < 120ms TTL -> injected
+	dl2 := testForwardFrame(2000) // 2000B @ 10_000 B/s = 200ms > 120ms TTL -> !attempted, restored in cleanup
+	binary.LittleEndian.PutUint32(dl1.Address.Data[0:4], 16)
+	binary.LittleEndian.PutUint32(dl2.Address.Data[0:4], 16)
+
+	link := &idleLink{
+		memoryLink: memoryLink{frames: []Frame{dl1, dl2}},
+		stop:       make(chan struct{}),
+	}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         16,
+			UplinkInterfaceIndex:   12,
+			TTL:                    120 * time.Millisecond,
+			DownlinkBytesPerSecond: 10_000,
+			UplinkBytesPerSecond:   100_000,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("normal pre-Inject ErrTTL should succeed, got err=%v receipt=%+v", err, receipt)
+	}
+	if receipt.State != "INJECTED_NOT_CALIBRATED" || receipt.StopReason != "TTL_EXPIRED" {
+		t.Fatalf("expected INJECTED_NOT_CALIBRATED/TTL_EXPIRED, got %+v", receipt)
+	}
+	if receipt.InjectedPackets != 1 || receipt.CleanupInjectedPackets != 1 || receipt.UnconfirmedUserPackets != 0 ||
+		receipt.Downlink == nil || receipt.Uplink == nil ||
+		receipt.Downlink.UnconfirmedUserPackets != 0 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("unexpected pre-Inject ErrTTL counts: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
+	}
+}
+
+func TestAdmittedInjectDriverErrorFailsClosedWithUnconfirmedPacket(t *testing.T) {
+	dl1 := testForwardFrame(100)
+	injectErr := errors.New("driver inject failed")
+	link := &scriptedInjectLink{
+		idleLink: idleLink{
+			memoryLink: memoryLink{frames: []Frame{dl1}},
+			stop:       make(chan struct{}),
+		},
+		onInject: func(int32, Frame) (int, error) {
+			return 0, injectErr
+		},
+	}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			TTL:                    time.Second,
+			DownlinkBytesPerSecond: 1_000_000,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if !errors.Is(err, injectErr) || receipt.State != "INVALID" || receipt.StopReason != "INJECT_ERROR" || receipt.UnconfirmedUserPackets != 1 {
+		t.Fatalf("expected INVALID/INJECT_ERROR with Unconfirmed=1, got err=%v receipt=%+v", err, receipt)
 	}
 }
