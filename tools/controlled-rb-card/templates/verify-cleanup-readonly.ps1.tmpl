@@ -1,0 +1,140 @@
+param([long]$ParentDeadlineTicks = 0, [long]$ParentDeadlineFrequency = 0)
+# Pure ASCII PowerShell 5.1 source.
+$ErrorActionPreference = 'Stop'
+if (-not [Diagnostics.Stopwatch]::IsHighResolution -or $ParentDeadlineFrequency -ne [Diagnostics.Stopwatch]::Frequency -or $ParentDeadlineTicks -le [Diagnostics.Stopwatch]::GetTimestamp()) {
+ throw 'Valid original parent QPC deadline required; no fresh budget'
+}
+$expectedRoot = '{{CARD_ROOT}}'
+if ($PSScriptRoot.Replace('\', '/') -cne $expectedRoot) { throw 'Unexpected verification root' }
+if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'common.ps1')).Hash.ToLowerInvariant() -cne '{{COMMON_SHA256}}') {
+ throw 'Fixed R/B common source changed'
+}
+. (Join-Path $PSScriptRoot 'common.ps1')
+$script:readDeadlineTicks = $ParentDeadlineTicks
+$resultPath = Join-Path $root 'INDEPENDENT_CLEANUP.json'
+$script:runtime = [IO.Path]::GetFullPath((Join-Path $root 'independent-cleanup-raw'))
+if ((Test-Path -LiteralPath $resultPath) -or (Test-Path -LiteralPath $runtime)) {
+ throw 'Independent cleanup check already retained; do not overwrite'
+}
+New-Item -ItemType Directory -Path $runtime -ErrorAction Stop | Out-Null
+$v = [ordered]@{
+ scope                          = 'FRESH_READ_ONLY_POST_RUN_VERIFICATION'
+ utc                            = [DateTime]::UtcNow.ToString('o')
+ checks                         = [ordered]@{}
+ failure                        = $null
+ phone_settings_changed         = $false
+ service_driver_hotspot_started = $false
+ business_app_launched          = $false
+}
+try {
+ [void](Get-AnebReadBudget 15000)
+ $terminalPath = Join-Path $root 'runtime/TERMINAL.json'
+ $terminal = Read-JSON $terminalPath
+ if ($null -eq $terminal.finished_utc) { throw 'Original run not terminal' }
+ $v.original_terminal_sha256 = (Get-FileHash -LiteralPath $terminalPath).Hash.ToLowerInvariant()
+
+ $beforePath = Join-Path $root 'runtime/before.json'
+ if (Test-Path -LiteralPath $beforePath) {
+  $v.before_json_present = $true
+  $v.early_abort_verified = $false
+  $before = Read-JSON $beforePath
+
+  Phone-Clean 'independent-'
+  $v.checks.phone_idle_no_conflicting_session_vpn_or_projection = $true
+
+  Host-NoResidue
+  $v.checks.host_no_helper_driver_service_or_eventlog_registration = $true
+
+  $wifi = Adb 'current-wifi' @('shell', 'cmd', 'wifi', 'status')
+  $priorSsid = [string]$before.original_wifi_ssid
+  $priorNetId = [string]$before.original_wifi_net_id
+  if (-not (Test-AnebWifiConnectedToSaved $wifi $priorSsid $priorNetId)) {
+   throw 'Current WiFi differs from original saved SSID/Net ID'
+  }
+  $v.checks.original_wifi_restored = $true
+
+  foreach ($key in @('wifi_on', 'mobile_data', 'stay_on_while_plugged_in')) {
+   $actual = (Adb ('current-' + $key) @('shell', 'settings', 'get', 'global', $key)).Trim()
+   $v.checks[$key + '_restored'] = $actual -ceq [string]$before.settings.$key
+  }
+  $actualPtr = (Adb 'current-pointer' @('shell', 'settings', 'get', 'system', 'pointer_location')).Trim()
+  $v.checks.pointer_location_restored = $actualPtr -ceq [string]$before.pointer_location
+  $actualTimeout = (Adb 'current-timeout' @('shell', 'settings', 'get', 'system', 'screen_off_timeout')).Trim()
+  $v.checks.screen_off_timeout_restored = $actualTimeout -ceq [string]$before.screen_off_timeout
+
+  $v.target = Package-Hash $targetPkg 'current-target-'
+  $v.test = Package-Hash $testPkg 'current-test-'
+  $v.checks.original_target_restored = $v.target.sha -ceq [string]$before.prior_target_sha256
+  $v.checks.original_test_restored = $v.test.sha -ceq [string]$before.prior_test_sha256
+
+  $ap = Read-AnebEthernetOffTopology
+  Save-New (Join-Path $runtime 'ethernet-off-topology.json') $ap
+  $v.checks.original_hotspot_off_no_start_stop = $ap.hotspot_state -ceq 'Off' -and $ap.ap_identity_matches -eq $true -and $ap.start_stop_invoked -eq $false
+
+  $sharing = @(Read-AnebSharingSnapshot 'independent')
+  Assert-AnebSharingRestored $before.sharing $sharing
+  $v.checks.original_sharing_bindings_restored = $true
+ } else {
+  if ($terminal.pass -eq $true -or $terminal.rb_pair_captured -eq $true) {
+   throw 'before.json missing despite terminal pass or captured phases'
+  }
+  if (Test-Path -LiteralPath (Join-Path $root 'runtime/hotspot-start-intent.json')) {
+   throw 'before.json missing despite hotspot-start-intent.json'
+  }
+  if ($terminal.clean_state_verified -ne $true -or @($terminal.cleanup_errors).Count -gt 0) {
+   throw 'Original early abort did not confirm clean_state_verified with zero cleanup_errors'
+  }
+  $v.before_json_present = $false
+  $v.early_abort_verified = $true
+  $v.terminal_failure = $terminal.failure
+
+  Phone-Clean 'independent-'
+  $v.checks.phone_idle_no_conflicting_session_vpn_or_projection = $true
+
+  Host-NoResidue
+  $v.checks.host_no_helper_driver_service_or_eventlog_registration = $true
+
+  $ap = Read-AnebEthernetOffTopology
+  Save-New (Join-Path $runtime 'ethernet-off-topology.json') $ap
+  $v.checks.original_hotspot_off_no_start_stop = $ap.hotspot_state -ceq 'Off' -and $ap.ap_identity_matches -eq $true -and $ap.start_stop_invoked -eq $false
+
+  $sharing = @(Read-AnebSharingSnapshot 'independent')
+  Assert-AnebSharingDisabled $sharing
+  $v.checks.original_sharing_disabled = $true
+
+  $mainIntentPath = Join-Path $root 'runtime/main-install-intent.json'
+  if (Test-Path -LiteralPath $mainIntentPath) {
+   $mi = Read-JSON $mainIntentPath
+   $v.target = Package-Hash $targetPkg 'current-target-'
+   $v.checks.early_abort_target_restored = $v.target.sha -ceq [string]$mi.before_sha256
+  }
+  $testIntentPath = Join-Path $root 'runtime/test-install-intent.json'
+  if (Test-Path -LiteralPath $testIntentPath) {
+   $ti = Read-JSON $testIntentPath
+   $v.test = Package-Hash $testPkg 'current-test-'
+   $v.checks.early_abort_test_restored = $v.test.sha -ceq [string]$ti.before_sha256
+  }
+  $ptrIntentPath = Join-Path $root 'runtime/pointer-intent.json'
+  if (Test-Path -LiteralPath $ptrIntentPath) {
+   $pi = Read-JSON $ptrIntentPath
+   $actualPtr = (Adb 'current-pointer' @('shell', 'settings', 'get', 'system', 'pointer_location')).Trim()
+   $v.checks.early_abort_pointer_restored = $actualPtr -ceq [string]$pi.before_value
+  }
+ }
+
+ if (@($v.checks.Values | Where-Object { $_ -isnot [bool] -or -not $_ }).Count) {
+  throw 'At least one read-only cleanup check failed'
+ }
+ [void](Get-AnebReadBudget 15000)
+ $v.all_checked_true = $true
+} catch {
+ $v.failure = $_.Exception.GetType().FullName + ':' + $_.Exception.Message
+ $v.all_checked_true = $false
+} finally {
+ $v.finished_utc = [DateTime]::UtcNow.ToString('o')
+ Save-New $resultPath $v
+ foreach ($pin in $pins) { $pin.Dispose() }
+}
+$v | ConvertTo-Json -Depth 8
+if (-not $v.all_checked_true) { exit 2 }
+exit 0

@@ -1,0 +1,431 @@
+$ErrorActionPreference = 'Stop'
+# Pure ASCII PowerShell 5.1 source.
+# {{CARD_TITLE}}
+$root = '{{CARD_ROOT}}'
+$case = '{{CASE_ROOT}}'
+$runtime = [IO.Path]::GetFullPath((Join-Path $root 'runtime'))
+$adb = '{{ADB_EXE}}'
+$serial = '{{ADB_SERIAL}}'
+$ps5 = 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+
+$prepBudgetMs       = 360000
+$cleanupBudgetMs    = 240000
+$hotspotBudgetMs    = 380000
+$chainBudgetMs      = 320000
+$phaseBudgetMs      = 150000
+$nativeTtlSeconds   = {{NATIVE_TTL_SECONDS}}
+$helperBudgetMs     = 120000
+$instrumentBudgetMs = 95000
+$outerBudgetMs      = 900000
+
+$sourceCommit       = '{{SOURCE_COMMIT}}'
+$profileSHA         = '{{PROFILE_SHA256}}'
+$businessPkg        = '{{BUSINESS_PACKAGE}}'
+$businessVerCode    = {{BUSINESS_VERSION_CODE}}L
+$topologyId         = 'ethernet-winrt-hotspot-20261119'
+$targetPkg          = '{{TARGET_PACKAGE}}'
+$testPkg            = '{{TEST_PACKAGE}}'
+$runIdPrefix        = '{{RUN_ID_PREFIX}}'
+$uiObservationMethod = '{{UI_OBSERVATION_METHOD}}'
+
+$bDownlinkIpBytesPerSecond = [uint64]{{B_DOWNLINK_IP_BYTES_PER_SECOND}}
+$bDownlinkDelayMs          = [uint64]{{B_DOWNLINK_DELAY_MS}}
+$bDownlinkLossBps          = [uint32]{{B_DOWNLINK_LOSS_BPS}}
+$bImpairmentSeed           = [uint64]{{B_IMPAIRMENT_SEED}}
+$bQueueOverflowPolicy      = '{{B_QUEUE_OVERFLOW_POLICY}}'
+$bQueueLimitBytes          = [uint32]{{B_QUEUE_LIMIT_BYTES}}
+
+$artifactsBindingPath = [IO.Path]::GetFullPath((Join-Path $root 'CANDIDATE_ARTIFACTS.json'))
+$artifactsBindingSHA  = '{{CANDIDATE_ARTIFACTS_SHA256}}'
+$uiBindingPath        = [IO.Path]::GetFullPath((Join-Path $root '{{UI_BINDING_FILENAME}}'))
+$uiBindingSHA         = '{{UI_BINDING_SHA256}}'
+
+$targetApk = [IO.Path]::GetFullPath((Join-Path $root 'artifacts/probe-debug.apk'))
+$targetSHA = '{{TARGET_APK_SHA256}}'
+$testApk   = [IO.Path]::GetFullPath((Join-Path $root 'artifacts/probe-debug-androidTest.apk'))
+$testSHA   = '{{TEST_APK_SHA256}}'
+$helper    = [IO.Path]::GetFullPath((Join-Path $root 'artifacts/phone-condition.exe'))
+$helperSHA = '{{HELPER_SHA256}}'
+
+$driverDir = [IO.Path]::GetFullPath((Join-Path $case 'network-candidate-2.2.2/signature-files/WinDivert-2.2.2-A/x64'))
+
+$pins = @()
+$cleanupClock = $null
+$commandNumber = 0
+$unresolvedAdb = @()
+$connectionClock = $null
+$ownWifiUI = $false
+$ownWifiTag = ''
+$wifiBackInputs = 0
+$readDeadlineTicks = 0
+
+function Save-New($path, $value) {
+ $f = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+ try {
+  $b = [Text.UTF8Encoding]::new($false).GetBytes(($value | ConvertTo-Json -Depth 16) + "`n")
+  $f.Write($b, 0, $b.Length)
+  $f.Flush($true)
+ } finally {
+  $f.Dispose()
+ }
+}
+
+function Pin-File($path, $sha) {
+ $f = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+ $script:pins += $f
+ $h = [Security.Cryptography.SHA256]::Create()
+ try {
+  $actual = [BitConverter]::ToString($h.ComputeHash($f)).Replace('-', '').ToLowerInvariant()
+ } finally {
+  $h.Dispose()
+ }
+ if ($actual -cne $sha) { throw ('Pinned file drift: ' + $path + ' (got ' + $actual + ')') }
+}
+
+Pin-File (Join-Path $root 'connection-admission.ps1') '{{CONNECTION_ADMISSION_SHA256}}'
+. (Join-Path $root 'connection-admission.ps1')
+Pin-File (Join-Path $root 'topology-admission.ps1') '{{TOPOLOGY_ADMISSION_SHA256}}'
+. (Join-Path $root 'topology-admission.ps1')
+Pin-File $artifactsBindingPath $artifactsBindingSHA
+Pin-File $uiBindingPath $uiBindingSHA
+
+function Read-JSON($path) {
+ $f = [IO.File]::OpenRead($path)
+ try {
+  if ($f.Length -gt 2097152) { throw 'JSON exceeds 2MiB' }
+  $r = [IO.StreamReader]::new($f, [Text.Encoding]::UTF8)
+  try {
+   return ($r.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop)
+  } finally {
+   $r.Dispose()
+  }
+ } finally {
+  $f.Dispose()
+ }
+}
+
+function Get-AnebPhaseInstrumentationConditionArgs([string]$ConditionId, $SavedRequest) {
+ if ($ConditionId -cnotin @('R', 'B')) {
+  throw ('Unsupported condition_id for instrumentation args: ' + $ConditionId)
+ }
+ if ($ConditionId -ceq 'R') {
+  return @()
+ }
+ if ($null -eq $SavedRequest -or $null -eq $SavedRequest.downlink_ip_bytes_per_second) {
+  throw 'Saved request.json missing downlink_ip_bytes_per_second for phase B'
+ }
+ $rate = [uint64]$SavedRequest.downlink_ip_bytes_per_second
+ if ($rate -le 0) {
+  throw ('Saved request.json downlink_ip_bytes_per_second must be positive for phase B, got: ' + $rate)
+ }
+ return @('-e', 'host_downlink_ip_bytes_per_second', ([string]$rate))
+}
+
+function Assert-AnebPhaseResultConditionMatch([string]$ConditionId, $DevResult, $SavedRequest) {
+ if ($ConditionId -cnotin @('R', 'B')) {
+  throw ('Unsupported condition_id for result provenance check: ' + $ConditionId)
+ }
+ if ($null -eq $DevResult -or $null -eq $DevResult.hostNetworkCondition) {
+  throw ('Device result missing hostNetworkCondition in condition ' + $ConditionId)
+ }
+ if ($ConditionId -ceq 'B') {
+  $expectedRate = [uint64]$SavedRequest.downlink_ip_bytes_per_second
+  $actualRateText = [string]$DevResult.hostNetworkCondition.downlinkIpBytesPerSecond
+  if ($actualRateText -cne ([string]$expectedRate)) {
+   throw ('Device result downlinkIpBytesPerSecond mismatch in condition B: got ' + $actualRateText + ', expected ' + $expectedRate)
+  }
+ }
+}
+
+function Import-PinnedFunctions($path, [string[]]$names) {
+ $tokens = $null; $errors = $null
+ $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+ if ($errors.Count) { throw 'Pinned function parse failure' }
+ foreach ($name in $names) {
+  $found = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name }, $true))
+  if ($found.Count -ne 1) { throw ('Exactly one named function required: ' + $name) }
+  $definition = $found[0].Extent.Text -replace ('^function\s+' + [regex]::Escape($name)), ('function script:' + $name)
+  . ([scriptblock]::Create($definition))
+ }
+}
+
+$desktop = [IO.Path]::GetFullPath((Join-Path $case 'shaping-admission/desktop-host-admission-once/owned-host-check.ps1'))
+$contextSource = [IO.Path]::GetFullPath((Join-Path $case 'scm-rpc-diagnosis/own-context-inventory.ps1'))
+$fieldsSource = [IO.Path]::GetFullPath((Join-Path $case 'scm-rpc-diagnosis/read-two-token-fields.ps1'))
+Pin-File $desktop 'd5951f08a87a996edfd617aff4c5f7d847eb4ff2bb31c562645cb235dbed0f2d'
+Pin-File $contextSource '3ca5a3bf5bfc51baefc5dc62a4ff833eb7ef1fc204edc363c707da6fc63634c5'
+Pin-File $fieldsSource '4d595518f02a7f9ed9f42671927a72d955d80925604fbe3c1c1054a2f074fa30'
+Import-PinnedFunctions $desktop @('Compile-AnebPinnedClass')
+Compile-AnebPinnedClass $desktop
+Compile-AnebPinnedClass $contextSource
+Compile-AnebPinnedClass $fieldsSource
+
+function Read-AnebAuthorizedAdminOrigin {
+ $process = [Diagnostics.Process]::GetCurrentProcess()
+ try { $actualExe = $process.MainModule.FileName } finally { $process.Dispose() }
+ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+ try {
+  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+  $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $h = [Security.Cryptography.SHA256]::Create()
+  try {
+   $sid = [BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity.User.Value))).Replace('-', '').ToLowerInvariant()
+  } finally {
+   $h.Dispose()
+  }
+ } finally {
+  $identity.Dispose()
+ }
+ $ctx = [AnebOwnContextInventory]::Context()
+ $tf = [AnebTwoTokenFields]::Read()
+ $parents = @(); $current = [int]$PID; $previous = $null
+ for ($i = 0; $i -lt 12; $i++) {
+  $p = $null
+  try { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction Stop } catch { $p = $null }
+  if ($null -eq $p -or $null -eq $p.CreationDate) { break }
+  $created = [datetime]$p.CreationDate
+  if ($null -ne $previous -and $created -gt $previous) { break }
+  $parents += , [ordered]@{
+   pid         = [int]$p.ProcessId
+   parent_pid  = [int]$p.ParentProcessId
+   name        = [string]$p.Name
+   exe         = [string]$p.ExecutablePath
+   created_utc = $created.ToUniversalTime().ToString('o')
+  }
+  if ($p.ParentProcessId -le 0 -or $p.ParentProcessId -eq $current) { break }
+  $previous = $created; $current = [int]$p.ParentProcessId
+ }
+ $origin = [ordered]@{
+  pid                      = $PID
+  pointer_size             = [IntPtr]::Size
+  actual_exe               = $actualExe
+  is_admin                 = [bool]$isAdmin
+  user_sid_sha256          = $sid
+  in_job                   = [bool]$ctx.in_job
+  po_agent_host_authorized = $true
+  context                  = $ctx
+  two_fields               = $tf
+  parents                  = $parents
+ }
+ return (Assert-AnebAuthorizedAdminOrigin $origin)
+}
+
+if (-not ('AnebCalibrationExit' -as [type])) {
+ Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class AnebCalibrationExit {[DllImport("kernel32.dll",SetLastError=true)]public static extern bool GetExitCodeProcess(IntPtr handle,out uint code);}'
+}
+
+function Start-Owned($file, [string[]]$arguments) {
+ $psi = [Diagnostics.ProcessStartInfo]::new()
+ $psi.FileName = $file
+ $psi.Arguments = (@($arguments | ForEach-Object { '"' + ($_.Replace('"', '\"')) + '"' }) -join ' ')
+ $psi.UseShellExecute = $false
+ $psi.CreateNoWindow = $true
+ $psi.RedirectStandardOutput = $true
+ $psi.RedirectStandardError = $true
+ $p = [Diagnostics.Process]::new()
+ $p.StartInfo = $psi
+ $c = [Diagnostics.Stopwatch]::StartNew()
+ if (-not $p.Start()) { throw 'Own process start refused' }
+ $h = $p.Handle
+ if ($h -eq [IntPtr]::Zero) { throw 'No original process HANDLE' }
+ return @{
+  process = $p
+  handle  = $h
+  clock   = $c
+  stdout  = $p.StandardOutput.ReadToEndAsync()
+  stderr  = $p.StandardError.ReadToEndAsync()
+  pid     = $p.Id
+ }
+}
+
+function Finish-Owned($job, [int]$budget) {
+ $left = [int][Math]::Max(0, $budget - $job.clock.ElapsedMilliseconds)
+ if ($left -eq 0 -or -not $job.process.WaitForExit($left)) {
+  throw 'Own process not exited within original budget; UNKNOWN, no PID kill or resend'
+ }
+ $code = [uint32]0
+ $ok = [AnebCalibrationExit]::GetExitCodeProcess($job.handle, [ref]$code)
+ $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+ if (-not $ok) { throw ('Actual exit query failed: ' + $errorCode) }
+ $texts = @()
+ foreach ($task in @($job.stdout, $job.stderr)) {
+  $left = [int][Math]::Max(0, $budget - $job.clock.ElapsedMilliseconds)
+  if (-not $task.IsCompleted -and ($left -eq 0 -or -not $task.Wait($left))) {
+   throw 'Output incomplete at original deadline'
+  }
+  $texts += , $task.GetAwaiter().GetResult()
+ }
+ if ($job.clock.ElapsedMilliseconds -gt $budget) { throw 'Original process/output budget exceeded' }
+ return [ordered]@{
+  pid                     = $job.pid
+  actual_exit_observed    = $true
+  native_exit_query_ok    = $ok
+  native_exit_query_error = 0
+  actual_exit_code        = $code
+  elapsed_ms              = $job.clock.ElapsedMilliseconds
+  stdout                  = $texts[0]
+  stderr                  = $texts[1]
+ }
+}
+
+function Partial-Owned($job, $failure) {
+ $v = [ordered]@{
+  pid                  = $job.pid
+  elapsed_ms           = $job.clock.ElapsedMilliseconds
+  failure              = $failure
+  actual_exit_observed = $false
+  actual_exit_code     = $null
+  stdout_state         = 'NOT_READY_NO_WAIT'
+  stderr_state         = 'NOT_READY_NO_WAIT'
+ }
+ try {
+  if ($job.process.HasExited) {
+   $v.actual_exit_observed = $true
+   $code = [uint32]0
+   $ok = [AnebCalibrationExit]::GetExitCodeProcess($job.handle, [ref]$code)
+   $v.native_exit_query_ok = $ok
+   if ($ok) { $v.actual_exit_code = $code }
+  }
+ } catch {
+  $v.exit_read_failure = $_.Exception.Message
+ }
+ foreach ($name in @('stdout', 'stderr')) {
+  try {
+   if ($job[$name].IsCompleted) {
+    $v[$name] = $job[$name].GetAwaiter().GetResult()
+    $v[$name + '_state'] = 'CAPTURED_WITHOUT_WAIT'
+   }
+  } catch {
+   $v[$name + '_failure'] = $_.Exception.Message
+  }
+ }
+ return $v
+}
+
+function Adb($name, [string[]]$arguments, [int]$budget = 10000) {
+ if ($cleanupClock) { $budget = [int][Math]::Min($budget, [Math]::Max(0, $cleanupBudgetMs - $cleanupClock.ElapsedMilliseconds)) }
+ if ($connectionClock) { $budget = [int][Math]::Min($budget, [Math]::Max(0, 30000 - $connectionClock.ElapsedMilliseconds)) }
+ if ($budget -le 0) { throw 'Bounded connection/cleanup clock exhausted before ADB' }
+ $budget = Get-AnebReadBudget $budget
+ $script:commandNumber++
+ $path = Join-Path $runtime ('adb-' + $script:commandNumber.ToString('D3') + '-' + $name + '.json')
+ $j = Start-Owned $adb (@('-s', $serial) + $arguments)
+ $retained = $false
+ try {
+  $v = Finish-Owned $j $budget
+  Save-New $path $v
+  if ($v.actual_exit_code -ne 0) { throw ('ADB actual exit nonzero: ' + $name) }
+  return $v.stdout
+ } catch {
+  if (-not (Test-Path -LiteralPath $path)) { Save-New $path (Partial-Owned $j $_.Exception.Message) }
+  if (-not $j.process.HasExited) { $script:unresolvedAdb += , $j; $retained = $true }
+  throw
+ } finally {
+  if (-not $retained) { $j.process.Dispose() }
+ }
+}
+
+function Phone-Clean($prefix) {
+ if ((Adb ($prefix + 'online') @('get-state')).Trim() -cne 'device') { throw 'P40 offline' }
+ $window = Adb ($prefix + 'focus') @('shell', 'dumpsys', 'window')
+ if ($window -notmatch 'mCurrentFocus=.*com\.huawei\.android\.launcher/') { throw 'Not Huawei Launcher' }
+ $p = Adb ($prefix + 'processes') @('shell', 'ps', '-A', '-o', 'PID,NAME')
+ if ($p -notmatch '\bPID\b.*\bNAME\b' -or $p -match 'com\.aneb\.probe|himovie|deepseek|moonshot|kimichat|qwen|aweme|screenrecord|scrcpy|httpcanary|remote_capture|tun2socks') {
+  throw 'Unknown conflicting session untouched'
+ }
+ $activeSvcs = Adb ($prefix + 'aneb-aweme-services') @('shell', 'dumpsys', 'activity', 'services')
+ if ($activeSvcs -match 'ServiceRecord\{[^\r\n]*(?:com\.aneb\.probe|com\.ss\.android\.ugc\.aweme)') {
+  throw 'Active ANEB or Douyin ServiceRecord present; not clean'
+ }
+ $activities = Adb ($prefix + 'settings-activities') @('shell', 'dumpsys', 'activity', 'activities')
+ $services = Adb ($prefix + 'settings-services') @('shell', 'dumpsys', 'activity', 'services', 'com.android.settings')
+ $present = $p -match '(?m)\scom\.android\.settings\r?$'
+ $processDump = ''
+ if ($present) { $processDump = Adb ($prefix + 'settings-state') @('shell', 'dumpsys', 'activity', 'processes') }
+ if (-not (Test-AnebSettingsIdle $window $activities $services $processDump $present)) {
+  throw 'Active or unknown Settings state; do not stop unknown process'
+ }
+ $n = Adb ($prefix + 'networks') @('shell', 'dumpsys', 'connectivity')
+ $a = @($n -split "`n" | Where-Object { $_ -match '^\s*NetworkAgentInfo\{' })
+ if ($a.Count -eq 0 -or @($a | Where-Object { $_ -notmatch '\bNOT_VPN\b' -or $_ -match 'Transports:[^\r\n]*\bVPN\b' }).Count) {
+  throw 'Unknown VPN/network'
+ }
+ if ((Adb ($prefix + 'projection') @('shell', 'dumpsys', 'media_projection')) -notmatch '(?s)^MEDIA PROJECTION MANAGER[^\r\n]*\r?\nMedia Projection:\s*null\s*$') {
+  throw 'Unknown active MediaProjection'
+ }
+ if ((Adb ($prefix + 'interfaces') @('shell', 'ls', '/sys/class/net')) -match '(?m)^(tun\d*|ppp\d*|wg\d+|ipsec\d+)\r?$') {
+  throw 'Unknown tunnel interface'
+ }
+ if ((Adb ($prefix + 'alwaysvpn') @('shell', 'settings', 'get', 'secure', 'always_on_vpn_app')).Trim() -cne 'null') {
+  throw 'Always-on VPN configured'
+ }
+}
+
+function Package-Hash($package, $name) {
+ $s = (Adb ($name + 'path') @('shell', 'pm', 'path', $package)).Trim()
+ if ($s -cnotmatch '^package:(/data/app/[A-Za-z0-9_~=/+.-]+/base\.apk)$') { throw ('Single installed APK required: ' + $package) }
+ $path = $Matches[1]
+ $s = Adb ($name + 'sha') @('shell', 'sha256sum', $path) 20000
+ if ($s -cnotmatch '^([0-9a-f]{64})\s') { throw ('Installed SHA unavailable: ' + $package) }
+ return @{ path = $path; sha = $Matches[1] }
+}
+
+function Host-NoResidue {
+ if ((Test-Path -LiteralPath 'HKLM:/SYSTEM/CurrentControlSet/Services/WinDivert') -or (Test-Path -LiteralPath 'HKLM:/SYSTEM/CurrentControlSet/Services/EventLog/System/WinDivert') -or @(Get-CimInstance Win32_SystemDriver -Filter "Name LIKE '%WinDivert%'" -ErrorAction Stop).Count -or @(Get-CimInstance Win32_Process -Filter "Name = 'phone-condition.exe'" -ErrorAction Stop).Count) {
+  throw 'Unknown host residue; no adoption'
+ }
+}
+
+function Stop-OwnDriver($phase) {
+ $cw = if ($cleanupClock) { $cleanupClock } else { [Diagnostics.Stopwatch]::StartNew() }
+ $r = [ordered]@{ created = $phase.created; delete_ok = $null; delete_error = $null; removed = $false; failure = $null; handle_errors = @() }
+ try {
+  if ($phase.created) {
+   if ($phase.started -and -not $phase.tree_proved) { throw 'Exact own exit/tree proof missing; no Stop/Delete' }
+   if ($cw.ElapsedMilliseconds -ge $cleanupBudgetMs) { throw 'Cleanup budget exhausted before service operation' }
+   $s = [AnebOwnedDriver+Status]::new()
+   if (-not [AnebOwnedDriver]::QueryServiceStatus($phase.service, [ref]$s)) { throw 'Own service Query failed' }
+   if ($s.State -ne 1) {
+    if (-not [AnebOwnedDriver]::ControlService($phase.service, 1, [ref]$s) -and [AnebOwnedDriver]::LastError() -ne 1062) {
+     throw 'Own service Stop failed'
+    }
+   }
+   while ($s.State -ne 1 -and $cw.ElapsedMilliseconds -lt $cleanupBudgetMs) {
+    Start-Sleep -Milliseconds 100
+    if (-not [AnebOwnedDriver]::QueryServiceStatus($phase.service, [ref]$s)) { throw 'Own service stop Query failed' }
+   }
+   if ($s.State -ne 1 -or $cw.ElapsedMilliseconds -ge $cleanupBudgetMs) { throw 'Own STOPPED/deadline missing' }
+   $r.delete_ok = [AnebOwnedDriver]::DeleteService($phase.service)
+   $r.delete_error = [AnebOwnedDriver]::LastError()
+   if (-not $r.delete_ok -and $r.delete_error -ne 1072) { throw 'Own Delete failed' }
+   if (-not [AnebOwnedDriver]::CloseServiceHandle($phase.service)) { throw 'Own service HANDLE close failed' }
+   $phase.service = [IntPtr]::Zero
+   $h = [AnebOwnedDriver]::OpenService($phase.scm, 'WinDivert', 4)
+   $e = [AnebOwnedDriver]::LastError()
+   if ($h -ne [IntPtr]::Zero) { [void][AnebOwnedDriver]::CloseServiceHandle($h); throw 'Service still present' }
+   if ($e -ne 1060) { throw 'Service absence UNKNOWN' }
+   $r.removed = $true
+  } else {
+   $r.no_service_created = $true
+  }
+ } catch {
+  $r.failure = $_.Exception.Message
+  if (-not $script:cleanupClock) { $script:cleanupClock = $cw }
+ } finally {
+  if ($phase.service -ne [IntPtr]::Zero) {
+   $r.fallback_service_handle_closed = [AnebOwnedDriver]::CloseServiceHandle($phase.service)
+   if (-not $r.fallback_service_handle_closed) { $r.handle_errors += , 'Own fallback HANDLE close failed' }
+  }
+  if ($phase.scm -ne [IntPtr]::Zero) {
+   $r.scm_handle_closed = [AnebOwnedDriver]::CloseServiceHandle($phase.scm)
+   if (-not $r.scm_handle_closed) { $r.handle_errors += , 'Own SCM HANDLE close failed' }
+  }
+  $r.elapsed_ms = $cw.ElapsedMilliseconds
+  if ($r.elapsed_ms -gt $cleanupBudgetMs) { $r.handle_errors += , 'Cleanup budget exceeded' }
+  if ($r.handle_errors.Count -and -not $script:cleanupClock) { $script:cleanupClock = $cw }
+  Save-New (Join-Path $phase.directory 'driver-cleanup.json') $r
+ }
+ if ($r.failure -or $r.handle_errors.Count -or ($phase.created -and -not $r.removed)) {
+  throw ('Own driver cleanup incomplete: ' + $r.failure + '; ' + ($r.handle_errors -join ';'))
+ }
+}

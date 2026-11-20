@@ -1,0 +1,770 @@
+param([switch]$ValidateOnly)
+# Pure ASCII PowerShell 5.1 source.
+. (Join-Path $PSScriptRoot 'common.ps1')
+Pin-File (Join-Path $driverDir 'WinDivert.dll') 'c1e060ee19444a259b2162f8af0f3fe8c4428a1c6f694dce20de194ac8d7d9a2'
+Pin-File (Join-Path $driverDir 'WinDivert64.sys') '8da085332782708d8767bcace5327a6ec7283c17cfb85e40b03cd2323a90ddc2'
+Pin-File $targetApk $targetSHA
+Pin-File $testApk $testSHA
+Pin-File $helper $helperSHA
+
+$ab = Read-JSON $artifactsBindingPath
+if ([string]$ab.source_commit -cne $sourceCommit -or [string]$ab.profile_sha256 -cne $profileSHA -or [string]$ab.ui_binding_sha256 -cne $uiBindingSHA -or [int64]$ab.target_business_version_code -ne $businessVerCode -or [string]$ab.artifacts.probe_debug_apk.sha256 -cne $targetSHA -or [string]$ab.artifacts.probe_debug_android_test_apk.sha256 -cne $testSHA -or [string]$ab.artifacts.phone_condition_exe.sha256 -cne $helperSHA) {
+ foreach ($pin in $pins) { $pin.Dispose() }
+ throw 'CANDIDATE_ARTIFACTS.json metadata drift from pinned artifacts'
+}
+$uiBytes = [IO.File]::ReadAllBytes($uiBindingPath)
+$uiText = [Text.UTF8Encoding]::new($true, $true).GetString($uiBytes)
+$uiValidation = {{UI_VALIDATOR_FN}} $uiText $uiBindingSHA
+$uiBindingB64 = [Convert]::ToBase64String($uiBytes)
+
+if ($ValidateOnly) {
+ ('Validated fixed sources/driver/APKs/UI-binding and compiled owned native wrappers (STAGED_AND_PINNED, query_plan=' + $uiValidation.query_plan_count + '); no runtime, service, hotspot, phone or business run')
+ foreach ($pin in $pins) { $pin.Dispose() }
+ exit 0
+}
+
+if (Test-Path -LiteralPath $runtime) {
+ foreach ($pin in $pins) { $pin.Dispose() }
+ throw 'Controlled R/B card already consumed; no repeat'
+}
+New-Item -ItemType Directory -Path $runtime -ErrorAction Stop | Out-Null
+
+$prep = [Diagnostics.Stopwatch]::StartNew()
+$ownPhone = $false
+$targetInstallAttempted = $false
+$testInstallAttempted = $false
+$pointerAttempted = $false
+$hotspotOwned = $false
+$manager = $null
+$phaseState = $null
+$hotspotClock = $null
+$priorTarget = $null
+$priorTest = $null
+$priorWifi = $null
+$priorSettings = @{}
+$priorPointerLocation = $null
+$priorScreenTimeout = $null
+$startTask = $null
+$sharingBefore = $null
+$originalSsid = $null
+$originalNetId = $null
+
+$r = [ordered]@{
+ format                                = '{{OUTCOME_FORMAT}}'
+ started_utc                           = [DateTime]::UtcNow.ToString('o')
+ source_commit                         = $sourceCommit
+ target_business_package               = $businessPkg
+ target_business_version_code          = $businessVerCode
+ profile_sha256                        = $profileSHA
+ ui_binding_sha256                     = $uiBindingSHA
+ ui_observation_method                 = $uiObservationMethod
+ topology_id                           = $topologyId
+ phases                                = @()
+ failure                               = $null
+ cleanup_errors                        = @()
+ pass                                  = $false
+ rb_pair_captured                      = $false
+ instrumentation_dispatch_permit_count = 0
+}
+
+function Prepared {
+ if ($prep.ElapsedMilliseconds -ge $prepBudgetMs) { throw 'Original preparation 360s budget exhausted' }
+}
+
+function Hotspot-Within {
+ if ($hotspotClock -and $hotspotClock.ElapsedMilliseconds -ge $hotspotBudgetMs) {
+  throw 'Bounded hotspot 380s window exhausted'
+ }
+ if (Test-Path -LiteralPath (Join-Path $root 'STOP')) { throw 'Explicit Root STOP' }
+ if ($hotspotOwned) {
+  $p = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType = WindowsRuntime]::GetInternetConnectionProfile()
+  if ($null -eq $p -or $p.NetworkAdapter.NetworkAdapterId.ToString().ToLowerInvariant() -cne '4f832b1f-4bfd-4866-8f3e-ad0c6e8c2b5d' -or $manager.TetheringOperationalState.ToString() -cne 'On' -or $manager.ClientCount -gt 1) {
+   throw 'Owned topology changed during controlled R/B run'
+  }
+ }
+}
+
+function Await-Tether($operation, [int]$budget) {
+ $task = $bridge[0].MakeGenericMethod($resultType).Invoke($null, @($operation))
+ if (-not $task.Wait($budget)) { throw 'Tether operation not terminal within budget; UNKNOWN' }
+ return $task.GetAwaiter().GetResult()
+}
+
+try {
+ $context = Read-AnebAuthorizedAdminOrigin
+ Save-New (Join-Path $runtime 'launch-context.json') $context
+ Host-NoResidue
+ Phone-Clean 'before-'
+
+ $appPkgDump = Adb 'business-package' @('shell', 'dumpsys', 'package', $businessPkg) 15000
+ if ($appPkgDump -notmatch ('\bversionCode=' + $businessVerCode + '\b')) {
+  throw ('Target business app ' + $businessPkg + ' versionCode=' + $businessVerCode + ' required on P40 Pro')
+ }
+ $wmSize = (Adb 'display-size' @('shell', 'wm', 'size')).Trim()
+ if ($wmSize -notmatch '1200x2640') {
+  throw ('Expected P40 Pro 1200x2640 display size, got: ' + $wmSize)
+ }
+
+ $hostBefore = Read-AnebEthernetOffTopology
+ Save-New (Join-Path $runtime 'ethernet-before.json') $hostBefore
+ $sharingBefore = @(Read-AnebSharingSnapshot 'before')
+ Assert-AnebSharingDisabled $sharingBefore
+ Prepared
+
+ $priorWifi = Adb 'wifi-before' @('shell', 'cmd', 'wifi', 'status')
+ if ($priorWifi -cnotmatch 'Wifi is connected to "([^"]+)"') { throw 'Current saved WiFi unavailable' }
+ $originalSsid = $Matches[1]
+ if ($priorWifi -cnotmatch 'Net ID: (\d+),') { throw 'Current saved WiFi Net ID unavailable' }
+ $originalNetId = $Matches[1]
+
+ foreach ($key in @('wifi_on', 'mobile_data', 'stay_on_while_plugged_in')) {
+  $priorSettings[$key] = (Adb ('setting-' + $key) @('shell', 'settings', 'get', 'global', $key)).Trim()
+ }
+ if ($priorSettings.wifi_on -cne '1') { throw 'Existing enabled WiFi required; no settings change' }
+ $priorPointerLocation = (Adb 'pointer-before' @('shell', 'settings', 'get', 'system', 'pointer_location')).Trim()
+ $priorScreenTimeout = (Adb 'timeout-before' @('shell', 'settings', 'get', 'system', 'screen_off_timeout')).Trim()
+
+ $priorTarget = Package-Hash $targetPkg 'target-before-'
+ $backupMain = [IO.Path]::GetFullPath((Join-Path $runtime 'main-before.apk'))
+ [void](Adb 'backup-main' @('pull', $priorTarget.path, $backupMain) 60000)
+ if ((Get-FileHash -LiteralPath $backupMain).Hash.ToLowerInvariant() -cne $priorTarget.sha) {
+  throw 'Current main APK backup SHA256 mismatch'
+ }
+
+ $priorTest = Package-Hash $testPkg 'test-before-'
+ $backupTest = [IO.Path]::GetFullPath((Join-Path $runtime 'test-before.apk'))
+ [void](Adb 'backup-test' @('pull', $priorTest.path, $backupTest) 30000)
+ if ((Get-FileHash -LiteralPath $backupTest).Hash.ToLowerInvariant() -cne $priorTest.sha) {
+  throw 'Current test APK backup SHA256 mismatch'
+ }
+ Prepared
+
+ if ($priorTarget.sha -cne $targetSHA) {
+  $targetInstallAttempted = $true
+  Save-New (Join-Path $runtime 'main-install-intent.json') @{
+   before_sha256         = $priorTarget.sha
+   candidate_sha256      = $targetSHA
+   replace_preserve_data = $true
+  }
+  $sMain = Adb 'install-main' @('install', '-r', $targetApk) 90000
+  if ($sMain -notmatch '(?m)^Success\r?$') { throw 'Candidate main APK install not confirmed' }
+ }
+ if ((Package-Hash $targetPkg 'target-after-').sha -cne $targetSHA) {
+  throw 'Installed main APK SHA256 mismatch'
+ }
+
+ if ($priorTest.sha -cne $testSHA) {
+  $testInstallAttempted = $true
+  Save-New (Join-Path $runtime 'test-install-intent.json') @{
+   before_sha256         = $priorTest.sha
+   candidate_sha256      = $testSHA
+   replace_preserve_data = $true
+  }
+  $sTest = Adb 'install-test' @('install', '-r', '-t', $testApk) 60000
+  if ($sTest -notmatch '(?m)^Success\r?$') { throw 'Candidate test APK install not confirmed' }
+ }
+ if ((Package-Hash $testPkg 'test-after-').sha -cne $testSHA) {
+  throw 'Installed test APK SHA256 mismatch'
+ }
+
+ if ($priorPointerLocation -cne '1') {
+  $pointerAttempted = $true
+  Save-New (Join-Path $runtime 'pointer-intent.json') @{
+   before_value = $priorPointerLocation
+   target_value = '1'
+  }
+  [void](Adb 'pointer-enable' @('shell', 'settings', 'put', 'system', 'pointer_location', '1'))
+  if ((Adb 'pointer-after-enable' @('shell', 'settings', 'get', 'system', 'pointer_location')).Trim() -cne '1') {
+   throw 'pointer_location=1 enable not confirmed'
+  }
+ }
+ Prepared
+
+ Add-Type -AssemblyName System.Runtime.WindowsRuntime
+ $managerType = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime]
+ $resultType = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime]
+ $bridge = @([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq 1 -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })
+ if ($bridge.Count -ne 1) { throw 'One public WinRT bridge required' }
+ $profile = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType = WindowsRuntime]::GetInternetConnectionProfile()
+ if ($null -eq $profile -or $profile.NetworkAdapter.NetworkAdapterId.ToString().ToLowerInvariant() -cne '4f832b1f-4bfd-4866-8f3e-ad0c6e8c2b5d') {
+  throw 'Uplink changed; no topology substitution'
+ }
+ $manager = $managerType::CreateFromConnectionProfile($profile)
+ $ssid = $manager.GetCurrentAccessPointConfiguration().Ssid
+ $hash = [Security.Cryptography.SHA256]::Create()
+ try {
+  $ssidHash = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($ssid))).Replace('-', '').ToLowerInvariant()
+ } finally {
+  $hash.Dispose()
+ }
+ if ($manager.TetheringOperationalState.ToString() -cne 'Off' -or $ssidHash -cne '8d723f7a052acd441348ac7ec8775e906af3b35f1568616833c7f6b541f73773') {
+  throw 'Unknown active AP or saved profile drift; untouched'
+ }
+
+ Save-New (Join-Path $runtime 'before.json') ([ordered]@{
+  phone_wifi              = $priorWifi
+  original_wifi_ssid      = $originalSsid
+  original_wifi_net_id    = $originalNetId
+  settings                = $priorSettings
+  pointer_location        = $priorPointerLocation
+  screen_off_timeout      = $priorScreenTimeout
+  prior_target_sha256     = $priorTarget.sha
+  prior_test_sha256       = $priorTest.sha
+  candidate_target_sha256 = $targetSHA
+  candidate_test_sha256   = $testSHA
+  hotspot_state           = 'Off'
+  ssid_sha256             = $ssidHash
+  host_topology           = $hostBefore
+  sharing                 = $sharingBefore
+ })
+ Prepared
+
+ Save-New (Join-Path $runtime 'hotspot-start-intent.json') @{
+  own_start_attempted = $true
+  ssid_sha256         = $ssidHash
+  utc                 = [DateTime]::UtcNow.ToString('o')
+ }
+ $startTask = $bridge[0].MakeGenericMethod($resultType).Invoke($null, @($manager.StartTetheringAsync()))
+ if (-not $startTask.Wait(30000)) { throw 'Tether start not terminal within 30s; settle only in cleanup' }
+ $start = $startTask.GetAwaiter().GetResult()
+ if ($start.Status.ToString() -cne 'Success' -or $manager.TetheringOperationalState.ToString() -cne 'On') {
+  throw 'Hotspot own start unconfirmed'
+ }
+ $hotspotOwned = $true
+ $hotspotClock = [Diagnostics.Stopwatch]::StartNew()
+
+ Hotspot-Within; Prepared
+ Connect-AnebExistingSavedWifi $ssid 'admission'
+
+ $phoneIp = $null
+ $ipText = Adb 'wlan-ip' @('shell', 'ip', '-4', 'addr', 'show', 'wlan0')
+ if ($ipText -match '\binet (192\.168\.137\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4]))/24\b') {
+  $phoneIp = $Matches[1]
+ }
+ if (-not $phoneIp) { throw 'Actual phone IPv4 unavailable on owned PC AP' }
+ $ap = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceGuid.ToString().Trim('{}').ToLowerInvariant() -ceq '7213c2a9-63f1-4f03-971e-ef715be25db6' })
+ if ($ap.Count -ne 1 -or $ap[0].Status -cne 'Up') { throw 'Actual AP identity not Up' }
+ $ifIndex = [uint32]$ap[0].ifIndex
+ if (@(Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 | Where-Object IPAddress -CEQ '192.168.137.1').Count -ne 1 -or $manager.ClientCount -ne 1) {
+  throw 'AP gateway/single-client proof missing'
+ }
+ $route = Adb 'phone-routes' @('shell', 'ip', '-4', 'route', 'show', 'table', 'all')
+ if ($route -notmatch 'default via 192\.168\.137\.1 dev wlan0') {
+  throw 'Phone default route not via owned PC gateway'
+ }
+ Phone-Clean 'ap-'
+ Prepared
+
+ $connInfo = $null
+ for ($ci = 0; $ci -lt 16; $ci++) {
+  $apConnDump = Adb ('ap-connectivity-' + $ci) @('shell', 'dumpsys', 'connectivity')
+  try {
+   $connInfo = ConvertFrom-AnebConnectivityDefaultWifi $apConnDump 'wlan0'
+   if ($connInfo -and [string]$connInfo.ssid -ceq $ssid) { break }
+  } catch {
+   $connInfo = $null
+  }
+  Start-Sleep -Milliseconds 750
+ }
+ if (-not $connInfo) {
+  throw 'Phone default WiFi network on owned PC AP did not reach WIFI+INTERNET+VALIDATED+NOT_VPN'
+ }
+ $networkKey = [string]$connInfo.network_key
+ Save-New (Join-Path $runtime 'ap-network-key.json') $connInfo
+
+ $sharingActive = @(Read-AnebSharingSnapshot 'active')
+ Assert-AnebSharingDisabled $sharingActive
+ $probeRemotes = @(Resolve-AnebBusinessProbeRemotes @({{PROBE_CANDIDATE_HOSTS}}) @('114.114.114.114', '223.5.5.5') 8)
+ $winrtSnapshot = Read-AnebWinRtHotspotUplinkAndRouteSnapshot $manager $probeRemotes $sharingActive
+ Save-New (Join-Path $runtime 'winrt-uplink-route-snapshot.json') $winrtSnapshot
+ $routeProof = Assert-AnebWinRtHotspotUplinkAndRoute $winrtSnapshot
+ Save-New (Join-Path $runtime 'winrt-uplink-route-proof.json') $routeProof
+ $uplinkIfIndex = [uint32]$routeProof.expected_uplink_interface_index
+ Prepared; Hotspot-Within
+
+ $card = [ordered]@{
+  format                            = '{{CARD_FORMAT}}'
+  po                                = '{{CARD_PO}}'
+  topology_id                       = $topologyId
+  uplink_adapter                    = '4f832b1f-4bfd-4866-8f3e-ad0c6e8c2b5d'
+  ap_adapter                        = '7213c2a9-63f1-4f03-971e-ef715be25db6'
+  expected_uplink_interface_index   = $uplinkIfIndex
+  ap_interface_index                = $ifIndex
+  phone_ipv4                        = $phoneIp
+  network_key                       = $networkKey
+  source_commit                     = $sourceCommit
+  target_apk_sha256                 = $targetSHA
+  test_apk_sha256                   = $testSHA
+  helper_sha256                     = $helperSHA
+  profile_sha256                    = $profileSHA
+  ui_binding_sha256                 = $uiBindingSHA
+  ui_observation_method             = $uiObservationMethod
+  target_business_package           = $businessPkg
+  target_business_version_code      = $businessVerCode
+  original_wifi_ssid                = $originalSsid
+  original_wifi_net_id              = $originalNetId
+  original_pointer_location         = $priorPointerLocation
+  phases                            = @('R', 'B')
+  native_ttl_seconds                = $nativeTtlSeconds
+  b_downlink_ip_bytes_per_second    = $bDownlinkIpBytesPerSecond
+  b_downlink_delay_ms               = $bDownlinkDelayMs
+  b_downlink_loss_bps               = $bDownlinkLossBps
+  b_impairment_seed                 = $bImpairmentSeed
+  b_queue_overflow_policy           = $bQueueOverflowPolicy
+  b_queue_limit_bytes               = $bQueueLimitBytes
+  measurement_clock                 = 'Android elapsedRealtimeNanos'
+ }
+ Save-New (Join-Path $runtime 'CARD.json') $card
+ $cardSHA = (Get-FileHash -LiteralPath (Join-Path $runtime 'CARD.json')).Hash.ToLowerInvariant()
+
+ $chain = [Diagnostics.Stopwatch]::StartNew()
+ foreach ($conditionId in @('R', 'B')) {
+  Hotspot-Within
+  if ($chain.ElapsedMilliseconds -ge $chainBudgetMs) {
+   throw 'Bounded R/B chain 320s budget exhausted before phase start'
+  }
+  Host-NoResidue
+  Phone-Clean ('pre-' + $conditionId + '-')
+  $liveConn = ConvertFrom-AnebConnectivityDefaultWifi (Adb ('pre-' + $conditionId + '-conn') @('shell', 'dumpsys', 'connectivity')) 'wlan0'
+  if ([string]$liveConn.network_key -cne $networkKey) {
+   throw ('Reference network_key drifted before phase ' + $conditionId + ': got ' + $liveConn.network_key + ', expected ' + $networkKey)
+  }
+
+  $phaseClock = [Diagnostics.Stopwatch]::StartNew()
+  $directory = [IO.Path]::GetFullPath((Join-Path $runtime ('phase-' + $conditionId)))
+  New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+  $mode = if ($conditionId -ceq 'B') { 'limit' } else { 'inspect' }
+  $inspect = [IO.Path]::GetFullPath((Join-Path $directory 'inspect'))
+  $request = [IO.Path]::GetFullPath((Join-Path $directory 'request.json'))
+
+  $reqPayload = New-AnebForwardConditionRequest $mode @($phoneIp) $ifIndex $nativeTtlSeconds $bDownlinkIpBytesPerSecond $driverDir $inspect $uplinkIfIndex $probeRemotes
+  if ($conditionId -ceq 'B') {
+   if ($bDownlinkDelayMs -gt 0) { $reqPayload['downlink_delay_ms'] = $bDownlinkDelayMs }
+   if ($bDownlinkLossBps -gt 0) {
+    $reqPayload['downlink_loss_bps'] = $bDownlinkLossBps
+    $reqPayload['impairment_seed'] = $bImpairmentSeed
+   }
+   if (-not [string]::IsNullOrWhiteSpace($bQueueOverflowPolicy)) {
+    $reqPayload['queue_overflow_policy'] = $bQueueOverflowPolicy
+   }
+   if ($bQueueLimitBytes -gt 0) {
+    $reqPayload['queue_limit_bytes'] = $bQueueLimitBytes
+   }
+  }
+  Save-New $request $reqPayload
+  $requestSHA = (Get-FileHash -LiteralPath $request).Hash.ToLowerInvariant()
+  Pin-File $request $requestSHA
+  $savedRequest = Read-JSON $request
+
+  $unicastBefore = Read-AnebAdapterUnicastSnapshot $uplinkIfIndex $ifIndex
+  Save-New (Join-Path $directory 'unicast-before.json') $unicastBefore
+
+  $phaseState = @{
+   directory   = $directory
+   scm         = [IntPtr]::Zero
+   service     = [IntPtr]::Zero
+   created     = $false
+   started     = $false
+   tree_proved = $false
+   job         = $null
+  }
+  try {
+   $phaseState.scm = [AnebOwnedDriver]::OpenLocalManager()
+   if ($phaseState.scm -eq [IntPtr]::Zero) { throw ('SCM refused: ' + [AnebOwnedDriver]::LastError()) }
+   $phaseState.service = [AnebOwnedDriver]::CreateOwnedDriver($phaseState.scm, (Join-Path $driverDir 'WinDivert64.sys'))
+   if ($phaseState.service -eq [IntPtr]::Zero) { throw ('CreateService refused: ' + [AnebOwnedDriver]::LastError() + '; no adoption') }
+   $phaseState.created = $true
+   Hotspot-Within
+
+   $j = Start-Owned $helper @($mode, '-config', $request)
+   $phaseState.job = $j
+   $phaseState.started = $true
+
+   $ready = $null
+   while ($j.clock.ElapsedMilliseconds -lt 8000) {
+    Hotspot-Within
+    if ($j.process.HasExited) { throw 'Helper exited before readiness; no business run' }
+    if (Test-Path -LiteralPath (Join-Path $inspect 'native-ready.json')) {
+     try { $ready = Read-JSON (Join-Path $inspect 'native-ready.json') } catch { $ready = $null }
+     if ($ready) { break }
+    }
+    Start-Sleep -Milliseconds 50
+   }
+   if (-not $ready) { throw 'Actual native ready not observed inside 8s; no business run' }
+
+   $parent = Read-JSON (Join-Path $inspect 'parent-start.json')
+   $worker = Read-JSON (Join-Path $inspect 'worker-start.json')
+   if ($parent.pid -ne $j.pid -or $parent.binary_sha256 -cne $helperSHA -or $parent.request_sha256 -cne $requestSHA -or $worker.request_sha256 -cne $requestSHA -or $worker.pid -ne $ready.pid -or $ready.mode -cne $mode -or $ready.request_sha256 -cne $requestSHA -or $ready.format -cne 'phone-forward-native-ready-1' -or $ready.state -cne 'OWNED_OPEN_NOT_A_RESULT' -or $ready.qpc_frequency -ne [Diagnostics.Stopwatch]::Frequency -or $ready.run_origin_qpc -le 0 -or $ready.ready_qpc -lt $ready.run_origin_qpc -or $ready.deadline_qpc -ne ($ready.run_origin_qpc + $nativeTtlSeconds * $ready.qpc_frequency)) {
+    throw 'Native ready identity/clock mismatch; no business run'
+   }
+   Assert-AnebNativeUplinkReadyProof $ready $uplinkIfIndex $ifIndex $probeRemotes
+   $live = @(Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$ready.pid) -ErrorAction Stop)
+   if ($live.Count -ne 1 -or $live[0].ParentProcessId -ne $j.pid -or [IO.Path]::GetFullPath([string]$live[0].ExecutablePath) -ine [IO.Path]::GetFullPath($helper)) {
+    throw 'Own live worker identity missing'
+   }
+   $dispatch = [Diagnostics.Stopwatch]::GetTimestamp()
+   if ($j.process.HasExited -or (Test-Path -LiteralPath (Join-Path $inspect 'supervisor.json')) -or (($ready.deadline_qpc - $dispatch) / [double]$ready.qpc_frequency) -lt 80.0) {
+    throw 'Native 100s window headroom (<80s) insufficient at dispatch; no business run'
+   }
+
+   $runId = $runIdPrefix + $conditionId
+   $instArgs = @(
+    'shell', 'am', 'instrument', '-w', '-r',
+    '-e', 'class', '{{INSTRUMENTATION_CLASS}}',
+    '-e', 'feature_release', 'video-business-profile-1',
+    '-e', 'live_authorized', 'true',
+    '-e', 'execution_mode', 'CONTROLLED_CONDITION_RUN',
+    '-e', 'run_id', $runId,
+    '-e', 'max_gestures', '1',
+    '-e', 'profile_sha256', $profileSHA,
+    '-e', 'app_version_code', ([string]$businessVerCode),
+    '-e', 'ui_observation_method', $uiObservationMethod,
+    '-e', 'ui_binding_b64', $uiBindingB64,
+    '-e', 'ui_binding_sha256', $uiBindingSHA,
+    '-e', 'network_key', $networkKey,
+    '-e', 'condition_id', $conditionId,
+    '-e', 'host_condition_mode', $mode,
+    '-e', 'host_topology_id', $topologyId,
+    '-e', 'host_request_sha256', $requestSHA,
+    '-e', 'host_uplink_if_index', ([string]$uplinkIfIndex),
+    '-e', 'host_ap_if_index', ([string]$ifIndex),
+    '-e', 'confirm_visible_projection_consent', 'true'
+   )
+   $instArgs += @(Get-AnebPhaseInstrumentationConditionArgs $conditionId $savedRequest)
+   $instArgs += ($testPkg + '/androidx.test.runner.AndroidJUnitRunner')
+
+   Hotspot-Within
+   $ownPhone = $true
+   $r.instrumentation_dispatch_permit_count++
+   Save-New (Join-Path $directory 'DISPATCH_INTENT.json') ([ordered]@{
+    card_sha256        = $cardSHA
+    condition_id       = $conditionId
+    host_mode          = $mode
+    request_sha256     = $requestSHA
+    network_key        = $networkKey
+    ready              = $ready
+    dispatch_qpc       = $dispatch
+    run_id             = $runId
+    max_one_gesture    = $true
+   })
+
+   Write-Host ('[ACTION REQUIRED ON P40 PRO] Condition ' + $conditionId + ' (' + $mode + '): confirming verified visible Android screen-capture consent dialog autonomously (no appops bypass).')
+   $instText = Adb ($conditionId + '-instrument') $instArgs $instrumentBudgetMs
+   $returned = [Diagnostics.Stopwatch]::GetTimestamp()
+
+   $remoteRunDir = '/sdcard/Android/data/' + $targetPkg + '/files/video-business/' + $runId
+   $deviceDest = [IO.Path]::GetFullPath((Join-Path $directory 'device-original'))
+   [void](Adb ($conditionId + '-pull') @('pull', $remoteRunDir, $deviceDest) 60000)
+
+   [void](Adb ($conditionId + '-stop-business') @('shell', 'am', 'force-stop', $businessPkg))
+   [void](Adb ($conditionId + '-stop-target') @('shell', 'am', 'force-stop', $targetPkg))
+   [void](Adb ($conditionId + '-stop-test') @('shell', 'am', 'force-stop', $testPkg))
+   $ownPhone = $false
+
+   $actual = Finish-Owned $j $helperBudgetMs
+   Save-New (Join-Path $directory 'helper-exit.json') $actual
+
+   $sup = Read-JSON (Join-Path $inspect 'supervisor.json')
+   $ws = Read-JSON (Join-Path $inspect 'worker.json')
+   $receipt = $sup.worker.receipt
+   if ($sup.binary_sha256 -cne $helperSHA -or $sup.request_sha256 -cne $requestSHA -or $ws.request_sha256 -cne $requestSHA -or $sup.worker.request_sha256 -cne $requestSHA -or $ws.pid -ne $ready.pid -or $sup.process.PID -ne $ready.pid -or $sup.worker.pid -ne $ready.pid) {
+    throw 'Final own provenance missing; no service Stop/Delete'
+   }
+   $phaseState.tree_proved = ($sup.process.OwnedTreeEmpty -is [bool] -and $sup.process.OwnedTreeEmpty -and $sup.process.ExitConfirmed -is [bool] -and $sup.process.ExitConfirmed)
+   if ($actual.actual_exit_code -ne 0 -or $null -eq $sup.process.ExitCode -or $sup.process.ExitCode -ne 0 -or $sup.failure -or $ws.failure -or $sup.worker.failure -or -not $phaseState.tree_proved) {
+    throw 'Host actual exit/native supervision failed'
+   }
+   foreach ($flag in @('ExitConfirmed', 'AssignedToOwnedJob', 'DeadlineArmedBeforeResume', 'Resumed', 'OwnedTreeEmpty', 'JobClosed', 'ProcessHandleClosed', 'ThreadHandleClosed', 'TimerHandleClosed')) {
+    if ($sup.process.$flag -isnot [bool] -or -not $sup.process.$flag) {
+     throw ('Missing supervisor actual true: ' + $flag)
+    }
+   }
+   if ($sup.process.TimedOut -isnot [bool] -or $sup.process.TimedOut -or $ws.owned_handle_returned -ne $true -or $sup.worker.owned_handle_returned -ne $true) {
+    throw 'Native/timeout provenance failed'
+   }
+   foreach ($native in @($ws, $sup.worker)) {
+    if ($native.format -cne ('phone-forward-' + $mode + '-result-1') -or $native.driver_open_attempted -ne $true -or $native.owned_handle_returned -ne $true -or $native.failure) {
+     throw 'Native result identity/open failure'
+    }
+    foreach ($flag in @('DriverDrained', 'OwnedHandleClosed', 'WorkersJoined')) {
+     if ($native.receipt.$flag -isnot [bool] -or -not $native.receipt.$flag) {
+      throw ('Native cleanup missing: ' + $flag)
+     }
+    }
+    $allowed = if ($mode -ceq 'inspect') { @('NO_MATCHING_PACKETS', 'OBSERVED_NOT_QUALIFIED') } else { @('NO_PACED_PACKETS', 'INJECTED_NOT_CALIBRATED') }
+    if ($native.receipt.StopReason -cne 'TTL_EXPIRED' -or $native.receipt.State -cnotin $allowed -or $native.receipt.Mode -cne $mode -or $native.receipt.UnconfirmedUserPackets -ne 0 -or $native.receipt.Failures) {
+     throw 'Original native window not confirmed through normal TTL_EXPIRED/cleanup'
+    }
+   }
+
+   Save-New (Join-Path $directory 'WINDOW.json') ([ordered]@{
+    dispatch_qpc               = $dispatch
+    instrumentation_return_qpc = $returned
+    conservative_deadline_qpc  = $ready.deadline_qpc
+    contained                  = ($dispatch -ge $ready.ready_qpc -and $returned -le $ready.deadline_qpc)
+   })
+   if ($returned -gt $ready.deadline_qpc -or $dispatch -lt $ready.ready_qpc) {
+    throw ('Condition ' + $conditionId + ' instrumentation not fully contained inside native 100s window; INCONCLUSIVE')
+   }
+
+   $pulledRoot = if (Test-Path -LiteralPath (Join-Path $deviceDest 'result.json')) {
+    $deviceDest
+   } elseif (Test-Path -LiteralPath (Join-Path (Join-Path $deviceDest $runId) 'result.json')) {
+    Join-Path $deviceDest $runId
+   } else {
+    throw ('Pulled device result.json missing for ' + $runId)
+   }
+   $devResult = Read-JSON (Join-Path $pulledRoot 'result.json')
+   $devBinding = Read-JSON (Join-Path $pulledRoot 'binding.json')
+   if ([string]$devResult.format -cne 'business-video-raw-1' -or [string]$devResult.runId -cne $runId -or [string]$devResult.conditionId -cne $conditionId -or [string]$devResult.profileSha256 -cne $profileSHA -or $devResult.ownedCleanup -ne $true -or [string]$devBinding.networkKey -cne $networkKey -or [string]$devResult.hostNetworkCondition.requestSha256 -cne $requestSHA -or [string]$devResult.hostNetworkCondition.conditionMode -cne $mode) {
+    throw ('Device result/binding provenance mismatch in condition ' + $conditionId)
+   }
+   Assert-AnebPhaseResultConditionMatch $conditionId $devResult $savedRequest
+   if ([string]$devResult.state -cne 'CAPTURED_AWAITING_REVIEW' -or [string]$devResult.category -cne 'OBSERVATION_CAPTURED' -or [string]$devResult.swipeCalls -cne '1') {
+    throw ('Condition ' + $conditionId + ' stopped before CAPTURED_AWAITING_REVIEW: state=' + $devResult.state + ', category=' + $devResult.category + ', reason=' + $devResult.reason)
+   }
+   if ($instText -notmatch 'OK \(1 test\)') {
+    throw ('Instrumentation did not report OK (1 test) in condition ' + $conditionId)
+   }
+   $videoPath = Join-Path $pulledRoot 'video.mp4'
+   if (-not (Test-Path -LiteralPath $videoPath) -or (Get-Item -LiteralPath $videoPath).Length -le 64) {
+    throw ('Condition ' + $conditionId + ' video.mp4 missing or empty')
+   }
+
+   foreach ($native in @($ws, $sup.worker)) {
+    Assert-AnebNativeBusinessUplinkResultProof $native $mode $uplinkIfIndex $ifIndex
+   }
+   $unicastAfter = Read-AnebAdapterUnicastSnapshot $uplinkIfIndex $ifIndex
+   Save-New (Join-Path $directory 'unicast-after.json') $unicastAfter
+   $unicastDelta = Assert-AnebBusinessPhaseUnicastDelta $unicastBefore $unicastAfter 1048576
+   Save-New (Join-Path $directory 'unicast-delta.json') $unicastDelta
+   Hotspot-Within
+
+   $r.phases += , [ordered]@{
+    condition_id            = $conditionId
+    run_id                  = $runId
+    host_mode               = $mode
+    device_state            = [string]$devResult.state
+    device_category         = [string]$devResult.category
+    frames_captured         = @($devResult.frames).Count
+    video_mp4_bytes         = (Get-Item -LiteralPath $videoPath).Length
+    host_state              = [string]$receipt.State
+    matched_packets         = [uint64]$receipt.ReceivedPackets
+    injected_packets        = [uint64]$receipt.InjectedPackets
+    eth_rx_delta_bytes      = [uint64]$unicastDelta.delta_uplink_rx_unicast_bytes
+    ap_tx_delta_bytes       = [uint64]$unicastDelta.delta_ap_tx_unicast_bytes
+    native_uplink_in_octets = [uint64]$ws.uplink_proof.uplink_delta.in_ucast_octets
+    native_ap_out_octets    = [uint64]$ws.uplink_proof.ap_delta.out_ucast_octets
+    elapsed_ms              = $phaseClock.ElapsedMilliseconds
+   }
+  } catch {
+   Save-New (Join-Path $directory 'phase-failure.json') @{
+    failure = $_.Exception.GetType().FullName + ':' + $_.Exception.Message
+    utc     = [DateTime]::UtcNow.ToString('o')
+   }
+   if (-not $cleanupClock) { $cleanupClock = [Diagnostics.Stopwatch]::StartNew() }
+   throw
+  } finally {
+   if ($phaseState.started -and -not $phaseState.tree_proved) {
+    try {
+     $v = Finish-Owned $phaseState.job $helperBudgetMs
+     if (-not (Test-Path -LiteralPath (Join-Path $directory 'helper-exit.json'))) {
+      Save-New (Join-Path $directory 'helper-exit.json') $v
+     }
+     $s = Read-JSON (Join-Path $inspect 'supervisor.json')
+     $p = Read-JSON (Join-Path $inspect 'parent-start.json')
+     $w = Read-JSON (Join-Path $inspect 'worker-start.json')
+     if ($s.binary_sha256 -ceq $helperSHA -and $p.binary_sha256 -ceq $helperSHA -and $p.pid -eq $phaseState.job.pid -and $p.request_sha256 -ceq $requestSHA -and $s.request_sha256 -ceq $requestSHA -and $s.worker.request_sha256 -ceq $requestSHA -and $w.request_sha256 -ceq $requestSHA -and $w.pid -eq $s.process.PID -and $s.worker.pid -eq $w.pid -and $s.process.ExitConfirmed -eq $true -and $s.process.OwnedTreeEmpty -eq $true) {
+      $phaseState.tree_proved = $true
+     }
+    } catch {
+     Save-New (Join-Path $directory 'unconfirmed-own-exit.json') (Partial-Owned $phaseState.job $_.Exception.Message)
+    }
+   }
+   $phaseCleanupFailed = $false
+   try {
+    Stop-OwnDriver $phaseState
+   } catch {
+    $r.cleanup_errors += , $_.Exception.Message
+    $phaseCleanupFailed = $true
+   } finally {
+    if ($phaseState.job) { $phaseState.job.process.Dispose() }
+    $phaseState = $null
+   }
+  }
+  if ($phaseCleanupFailed) { throw 'Driver cleanup failed; no next condition' }
+  if ($phaseClock.ElapsedMilliseconds -gt $phaseBudgetMs -or $chain.ElapsedMilliseconds -gt $chainBudgetMs) {
+   throw 'Bounded phase 150s / chain 320s budget exceeded'
+  }
+ }
+ $r.rb_pair_captured = ($r.phases.Count -eq 2)
+} catch {
+ $r.failure = $_.Exception.GetType().FullName + ':' + $_.Exception.Message
+} finally {
+ if (-not $cleanupClock) { $cleanupClock = [Diagnostics.Stopwatch]::StartNew() }
+ if ($ownWifiUI) {
+  try { Close-AnebOwnWifiUI } catch { $r.cleanup_errors += , $_.Exception.Message }
+ }
+ if ($ownPhone) {
+  try {
+   [void](Adb 'cleanup-own-business' @('shell', 'am', 'force-stop', $businessPkg))
+   [void](Adb 'cleanup-own-target' @('shell', 'am', 'force-stop', $targetPkg))
+   [void](Adb 'cleanup-own-test' @('shell', 'am', 'force-stop', $testPkg))
+   $fg = Adb 'cleanup-own-focus' @('shell', 'dumpsys', 'window')
+   if ($fg -notmatch 'mCurrentFocus=.*com\.huawei\.android\.launcher/' -and $fg -match ('mCurrentFocus=.*(?:' + [regex]::Escape($businessPkg) + '|com\.aneb\.probe)')) {
+    [void](Adb 'cleanup-own-home' @('shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.HOME'))
+    Start-Sleep -Milliseconds 600
+   }
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ }
+ if ($pointerAttempted -and $null -ne $priorPointerLocation) {
+  try {
+   if ($priorPointerLocation -ceq 'null') {
+    [void](Adb 'restore-pointer-delete' @('shell', 'settings', 'delete', 'system', 'pointer_location'))
+   } else {
+    [void](Adb 'restore-pointer-put' @('shell', 'settings', 'put', 'system', 'pointer_location', $priorPointerLocation))
+   }
+   $nowPtr = (Adb 'restore-pointer-readback' @('shell', 'settings', 'get', 'system', 'pointer_location')).Trim()
+   if ($nowPtr -cne $priorPointerLocation) { throw ('pointer_location readback mismatch: got ' + $nowPtr) }
+   $r.pointer_location_restored = $true
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ } else {
+  $r.pointer_location_restored = $true
+ }
+
+ if (-not $hotspotOwned -and $startTask) {
+  try {
+   $left = [int][Math]::Max(0, 180000 - $cleanupClock.ElapsedMilliseconds)
+   if (-not $startTask.IsCompleted -and ($left -eq 0 -or -not $startTask.Wait($left))) {
+    throw 'Late own AP start outcome UNKNOWN; no blind stop'
+   }
+   $late = $startTask.GetAwaiter().GetResult()
+   $hotspotOwned = $late.Status.ToString() -ceq 'Success'
+   $r.late_hotspot_start_status = $late.Status.ToString()
+   if (-not $hotspotOwned -and $manager.TetheringOperationalState.ToString() -cne 'Off') {
+    throw 'AP ownership unconfirmed; unknown replacement untouched'
+   }
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ }
+ if ($hotspotOwned) {
+  try {
+   $h = [Security.Cryptography.SHA256]::Create()
+   try {
+    $actual = [BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($manager.GetCurrentAccessPointConfiguration().Ssid))).Replace('-', '').ToLowerInvariant()
+   } finally {
+    $h.Dispose()
+   }
+   if ($actual -cne $ssidHash) { throw 'AP identity changed; unknown replacement untouched' }
+   if ($manager.TetheringOperationalState.ToString() -ceq 'On') {
+    $left = [int][Math]::Min(30000, $cleanupBudgetMs - $cleanupClock.ElapsedMilliseconds)
+    if ($left -le 0) { throw 'Cleanup budget exhausted before AP stop' }
+    $stop = Await-Tether ($manager.StopTetheringAsync()) $left
+    if ($stop.Status.ToString() -cne 'Success') { throw 'Own AP stop refused' }
+   }
+   if ($manager.TetheringOperationalState.ToString() -cne 'Off') { throw 'Own AP not Off' }
+   $r.hotspot_restored_off = $true
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ }
+ if ($sharingBefore) {
+  try {
+   $hostAfter = Read-AnebEthernetOffTopology
+   Save-New (Join-Path $runtime 'ethernet-after.json') $hostAfter
+   $sharingAfter = @(Read-AnebSharingSnapshot 'after')
+   Assert-AnebSharingRestored $sharingBefore $sharingAfter
+   $r.host_topology_and_bindings_restored = $true
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ }
+ if ($hotspotOwned -and $originalSsid) {
+  try {
+   $wifiRestore = Restore-AnebOriginalSavedWifi $originalSsid $originalNetId 15000 500
+   Save-New (Join-Path $runtime 'wifi-restore-receipt.json') $wifiRestore
+   $r.original_wifi_restored = $true
+   $r.wifi_restore_mode = $wifiRestore.mode
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ }
+ if ($targetInstallAttempted) {
+  try {
+   if (@($unresolvedAdb | Where-Object { -not $_.process.HasExited }).Count) { throw 'Unresolved ADB command; no main APK rollback' }
+   $nowMain = Package-Hash $targetPkg 'rollback-main-before-'
+   if ($nowMain.sha -ceq $priorTarget.sha) {
+    $r.prior_target_restored = $true
+   } elseif ($nowMain.sha -ceq $targetSHA) {
+    if ((Get-FileHash -LiteralPath $backupMain).Hash.ToLowerInvariant() -cne $priorTarget.sha) { throw 'Main backup SHA256 drift' }
+    if ((Adb 'restore-main' @('install', '-r', $backupMain) 90000) -notmatch '(?m)^Success\r?$') { throw 'Prior main APK replacement not confirmed' }
+    if ((Package-Hash $targetPkg 'rollback-main-after-').sha -cne $priorTarget.sha) { throw 'Prior main APK readback mismatch' }
+    $r.prior_target_restored = $true
+   } else {
+    throw 'Installed main APK identity unknown; no overwrite'
+   }
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ } else {
+  $r.prior_target_restored = $true
+ }
+
+ if ($testInstallAttempted) {
+  try {
+   if (@($unresolvedAdb | Where-Object { -not $_.process.HasExited }).Count) { throw 'Unresolved ADB command; no test APK rollback' }
+   $nowTest = Package-Hash $testPkg 'rollback-test-before-'
+   if ($nowTest.sha -ceq $priorTest.sha) {
+    $r.prior_test_restored = $true
+   } elseif ($nowTest.sha -ceq $testSHA) {
+    if ((Get-FileHash -LiteralPath $backupTest).Hash.ToLowerInvariant() -cne $priorTest.sha) { throw 'Test backup SHA256 drift' }
+    if ((Adb 'restore-test' @('install', '-r', '-t', $backupTest) 60000) -notmatch '(?m)^Success\r?$') { throw 'Prior test APK replacement not confirmed' }
+    if ((Package-Hash $testPkg 'rollback-test-after-').sha -cne $priorTest.sha) { throw 'Prior test APK readback mismatch' }
+    $r.prior_test_restored = $true
+   } else {
+    throw 'Installed test APK identity unknown; no overwrite'
+   }
+  } catch {
+   $r.cleanup_errors += , $_.Exception.Message
+  }
+ } else {
+  $r.prior_test_restored = $true
+ }
+
+ try {
+  foreach ($key in $priorSettings.Keys) {
+   if ((Adb ('restored-' + $key) @('shell', 'settings', 'get', 'global', $key)).Trim() -cne $priorSettings[$key]) {
+    throw ('Original global setting changed: ' + $key)
+   }
+  }
+  if ($null -ne $priorScreenTimeout -and (Adb 'restored-timeout' @('shell', 'settings', 'get', 'system', 'screen_off_timeout')).Trim() -cne $priorScreenTimeout) {
+   throw 'Original screen_off_timeout changed'
+  }
+  Phone-Clean 'final-'
+  Host-NoResidue
+  $r.clean_state_verified = $true
+ } catch {
+  $r.cleanup_errors += , $_.Exception.Message
+ }
+
+ foreach ($job in $unresolvedAdb) {
+  $jv = Partial-Owned $job 'Original command had an unknown outcome; cleanup observation only'
+  $r.unresolved_adb_cleanup += , $jv
+  $job.process.Dispose()
+ }
+ $r.cleanup_elapsed_ms = $cleanupClock.ElapsedMilliseconds
+ if ($r.cleanup_elapsed_ms -gt $cleanupBudgetMs) { $r.cleanup_errors += , 'Bounded cleanup 240s budget exceeded' }
+ $r.pass = ($r.rb_pair_captured -eq $true -and -not $r.failure -and $r.cleanup_errors.Count -eq 0 -and $r.clean_state_verified -eq $true)
+ $r.finished_utc = [DateTime]::UtcNow.ToString('o')
+ Save-New (Join-Path $runtime 'TERMINAL.json') $r
+ foreach ($pin in $pins) { $pin.Dispose() }
+}
+Write-Host ('Controlled R/B capture pass: ' + $r.pass + '; raw evidence awaiting independent media/LoadedResponsiveness review. Do not repeat.')
+Write-Host ('Receipt: ' + (Join-Path $runtime 'TERMINAL.json'))
+if (-not $r.pass) { exit 2 }
+exit 0
