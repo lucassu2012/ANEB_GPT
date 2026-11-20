@@ -17,6 +17,7 @@ import com.aneb.probe.data.TokenEventEntity
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
+import com.aneb.probe.net.NegotiatedProtocolLog
 import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.PathMonitor
 import com.aneb.probe.net.ReachabilityProbe
@@ -151,7 +152,8 @@ class TestEngine(private val context: Context) {
         }
         bound?.let { log("NET_BIND transport=$transportStr snapshot=${it.snapshot.capabilities.replace(' ', '_')}") }
 
-        val client = AnebClient(bound)
+        val protocolLog = NegotiatedProtocolLog()
+        val client = AnebClient(bound, protocolLog)
 
         // ---------------- SNI 双通道连接可达性探测（阶段3，additive best-effort） ----------------
         // run 前对同一 E-01 分别用 {带 SNI 主机名, bare-IP} 各发 1 次 /serverinfo，
@@ -198,6 +200,7 @@ class TestEngine(private val context: Context) {
 
         // ---------------- 全程监控（R-01/R-12/R-16 + RadioCollector 1Hz） ----------------
         val envBuf = ConcurrentLinkedQueue<EnvEvent>()
+        val thermalDetails = ConcurrentLinkedQueue<String>()
         val radioBuf = ConcurrentLinkedQueue<RadioSample>()
         // 实时遥测投影源（观测通道，非测量）：引擎在既有记录点追加式填充，采样协程只读。
         val telemetrySource = TelemetrySource()
@@ -240,6 +243,7 @@ class TestEngine(private val context: Context) {
             collectors += launch {
                 envMonitors.events.collect { ev ->
                     envBuf.add(ev)
+                    if (ev.type == EnvEventType.THERMAL) thermalDetails.add(ev.detail)
                     // §4.6：测中 Doze/省电状态变化 → invalid（初始状态行除外）
                     if ((ev.type == EnvEventType.POWER_SAVE || ev.type == EnvEventType.DOZE) &&
                         !ev.detail.startsWith("initial")
@@ -516,7 +520,15 @@ class TestEngine(private val context: Context) {
             } else {
                 log("VOICE_SUMMARY run_id=$runId available=false reason=no_done_row_in_24h")
             }
-            val body = ResultReporter.build(runEntity, scenarioReports, aqsResult, voice = voiceSummary)
+            val body = ResultReporter.build(
+                runEntity,
+                scenarioReports,
+                aqsResult,
+                voice = voiceSummary,
+                env = ThermalSummary.fold(thermalDetails.toList()),
+                protocols = protocolLog.snapshot(),
+                aqsV02 = aqsV02,
+            )
             val bodyBytes = body.toByteArray(Charsets.UTF_8).size
             if (bodyBytes > ResultReporter.MAX_REPORT_BYTES) {
                 log("REPORT_SIZE_WARN bytes=$bodyBytes limit=${ResultReporter.MAX_REPORT_BYTES}")

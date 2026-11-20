@@ -59,6 +59,32 @@ class ProfileRepository(private val context: Context) {
     suspend fun loadBundled(): List<ScenarioProfile> =
         loadAssets().values.sortedWith(compareBy({ it.modeId }, { it.profileId }))
 
+    /**
+     * 读取随 APK 打包的 `profiles/v2/<profile_id>/profile.json` 候选/已接入 v2 Profile。
+     * 不改变 `BUILTIN_IDS` 与 `REQUIRED_IDS` 的既有冻结合同。
+     */
+    suspend fun loadV2Profiles(): List<ScenarioProfile> = withContext(Dispatchers.IO) {
+        val dirs = runCatching { context.assets.list("v2")?.toList().orEmpty() }
+            .getOrElse { emptyList() }
+            .ifEmpty { listOf(DEFAULT_V2_PROFILE_ID) }
+        dirs.mapNotNull { dir ->
+            runCatching {
+                context.assets.open("v2/$dir/profile.json").use { input ->
+                    ProfileParser.parseSingle(input.readBytes().toString(Charsets.UTF_8))
+                }
+            }.getOrNull()
+        }.sortedWith(compareBy({ it.modeId }, { it.profileId }))
+    }
+
+    /**
+     * 读取 `profiles/v2/<profile_id>/golden_trace.jsonl` 行为轨迹原文。
+     */
+    suspend fun loadV2TraceJsonl(profileId: String): String = withContext(Dispatchers.IO) {
+        context.assets.open("v2/$profileId/golden_trace.jsonl").use { input ->
+            input.readBytes().toString(Charsets.UTF_8)
+        }
+    }
+
     private suspend fun loadAssets(): Map<String, ScenarioProfile> = withContext(Dispatchers.IO) {
         // 同步磁盘 IO 显式落 IO 池（R-16；与 TestEngine.run 的 flowOn(IO) 双重兜底）
         val profiles = ProfileParser.BUILTIN_IDS.map { id ->
@@ -67,5 +93,9 @@ class ProfileRepository(private val context: Context) {
             }
         }
         ProfileParser.index(profiles)
+    }
+
+    companion object {
+        const val DEFAULT_V2_PROFILE_ID = "token_multimodal_standard"
     }
 }

@@ -55,6 +55,7 @@ data class ProfileQualityTarget(
     val operator: String = "",
     val value: Double? = null,
     val values: Map<String, Double> = emptyMap(),
+    @SerialName("policy_id") val policyId: String = "",
     @SerialName("required_compliance_ratio") val requiredComplianceRatio: Double? = null,
     val provenance: String = "",
 )

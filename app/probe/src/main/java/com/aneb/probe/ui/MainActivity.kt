@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -30,6 +31,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -58,6 +60,8 @@ import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.data.VoiceResultRepository
 import com.aneb.probe.engine.AbRunner
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.engine.BehaviorTracePlan
+import com.aneb.probe.engine.BehaviorTraceRunner
 import com.aneb.probe.engine.ContinuityRunner
 import com.aneb.probe.engine.ProbeRunService
 import com.aneb.probe.engine.ProbeRunSession
@@ -140,6 +144,7 @@ class MainActivity : ComponentActivity() {
     private var intentAb: Boolean = false
     private var intentAbPairs: Int = AbRunner.DEFAULT_PAIRS
     private var intentAbNetlog: Boolean = false
+    private val keepScreenOnPolicy = KeepScreenOnPolicy()
 
     private var radioPermissionResultCallback: ((RadioPermissionState) -> Unit)? = null
     private val radioPermissionLauncher =
@@ -229,6 +234,10 @@ class MainActivity : ComponentActivity() {
         val ordinaryProbeIntent = PrototypeReleaseProbeBoundary.ordinaryExternalEntry(intent)
         intentServer = ordinaryProbeIntent?.getStringExtra("server")
         intentAutorun = ordinaryProbeIntent?.getBooleanExtra("autorun", false) == true
+        keepScreenOnPolicy.onCreate(intentAutorun)
+        if (keepScreenOnPolicy.held) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         intentModeOverride = when (ordinaryProbeIntent?.getStringExtra("mode")?.lowercase()) {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
@@ -1374,17 +1383,25 @@ class MainActivity : ComponentActivity() {
         val warnings: List<String> = emptyList(),
         val loading: Boolean = true,
         val error: String? = null,
+        val resolvedBase: String = "",
     )
 
     @Composable
     private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit) {
         var refreshTick by rememberSaveable { mutableIntStateOf(0) }
+        val scope = rememberCoroutineScope()
+        var simJob by remember { mutableStateOf<Job?>(null) }
+        var simRunning by remember { mutableStateOf(false) }
+        val simLogs = remember { mutableStateListOf<String>() }
+        var simResult by remember { mutableStateOf<BehaviorTraceRunner.BehaviorTraceRunResult?>(null) }
+        var simError by remember { mutableStateOf<String?>(null) }
+
         val catalog by produceState(
-            initialValue = ProfileCatalogData(),
+            initialValue = ProfileCatalogData(resolvedBase = serverUrl),
             serverUrl,
             refreshTick,
         ) {
-            value = ProfileCatalogData(loading = true)
+            value = ProfileCatalogData(loading = true, resolvedBase = serverUrl)
             value = withContext(Dispatchers.IO) {
                 try {
                     // Profile 目录属于配置读取，不参与测量或评分，但仍需复用 E-01 的
@@ -1409,17 +1426,24 @@ class MainActivity : ComponentActivity() {
                             "PROFILE_CATALOG_ROUTE route=bare_ip reason=sni_rst_ip_ok",
                         )
                     }
-                    val loaded = ProfileRepository(applicationContext).load(AnebClient(), catalogBase)
+                    val repo = ProfileRepository(applicationContext)
+                    val loaded = repo.load(AnebClient(), catalogBase)
+                    val v2Profiles = repo.loadV2Profiles()
+                    val merged = (loaded.profiles.values + v2Profiles)
+                        .distinctBy { "${it.profileId}@${it.version}" }
+                        .sortedWith(compareBy({ it.modeId }, { it.profileId }))
                     ProfileCatalogData(
-                        profiles = loaded.profiles.values.sortedWith(compareBy({ it.modeId }, { it.profileId })),
+                        profiles = merged,
                         source = loaded.source,
                         warnings = loaded.warnings,
                         loading = false,
+                        resolvedBase = catalogBase,
                     )
                 } catch (_: Exception) {
                     ProfileCatalogData(
                         loading = false,
                         error = "Profile 目录读取失败，请检查节点或重新安装 APK。",
+                        resolvedBase = serverUrl,
                     )
                 }
             }
@@ -1431,7 +1455,53 @@ class MainActivity : ComponentActivity() {
             loading = catalog.loading,
             error = catalog.error,
             onRefresh = { refreshTick += 1 },
-            onBack = onBack,
+            onBack = {
+                simJob?.cancel()
+                onBack()
+            },
+            onRunV2Simulation = { profile ->
+                if (!simRunning) {
+                    simJob?.cancel()
+                    simLogs.clear()
+                    simResult = null
+                    simError = null
+                    simRunning = true
+                    val targetBase = catalog.resolvedBase.ifBlank { serverUrl }
+                    simJob = scope.launch {
+                        try {
+                            val repo = ProfileRepository(applicationContext)
+                            val jsonl = repo.loadV2TraceJsonl(profile.profileId)
+                            val plan = withContext(Dispatchers.Default) {
+                                BehaviorTracePlan.parse(jsonl, profile)
+                            }
+                            val runner = BehaviorTraceRunner()
+                            runner.run(
+                                BehaviorTraceRunner.Config(
+                                    serverBase = targetBase,
+                                    profile = profile,
+                                    tracePlan = plan,
+                                    runId = "v2-${UUID.randomUUID()}",
+                                ),
+                            ).collect { line ->
+                                simLogs.add(line)
+                            }
+                            simResult = runner.result.value
+                        } catch (e: CancellationException) {
+                            simLogs.add("V2_RUN_CANCELLED")
+                            throw e
+                        } catch (e: Exception) {
+                            simError = "v2 仿真失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            simRunning = false
+                        }
+                    }
+                }
+            },
+            onCancelV2Simulation = { simJob?.cancel() },
+            v2SimulationRunning = simRunning,
+            v2SimulationLogs = simLogs.toList(),
+            v2SimulationResult = simResult,
+            v2SimulationError = simError,
         )
     }
 
@@ -1554,6 +1624,7 @@ class MainActivity : ComponentActivity() {
             run = data.run,
             scenarios = data.scenarios,
             hasReportJson = data.reportJson != null,
+            reportJson = data.reportJson,
             exportStatus = exportStatus,
             onExportJson = {
                 val body = data.reportJson ?: return@ResultScreen
@@ -1813,5 +1884,13 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("AnebProbe", "APIPROBE_FAILED error=${e.javaClass.simpleName}")
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (keepScreenOnPolicy.held) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        keepScreenOnPolicy.onDestroy()
+        super.onDestroy()
     }
 }

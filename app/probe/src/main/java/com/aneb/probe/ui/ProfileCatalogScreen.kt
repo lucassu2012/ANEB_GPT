@@ -19,13 +19,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.engine.BehaviorTraceRunner
 import com.aneb.probe.engine.ProfileCapability
 import com.aneb.probe.engine.ProfilePhase
 import com.aneb.probe.engine.ScenarioProfile
@@ -33,6 +36,7 @@ import com.aneb.probe.ui.components.AnebPageIntro
 import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebTheme
+import java.util.Locale
 
 /**
  * Profile 目录只呈现节点实际下发或 APK 内置的版本化合同，不在 UI 中复制配置。
@@ -47,8 +51,22 @@ fun ProfileCatalogScreen(
     error: String?,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
+    onRunV2Simulation: ((ScenarioProfile) -> Unit)? = null,
+    onCancelV2Simulation: (() -> Unit)? = null,
+    v2SimulationRunning: Boolean = false,
+    v2SimulationLogs: List<String> = emptyList(),
+    v2SimulationResult: BehaviorTraceRunner.BehaviorTraceRunResult? = null,
+    v2SimulationError: String? = null,
 ) {
     val colors = AnebTheme.colors
+    val view = LocalView.current
+    DisposableEffect(view, v2SimulationRunning) {
+        val prev = view.keepScreenOn
+        if (v2SimulationRunning) {
+            view.keepScreenOn = true
+        }
+        onDispose { view.keepScreenOn = prev }
+    }
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
         AnebTopBar(showBack = true, onBack = onBack, showMenu = true)
         Row(verticalAlignment = Alignment.Bottom) {
@@ -84,7 +102,22 @@ fun ProfileCatalogScreen(
                 )
             }
             items(profiles, key = { "${it.profileId}@${it.version}" }) { profile ->
-                ProfileContractCard(profile)
+                ProfileContractCard(
+                    profile = profile,
+                    onRunV2Simulation = onRunV2Simulation,
+                    onCancelV2Simulation = onCancelV2Simulation,
+                    v2SimulationRunning = v2SimulationRunning,
+                )
+            }
+            if (v2SimulationRunning || v2SimulationLogs.isNotEmpty() || v2SimulationResult != null || v2SimulationError != null) {
+                item {
+                    V2SimulationPanel(
+                        running = v2SimulationRunning,
+                        logs = v2SimulationLogs,
+                        result = v2SimulationResult,
+                        error = v2SimulationError,
+                    )
+                }
             }
             if (!loading && profiles.isEmpty()) {
                 item {
@@ -157,9 +190,15 @@ private fun ContractStatusCard(
 }
 
 @Composable
-private fun ProfileContractCard(profile: ScenarioProfile) {
+private fun ProfileContractCard(
+    profile: ScenarioProfile,
+    onRunV2Simulation: ((ScenarioProfile) -> Unit)? = null,
+    onCancelV2Simulation: (() -> Unit)? = null,
+    v2SimulationRunning: Boolean = false,
+) {
     val colors = AnebTheme.colors
     val assessment = ProfileCapability.assess(profile)
+    val isV2 = profile.contractVersion == ScenarioProfile.CONTRACT_V2
     Column(
         Modifier
             .fillMaxWidth()
@@ -169,7 +208,7 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(profileTitle(profile.profileId), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                Text(profileTitle(profile), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
                 Text(
                     "${modeLabel(profile.modeId)} · ${profile.profileId}@${profile.version}",
                     fontSize = 9.sp,
@@ -180,29 +219,53 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
             StatusPill(assessment.executable)
         }
         Text(
-            profile.description.ifBlank { "未提供业务说明" },
+            if (isV2 && profile.description.isBlank()) {
+                "${profile.business.label} · 模型 ${profile.business.behaviorModelId}@${profile.business.behaviorModelVersion} (${profile.business.calibrationStatus})"
+            } else {
+                profile.description.ifBlank { "未提供业务说明" }
+            },
             fontSize = 10.sp,
             lineHeight = 15.sp,
             color = colors.muted,
             modifier = Modifier.padding(top = 9.dp),
         )
 
-        ContractLine(
-            label = "实时主指标",
-            value = profile.presentation.liveMetricLabel.ifBlank { "—" } +
-                profile.presentation.liveMetricUnit.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
-            detail = if (profile.presentation.liveWindowMs > 0 && profile.presentation.uiRefreshMs > 0) {
-                "${profile.presentation.liveWindowMs}ms 窗口 · ${profile.presentation.uiRefreshMs}ms 刷新"
-            } else null,
-        )
-        ContractLine(
-            label = "输出指标",
-            value = profile.presentation.metricIds.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "—",
-        )
-        ContractLine(
-            label = "结论策略",
-            value = profile.presentation.conclusionPolicyId.ifBlank { "—" },
-        )
+        if (isV2) {
+            ContractLine(
+                label = "实时主指标",
+                value = profile.livePresentation.primaryMetricId.ifBlank { "—" } +
+                    profile.livePresentation.secondaryMetricIds.takeIf { it.isNotEmpty() }
+                        ?.let { " · ${it.joinToString(" / ")}" }.orEmpty(),
+                detail = "${profile.livePresentation.windowMs}ms 窗口 · ${profile.livePresentation.uiRefreshMs}ms 刷新 · ${profile.livePresentation.missingBehavior}",
+            )
+            ContractLine(
+                label = "必需指标",
+                value = profile.evaluation.requiredMetricIds.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "—",
+                detail = "共 ${profile.measurements.size} 项度量 · 门控 ${profile.evaluation.guardrailMetricIds.joinToString().ifBlank { "无" }}",
+            )
+            ContractLine(
+                label = "评分策略",
+                value = profile.evaluation.scorePolicyId.ifBlank { "—" },
+                detail = "缺失策略=${profile.evaluation.missingRequiredMetric} · 轨迹 seed=${profile.trace?.seed ?: 0L}",
+            )
+        } else {
+            ContractLine(
+                label = "实时主指标",
+                value = profile.presentation.liveMetricLabel.ifBlank { "—" } +
+                    profile.presentation.liveMetricUnit.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
+                detail = if (profile.presentation.liveWindowMs > 0 && profile.presentation.uiRefreshMs > 0) {
+                    "${profile.presentation.liveWindowMs}ms 窗口 · ${profile.presentation.uiRefreshMs}ms 刷新"
+                } else null,
+            )
+            ContractLine(
+                label = "输出指标",
+                value = profile.presentation.metricIds.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "—",
+            )
+            ContractLine(
+                label = "结论策略",
+                value = profile.presentation.conclusionPolicyId.ifBlank { "—" },
+            )
+        }
         ContractLine(
             label = "测试阶段",
             value = profile.phases.joinToString(" → ") { phaseLabel(it.type) }.ifBlank { "—" },
@@ -222,6 +285,88 @@ private fun ProfileContractCard(profile: ScenarioProfile) {
                 lineHeight = 13.sp,
                 color = colors.fair,
                 modifier = Modifier.padding(top = 9.dp),
+            )
+        }
+        if (assessment.executable && isV2 && profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION && onRunV2Simulation != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (v2SimulationRunning) "仿真运行中…" else "运行行为轨迹仿真",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (v2SimulationRunning) colors.faint else colors.brand,
+                    modifier = Modifier
+                        .border(1.dp, if (v2SimulationRunning) colors.hairline else colors.brand.copy(alpha = 0.4f), CircleShape)
+                        .pressable(enabled = !v2SimulationRunning, onClick = { onRunV2Simulation(profile) })
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+                if (v2SimulationRunning && onCancelV2Simulation != null) {
+                    Text(
+                        "停止",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.poor,
+                        modifier = Modifier
+                            .border(1.dp, colors.poor.copy(alpha = 0.4f), CircleShape)
+                            .pressable(onClick = onCancelV2Simulation)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun V2SimulationPanel(
+    running: Boolean,
+    logs: List<String>,
+    result: BehaviorTraceRunner.BehaviorTraceRunResult?,
+    error: String?,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF11172B), RoundedCornerShape(18.dp))
+            .border(1.dp, colors.hairline, RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Text(
+            if (running) "aneb-profile-v2 仿真执行中" else "aneb-profile-v2 仿真摘要",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.ink,
+        )
+        error?.let {
+            Text(it, fontSize = 10.sp, color = colors.poor, modifier = Modifier.padding(top = 6.dp))
+        }
+        result?.let { r ->
+            val scoreText = r.score?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "null (${r.suppressionReasons.joinToString()})"
+            Text(
+                "status=${r.status} · tasks=${r.tasksSucceeded}/${r.tasksExecuted} · score=$scoreText",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = if (r.computable) colors.excellent else colors.fair,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Text(
+                "TOK-B01=${r.metrics["TOK-B01"]?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "null"} · " +
+                    "TOK-B11=${r.metrics["TOK-B11"]?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "null"} · " +
+                    "TOK-N03=${r.metrics["TOK-N03"]?.let { String.format(Locale.ROOT, "%.1fms", it) } ?: "null"}",
+                fontSize = 9.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = colors.muted,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        logs.takeLast(6).forEach { line ->
+            Text(
+                line,
+                fontSize = 8.5.sp,
+                fontFamily = FontFamily.Monospace,
+                color = colors.faint,
+                modifier = Modifier.padding(top = 3.dp),
             )
         }
     }
@@ -268,15 +413,19 @@ private fun EmptyCatalog(error: String?) {
 private fun modeLabel(modeId: String): String = when (modeId) {
     ScenarioProfile.MODE_TOKEN_EXPERIENCE -> "Token 体验"
     ScenarioProfile.MODE_NETWORK_BASIC -> "基本测速"
+    ScenarioProfile.MODE_TOKEN_SIMULATION -> "Token 仿真"
+    ScenarioProfile.MODE_AI_REALTIME_SIMULATION -> "AI 实时语音仿真"
+    ScenarioProfile.MODE_NETWORK_COMPREHENSIVE -> "网络综合"
     else -> "扩展模式"
 }
 
-private fun profileTitle(id: String): String = when (id) {
+private fun profileTitle(profile: ScenarioProfile): String = when (profile.profileId) {
     "s1_chat" -> "AI 对话流"
     "s2_coding_agent" -> "编码 Agent"
     "s3_multimodal" -> "多模态任务"
     "basic_network" -> "网络基本性能"
-    else -> id
+    "token_multimodal_standard" -> profile.business.label.ifBlank { "多模态 Token 仿真" }
+    else -> profile.business.label.ifBlank { profile.profileId }
 }
 
 private fun phaseLabel(type: String): String = when (type) {
@@ -287,5 +436,6 @@ private fun phaseLabel(type: String): String = when (type) {
     ProfilePhase.TYPE_TOOL_LOOP -> "工具循环"
     ProfilePhase.TYPE_DOWNLOAD_THROUGHPUT -> "下载"
     ProfilePhase.TYPE_UPLOAD_THROUGHPUT -> "上传"
+    ProfilePhase.TYPE_BEHAVIOR_TRACE -> "行为轨迹"
     else -> type
 }

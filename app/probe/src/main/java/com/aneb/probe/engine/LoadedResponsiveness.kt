@@ -83,6 +83,8 @@ data class ResponsivenessStageSummary(
     val totalSampleCount: Int,
     val missingReason: String?,
     val sampleResults: List<ResponsivenessSampleResult>,
+    val rttDominanceOk: Boolean? = null,
+    val rttDominanceRatio: Double? = null,
 )
 
 @Serializable
@@ -119,7 +121,7 @@ object LoadedResponsiveness {
     }
 
     fun summarize(report: LoadedResponsivenessReport): LoadedResponsivenessSummary {
-        val stages = report.stages.map { stage ->
+        val rawStages = report.stages.map { stage ->
             val stageReason = when {
                 report.status != "completed" -> "run_not_completed:${report.status}"
                 report.methodVersion !in setOf("loaded-responsiveness-v1", "loaded-responsiveness-v2") -> "unsupported_method_version"
@@ -154,7 +156,20 @@ object LoadedResponsiveness {
                 sampleResults = samples,
             )
         }
-        val idle = stages.singleOrNull { it.stage == "idle" }?.valueMs
+        val idle = rawStages.singleOrNull { it.stage == "idle" }?.valueMs
+        val stages = rawStages.mapIndexed { idx, summary ->
+            if (summary.stage == "idle") {
+                summary
+            } else {
+                val rawStage = report.stages[idx]
+                val windowMs = (rawStage.endUs - rawStage.startUs).coerceAtLeast(0L) / 1_000.0
+                val verdict = RttDominanceGuard.evaluate(windowMs, idle, rawStage.transferBytes)
+                summary.copy(
+                    rttDominanceOk = verdict.ratio?.let { verdict.ok },
+                    rttDominanceRatio = verdict.ratio,
+                )
+            }
+        }
         val download = stages.singleOrNull { it.stage == "download" }?.valueMs
         val upload = stages.singleOrNull { it.stage == "upload" }?.valueMs
         return LoadedResponsivenessSummary(

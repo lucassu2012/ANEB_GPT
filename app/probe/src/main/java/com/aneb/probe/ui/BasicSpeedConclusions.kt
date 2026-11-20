@@ -1,6 +1,7 @@
 package com.aneb.probe.ui
 
 import com.aneb.probe.engine.BasicSpeedResult
+import com.aneb.probe.engine.RttDominanceGuard
 import java.util.Locale
 
 /**
@@ -36,7 +37,30 @@ object BasicSpeedConclusions {
                 Tone.POOR,
             )
         }
-        return listOf(completion, bottleneck(result)) + useCases(result)
+        val base = listOf(completion, bottleneck(result)) + useCases(result)
+        val guard = rttDominanceCaution(result)
+        return if (guard == null) base else base + guard
+    }
+
+    private fun rttDominanceCaution(result: BasicSpeedResult): Item? {
+        val downVerdict = result.downloadWindowMs?.let {
+            RttDominanceGuard.evaluate(it, result.pingMs, result.downloadBytes)
+        }
+        val upVerdict = result.uploadWindowMs?.let {
+            RttDominanceGuard.evaluate(it, result.pingMs, result.uploadBytes)
+        }
+        val downDominated = downVerdict != null && downVerdict.ratio != null && !downVerdict.ok
+        val upDominated = upVerdict != null && upVerdict.ratio != null && !upVerdict.ok
+        if (downDominated || upDominated) {
+            val downTxt = downVerdict?.ratio?.let { "下行 ${one(it)}x" } ?: "下行未测"
+            val upTxt = upVerdict?.ratio?.let { "上行 ${one(it)}x" } ?: "上行未测"
+            return Item(
+                "吞吐窗受 RTT 主导提示",
+                "传输窗相对于基线 RTT 倍数或样本量不足（$downTxt · $upTxt，要求 ≥${RttDominanceGuard.RTT_DOMINANCE_MIN.toInt()}x 且 ≥100KB），吞吐读数可能受握手/往返时延拖累。",
+                Tone.CAUTION,
+            )
+        }
+        return null
     }
 
     private fun bottleneck(result: BasicSpeedResult): Item {

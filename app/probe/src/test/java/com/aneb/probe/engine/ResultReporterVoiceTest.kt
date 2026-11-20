@@ -118,7 +118,11 @@ class ResultReporterVoiceTest {
         val testEngine = source("engine/TestEngine.kt")
         assertTrue(testEngine.contains("VoiceSummary.select("))
         assertTrue(testEngine.contains("db.voiceResultDao().recent(1)"))
-        assertTrue(testEngine.contains("ResultReporter.build(runEntity, scenarioReports, aqsResult, voice = voiceSummary)"))
+        assertTrue(testEngine.contains("ResultReporter.build("))
+        assertTrue(testEngine.contains("voice = voiceSummary"))
+        assertTrue(testEngine.contains("env = ThermalSummary.fold(thermalDetails.toList())"))
+        assertTrue(testEngine.contains("protocols = protocolLog.snapshot()"))
+        assertTrue(testEngine.contains("aqsV02 = aqsV02"))
 
         val activity = source("ui/MainActivity.kt")
         assertTrue(activity.contains("data object Voice : Screen"))

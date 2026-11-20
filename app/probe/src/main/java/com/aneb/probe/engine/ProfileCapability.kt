@@ -27,14 +27,27 @@ object ProfileCapability {
         ProfilePhase.TYPE_DOWNLOAD_THROUGHPUT,
         ProfilePhase.TYPE_UPLOAD_THROUGHPUT,
     )
+    private val tokenSimPhases = setOf(ProfilePhase.TYPE_BEHAVIOR_TRACE)
     private val measurementLevels = setOf("exact", "derived", "proxy", "unsupported")
     private val calibrationStates = setOf("hypothesis", "calibrated", "validated", "retired")
+    private val supportedTargetOperators = setOf(
+        "gte",
+        "lte",
+        "eq",
+        "lte_by_workload",
+        "gte_by_workload",
+        "lte_model_p95_plus_ms",
+        "lte_by_stage",
+        "deadline_by_artifact_size",
+    )
 
     fun assess(profile: ScenarioProfile): Assessment {
         val supported = when (profile.modeId) {
             ScenarioProfile.MODE_TOKEN_EXPERIENCE -> tokenPhases
             ScenarioProfile.MODE_NETWORK_BASIC -> basicPhases
-            // v2 引擎逐类接入；未接入前必须保持不可执行。
+            ScenarioProfile.MODE_TOKEN_SIMULATION ->
+                if (profile.contractVersion == ScenarioProfile.CONTRACT_V2) tokenSimPhases else emptySet()
+            // ai_realtime_simulation 与 network_comprehensive 未接入运行时前保持不可执行。
             else -> emptySet()
         }
         val unsupported = profile.phases.map { it.type }.filter { it !in supported }.toSet()
@@ -81,8 +94,14 @@ object ProfileCapability {
             if (metric.minimumSampleCount <= 0) add("${metric.metricId} 最小样本量无效")
             if (metric.requiredForScore && metric.qualityTarget == null) add("${metric.metricId} 必需指标缺少质量目标")
             metric.qualityTarget?.let { target ->
-                if (target.operator.isBlank()) add("${metric.metricId} 质量目标缺少运算符")
-                if (target.value == null && target.values.isEmpty()) add("${metric.metricId} 质量目标缺少门限")
+                if (target.operator.isBlank()) {
+                    add("${metric.metricId} 质量目标缺少运算符")
+                } else if (target.operator !in supportedTargetOperators) {
+                    add("${metric.metricId} 不支持的质量目标运算符: ${target.operator}")
+                }
+                if (target.value == null && target.values.isEmpty() && target.policyId.isBlank()) {
+                    add("${metric.metricId} 质量目标缺少门限")
+                }
                 target.requiredComplianceRatio?.let { ratio ->
                     if (ratio !in 0.0..1.0) add("${metric.metricId} 达标比例无效")
                 }
@@ -99,8 +118,14 @@ object ProfileCapability {
         if (profile.evaluation.conclusionPolicyId.isBlank()) add("缺少结论策略")
         if (profile.evaluation.missingRequiredMetric != "score_null") add("必需指标缺失策略必须为 score_null")
         if (profile.evaluation.invalidRun != "retain_raw_suppress_score") add("无效 run 策略不符合 fail-closed")
-        val weightSum = profile.evaluation.groupWeights.values.sum()
-        if (profile.evaluation.groupWeights.isEmpty() || abs(weightSum - 1.0) > 0.000_001) add("评分组权重之和必须为 1")
+        val weights = profile.evaluation.groupWeights
+        val weightSum = weights.values.sum()
+        if (weights.isEmpty() ||
+            weights.values.any { !it.isFinite() || it < 0.0 } ||
+            abs(weightSum - 1.0) > 0.000_001
+        ) {
+            add("评分组权重必须非负且之和为 1")
+        }
 
         if (profile.livePresentation.primaryMetricId.isBlank()) add("缺少动态主指标")
         if (profile.livePresentation.secondaryMetricIds.isEmpty()) add("缺少动态辅助指标")
@@ -108,10 +133,25 @@ object ProfileCapability {
         if (profile.livePresentation.staleAfterMs < profile.livePresentation.uiRefreshMs) add("实时指标过期窗口小于刷新周期")
         if (profile.livePresentation.missingBehavior != "show_unavailable_never_zero") add("缺失值策略必须为 show_unavailable_never_zero")
 
+        val trace = profile.trace
+        val hasBehaviorTrace = profile.phases.any { it.type == ProfilePhase.TYPE_BEHAVIOR_TRACE }
+        if (hasBehaviorTrace) {
+            if (trace == null) {
+                add("缺少行为轨迹 trace 声明")
+            } else {
+                if (trace.contractVersion != BehaviorTracePlan.CONTRACT_VERSION) add("轨迹合同版本无效")
+                if (trace.prng != "pcg32-v1") add("轨迹 PRNG 声明无效")
+                if (trace.seed == 0L) add("轨迹声明缺少确定性 seed")
+            }
+        }
+
         profile.phases.filter { it.type == ProfilePhase.TYPE_BEHAVIOR_TRACE }.forEach { phase ->
             if (phase.modelId != profile.business.behaviorModelId) add("阶段模型 ID 与业务声明不一致")
             if (phase.modelHash != profile.business.behaviorModelHash) add("阶段模型哈希与业务声明不一致")
             if (phase.seed == 0L) add("行为轨迹缺少确定性 seed")
+            if (trace != null && trace.seed != 0L && phase.seed != 0L && phase.seed != trace.seed) {
+                add("阶段 seed 与轨迹声明不一致")
+            }
         }
     }
 }
