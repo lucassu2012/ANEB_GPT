@@ -39,6 +39,8 @@ func TestDownloadRejectsInvalidParametersAndMethod(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/v1/download?bytes=0",
+		"/api/v1/download?bytes=-1",
+		"/api/v1/download?bytes=1073741825",
 		"/api/v1/download?bytes=not-a-number",
 		"/api/v1/download?chunk_kb=2048",
 	} {
