@@ -1,0 +1,95 @@
+name: miw2 Health and Cert Monitor
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Target miw2 base URL"
+        required: false
+        type: string
+        default: "https://120.77.174.207:8443"
+      min_cert_hours:
+        description: "Minimum required TLS certificate lifetime in hours"
+        required: false
+        type: string
+        default: "48"
+
+permissions:
+  contents: read
+
+jobs:
+  miw2-health:
+    name: Daily miw2 health and cert expiry check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run miw2 monitor unit tests
+        run: python -B -m unittest tests.test_miw2_monitor -v
+
+      - name: Check live miw2 health and cert expiry
+        env:
+          TARGET_URL: ${{ inputs.base_url || 'https://120.77.174.207:8443' }}
+          MIN_CERT_HOURS: ${{ inputs.min_cert_hours || '48' }}
+          REPORT_PATH: ${{ runner.temp }}/miw2-monitor-report.json
+        run: |
+          python -B tools/miw2-monitor/check_miw2.py \
+            --base-url "$TARGET_URL" \
+            --min-cert-hours "$MIN_CERT_HOURS" \
+            --json-out "$REPORT_PATH" \
+            --format text
+
+      - name: Write job summary
+        if: always()
+        env:
+          REPORT_PATH: ${{ runner.temp }}/miw2-monitor-report.json
+        run: |
+          python -B - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          report_path = Path(os.environ["REPORT_PATH"])
+          if not report_path.exists():
+              summary_path.write_text("## miw2 Health Monitor\n\nNo report JSON produced.\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          lines = [
+              f"## miw2 Health Monitor — {'PASS' if report.get('ok') else 'FAIL'} ({report.get('passed')}/{report.get('total')})",
+              "",
+              f"- Target: `{report.get('base_url')}`",
+              f"- Checked at (UTC): `{report.get('checked_at_utc')}`",
+              f"- Min cert hours: `{report.get('min_cert_hours')}`",
+              "",
+              "| Check | Status | Elapsed (ms) | Detail |",
+              "|---|---|---|---|",
+          ]
+          for name, item in report.get("checks", {}).items():
+              status = "PASS" if item.get("ok") else "FAIL"
+              if name == "tls_cert" and item.get("ok"):
+                  detail = f"remaining={item.get('remaining_hours')}h, tls={item.get('tls_version')}"
+              elif item.get("ok"):
+                  detail = f"status={item.get('status', 'ok')}"
+              else:
+                  detail = f"{item.get('error_type')}: {item.get('error')}"
+              lines.append(f"| `{name}` | {status} | {item.get('elapsed_ms')} | {detail} |")
+          with summary_path.open("a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload miw2 monitor JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miw2-monitor-report
+          path: ${{ runner.temp }}/miw2-monitor-report.json
+          retention-days: 14
+          if-no-files-found: ignore
