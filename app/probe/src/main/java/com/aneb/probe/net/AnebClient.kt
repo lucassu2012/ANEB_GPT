@@ -63,9 +63,9 @@ class AnebClient private constructor(
         .addInterceptor(if (loadedLocal && !prototypePrivate) LoadedNodePolicy.interceptor()
             else EngineeringCleartextPolicy.interceptor(prototypePrivate))
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
+        .socketFactory(TcpNoDelaySocketFactory(bound?.socketFactory ?: javax.net.SocketFactory.getDefault()))
         .apply {
             if (bound != null) {
-                socketFactory(bound.socketFactory)
                 dns(bound.dns)
             }
         }
