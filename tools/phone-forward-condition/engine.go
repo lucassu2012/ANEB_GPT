@@ -42,6 +42,8 @@ type Receipt struct {
 	OwnedReceivedPackets   uint64
 	InjectedPackets        uint64
 	InjectedBytes          uint64
+	DroppedPackets         uint64
+	DroppedBytes           uint64
 	CleanupInjectedPackets uint64
 	CleanupInjectedBytes   uint64
 	UnconfirmedUserPackets uint64
@@ -51,6 +53,19 @@ type Receipt struct {
 	PhoneReceivedBytes     *uint64
 	DriverDroppedPackets   *uint64
 	Failures               []string
+}
+
+// shouldDrop applies a deterministic SplitMix64 hash over (seed, seq) against
+// lossBps in [0, 10000] so packet-loss experiments are strictly reproducible.
+func shouldDrop(seed, seq uint64, lossBps uint32) bool {
+	if lossBps == 0 {
+		return false
+	}
+	z := seed + seq*0x9e3779b97f4a7c15
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	z = z ^ (z >> 31)
+	return (z % 10000) < uint64(lossBps)
 }
 
 func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(Plan, Mode) (Link, error)) (receipt Receipt, err error) {
@@ -84,6 +99,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	type received struct {
 		frame        Frame
 		err          error
+		receivedAt   time.Time
 		reserved     bool
 		overflowDone chan struct{}
 	}
@@ -121,6 +137,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 			item := received{frame: frame, err: e}
 			if e == nil {
+				item.receivedAt = clock.Now()
 				item.reserved = pending.reserve(cap(frame.Packet))
 				if !item.reserved {
 					if !stopping.Load() {
@@ -226,7 +243,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		receipt.ReceivedBytes = receivedBytes.Load()
 		receipt.OwnedReceivedPackets = ownedReceivedCount.Load()
 		receipt.DriverDrained = driverDrained.Load()
-		receipt.UnconfirmedUserPackets = receipt.OwnedReceivedPackets - receipt.InjectedPackets - receipt.CleanupInjectedPackets
+		receipt.UnconfirmedUserPackets = receipt.OwnedReceivedPackets - receipt.InjectedPackets - receipt.DroppedPackets - receipt.CleanupInjectedPackets
 		if err != nil {
 			if errors.Is(err, ErrQueueOverflow) {
 				receipt.StopReason = "USER_QUEUE_OVERFLOW"
@@ -247,6 +264,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		receipt.StopReason = "OPEN_SETUP_FAILED"
 		return receipt, openErr
 	}
+	var limitSeq uint64
 	for {
 		var current received
 		select {
@@ -286,8 +304,15 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			settled(current)
 			continue
 		}
+		limitSeq++
+		if plan.Config.DownlinkLossBasisPoints > 0 && shouldDrop(plan.Config.ImpairmentSeed, limitSeq, plan.Config.DownlinkLossBasisPoints) {
+			receipt.DroppedPackets++
+			receipt.DroppedBytes += uint64(len(frame.Packet))
+			settled(current)
+			continue
+		}
 		attempted := false
-		_, e = pacer.Inject(ctx, frame.Packet, func(packet []byte) error {
+		_, e = pacer.InjectAt(ctx, current.receivedAt, frame.Packet, func(packet []byte) error {
 			frame.Packet = packet
 			n, sendErr, admitted := boundedCall(ctx, &activeCalls, func() (int, error) { return link.Inject(frame) })
 			attempted = admitted

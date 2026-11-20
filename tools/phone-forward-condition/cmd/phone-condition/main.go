@@ -67,7 +67,10 @@ func run(args []string, output io.Writer) error {
 		RequestSHA256                string         `json:"request_sha256"`
 		DriverOpened                 bool           `json:"driver_opened"`
 		TrafficCaptured              bool           `json:"traffic_captured"`
+		DownlinkDelayMs              uint64         `json:"downlink_delay_ms,omitempty"`
+		DownlinkLossBps              uint32         `json:"downlink_loss_bps,omitempty"`
+		ImpairmentSeed               uint64         `json:"impairment_seed,omitempty"`
 		ExpectedUplinkInterfaceIndex uint32         `json:"expected_uplink_interface_index,omitempty"`
 		ProbeRemoteAddresses         []string       `json:"probe_remote_addresses,omitempty"`
-	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
+	}{"phone-forward-plan-1", "NOT_RUN", request.Mode, plan.Filter, hex.EncodeToString(hash[:]), false, false, request.DownlinkDelayMs, request.DownlinkLossBps, request.ImpairmentSeed, request.ExpectedUplinkInterfaceIndex, request.ProbeRemoteAddresses})
 }

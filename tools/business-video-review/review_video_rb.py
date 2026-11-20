@@ -37,6 +37,52 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def classify_post_settle_content(roi_prev_diffs: list[float], n_settle: int) -> dict:
+    """Advisory post-settle motion heuristic to flag static-photo (限时日常) or
+    photo-carousel (图文) entries before human visual review. Never overrides
+    mandatory PNG inspection or formal business-video-review-1 qualification."""
+    post = roi_prev_diffs[n_settle:]
+    total = len(post)
+    if total == 0:
+        return {
+            "advisory": "INSUFFICIENT_POST_SETTLE_FRAMES",
+            "post_settle_frames": 0,
+            "active_frames": 0,
+            "active_ratio": 0.0,
+            "max_active_60f": 0,
+            "note": "No frames after settle; inspect decoded PNGs.",
+        }
+    active = [d >= 0.45 for d in post]
+    active_count = sum(active)
+    active_ratio = round(active_count / total, 4)
+    if total <= 60:
+        max_60f = active_count
+    else:
+        cur = sum(active[:60])
+        max_60f = cur
+        for i in range(60, total):
+            cur += (1 if active[i] else 0) - (1 if active[i - 60] else 0)
+            if cur > max_60f:
+                max_60f = cur
+    if max_60f < 15 and active_ratio < 0.12:
+        advisory = "POSSIBLE_NON_VIDEO_STATIC_OR_CAROUSEL"
+        note = (
+            "Low sustained post-settle video motion (compatible with single-photo 限时日常 "
+            "or photo-carousel 图文); visually verify decoded PNGs before declaring QUALIFIED."
+        )
+    else:
+        advisory = "LIKELY_CONTINUOUS_VIDEO"
+        note = "Sustained post-settle ROI motion observed; visually verify boundary PNGs."
+    return {
+        "advisory": advisory,
+        "post_settle_frames": total,
+        "active_frames": active_count,
+        "active_ratio": active_ratio,
+        "max_active_60f": max_60f,
+        "note": note,
+    }
+
+
 def detect_letterbox_y_bounds(frame_rgb: np.ndarray) -> tuple[int, int, str]:
     """Detect whether a settled 300x660 frame is 16:9 letterboxed or full portrait.
     Returns (y_lo, y_hi, layout_kind) in 300x660 coordinates, strictly inside video."""
@@ -316,6 +362,8 @@ def scan_condition(card_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
             os.remove(dst)
         os.rename(os.path.join(ddir, f"tmp-{k:03d}.png"), dst)
 
+    content_advisory = classify_post_settle_content(roi_prev_diffs, n_settle)
+
     summary = {
         "condition": cond,
         "mp4_bytes": os.path.getsize(mp4),
@@ -324,6 +372,7 @@ def scan_condition(card_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
         "strict_monotonic_pts": strict_inc,
         "duration_s": round(pts_list[-1] / 90000.0, 6),
         "detected_layout": layout,
+        "content_type_advisory": content_advisory,
         "cand_A": None if n_a is None else {"neg_n": n_a - 1, "pos_n": n_a, "neg_pts": pts_list[n_a - 1], "pos_pts": pts_list[n_a]},
         "cand_S": None if n_s is None else {"neg_n": n_s - 1, "pos_n": n_s, "neg_pts": pts_list[n_s - 1], "pos_pts": pts_list[n_s]},
         "cand_settle": {"n": n_settle, "pts": pts_list[n_settle], "pts_s": round(pts_list[n_settle] / 90000.0, 4)},
