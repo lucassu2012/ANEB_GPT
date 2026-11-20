@@ -40,6 +40,8 @@ class ControlledRbCardTemplateTests(unittest.TestCase):
         self.assertIn("function Assert-AnebPhaseResultConditionMatch", common_text)
         self.assertIn("function Assert-AnebDoubaoUiBinding", common_text)
         self.assertIn("com\\.larus\\.nova", common_text)
+        self.assertIn("com\\.huawei\\.himovie\\b", common_text)
+        self.assertNotIn("|himovie|", common_text)
         self.assertIn("downlink_ip_bytes_per_second", common_text)
         self.assertIn("downlinkIpBytesPerSecond", common_text)
 

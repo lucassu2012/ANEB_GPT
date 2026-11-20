@@ -368,7 +368,7 @@ function Phone-Clean($prefix) {
  $window = Adb ($prefix + 'focus') @('shell', 'dumpsys', 'window')
  if ($window -notmatch 'mCurrentFocus=.*com\.huawei\.android\.launcher/') { throw 'Not Huawei Launcher' }
  $p = Adb ($prefix + 'processes') @('shell', 'ps', '-A', '-o', 'PID,NAME')
- if ($p -notmatch '\bPID\b.*\bNAME\b' -or $p -match 'com\.aneb\.probe|himovie|deepseek|moonshot|kimichat|qwen|aweme|com\.larus\.nova|screenrecord|scrcpy|httpcanary|remote_capture|tun2socks') {
+ if ($p -notmatch '\bPID\b.*\bNAME\b' -or $p -match 'com\.aneb\.probe|com\.huawei\.himovie\b|deepseek|moonshot|kimichat|qwen|aweme|com\.larus\.nova|screenrecord|scrcpy|httpcanary|remote_capture|tun2socks') {
   throw 'Unknown conflicting session untouched'
  }
  $activeSvcs = Adb ($prefix + 'aneb-aweme-services') @('shell', 'dumpsys', 'activity', 'services')
