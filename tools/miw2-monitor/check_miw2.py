@@ -19,6 +19,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import math
 import os
 import socket
 import ssl
@@ -92,6 +93,19 @@ def _san_matches_host(san_entries: tuple[tuple[str, str], ...], host: str) -> bo
     return False
 
 
+def validate_min_cert_hours(min_cert_hours: float) -> float:
+    if isinstance(min_cert_hours, bool) or not isinstance(min_cert_hours, (int, float)):
+        raise ValueError(
+            f"min_cert_hours must be a finite non-negative number, got {min_cert_hours!r}"
+        )
+    value = float(min_cert_hours)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"min_cert_hours must be finite and >= 0, got {min_cert_hours!r}"
+        )
+    return value
+
+
 def inspect_cert(
     cert: dict[str, Any] | None,
     *,
@@ -99,6 +113,7 @@ def inspect_cert(
     min_cert_hours: float,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    min_cert_hours = validate_min_cert_hours(min_cert_hours)
     if not cert:
         raise ValueError("Peer did not present an X.509 certificate")
 
@@ -534,7 +549,12 @@ def check_realtime_sim_ws(
     with connector(host, port, timeout, ssl_context) as sock:
         sock.sendall(req_bytes)
         status_line, resp_headers = _read_http_response_head(sock)
-        if not status_line.startswith("HTTP/1.1 101"):
+        status_parts = status_line.split(" ", 2)
+        if not (
+            len(status_parts) >= 2
+            and status_parts[0] == "HTTP/1.1"
+            and status_parts[1] == "101"
+        ):
             raise ValueError(
                 f"/api/v1/realtime-sim handshake returned {status_line!r}, expected HTTP/1.1 101"
             )
@@ -609,6 +629,7 @@ def run_checks(
     ws_connector: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     scheme, host, port, base_path = parse_base_url(base_url)
+    min_cert_hours = validate_min_cert_hours(min_cert_hours)
     ctx = ssl_context if ssl_context is not None else build_ssl_context(ca_file=ca_file)
     now_cb = now_fn if now_fn is not None else utc_now
     tls_conn = tls_connector if tls_connector is not None else default_tls_connector
@@ -701,6 +722,8 @@ def run_checks(
     now_dt = now_cb()
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=timezone.utc)
+    else:
+        now_dt = now_dt.astimezone(timezone.utc)
 
     return {
         "checked_at_utc": now_dt.isoformat().replace("+00:00", "Z"),

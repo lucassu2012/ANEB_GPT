@@ -94,7 +94,7 @@ class _ServerState:
         self.echo_t2 = 1250
         self.echo_observed = "127.0.0.1:54321"
         self.results_status = 503
-        self.ws_mode = "valid"  # valid | 403 | 200 | bad_accept | stall
+        self.ws_mode = "valid"  # valid | 403 | 200 | bad_accept | bad_status_1010 | stall
         self.ws_saw_origin: bool | None = None
         self.ws_received_close_frame: bytes | None = None
         self.ws_event = threading.Event()
@@ -187,9 +187,14 @@ def _make_handler(state: _ServerState) -> type[http.server.BaseHTTPRequestHandle
                 if state.ws_mode == "bad_accept":
                     accept = "invalid-accept-token"
 
+                status_line = (
+                    "HTTP/1.1 1010 Bogus"
+                    if state.ws_mode == "bad_status_1010"
+                    else "HTTP/1.1 101 Switching Protocols"
+                )
                 self.wfile.write(
                     (
-                        "HTTP/1.1 101 Switching Protocols\r\n"
+                        f"{status_line}\r\n"
                         "Upgrade: websocket\r\n"
                         "Connection: Upgrade\r\n"
                         f"Sec-WebSocket-Accept: {accept}\r\n"
@@ -420,12 +425,51 @@ class Miw2MonitorTests(unittest.TestCase):
         self.assertFalse(report["checks"]["echo"]["ok"])
 
     def test_realtime_sim_ws_failures(self) -> None:
-        for mode in ("403", "200", "bad_accept"):
+        for mode in ("403", "200", "bad_accept", "bad_status_1010"):
             with self.subTest(ws_mode=mode):
                 self.state.ws_mode = mode
                 report = self._run_against_loopback()
                 self.assertFalse(report["ok"])
                 self.assertFalse(report["checks"]["realtime_sim_ws"]["ok"])
+
+    def test_realtime_sim_ws_rejects_status_1010_prefix(self) -> None:
+        self.state.ws_mode = "bad_status_1010"
+        with self.assertRaisesRegex(ValueError, "1010"):
+            check_miw2.check_realtime_sim_ws(
+                host="127.0.0.1",
+                port=self.port,
+                base_path="",
+                timeout=1.0,
+                ssl_context=check_miw2.build_ssl_context(),
+                tls_connector=_plain_tcp_connector,
+            )
+
+    def test_min_cert_hours_rejects_non_finite_and_negative(self) -> None:
+        cert = self._cert(hours_remaining=120.0, ip_san="127.0.0.1")
+        for bad_threshold in (float("nan"), float("inf"), float("-inf"), -1.0):
+            with self.subTest(min_cert_hours=bad_threshold):
+                with self.assertRaisesRegex(ValueError, "min_cert_hours"):
+                    check_miw2.inspect_cert(
+                        cert,
+                        host="127.0.0.1",
+                        min_cert_hours=bad_threshold,
+                        now=self.now,
+                    )
+                with self.assertRaisesRegex(ValueError, "min_cert_hours"):
+                    self._run_against_loopback(min_cert_hours=bad_threshold)
+
+    def test_checked_at_utc_normalizes_non_utc_offset(self) -> None:
+        cert = self._cert(hours_remaining=120.0, ip_san="127.0.0.1")
+        cst_now = self.now.astimezone(timezone(timedelta(hours=8)))
+        report = check_miw2.run_checks(
+            base_url=f"http://127.0.0.1:{self.port}",
+            timeout=1.0,
+            now_fn=lambda: cst_now,
+            tls_connector=lambda *args: _FakeTLSSocket(cert),
+            ws_connector=_plain_tcp_connector,
+        )
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["checked_at_utc"], "2026-11-20T22:00:00Z")
 
     def test_connection_refused_and_timeout_handling(self) -> None:
         probe_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
