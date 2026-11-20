@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import review_video_rb
+import review_kimi_rb
 import summarize_rb_campaign
 
 
@@ -67,6 +68,25 @@ class ReviewToolsTest(unittest.TestCase):
             self.assertIn("NA (NOT_QUALIFIED)", md)
             self.assertIn("<svg", svg)
             self.assertIn("Target <= 3.0s", svg)
+
+    def test_detect_ai_transitions_brackets_response_completion(self):
+        rows = []
+        for i in range(100):
+            rows.append({
+                "n": i,
+                "pts": i * 3000,
+                "pts_s": i * (3000 / 90000.0),
+                "upper_diff": 12.0 if i == 20 else 0.05,
+                "resp_diff": 8.0 if 30 <= i <= 65 else 0.02,
+                "comp_diff": 10.0 if i == 20 else 0.02,
+                "resp_vs_end": 15.0 if i < 66 else 0.1,
+            })
+        n_done, picks = review_kimi_rb.detect_ai_transitions(rows, max_picks=20)
+        self.assertEqual(n_done, 66)
+        self.assertIn(0, picks)
+        self.assertIn(20, picks)
+        self.assertIn(66, picks)
+        self.assertLessEqual(len(picks), 20)
 
 
 if __name__ == "__main__":
