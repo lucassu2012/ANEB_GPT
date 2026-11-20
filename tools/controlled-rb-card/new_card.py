@@ -227,13 +227,13 @@ def validate_condition_args(args: argparse.Namespace) -> None:
 
 def resolve_input_file(explicit: str | None, fallbacks: list[Path | None], label: str) -> Path:
     if explicit:
-        p = Path(explicit).resolve()
+        p = Path(os.path.abspath(explicit))
         if not p.is_file():
             raise FileNotFoundError(f"Missing {label}: {p}")
         return p
     for cand in fallbacks:
         if cand is not None and cand.is_file():
-            return cand.resolve()
+            return Path(os.path.abspath(cand))
     tried = [str(c) for c in fallbacks if c is not None]
     raise FileNotFoundError(f"Could not resolve {label}; tried {tried}")
 
@@ -247,8 +247,8 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
     if args.seed is None:
         args.seed = 20261120 if (args.loss_bps > 0 or (args.uplink_loss_bps or 0) > 0) else 0
 
-    if not CARD_ID_RE.match(args.card_id):
-        raise ValueError(f"card_id must match [A-Za-z0-9._-]+, got {args.card_id!r}")
+    if args.card_id in {".", ".."} or not CARD_ID_RE.match(args.card_id):
+        raise ValueError(f"card_id must match [A-Za-z0-9._-]+ and not be '.' or '..', got {args.card_id!r}")
     ensure_ascii_ps_safe("card_id", args.card_id)
     ensure_ascii_ps_safe("version_name", args.version_name)
     ensure_ascii_ps_safe("adb_exe", args.adb_exe)
@@ -256,7 +256,7 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
 
     validate_condition_args(args)
 
-    repo_root = Path(args.repo_root).resolve()
+    repo_root = Path(os.path.abspath(args.repo_root))
     template_dir = Path(__file__).resolve().parent / "templates"
     for tmpl_name in (
         "common.ps1.tmpl",
@@ -267,8 +267,8 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
         if not (template_dir / tmpl_name).is_file():
             raise FileNotFoundError(f"Missing template: {template_dir / tmpl_name}")
 
-    case_root = Path(args.case_root)
-    out_dir = Path(args.out_dir) if args.out_dir else (case_root / args.card_id)
+    case_root = Path(os.path.abspath(args.case_root))
+    out_dir = Path(os.path.abspath(args.out_dir)) if args.out_dir else Path(os.path.abspath(case_root / args.card_id))
     if out_dir.exists():
         raise FileExistsError(f"Destination card directory already exists (immutable): {out_dir}")
 
@@ -286,7 +286,11 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
     source_branch = args.source_branch or detect_git_value(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"]) or "HEAD"
     ensure_ascii_ps_safe("source_branch", source_branch)
 
-    ref_dir = Path(args.reference_card_dir) if args.reference_card_dir else (case_root / DEFAULT_REFERENCE_CARD_NAME)
+    ref_dir = (
+        Path(os.path.abspath(args.reference_card_dir))
+        if args.reference_card_dir
+        else Path(os.path.abspath(case_root / DEFAULT_REFERENCE_CARD_NAME))
+    )
     if not ref_dir.is_dir():
         ref_dir = None
 

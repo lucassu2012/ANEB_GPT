@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -45,10 +46,14 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             "douyin_ui": fx / "ui-binding-douyin-410101-v2.json",
         }
 
-    def _run_new_card(self, extra_args: list[str]) -> subprocess.CompletedProcess[str]:
+    def _run_new_card(
+        self,
+        extra_args: list[str],
+        cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(NEW_CARD), *extra_args],
-            cwd=str(REPO_ROOT),
+            cwd=str(cwd or REPO_ROOT),
             capture_output=True,
             text=True,
         )
@@ -249,6 +254,127 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             for label, extra in bad_cases:
                 res = self._run_new_card([*common, *extra])
                 self.assertNotEqual(res.returncode, 0, f"Expected failure for {label}")
+
+    def test_relative_out_dir_and_case_root_are_normalized_to_absolute(self):
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            fx = self._make_fixtures(tmp)
+            common_args = [
+                "--app", "douyin",
+                "--downlink-bps", "500000",
+                "--repo-root", str(REPO_ROOT),
+                "--source-commit", SOURCE_COMMIT,
+                "--target-apk", str(fx["target_apk"]),
+                "--test-apk", str(fx["test_apk"]),
+                "--helper-exe", str(fx["helper_exe"]),
+                "--ui-binding", str(fx["douyin_ui"]),
+                "--connection-admission", str(fx["conn_adm"]),
+                "--topology-admission", str(fx["topo_adm"]),
+            ]
+
+            # 1. Relative --out-dir ./rel_card from temp cwd
+            res_out = self._run_new_card(
+                [
+                    *common_args,
+                    "--card-id", "rel_card",
+                    "--case-root", str(tmp),
+                    "--out-dir", "./rel_card",
+                ],
+                cwd=tmp,
+            )
+            self.assertEqual(res_out.returncode, 0, res_out.stderr)
+            rel_card_dir = tmp / "rel_card"
+            self._assert_card_hashes_and_ascii(rel_card_dir, "ui-binding-douyin-410101-v2.json")
+
+            expected_out_abs = os.path.abspath(rel_card_dir).replace("\\", "/")
+            expected_case_abs = os.path.abspath(tmp).replace("\\", "/")
+            self.assertTrue(os.path.isabs(expected_out_abs))
+
+            common_text = (rel_card_dir / "common.ps1").read_text(encoding="ascii")
+            run_text = (rel_card_dir / "run-once.ps1").read_text(encoding="ascii")
+            verify_text = (rel_card_dir / "verify-cleanup-readonly.ps1").read_text(encoding="ascii")
+            spec = json.loads((rel_card_dir / "CARD_SPEC.json").read_text(encoding="utf-8"))
+
+            self.assertIn(f"$root = '{expected_out_abs}'", common_text)
+            self.assertIn(f"$case = '{expected_case_abs}'", common_text)
+            self.assertIn(f"$root = '{expected_out_abs}'", run_text)
+            self.assertIn(f"$expectedRoot = '{expected_out_abs}'", verify_text)
+            self.assertEqual(
+                spec["sha256_pins"]["verify-cleanup-readonly.ps1"],
+                sha256_bytes((rel_card_dir / "verify-cleanup-readonly.ps1").read_bytes()),
+            )
+
+            # 2. Relative --case-root ./rel_case without --out-dir
+            rel_case = tmp / "rel_case"
+            rel_case.mkdir()
+            res_case = self._run_new_card(
+                [
+                    *common_args,
+                    "--card-id", "rel_case_card",
+                    "--case-root", "./rel_case",
+                ],
+                cwd=tmp,
+            )
+            self.assertEqual(res_case.returncode, 0, res_case.stderr)
+            rel_case_card_dir = rel_case / "rel_case_card"
+            self._assert_card_hashes_and_ascii(rel_case_card_dir, "ui-binding-douyin-410101-v2.json")
+
+            expected_case2_abs = os.path.abspath(rel_case).replace("\\", "/")
+            expected_card2_abs = os.path.abspath(rel_case_card_dir).replace("\\", "/")
+            common_case_text = (rel_case_card_dir / "common.ps1").read_text(encoding="ascii")
+            verify_case_text = (rel_case_card_dir / "verify-cleanup-readonly.ps1").read_text(encoding="ascii")
+
+            self.assertIn(f"$root = '{expected_card2_abs}'", common_case_text)
+            self.assertIn(f"$case = '{expected_case2_abs}'", common_case_text)
+            self.assertIn("(Join-Path $case 'network-candidate-2.2.2/signature-files/WinDivert-2.2.2-A/x64')", common_case_text)
+            self.assertIn("(Join-Path $case 'shaping-admission/desktop-host-admission-once/owned-host-check.ps1')", common_case_text)
+            self.assertIn(f"$expectedRoot = '{expected_card2_abs}'", verify_case_text)
+
+            # 3. Parent traversal '..' segments are normalized away
+            sub = tmp / "sub"
+            sub.mkdir()
+            res_dotdot = self._run_new_card(
+                [
+                    *common_args,
+                    "--card-id", "dotdot_card",
+                    "--case-root", "../rel_case",
+                    "--out-dir", "../dotdot_card",
+                ],
+                cwd=sub,
+            )
+            self.assertEqual(res_dotdot.returncode, 0, res_dotdot.stderr)
+            dotdot_dir = tmp / "dotdot_card"
+            self._assert_card_hashes_and_ascii(dotdot_dir, "ui-binding-douyin-410101-v2.json")
+            expected_dotdot_abs = os.path.abspath(dotdot_dir).replace("\\", "/")
+            dotdot_verify_text = (dotdot_dir / "verify-cleanup-readonly.ps1").read_text(encoding="ascii")
+            self.assertIn(f"$expectedRoot = '{expected_dotdot_abs}'", dotdot_verify_text)
+            self.assertNotIn("..", expected_dotdot_abs)
+
+    def test_rejects_dot_and_dotdot_card_ids(self):
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            fx = self._make_fixtures(tmp)
+            case_dir = tmp / "case"
+            case_dir.mkdir()
+            for bad_id in (".", ".."):
+                unused_out = tmp / f"out_{'dot' if bad_id == '.' else 'dotdot'}"
+                res = self._run_new_card([
+                    "--card-id", bad_id,
+                    "--app", "douyin",
+                    "--downlink-bps", "500000",
+                    "--case-root", str(case_dir),
+                    "--out-dir", str(unused_out),
+                    "--source-commit", SOURCE_COMMIT,
+                    "--target-apk", str(fx["target_apk"]),
+                    "--test-apk", str(fx["test_apk"]),
+                    "--helper-exe", str(fx["helper_exe"]),
+                    "--ui-binding", str(fx["douyin_ui"]),
+                    "--connection-admission", str(fx["conn_adm"]),
+                    "--topology-admission", str(fx["topo_adm"]),
+                ])
+                self.assertNotEqual(res.returncode, 0, f"Expected non-zero exit for --card-id {bad_id!r}")
+                self.assertFalse(unused_out.exists(), f"Output dir must not be created for --card-id {bad_id!r}")
+                self.assertEqual(list(case_dir.iterdir()), [], f"Case dir must stay empty for --card-id {bad_id!r}")
 
 
 if __name__ == "__main__":
