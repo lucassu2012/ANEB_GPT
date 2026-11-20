@@ -1,0 +1,14 @@
+{
+  "contractVersion": "aneb-ai-business-profile-1",
+  "profileId": "doubao-chat-single-send",
+  "version": "1.0.0",
+  "packageName": "com.larus.nova",
+  "appVersionPolicy": "PIN_AT_FIRST_ADMISSION",
+  "scenario": "SINGLE_PROMPT_SEND",
+  "prompt": "Write ten short numbered sentences explaining how network latency and packet loss hurt mobile AI chat.",
+  "observeMs": 26000,
+  "captureBackend": "android_media_projection_v1",
+  "visualMetric": "FIRST_RESPONSE_AND_COMPLETION_NOT_DEVICE_COMPUTED",
+  "recovery": "STOP_NO_RETRY",
+  "exitPolicy": "OWNED_ONLY_LAUNCHER_RESTORE"
+}

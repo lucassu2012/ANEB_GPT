@@ -9,6 +9,7 @@
         <package android:name="com.deepseek.chat" />
         <package android:name="com.moonshot.kimichat" />
         <package android:name="com.ss.android.ugc.aweme" />
+        <package android:name="com.larus.nova" />
     </queries>
     <application android:networkSecurityConfig="@xml/network_security_config">
         <activity

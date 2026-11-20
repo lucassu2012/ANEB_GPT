@@ -47,6 +47,7 @@ function Render-DummyTemplate([string]$Text) {
         '{{PROBE_CANDIDATE_HOSTS}}'       = "'120.77.174.207'"
         '{{CARD_FORMAT}}'                 = 'test-card-1'
         '{{CARD_PO}}'                     = 'test-po'
+        '{{PHASE_ORDER_PS}}'              = "'R', 'B'"
         '{{INSTRUMENTATION_CLASS}}'       = 'com.aneb.probe.TestClass'
         '{{COMMON_SHA256}}'               = ('3' * 64)
         '{{EXECUTE_ONCE_SHA256}}'         = ('4' * 64)
@@ -81,16 +82,31 @@ $execTmpl = [IO.File]::ReadAllText((Join-Path $tmplDir 'execute-once.ps1.tmpl'),
 foreach ($literal in @('250000', '125000', '187500', '500000')) {
     Assert-Card (-not $execTmpl.Contains($literal)) "execute-once.ps1.tmpl has no hardcoded rate literal $literal"
 }
+$execBrRendered = (Render-DummyTemplate $execTmpl).Replace("phases                            = @('R', 'B')", "phases                            = @('B', 'R')").Replace("foreach (`$conditionId in @('R', 'B'))", "foreach (`$conditionId in @('B', 'R'))")
+$brTokens = $null; $brErrors = $null
+$null = [Management.Automation.Language.Parser]::ParseInput($execBrRendered, [ref]$brTokens, [ref]$brErrors)
+Assert-Card ($brErrors.Count -eq 0 -and $execBrRendered.Contains("phases                            = @('B', 'R')") -and $execBrRendered.Contains("foreach (`$conditionId in @('B', 'R'))")) 'execute-once.ps1.tmpl renders B->R cleanly and parses'
 
-# Part B: Unit test extracted Get-AnebPhaseInstrumentationConditionArgs & Assert-AnebPhaseResultConditionMatch
+# Part B: Unit test extracted Get-AnebPhaseInstrumentationConditionArgs, Assert-AnebPhaseResultConditionMatch & Assert-AnebDoubaoUiBinding
 $commonRendered = Render-DummyTemplate ([IO.File]::ReadAllText((Join-Path $tmplDir 'common.ps1.tmpl'), [Text.Encoding]::ASCII))
 $tokens = $null; $errors = $null
 $commonAst = [Management.Automation.Language.Parser]::ParseInput($commonRendered, [ref]$tokens, [ref]$errors)
-foreach ($fnName in @('Get-AnebPhaseInstrumentationConditionArgs', 'Assert-AnebPhaseResultConditionMatch')) {
+foreach ($fnName in @('Get-AnebPhaseInstrumentationConditionArgs', 'Assert-AnebPhaseResultConditionMatch', 'Assert-AnebDoubaoUiBinding')) {
     $fnAst = @($commonAst.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $fnName }, $true))
     Assert-Card ($fnAst.Count -eq 1) "extracted $fnName from common.ps1.tmpl"
     . ([scriptblock]::Create($fnAst[0].Extent.Text))
 }
+$doubaoBindingPath = Join-Path $repoRoot 'tools/controlled-rb-card/bindings/ui-binding-doubao-15080040-v1.json'
+Assert-Card (Test-Path -LiteralPath $doubaoBindingPath) 'doubao UI binding JSON exists in repo'
+$doubaoBindingBytes = [IO.File]::ReadAllBytes($doubaoBindingPath)
+$doubaoBindingText = [Text.UTF8Encoding]::new($false).GetString($doubaoBindingBytes)
+$shaAlg = [Security.Cryptography.SHA256]::Create()
+try { $doubaoBindingSha = [BitConverter]::ToString($shaAlg.ComputeHash($doubaoBindingBytes)).Replace('-', '').ToLowerInvariant() } finally { $shaAlg.Dispose() }
+$doubaoVal = Assert-AnebDoubaoUiBinding $doubaoBindingText $doubaoBindingSha
+Assert-Card ($doubaoVal.valid -eq $true -and $doubaoVal.query_plan_count -eq 5) 'Assert-AnebDoubaoUiBinding validates repo Doubao binding'
+$doubaoBadThrew = $false
+try { [void](Assert-AnebDoubaoUiBinding $doubaoBindingText ('0' * 64)) } catch { $doubaoBadThrew = $true }
+Assert-Card $doubaoBadThrew 'Assert-AnebDoubaoUiBinding rejects SHA-256 mismatch'
 
 $rArgs = @(Get-AnebPhaseInstrumentationConditionArgs 'R' ([pscustomobject]@{ downlink_ip_bytes_per_second = 187500 }))
 Assert-Card ($rArgs.Count -eq 0) 'phase R emits no host_downlink_ip_bytes_per_second arg'
@@ -138,7 +154,8 @@ function New-VerifyScenario {
         [string]$MockTargetSha = ('a' * 64),
         [string]$MockTestSha = ('b' * 64),
         [string]$MockPointer = '0',
-        [bool]$MockHostClean = $true
+        [bool]$MockHostClean = $true,
+        [bool]$CreateCardJson = $false
     )
     $dir = Join-Path $tempRoot $Name
     $rt = Join-Path $dir 'runtime'
@@ -219,6 +236,9 @@ function Adb(`$name, [string[]]`$arguments, [int]`$budget = 10000) {
     if ($CreateHotspotIntent) {
         [IO.File]::WriteAllText((Join-Path $rt 'hotspot-start-intent.json'), '{"own_start_attempted":true}', [Text.Encoding]::ASCII)
     }
+    if ($CreateCardJson) {
+        [IO.File]::WriteAllText((Join-Path $rt 'CARD.json'), '{"format":"test"}', [Text.Encoding]::ASCII)
+    }
 
     $freq = [Diagnostics.Stopwatch]::Frequency
     $deadline = [Diagnostics.Stopwatch]::GetTimestamp() + (60 * $freq)
@@ -294,6 +314,36 @@ try {
         cleanup_errors = @('cleanup err')
     }
     Assert-Card ($s5b.ExitCode -eq 2 -and $s5b.Cleanup.all_checked_true -eq $false) 'missing before.json with clean_state_verified=false fails closed'
+
+    # Scenarios 5c, 5d, 5e: Missing before.json despite captured phase, dispatch permit, or CARD.json fails closed
+    $s5c = New-VerifyScenario -Name 'missing-before-phases' -TerminalData @{
+        finished_utc = '2026-11-20T00:00:00Z'
+        pass = $false
+        rb_pair_captured = $false
+        clean_state_verified = $true
+        cleanup_errors = @()
+        phases = @(@{ condition_id = 'R' })
+    }
+    Assert-Card ($s5c.ExitCode -eq 2 -and $s5c.Cleanup.all_checked_true -eq $false) 'missing before.json with captured phases fails closed'
+
+    $s5d = New-VerifyScenario -Name 'missing-before-dispatch-permit' -TerminalData @{
+        finished_utc = '2026-11-20T00:00:00Z'
+        pass = $false
+        rb_pair_captured = $false
+        clean_state_verified = $true
+        cleanup_errors = @()
+        instrumentation_dispatch_permit_count = 1
+    }
+    Assert-Card ($s5d.ExitCode -eq 2 -and $s5d.Cleanup.all_checked_true -eq $false) 'missing before.json with instrumentation_dispatch_permit_count>0 fails closed'
+
+    $s5e = New-VerifyScenario -Name 'missing-before-card-json' -TerminalData @{
+        finished_utc = '2026-11-20T00:00:00Z'
+        pass = $false
+        rb_pair_captured = $false
+        clean_state_verified = $true
+        cleanup_errors = @()
+    } -CreateCardJson $true
+    Assert-Card ($s5e.ExitCode -eq 2 -and $s5e.Cleanup.all_checked_true -eq $false) 'missing before.json with runtime/CARD.json fails closed'
 
     # Scenario 6: Normal full run with before.json present passes all 9 checks
     $s6 = New-VerifyScenario -Name 'normal-full-run' -TerminalData @{

@@ -21,6 +21,7 @@ internal class VideoOwnerShell(
     private val automation: UiAutomation,
     private val directory: File,
     private val nowNs: () -> Long,
+    private val allowedPackage: String = PACKAGE,
 ) : OwnedProcessLifecycle.Shell {
     private class ReadState {
         val bytes = ByteArrayOutputStream()
@@ -186,6 +187,7 @@ internal class VideoOwnerShell(
             readersHealthy = ::readersClosed,
             packageName = packageName,
             deadlineNanos = deadlineNanos,
+            expectedPackage = allowedPackage,
         )
     }
 
@@ -193,7 +195,7 @@ internal class VideoOwnerShell(
     fun findPackageOwner(packageName: String, expectedUid: Int, deadlineNanos: Long): OwnedProcessLifecycle.Owner? {
         requirePackage(packageName)
         require(expectedUid >= 0) { "VIDEO_EXPECTED_UID_INVALID" }
-        val result = execute("pidof $PACKAGE", deadlineNanos)
+        val result = execute("pidof $packageName", deadlineNanos)
         requireComplete(result, deadlineNanos)
         if (result.exitCode == 1 && result.stdout.trim().isEmpty()) return null
         check(result.exitCode == 0) { "VIDEO_PACKAGE_PID_UNKNOWN" }
@@ -202,7 +204,7 @@ internal class VideoOwnerShell(
         val observed = lifecycle.observe(pids.single(), deadlineNanos)
         val owner = (observed as? OwnedProcessLifecycle.Observation.Alive)?.owner
             ?: error("VIDEO_PACKAGE_OWNER_UNKNOWN_OR_DISAPPEARED")
-        check(owner.uid == expectedUid && owner.commandLine == listOf(PACKAGE)) { "VIDEO_PACKAGE_IDENTITY_MISMATCH" }
+        check(owner.uid == expectedUid && owner.commandLine == listOf(packageName)) { "VIDEO_PACKAGE_IDENTITY_MISMATCH" }
         return owner
     }
 
@@ -216,6 +218,7 @@ internal class VideoOwnerShell(
             owner = owner,
             packageName = packageName,
             deadlineNanos = deadlineNanos,
+            expectedPackage = allowedPackage,
         )
         val stopped = outcome.stopped
         val reason = outcome.reason
@@ -235,7 +238,9 @@ internal class VideoOwnerShell(
     }
 
     private fun requirePackage(packageName: String) {
-        require(packageName == PACKAGE) { "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" }
+        require(packageName == allowedPackage) {
+            if (allowedPackage == PACKAGE) "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" else "VIDEO_PACKAGE_NOT_ADMITTED"
+        }
     }
 
     private fun requireComplete(result: OwnedProcessLifecycle.ShellResult, deadlineNanos: Long) {

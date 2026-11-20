@@ -304,7 +304,7 @@ try {
   original_wifi_ssid                = $originalSsid
   original_wifi_net_id              = $originalNetId
   original_pointer_location         = $priorPointerLocation
-  phases                            = @('R', 'B')
+  phases                            = @({{PHASE_ORDER_PS}})
   native_ttl_seconds                = $nativeTtlSeconds
   b_downlink_ip_bytes_per_second    = $bDownlinkIpBytesPerSecond
   b_downlink_delay_ms               = $bDownlinkDelayMs
@@ -318,7 +318,7 @@ try {
  $cardSHA = (Get-FileHash -LiteralPath (Join-Path $runtime 'CARD.json')).Hash.ToLowerInvariant()
 
  $chain = [Diagnostics.Stopwatch]::StartNew()
- foreach ($conditionId in @('R', 'B')) {
+ foreach ($conditionId in @({{PHASE_ORDER_PS}})) {
   Hotspot-Within
   if ($chain.ElapsedMilliseconds -ge $chainBudgetMs) {
    throw 'Bounded R/B chain 320s budget exhausted before phase start'
@@ -403,8 +403,9 @@ try {
     throw 'Own live worker identity missing'
    }
    $dispatch = [Diagnostics.Stopwatch]::GetTimestamp()
-   if ($j.process.HasExited -or (Test-Path -LiteralPath (Join-Path $inspect 'supervisor.json')) -or (($ready.deadline_qpc - $dispatch) / [double]$ready.qpc_frequency) -lt 80.0) {
-    throw 'Native 100s window headroom (<80s) insufficient at dispatch; no business run'
+   $minHeadroomSeconds = [double][Math]::Max(60, $nativeTtlSeconds - 20)
+   if ($j.process.HasExited -or (Test-Path -LiteralPath (Join-Path $inspect 'supervisor.json')) -or (($ready.deadline_qpc - $dispatch) / [double]$ready.qpc_frequency) -lt $minHeadroomSeconds) {
+    throw ('Native ' + $nativeTtlSeconds + 's window headroom (<' + $minHeadroomSeconds + 's) insufficient at dispatch; no business run')
    }
 
    $runId = $runIdPrefix + $conditionId
@@ -529,6 +530,13 @@ try {
    $videoPath = Join-Path $pulledRoot 'video.mp4'
    if (-not (Test-Path -LiteralPath $videoPath) -or (Get-Item -LiteralPath $videoPath).Length -le 64) {
     throw ('Condition ' + $conditionId + ' video.mp4 missing or empty')
+   }
+   $finalMediaPath = Join-Path $pulledRoot 'FINAL_MEDIA.json'
+   if (Test-Path -LiteralPath $finalMediaPath) {
+    $finalMedia = Read-JSON $finalMediaPath
+    if ([int]$finalMedia.sample_count -le 0 -or $finalMedia.pts_nondecreasing -ne $true) {
+     throw ('Condition ' + $conditionId + ' FINAL_MEDIA.json invalid: sample_count=' + $finalMedia.sample_count + ', pts_nondecreasing=' + $finalMedia.pts_nondecreasing)
+    }
    }
 
    foreach ($native in @($ws, $sup.worker)) {

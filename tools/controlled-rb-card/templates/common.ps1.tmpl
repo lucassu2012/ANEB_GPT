@@ -14,7 +14,7 @@ $hotspotBudgetMs    = 380000
 $chainBudgetMs      = 320000
 $phaseBudgetMs      = 150000
 $nativeTtlSeconds   = {{NATIVE_TTL_SECONDS}}
-$helperBudgetMs     = 120000
+$helperBudgetMs     = [int][Math]::Max(120000, ($nativeTtlSeconds + 25) * 1000)
 $instrumentBudgetMs = 95000
 $outerBudgetMs      = 900000
 
@@ -134,6 +134,44 @@ function Assert-AnebPhaseResultConditionMatch([string]$ConditionId, $DevResult, 
   if ($actualRateText -cne ([string]$expectedRate)) {
    throw ('Device result downlinkIpBytesPerSecond mismatch in condition B: got ' + $actualRateText + ', expected ' + $expectedRate)
   }
+ }
+}
+
+function Assert-AnebDoubaoUiBinding([string]$JsonText, [string]$ExpectedSha256 = '') {
+ if ([string]::IsNullOrWhiteSpace($JsonText)) { throw 'Doubao UI binding JSON text missing' }
+ $utf8Bytes = [Text.UTF8Encoding]::new($false).GetBytes($JsonText)
+ $h = [Security.Cryptography.SHA256]::Create()
+ try {
+  $actualSha = [BitConverter]::ToString($h.ComputeHash($utf8Bytes)).Replace('-', '').ToLowerInvariant()
+ } finally {
+  $h.Dispose()
+ }
+ if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256) -and $actualSha -cne $ExpectedSha256) {
+  throw ('Doubao UI binding UTF-8 SHA256 mismatch: expected ' + $ExpectedSha256 + ', got ' + $actualSha)
+ }
+ $b = $JsonText | ConvertFrom-Json -ErrorAction Stop
+ if ([string]$b.observation_method -cne 'doubao-public-selectors-1') {
+  throw 'Doubao UI binding observation_method must be doubao-public-selectors-1'
+ }
+ if ([string]$b.package_name -cne 'com.larus.nova') {
+  throw 'Doubao UI binding package_name must be com.larus.nova'
+ }
+ if ([int64]$b.app_version_code -le 0) {
+  throw 'Doubao UI binding app_version_code must be positive'
+ }
+ if ([int]$b.display_width -ne 1200 -or [int]$b.display_height -ne 2640 -or [int]$b.rotation -ne 0) {
+  throw 'Doubao UI binding display geometry must be 1200x2640 rotation 0'
+ }
+ if ($null -eq $b.selectors -or [string]::IsNullOrWhiteSpace([string]$b.selectors.edit_text_id) -or [string]::IsNullOrWhiteSpace([string]$b.selectors.send_button_id) -or [string]::IsNullOrWhiteSpace([string]$b.selectors.send_button_desc) -or [string]::IsNullOrWhiteSpace([string]$b.selectors.new_chat_id_contains) -or [string]::IsNullOrWhiteSpace([string]$b.selectors.message_list_id)) {
+  throw 'Doubao UI binding selectors incomplete'
+ }
+ if ([string]::IsNullOrWhiteSpace([string]$b.prompt)) {
+  throw 'Doubao UI binding prompt missing'
+ }
+ return [ordered]@{
+  valid            = $true
+  sha256           = $actualSha
+  query_plan_count = 5
  }
 }
 
@@ -330,12 +368,12 @@ function Phone-Clean($prefix) {
  $window = Adb ($prefix + 'focus') @('shell', 'dumpsys', 'window')
  if ($window -notmatch 'mCurrentFocus=.*com\.huawei\.android\.launcher/') { throw 'Not Huawei Launcher' }
  $p = Adb ($prefix + 'processes') @('shell', 'ps', '-A', '-o', 'PID,NAME')
- if ($p -notmatch '\bPID\b.*\bNAME\b' -or $p -match 'com\.aneb\.probe|himovie|deepseek|moonshot|kimichat|qwen|aweme|screenrecord|scrcpy|httpcanary|remote_capture|tun2socks') {
+ if ($p -notmatch '\bPID\b.*\bNAME\b' -or $p -match 'com\.aneb\.probe|himovie|deepseek|moonshot|kimichat|qwen|aweme|com\.larus\.nova|screenrecord|scrcpy|httpcanary|remote_capture|tun2socks') {
   throw 'Unknown conflicting session untouched'
  }
  $activeSvcs = Adb ($prefix + 'aneb-aweme-services') @('shell', 'dumpsys', 'activity', 'services')
- if ($activeSvcs -match 'ServiceRecord\{[^\r\n]*(?:com\.aneb\.probe|com\.ss\.android\.ugc\.aweme)') {
-  throw 'Active ANEB or Douyin ServiceRecord present; not clean'
+ if ($activeSvcs -match 'ServiceRecord\{[^\r\n]*(?:com\.aneb\.probe|com\.ss\.android\.ugc\.aweme|com\.larus\.nova)') {
+  throw 'Active ANEB or business ServiceRecord present; not clean'
  }
  $activities = Adb ($prefix + 'settings-activities') @('shell', 'dumpsys', 'activity', 'activities')
  $services = Adb ($prefix + 'settings-services') @('shell', 'dumpsys', 'activity', 'services', 'com.android.settings')

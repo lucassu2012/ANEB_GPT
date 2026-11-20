@@ -22,9 +22,12 @@ internal object VideoOwnedStopConfirmation {
         readersHealthy: () -> Boolean,
         packageName: String,
         deadlineNanos: Long,
+        expectedPackage: String = PACKAGE,
     ) {
-        require(packageName == PACKAGE) { "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" }
-        check(packagePresentCount(shell, nowNs, readersHealthy, deadlineNanos) == 0) {
+        require(packageName == expectedPackage) {
+            if (expectedPackage == PACKAGE) "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" else "VIDEO_PACKAGE_NOT_ADMITTED"
+        }
+        check(packagePresentCount(shell, nowNs, readersHealthy, deadlineNanos, expectedPackage) == 0) {
             "VIDEO_PACKAGE_STILL_PRESENT"
         }
     }
@@ -37,15 +40,18 @@ internal object VideoOwnedStopConfirmation {
         owner: OwnedProcessLifecycle.Owner,
         packageName: String,
         deadlineNanos: Long,
+        expectedPackage: String = PACKAGE,
     ): Outcome {
-        require(packageName == PACKAGE) { "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" }
-        check(PID.matches(owner.pid) && owner.uid >= 0 && owner.commandLine == listOf(PACKAGE)) {
+        require(packageName == expectedPackage) {
+            if (expectedPackage == PACKAGE) "VIDEO_ONLY_DOUYIN_PACKAGE_ADMITTED" else "VIDEO_PACKAGE_NOT_ADMITTED"
+        }
+        check(PID.matches(owner.pid) && owner.uid >= 0 && owner.commandLine == listOf(expectedPackage)) {
             "VIDEO_STOP_OWNER_NOT_ADMITTED"
         }
         return try {
             when (val current = lifecycle.observe(owner.pid, deadlineNanos)) {
                 OwnedProcessLifecycle.Observation.Absent -> {
-                    requirePackageAbsentOnce(shell, nowNs, readersHealthy, packageName, deadlineNanos)
+                    requirePackageAbsentOnce(shell, nowNs, readersHealthy, packageName, deadlineNanos, expectedPackage)
                     Outcome(true, "MAIN_AND_PACKAGE_ALREADY_ABSENT_NO_STOP")
                 }
                 is OwnedProcessLifecycle.Observation.Unknown ->
@@ -54,13 +60,13 @@ internal object VideoOwnedStopConfirmation {
                     if (current.owner != owner) {
                         Outcome(false, "OWNER_REPLACED_NOT_STOPPED")
                     } else {
-                        val stopResult = shell.execute("am force-stop $PACKAGE", deadlineNanos)
+                        val stopResult = shell.execute("am force-stop $expectedPackage", deadlineNanos)
                         requireComplete(stopResult, nowNs, readersHealthy, deadlineNanos)
                         check(stopResult.exitCode == 0 && stopResult.stdout.isBlank()) {
                             "VIDEO_FORCE_STOP_RESULT_UNKNOWN"
                         }
                         confirmMainPidExited(shell, lifecycle, nowNs, readersHealthy, owner, deadlineNanos)
-                        confirmAllPackageProcessesExited(shell, nowNs, readersHealthy, deadlineNanos)
+                        confirmAllPackageProcessesExited(shell, nowNs, readersHealthy, deadlineNanos, expectedPackage)
                         Outcome(true, "EXACT_OWNER_PRECHECK_AND_PACKAGE_ABSENCE_OBSERVED")
                     }
                 }
@@ -122,9 +128,10 @@ internal object VideoOwnedStopConfirmation {
         nowNs: () -> Long,
         readersHealthy: () -> Boolean,
         deadlineNanos: Long,
+        expectedPackage: String = PACKAGE,
     ) {
         while (true) {
-            if (packagePresentCount(shell, nowNs, readersHealthy, deadlineNanos) == 0) return
+            if (packagePresentCount(shell, nowNs, readersHealthy, deadlineNanos, expectedPackage) == 0) return
             check(nowNs() < deadlineNanos) { "VIDEO_PACKAGE_STILL_PRESENT" }
             shell.sleepMillis(50L)
         }
@@ -135,6 +142,7 @@ internal object VideoOwnedStopConfirmation {
         nowNs: () -> Long,
         readersHealthy: () -> Boolean,
         deadlineNanos: Long,
+        expectedPackage: String = PACKAGE,
     ): Int {
         val result = shell.execute("ps -A -o PID,NAME", deadlineNanos)
         requireComplete(result, nowNs, readersHealthy, deadlineNanos)
@@ -151,7 +159,7 @@ internal object VideoOwnedStopConfirmation {
             }
         }
         check(rows.map { it[0] }.distinct().size == rows.size) { "VIDEO_PACKAGE_PROCESS_LIST_UNKNOWN" }
-        return rows.count { it[1] == PACKAGE || it[1].startsWith("$PACKAGE:") }
+        return rows.count { it[1] == expectedPackage || it[1].startsWith("$expectedPackage:") }
     }
 
     private fun requireComplete(
