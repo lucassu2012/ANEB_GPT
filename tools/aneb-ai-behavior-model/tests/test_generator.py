@@ -65,6 +65,28 @@ class GeneratorTest(unittest.TestCase):
         self.assertIn("audio_downlink_frame_plan", event_types)
         self.assertTrue(saw_barge_in)
 
+    def test_exported_v2_token_multimodal_standard_matches_manifest(self) -> None:
+        v2_dir = ROOT.parents[1] / "profiles/v2/token_multimodal_standard"
+        self.assertTrue(v2_dir.is_dir(), f"missing exported v2 profile dir: {v2_dir}")
+        model = load_model(ROOT / "models/token_multimodal_hypothesis_v0.1.json")
+        artifacts = build_artifacts(model, 20260716)
+
+        expected_manifest = "".join(
+            f"{digest.removeprefix('sha256:')}  {name}\n"
+            for name, digest in artifacts.manifest.items()
+        )
+        self.assertEqual((v2_dir / "manifest.sha256").read_text(encoding="utf-8"), expected_manifest)
+        self.assertEqual(
+            json.loads((v2_dir / "profile.json").read_text(encoding="utf-8")),
+            artifacts.profile,
+        )
+        exported_trace = [
+            json.loads(line)
+            for line in (v2_dir / "golden_trace.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(exported_trace, artifacts.trace)
+
 
 if __name__ == "__main__":
     unittest.main()

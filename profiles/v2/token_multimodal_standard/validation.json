@@ -1,0 +1,33 @@
+{
+  "validation_contract_version": "aneb-behavior-validation-v1",
+  "model_id": "token-multimodal-behavior-v0.1",
+  "model_version": "0.1.0",
+  "model_status": "hypothesis",
+  "structural_valid": true,
+  "issues": [],
+  "event_count": 16023,
+  "summaries": {
+    "payload_bytes": {
+      "count": 20,
+      "p05": 2048.0,
+      "p50": 3145728.0,
+      "p95": 10485760.0,
+      "mean": 4826624.0
+    },
+    "token_interval_ms": {
+      "count": 14020,
+      "p05": 8.0,
+      "p50": 40.0,
+      "p95": 300.0,
+      "mean": 94.52560627674751
+    },
+    "response_wait_ms": {
+      "count": 0,
+      "p05": null,
+      "p50": null,
+      "p95": null,
+      "mean": null
+    }
+  },
+  "claim": "structural validation only; hypothesis models are not validated representations of any named provider"
+}

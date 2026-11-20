@@ -22,11 +22,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,6 +56,12 @@ fun BasicSpeedTestingScreen(
     nodeLabel: String,
     onCancel: () -> Unit,
 ) {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val prev = view.keepScreenOn
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = prev }
+    }
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
     val live = telemetry.currentMbps
@@ -215,6 +224,44 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                         Column {
                             Text(item.title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.ink)
                             Text(item.body, fontSize = 10.sp, lineHeight = 15.sp, color = colors.muted, modifier = Modifier.padding(top = 3.dp))
+                        }
+                    }
+                }
+            }
+            val verdicts = remember(result.downloadMbps, result.uploadMbps, result.pingMs, result.jitterMs) {
+                AiScenarioAdvisor.advise(
+                    downMbps = result.downloadMbps,
+                    upMbps = result.uploadMbps,
+                    rttMs = result.pingMs,
+                    jitterMs = result.jitterMs,
+                )
+            }
+            Text(
+                "AI 场景适配（按基础测速实测 · 良级门限）",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.ink,
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+            )
+            AnebGradientCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), radius = 14.dp) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    verdicts.forEach { v ->
+                        val statusColor = when (v.suitable) {
+                            true -> colors.excellent
+                            false -> colors.poor
+                            null -> colors.neutral
+                        }
+                        val statusText = when (v.suitable) {
+                            true -> "✓ 适合"
+                            false -> "✗ 不适合"
+                            null -> "— 无法判定"
+                        }
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("${v.code} ${v.title}", fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+                                Text(statusText, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = statusColor)
+                            }
+                            Text(v.requirement, fontSize = 9.5.sp, lineHeight = 14.sp, color = colors.faint, modifier = Modifier.padding(top = 2.dp))
                         }
                     }
                 }

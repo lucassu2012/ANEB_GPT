@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -30,6 +31,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -52,13 +54,19 @@ import com.aneb.probe.data.AnebDatabase
 import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.data.PrototypeCampaignRoomRepository
+import com.aneb.probe.data.RadioSampleEntity
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.data.VoiceResultRepository
 import com.aneb.probe.engine.AbRunner
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.engine.BehaviorTracePlan
+import com.aneb.probe.engine.BehaviorTraceRunner
 import com.aneb.probe.engine.ContinuityRunner
+import com.aneb.probe.engine.LoadedResponsiveness
+import com.aneb.probe.engine.LoadedResponsivenessReport
+import com.aneb.probe.engine.NetworkSpeedEngine
 import com.aneb.probe.engine.ProbeRunService
 import com.aneb.probe.engine.ProbeRunSession
 import com.aneb.probe.engine.ProbeSpecialRunService
@@ -140,6 +148,7 @@ class MainActivity : ComponentActivity() {
     private var intentAb: Boolean = false
     private var intentAbPairs: Int = AbRunner.DEFAULT_PAIRS
     private var intentAbNetlog: Boolean = false
+    private val keepScreenOnPolicy = KeepScreenOnPolicy()
 
     private var radioPermissionResultCallback: ((RadioPermissionState) -> Unit)? = null
     private val radioPermissionLauncher =
@@ -191,9 +200,9 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 下钻子状态机（SpeedTest 式外壳）：Home=当前 tab 的根哨兵（此时显底栏 [AnebTabBar]），
-     * 其余为下钻屏（隐底栏、靠各自返回键回根）。底部 3-tab 测试/历史/设置见 [MainTab]，均是
-     * Home 哨兵下按 tab 选根，不再是 Screen 值。可达性看板 [ReachBoard] 已从顶级 tab 降为设置里
-     * 的二级下钻入口。Result.fromHistory 仅为兼容 startRun 逐字构造保留（导航现由 tab 决定回根）。
+     * 其余为下钻屏（隐底栏、靠各自返回键回根）。底部 4-tab 测试/结果/地图/设置见 [MainTab]，均是
+     * Home 哨兵下按 tab 选根，不再是 Screen 值。API 探针 [ApiProbe] 与可达性看板 [ReachBoard]
+     * 均为设置里的二级下钻入口。Result.fromHistory 仅为兼容 startRun 逐字构造保留（导航现由 tab 决定回根）。
      */
     private sealed interface Screen {
         data object Home : Screen
@@ -229,6 +238,10 @@ class MainActivity : ComponentActivity() {
         val ordinaryProbeIntent = PrototypeReleaseProbeBoundary.ordinaryExternalEntry(intent)
         intentServer = ordinaryProbeIntent?.getStringExtra("server")
         intentAutorun = ordinaryProbeIntent?.getBooleanExtra("autorun", false) == true
+        keepScreenOnPolicy.onCreate(intentAutorun)
+        if (keepScreenOnPolicy.held) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         intentModeOverride = when (ordinaryProbeIntent?.getStringExtra("mode")?.lowercase()) {
             "quick" -> TestEngine.Mode.QUICK
             "forensic" -> TestEngine.Mode.FORENSIC
@@ -281,13 +294,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             AnebTheme {
                 // 只消费顶部状态栏。华为三键导航模式已经从 Activity 内容窗口排除了底栏，
-                // 若再消费 navigationBars inset，会把五栏导航的点击区裁到窗口之外。
+                // 若再消费 navigationBars inset，会把四栏导航的点击区裁到窗口之外。
                 Surface(
                     color = AnebTheme.colors.background,
                     modifier = Modifier.fillMaxSize().statusBarsPadding(),
                 ) {
                     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
-                    // 底部 5-tab 外壳选中态（默认测试）；下钻只在 Home 哨兵下按 tab 决定根，
+                    // 底部 4-tab 外壳选中态（默认测试）；下钻只在 Home 哨兵下按 tab 决定根，
                     // 故切 tab 只发生在各 tab 根（切换前后 screen 均为 Home），子状态天然互不串扰。
                     var tab by rememberSaveable { mutableStateOf(MainTab.Test) }
                     var serverUrl by rememberSaveable {
@@ -801,7 +814,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // ---- ANEB_UI 五栏外壳（测试 / 探针 / 结果 / 地图 / 设置）----
+                    // ---- ANEB_UI 四栏外壳（测试 / 结果 / 地图 / 设置）----
                     // 底栏仅在各 tab 根（screen==Home）显示；下钻屏（Testing/Result/ApiProbe/
                     // ReachBoard/Report）隐底栏、Testing 运行中保持全屏专注。contentWindowInsets 置 0：
                     // Surface 已消费顶部状态栏，Scaffold 不再重复消费系统 Insets。
@@ -816,7 +829,7 @@ class MainActivity : ComponentActivity() {
                         containerColor = AnebTheme.colors.background,
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     ) { innerPadding ->
-                        // 根页面主动为五栏导航留白；首页/地图的抽屉则刻意延伸到导航背后，
+                        // 根页面主动为四栏导航留白；首页/地图的抽屉则刻意延伸到导航背后，
                         // 对齐 HTML 原型的覆盖关系，因此这里不消费 Scaffold bottom padding。
                         Box(
                             modifier = Modifier
@@ -850,11 +863,6 @@ class MainActivity : ComponentActivity() {
                                             screen = Screen.BasicResult(runId)
                                         },
                                         onOpenVoice = { screen = Screen.Voice },
-                                    )
-                                    MainTab.Probe -> ApiProbeRoute(
-                                        onBack = { tab = MainTab.Test },
-                                        onOpenReachBoard = { screen = Screen.ReachBoard },
-                                        showBack = false,
                                     )
                                     MainTab.Results -> HistoryRoute(
                                         onOpen = { runId ->
@@ -911,7 +919,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         injectActive = intentInject,
                                         onOpenServer = ::openServerScreen,
-                                        onOpenApiProbe = { tab = MainTab.Probe },
+                                        onOpenApiProbe = { screen = Screen.ApiProbe },
                                         // 可达性看板已降为设置二级入口（下钻屏）。
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
                                         onOpenProfiles = { screen = Screen.Profiles },
@@ -1268,13 +1276,41 @@ class MainActivity : ComponentActivity() {
         }
         val history by produceState(initialValue = HistoryData(), voiceHistoryVersion) {
             value = withContext(Dispatchers.IO) {
+                val tokenRuns = db.testRunDao().all()
+                val scenariosByRunId = db.scenarioResultDao().all().groupBy { it.runId }
+                val basicRuns = db.basicSpeedResultDao().all()
+                val loadedResponsivenessByRunId = basicRuns
+                    .filter { it.profileId == NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID }
+                    .mapNotNull { run ->
+                        val body = db.reportBodyDao().forRun(run.runId)?.body ?: return@mapNotNull null
+                        runCatching { LoadedResponsiveness.decode(body) }
+                            .getOrNull()
+                            ?.let { run.runId to it }
+                    }
+                    .toMap()
+                val radioSamplesByRunId = tokenRuns
+                    .filter { run ->
+                        run.transport.contains("cellular", ignoreCase = true) ||
+                            scenariosByRunId[run.runId].orEmpty().any {
+                                it.netTransport?.contains("cellular", ignoreCase = true) == true
+                            }
+                    }
+                    .associate { run -> run.runId to db.radioSampleDao().forRun(run.runId) }
                 HistoryData(
-                    tokenRuns = db.testRunDao().all(),
-                    basicRuns = db.basicSpeedResultDao().all(),
+                    tokenRuns = tokenRuns,
+                    basicRuns = basicRuns,
                     voiceResults = db.voiceResultDao().recent(50),
+                    scenariosByRunId = scenariosByRunId,
+                    radioSamplesByRunId = radioSamplesByRunId,
+                    loadedResponsivenessByRunId = loadedResponsivenessByRunId,
                 )
             }
         }
+        val scope = rememberCoroutineScope()
+        var comparisonExportStatus by remember { mutableStateOf<String?>(null) }
+        var comparisonActionBusy by remember { mutableStateOf(false) }
+        var comparisonStatusToken by remember { mutableIntStateOf(0) }
+
         HistoryScreen(
             runs = history.tokenRuns,
             basicRuns = history.basicRuns,
@@ -1286,6 +1322,71 @@ class MainActivity : ComponentActivity() {
             onOpenResearch = { researchOpen = true },
             voiceResults = history.voiceResults,
             onOpenVoice = onOpenVoice,
+            scenariosByRunId = history.scenariosByRunId,
+            radioSamplesByRunId = history.radioSamplesByRunId,
+            loadedResponsivenessByRunId = history.loadedResponsivenessByRunId,
+            comparisonExportStatus = comparisonExportStatus,
+            comparisonActionBusy = comparisonActionBusy,
+            onExportComparisonMarkdown = { compatible ->
+                if (!comparisonActionBusy) {
+                    comparisonActionBusy = true
+                    val startToken = comparisonStatusToken
+                    scope.launch {
+                        try {
+                            val line = withContext(Dispatchers.IO) {
+                                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                                val fileName = "aneb_compare_$ts.md"
+                                val markdown = PairedComparisonFormat.buildMarkdown(compatible)
+                                val outcome = Exporter.exportToDownloads(
+                                    context = applicationContext,
+                                    fileName = fileName,
+                                    mimeType = "text/markdown",
+                                    content = markdown,
+                                )
+                                "COMPARE_EXPORT file=$fileName bytes=${outcome.bytes} " +
+                                    "status=${if (outcome.ok) "ok" else "fail"} " +
+                                    "uri=${outcome.uri ?: "null"} error=${outcome.error?.replace(' ', '_') ?: "none"}"
+                            }
+                            android.util.Log.i("AnebProbe", line)
+                            if (comparisonStatusToken == startToken) {
+                                comparisonExportStatus = line
+                            }
+                        } finally {
+                            comparisonActionBusy = false
+                        }
+                    }
+                }
+            },
+            onShareComparisonImage = { compatible ->
+                if (!comparisonActionBusy) {
+                    comparisonActionBusy = true
+                    val startToken = comparisonStatusToken
+                    scope.launch {
+                        try {
+                            val model = PairedComparisonShareCard.toShareModel(compatible)
+                            val saveOutcome = withContext(Dispatchers.IO) {
+                                PairedComparisonShareCard.renderAndSave(applicationContext, model)
+                            }
+                            val line = if (saveOutcome.ok && saveOutcome.uri != null) {
+                                val launched = PairedComparisonShareCard.launchShare(applicationContext, saveOutcome.uri)
+                                "COMPARE_SHARE status=${if (launched) "ok" else "saved_only"} uri=${saveOutcome.uri}"
+                            } else {
+                                "COMPARE_SHARE status=fail error=${saveOutcome.error ?: "unknown"}"
+                            }
+                            android.util.Log.i("AnebProbe", line)
+                            if (comparisonStatusToken == startToken) {
+                                comparisonExportStatus = line
+                            }
+                        } finally {
+                            comparisonActionBusy = false
+                        }
+                    }
+                }
+            },
+            onClearComparisonStatus = {
+                comparisonStatusToken += 1
+                comparisonExportStatus = null
+            },
         )
     }
 
@@ -1339,6 +1440,9 @@ class MainActivity : ComponentActivity() {
         val tokenRuns: List<TestRun> = emptyList(),
         val basicRuns: List<BasicSpeedResultEntity> = emptyList(),
         val voiceResults: List<VoiceResultEntity> = emptyList(),
+        val scenariosByRunId: Map<String, List<ScenarioResultEntity>> = emptyMap(),
+        val radioSamplesByRunId: Map<String, List<RadioSampleEntity>> = emptyMap(),
+        val loadedResponsivenessByRunId: Map<String, LoadedResponsivenessReport> = emptyMap(),
     )
 
     @Composable
@@ -1374,17 +1478,25 @@ class MainActivity : ComponentActivity() {
         val warnings: List<String> = emptyList(),
         val loading: Boolean = true,
         val error: String? = null,
+        val resolvedBase: String = "",
     )
 
     @Composable
     private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit) {
         var refreshTick by rememberSaveable { mutableIntStateOf(0) }
+        val scope = rememberCoroutineScope()
+        var simJob by remember { mutableStateOf<Job?>(null) }
+        var simRunning by remember { mutableStateOf(false) }
+        val simLogs = remember { mutableStateListOf<String>() }
+        var simResult by remember { mutableStateOf<BehaviorTraceRunner.BehaviorTraceRunResult?>(null) }
+        var simError by remember { mutableStateOf<String?>(null) }
+
         val catalog by produceState(
-            initialValue = ProfileCatalogData(),
+            initialValue = ProfileCatalogData(resolvedBase = serverUrl),
             serverUrl,
             refreshTick,
         ) {
-            value = ProfileCatalogData(loading = true)
+            value = ProfileCatalogData(loading = true, resolvedBase = serverUrl)
             value = withContext(Dispatchers.IO) {
                 try {
                     // Profile 目录属于配置读取，不参与测量或评分，但仍需复用 E-01 的
@@ -1409,17 +1521,24 @@ class MainActivity : ComponentActivity() {
                             "PROFILE_CATALOG_ROUTE route=bare_ip reason=sni_rst_ip_ok",
                         )
                     }
-                    val loaded = ProfileRepository(applicationContext).load(AnebClient(), catalogBase)
+                    val repo = ProfileRepository(applicationContext)
+                    val loaded = repo.load(AnebClient(), catalogBase)
+                    val v2Profiles = repo.loadV2Profiles()
+                    val merged = (loaded.profiles.values + v2Profiles)
+                        .distinctBy { "${it.profileId}@${it.version}" }
+                        .sortedWith(compareBy({ it.modeId }, { it.profileId }))
                     ProfileCatalogData(
-                        profiles = loaded.profiles.values.sortedWith(compareBy({ it.modeId }, { it.profileId })),
+                        profiles = merged,
                         source = loaded.source,
                         warnings = loaded.warnings,
                         loading = false,
+                        resolvedBase = catalogBase,
                     )
                 } catch (_: Exception) {
                     ProfileCatalogData(
                         loading = false,
                         error = "Profile 目录读取失败，请检查节点或重新安装 APK。",
+                        resolvedBase = serverUrl,
                     )
                 }
             }
@@ -1431,7 +1550,53 @@ class MainActivity : ComponentActivity() {
             loading = catalog.loading,
             error = catalog.error,
             onRefresh = { refreshTick += 1 },
-            onBack = onBack,
+            onBack = {
+                simJob?.cancel()
+                onBack()
+            },
+            onRunV2Simulation = { profile ->
+                if (!simRunning) {
+                    simJob?.cancel()
+                    simLogs.clear()
+                    simResult = null
+                    simError = null
+                    simRunning = true
+                    val targetBase = catalog.resolvedBase.ifBlank { serverUrl }
+                    simJob = scope.launch {
+                        try {
+                            val repo = ProfileRepository(applicationContext)
+                            val jsonl = repo.loadV2TraceJsonl(profile.profileId)
+                            val plan = withContext(Dispatchers.Default) {
+                                BehaviorTracePlan.parse(jsonl, profile)
+                            }
+                            val runner = BehaviorTraceRunner()
+                            runner.run(
+                                BehaviorTraceRunner.Config(
+                                    serverBase = targetBase,
+                                    profile = profile,
+                                    tracePlan = plan,
+                                    runId = "v2-${UUID.randomUUID()}",
+                                ),
+                            ).collect { line ->
+                                simLogs.add(line)
+                            }
+                            simResult = runner.result.value
+                        } catch (e: CancellationException) {
+                            simLogs.add("V2_RUN_CANCELLED")
+                            throw e
+                        } catch (e: Exception) {
+                            simError = "v2 仿真失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            simRunning = false
+                        }
+                    }
+                }
+            },
+            onCancelV2Simulation = { simJob?.cancel() },
+            v2SimulationRunning = simRunning,
+            v2SimulationLogs = simLogs.toList(),
+            v2SimulationResult = simResult,
+            v2SimulationError = simError,
         )
     }
 
@@ -1554,6 +1719,7 @@ class MainActivity : ComponentActivity() {
             run = data.run,
             scenarios = data.scenarios,
             hasReportJson = data.reportJson != null,
+            reportJson = data.reportJson,
             exportStatus = exportStatus,
             onExportJson = {
                 val body = data.reportJson ?: return@ResultScreen
@@ -1813,5 +1979,13 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("AnebProbe", "APIPROBE_FAILED error=${e.javaClass.simpleName}")
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (keepScreenOnPolicy.held) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        keepScreenOnPolicy.onDestroy()
+        super.onDestroy()
     }
 }

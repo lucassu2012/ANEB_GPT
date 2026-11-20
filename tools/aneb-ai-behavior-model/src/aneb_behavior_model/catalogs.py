@@ -63,7 +63,7 @@ TOKEN_SIM_MEASUREMENTS: list[dict[str, Any]] = [
         required=True, minimum_samples=3,
         target={
             "operator": "lte_by_workload",
-            "values": {"text": 1000, "document_5mib": 6000, "image_10mib": 10000, "video_100mib": 60000},
+            "values": {"text": 1000, "document": 6000, "image": 10000, "video": 60000},
             "required_compliance_ratio": 0.95,
             "provenance": "aneb_product_provisional_v1",
         },

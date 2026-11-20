@@ -41,7 +41,8 @@ fun LoadedResponsivenessScreen(result: BasicSpeedResult, onBack: () -> Unit) {
         result.responsivenessJson?.let { runCatching { LoadedResponsiveness.decode(it) }.getOrNull() }
     }
     val summary = remember(report) { report?.let(LoadedResponsiveness::summarize) }
-    fun value(value: Double?): String = value?.let { String.format(Locale.ROOT, "%.2f ms", it) } ?: "不可用"
+    fun value(value: Double?): String =
+        value?.takeIf { it.isFinite() }?.let { String.format(Locale.ROOT, "%.2f ms", it) } ?: "不可用"
     val colors = AnebTheme.colors
     CompositionLocalProvider(LocalContentColor provides colors.ink) {
     Column(Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -60,8 +61,17 @@ fun LoadedResponsivenessScreen(result: BasicSpeedResult, onBack: () -> Unit) {
             Text("上传期间增量：${value(summary.uploadDeltaMs)}")
             summary.stages.forEach { stage ->
                 val label = when (stage.stage) { "idle" -> "空闲"; "download" -> "下载"; else -> "上传" }
+                val domNote = if (
+                    stage.stage != "idle" &&
+                    stage.rttDominanceOk == false &&
+                    stage.rttDominanceRatio != null &&
+                    stage.rttDominanceRatio.isFinite() &&
+                    stage.valueMs != null
+                ) {
+                    " · 窗口时延主导（RTT占比偏高）"
+                } else ""
                 Text("$label · 有效 ${stage.validSampleCount} / 观察 ${stage.totalSampleCount}" +
-                    (stage.missingReason?.let { " · 证据不足：$it" } ?: ""))
+                    (stage.missingReason?.let { " · 证据不足：$it" } ?: "") + domNote)
             }
         }
         Text("负载样本只采用完整位于该阶段、且探测期间记录到传输字节增加的 echo。未采用的样本和原因仍在导出中。")

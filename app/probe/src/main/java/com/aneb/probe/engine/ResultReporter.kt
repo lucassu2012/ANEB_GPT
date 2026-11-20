@@ -2,6 +2,7 @@ package com.aneb.probe.engine
 
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
+import com.aneb.probe.net.NegotiatedProtocolLog
 import com.aneb.probe.scoring.AqsScorer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -30,6 +31,9 @@ object ResultReporter {
         scenarios: List<Pair<ScenarioResultEntity, ItlHistogram>>,
         aqs: AqsScorer.AqsResult,
         voice: VoiceSummary.Voice? = null,
+        env: ThermalSummary.Env? = null,
+        protocols: NegotiatedProtocolLog.Snapshot? = null,
+        aqsV02: AqsScorer.AqsResult? = null,
     ): String = buildJsonObject {
         // ---- 合同字段（顶层，const/枚举锁定） ----
         put("claim_scope", CLAIM_SCOPE)
@@ -69,6 +73,36 @@ object ResultReporter {
                     put("low_confidence", voice.lowConfidence)
                     put("turns_ok", voice.turnsOk)
                     put("ts_epoch_ms", voice.tsEpochMs)
+                })
+            }
+            if (env != null) {
+                put("env", buildJsonObject {
+                    put("thermal_max_status", env.thermalMaxStatus)
+                    put("thermal_polluting_event_count", env.thermalPollutingCount)
+                })
+            }
+            if (protocols != null) {
+                put("negotiated_protocol", buildJsonObject {
+                    put("samples", protocols.samples)
+                    put("header_absent", protocols.headerAbsent)
+                    put("by_protocol", buildJsonObject {
+                        protocols.byProtocol.forEach { (k, v) -> put(k, v) }
+                    })
+                    put("by_proto_header", buildJsonObject {
+                        protocols.byProtoHeader.forEach { (k, v) -> put(k, v) }
+                    })
+                })
+            }
+            if (aqsV02 != null) {
+                put("aqs_v02", buildJsonObject {
+                    put("aqs_version", aqsV02.aqsVersion)
+                    put("score", aqsV02.score)
+                    put("low_confidence", aqsV02.lowConfidence)
+                    put("veto_applied", aqsV02.vetoApplied)
+                    put("not_computable_reason", aqsV02.notComputableReason)
+                    put("sub_scores", buildJsonObject {
+                        aqsV02.subScores.forEach { (k, v) -> put(k, v) }
+                    })
                 })
             }
         })

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -24,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -43,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.radio.GeoTrack
+import com.aneb.probe.ui.components.AnebGradientCard
 import com.aneb.probe.ui.components.GlassChrome
 import com.aneb.probe.ui.components.AnebMetric
 import com.aneb.probe.ui.components.AnebMetricTrio
@@ -69,6 +73,7 @@ import com.aneb.probe.ui.theme.gradeColorByKey
 import com.aneb.probe.ui.theme.invalidNeutral
 import com.aneb.probe.ui.theme.lowConf
 import com.aneb.probe.ui.theme.validityColor
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -101,6 +106,7 @@ fun ResultScreen(
     onExportTrack: () -> Unit = {},
     /** 分享成图：ResultScreen 投影出展示态 Model，实际存图/分享由 Activity 承载（需 Context） */
     onShare: (ShareCard.Model) -> Unit = {},
+    reportJson: String? = null,
 ) {
     val colors = AnebTheme.colors
     var viewMode by rememberSaveable { mutableStateOf(ResultViewMode.Simple) }
@@ -135,6 +141,7 @@ fun ResultScreen(
                     run = run,
                     scenarios = scenarios,
                     hasReportJson = hasReportJson,
+                    reportJson = reportJson,
                     exportStatus = exportStatus,
                     trackSummaries = trackSummaries,
                     hasTrack = hasTrack,
@@ -289,7 +296,7 @@ private fun SimpleResultView(
         // ---- 270° 1:1 结果圆环（与 result-simple.html 同构）----
         AnebScoreRing(
             score = score?.roundToInt(),
-            fraction = score?.let { (it / 100.0).toFloat() } ?: 0f,
+            fraction = score?.let { (it / 100.0).toFloat() }?.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f,
             accent = band,
             label = grade?.labelFriendly ?: "未完成",
             supporting = "AI 体验分",
@@ -464,19 +471,23 @@ private fun DetailedResultView(
     run: TestRun,
     scenarios: List<ScenarioResultEntity>,
     hasReportJson: Boolean,
+    reportJson: String?,
     exportStatus: String?,
     trackSummaries: Map<Long, GeoTrack.Summary>,
     hasTrack: Boolean,
     onExportTrack: () -> Unit,
 ) {
     val colors = AnebTheme.colors
+    val breakdown = remember(reportJson) { ResultAqsBreakdown.fromReportJson(reportJson) }
+    val breakdownV02 = remember(reportJson) { ResultAqsBreakdown.v02FromReportJson(reportJson) }
     // 主导出（JSON/CSV）已上移到底部玻璃操作区；此处 contentPadding.bottom 让末尾内容从其下方滚过。
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 84.dp),
     ) {
-        item { AqsHeadline(run) }
-        item { AqsSubScoreBars(scenarios) }
+        item { AqsHeadline(run, breakdown, scenarios) }
+        item { AqsBreakdownSection(run, breakdown, scenarios) }
+        breakdownV02?.let { bd -> item { AqsV02BreakdownSection(bd) } }
         item { ReachMatrix(run) }
         item { ConnectionInfo(scenarios) }
         item { RunMeta(run) }
@@ -517,7 +528,6 @@ private fun AqsSubScoreBars(scenarios: List<ScenarioResultEntity>) {
         "U2" to "10%", "N1" to "10%", "N2" to "10%",
     )
     val rows = ResultFormat.runKpiRows(scenarios).associateBy { it.row.id }
-    SectionLabel("AQS 子分与权重")
     weights.forEach { (id, w) ->
         val r = rows[id]?.row
         val grade = Grade.fromKey(r?.grade)
@@ -601,14 +611,18 @@ private fun ConnectionInfo(scenarios: List<ScenarioResultEntity>) {
 // ---- 以下为原 P1-C07 详情组件（保留内部实现，专业视图复用）----
 
 @Composable
-private fun AqsHeadline(run: TestRun) {
+private fun AqsHeadline(
+    run: TestRun,
+    breakdown: ResultAqsBreakdown.Breakdown?,
+    scenarios: List<ScenarioResultEntity>,
+) {
     val colors = AnebTheme.colors
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         val score = run.aqsScore
         if (score != null) {
             val grade = ResultFormat.aqsGrade(score)
             Row(verticalAlignment = Alignment.Bottom) {
-                Text("%.1f".format(score), fontSize = 44.sp, fontWeight = FontWeight.Black, color = colors.gradeColorByKey(grade))
+                Text(String.format(Locale.ROOT, "%.1f", score), fontSize = 44.sp, fontWeight = FontWeight.Black, color = colors.gradeColorByKey(grade))
                 Spacer(Modifier.width(10.dp))
                 Text(
                     "AQS ${ResultFormat.gradeLabel(grade)}",
@@ -616,13 +630,32 @@ private fun AqsHeadline(run: TestRun) {
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
+            Spacer(Modifier.height(10.dp))
+            if (breakdown != null) {
+                GroupSubscoreRow(breakdown)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    ResultAqsBreakdown.draggingVerdictLine(breakdown),
+                    fontSize = 11.sp,
+                    color = colors.muted,
+                )
+            } else {
+                ApproxGroupSubscoreRow(scenarios)
+                Text(
+                    "子分为分级近似（本 run 无落库上报体）",
+                    fontSize = 9.5.sp,
+                    color = colors.faint,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
             if (run.aqsVetoApplied == true) {
-                Text("T4 一票否决生效（封顶 54）", color = colors.poor, fontSize = 13.sp)
+                Text("T4 一票否决生效（封顶 54）", color = colors.poor, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             }
             if (run.aqsLowConfidence == true) {
                 Text(
                     "⚠ ${ResultFormat.LOW_CONFIDENCE_LABEL}：证据不完整，本分数仅供参考",
                     color = colors.lowConf, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
         } else {
@@ -635,6 +668,183 @@ private fun AqsHeadline(run: TestRun) {
         ResultFormat.aqsV02Lines(run)?.let { lines ->
             Text(lines[0], fontSize = 15.sp, fontWeight = FontWeight.Bold, color = colors.ink)
             Text(lines[1], fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = colors.invalidNeutral)
+        }
+    }
+}
+
+@Composable
+private fun GroupSubscoreRow(breakdown: ResultAqsBreakdown.Breakdown) {
+    val colors = AnebTheme.colors
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        breakdown.groups.forEach { g ->
+            val normalized = if (g.maxPoints > 0) g.subtotalPoints / g.maxPoints * 100.0 else 0.0
+            GroupChip(
+                label = g.label,
+                band = colors.gradeColor(Grade.fromAqsScore(normalized)),
+                valueText = String.format(Locale.ROOT, "%.1f", g.subtotalPoints),
+                subText = "/ ${g.maxPoints.roundToInt()}",
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ApproxGroupSubscoreRow(scenarios: List<ScenarioResultEntity>) {
+    val colors = AnebTheme.colors
+    val rows = ResultFormat.runKpiRows(scenarios).associateBy { it.row.id }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        ResultAqsBreakdown.GROUP_KPI_IDS_V01.forEach { (label, ids) ->
+            val buckets = ids.mapNotNull { id -> Grade.fromKey(rows[id]?.row?.grade)?.let { approxGradeBucket(it) } }
+            if (buckets.isEmpty()) {
+                GroupChip(label, colors.neutral, "—", "近似", Modifier.weight(1f))
+            } else {
+                val g = Grade.fromAqsScore(buckets.average() * 100.0)
+                GroupChip(label, colors.gradeColor(g), g.labelCn, "近似", Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupChip(label: String, band: Color, valueText: String, subText: String, modifier: Modifier = Modifier) {
+    val colors = AnebTheme.colors
+    Column(
+        modifier = modifier.clip(AnebShapes.sm).background(colors.surface2).padding(horizontal = 9.dp, vertical = 8.dp),
+    ) {
+        Text(label, fontSize = 9.5.sp, color = colors.muted, maxLines = 1)
+        Spacer(Modifier.height(3.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(valueText, style = AnebType.StatValue, fontSize = 16.sp, color = band)
+            Text(" $subText", fontSize = 10.sp, color = colors.faint, modifier = Modifier.padding(bottom = 1.dp))
+        }
+    }
+}
+
+private fun approxGradeBucket(grade: Grade): Double = when (grade) {
+    Grade.Excellent -> 1.0
+    Grade.Good -> 0.75
+    Grade.Fair -> 0.5
+    Grade.Poor -> 0.25
+}
+
+@Composable
+private fun AqsBreakdownSection(
+    run: TestRun,
+    breakdown: ResultAqsBreakdown.Breakdown?,
+    scenarios: List<ScenarioResultEntity>,
+) {
+    val colors = AnebTheme.colors
+    Column {
+        SectionLabel("AQS 子分与权重", trailing = if (breakdown != null) "组→KPI→贡献分" else "分级近似")
+        AnebGradientCard(modifier = Modifier.fillMaxWidth(), radius = 16.dp) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                when {
+                    breakdown != null -> breakdown.groups.forEachIndexed { i, g ->
+                        if (i > 0) Spacer(Modifier.height(10.dp))
+                        AqsGroupBlock(g)
+                    }
+                    run.aqsScore != null -> {
+                        Text(
+                            "无落库子分，以下为分级近似（优 1.0 / 良 .75 / 可 .5 / 差 .25）",
+                            fontSize = 10.5.sp,
+                            color = colors.faint,
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        )
+                        AqsSubScoreBars(scenarios)
+                    }
+                    else -> Text("AQS 不可计算，无子分可展示", fontSize = 12.sp, color = colors.invalidNeutral)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AqsGroupBlock(group: ResultAqsBreakdown.Group) {
+    val colors = AnebTheme.colors
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+        Text(
+            "${group.label} · ${(group.weight * 100).roundToInt()}%",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.ink,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "${String.format(Locale.ROOT, "%.1f", group.subtotalPoints)} / ${group.maxPoints.roundToInt()} 分",
+            style = AnebType.StatValue,
+            fontSize = 11.sp,
+            color = colors.muted,
+        )
+    }
+    group.kpis.forEach { AqsContribRow(it) }
+}
+
+@Composable
+private fun AqsContribRow(kpi: ResultAqsBreakdown.KpiContribution) {
+    val colors = AnebTheme.colors
+    val band = colors.gradeColor(Grade.fromKey(kpi.gradeKey))
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+        Text(
+            "${kpi.label} · ${(kpi.weight * 100).roundToInt()}%",
+            fontSize = 11.sp,
+            color = colors.muted,
+            modifier = Modifier.width(96.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(999.dp)).background(colors.surfaceMuted),
+        ) {
+            val barFraction = (kpi.subScore / 100.0).toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(barFraction)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(band),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(66.dp)) {
+            Text(
+                String.format(Locale.ROOT, "%.1f", kpi.subScore),
+                style = AnebType.StatValue,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.ink,
+            )
+            Text(
+                "${String.format(Locale.ROOT, "%.1f", kpi.contributionPoints)}分",
+                style = AnebType.StatValue,
+                fontSize = 9.5.sp,
+                color = colors.faint,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AqsV02BreakdownSection(breakdown: ResultAqsBreakdown.Breakdown) {
+    val colors = AnebTheme.colors
+    Column {
+        SectionLabel(
+            "AQS v0.2 子分（含连续性）",
+            trailing = breakdown.score?.let { String.format(Locale.ROOT, "= %.1f", it) } ?: "不可计算",
+        )
+        AnebGradientCard(modifier = Modifier.fillMaxWidth(), radius = 16.dp) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    "阶段二口径：v0.1 各组 ×0.8 + 连续性 20%（C1 会话中断 / C2 切换恢复）",
+                    fontSize = 10.sp,
+                    color = colors.faint,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                breakdown.groups.forEachIndexed { i, g ->
+                    if (i > 0) Spacer(Modifier.height(10.dp))
+                    AqsGroupBlock(g)
+                }
+            }
         }
     }
 }

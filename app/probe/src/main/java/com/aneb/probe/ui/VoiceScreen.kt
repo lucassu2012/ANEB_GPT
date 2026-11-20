@@ -17,11 +17,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -72,6 +74,15 @@ fun VoiceScreen(
     onExportCsv: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val view = LocalView.current
+    val activeVoiceRun = running || contRunning
+    DisposableEffect(view, activeVoiceRun) {
+        val prev = view.keepScreenOn
+        if (activeVoiceRun) {
+            view.keepScreenOn = true
+        }
+        onDispose { view.keepScreenOn = prev }
+    }
     val colors = AnebTheme.colors
     val phase = sample?.phase
     val isSim = sample?.caliber == VoiceRunner.SIM_CALIBER

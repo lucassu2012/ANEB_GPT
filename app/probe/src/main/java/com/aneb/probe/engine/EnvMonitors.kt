@@ -32,6 +32,7 @@ class EnvMonitors(private val context: Context) {
     private val directExecutor = Executor { it.run() }
 
     private val _events = MutableSharedFlow<EnvEvent>(
+        replay = 8,
         extraBufferCapacity = 256,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
@@ -62,14 +63,16 @@ class EnvMonitors(private val context: Context) {
                 )
             }
             // 初始状态显式入时间轴（区分「无事件」与「未监控」）
-            emitThermal(
-                try {
-                    pm.currentThermalStatus
-                } catch (t: Throwable) {
-                    PowerManager.THERMAL_STATUS_NONE
-                },
-                initial = true,
-            )
+            val initialThermal = try {
+                pm.currentThermalStatus
+            } catch (_: Throwable) {
+                null
+            }
+            if (initialThermal != null) {
+                emitThermal(initialThermal, initial = true)
+            } else {
+                _events.tryEmit(EnvEvent(now(), EnvEventType.THERMAL, "initial_unknown: status_read_failed"))
+            }
             _events.tryEmit(EnvEvent(now(), EnvEventType.POWER_SAVE, "initial power_save=${pm.isPowerSaveMode}"))
             _events.tryEmit(EnvEvent(now(), EnvEventType.DOZE, "initial device_idle=${pm.isDeviceIdleMode}"))
         } else {

@@ -12,6 +12,7 @@ import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.BoundNetwork
 import com.aneb.probe.net.GuardException
 import com.aneb.probe.net.MonotonicNanosClock
+import com.aneb.probe.net.NegotiatedProtocolLog
 import com.aneb.probe.net.NetGuard
 import com.aneb.probe.net.ObservedTransferCancellation
 import com.aneb.probe.net.ReachabilityProbe
@@ -79,6 +80,8 @@ data class BasicSpeedResult(
     val transferErrors: List<String>,
     val profileId: String = NetworkSpeedEngine.PROFILE_ID,
     val responsivenessJson: String? = null,
+    val downloadWindowMs: Double? = null,
+    val uploadWindowMs: Double? = null,
 )
 
 /** SpeedTest 同项目的基本网络性能引擎；与 Token/AQS 引擎独立，避免口径串扰。 */
@@ -176,7 +179,12 @@ class NetworkSpeedEngine internal constructor(
                 pathMonitor = PathMonitor(context, checkNotNull(bound), onInvalidate = { pathFailure.compareAndSet(null, it) })
                 pathMonitor?.start()
             }
-            val client = if (config.captureResponsiveness) AnebClient.forLoadedResponsiveness(bound, clock) else AnebClient(bound)
+            val protocolLog = NegotiatedProtocolLog()
+            val client = if (config.captureResponsiveness) {
+                AnebClient.forLoadedResponsiveness(bound, clock, protocolLog)
+            } else {
+                AnebClient(bound, protocolLog)
+            }
             var reach: ReachabilityProbe.DualReach? = null
             ReachabilityProbe.deriveE01Pair(configuredBase)?.let { (sniBase, ipBase) ->
                 reach = runCatching { ReachabilityProbe(bound).probeDual(sniBase, ipBase) }.getOrNull()
@@ -273,6 +281,8 @@ class NetworkSpeedEngine internal constructor(
                 download.averageMbps == null || upload.averageMbps == null -> "partial"
                 else -> "completed"
             }
+            val downDominance = RttDominanceGuard.evaluate(download.elapsedMs, baseline.rttP50Ms, download.totalBytes)
+            val upDominance = RttDominanceGuard.evaluate(upload.elapsedMs, baseline.rttP50Ms, upload.totalBytes)
             val finalResult = BasicSpeedResult(
                 runId = runId,
                 startedAtEpochMs = startedAtEpochMs,
@@ -288,6 +298,8 @@ class NetworkSpeedEngine internal constructor(
                 downloadBytes = download.totalBytes,
                 uploadBytes = upload.totalBytes,
                 transferErrors = errors,
+                downloadWindowMs = download.elapsedMs,
+                uploadWindowMs = upload.elapsedMs,
             )
             publishObserved(finalResult)
             _telemetry.value = _telemetry.value.copy(
@@ -295,6 +307,15 @@ class NetworkSpeedEngine internal constructor(
                 currentMbps = null,
                 phaseAverageMbps = null,
                 progress = 1.0,
+            )
+            log(
+                "BASIC_RTT_DOMINANCE run_id=$runId down_ok=${downDominance.ok} down_ratio=${downDominance.ratio ?: "null"} " +
+                    "up_ok=${upDominance.ok} up_ratio=${upDominance.ratio ?: "null"}"
+            )
+            val protoSnap = protocolLog.snapshot()
+            log(
+                "BASIC_PROTO run_id=$runId samples=${protoSnap.samples} header_absent=${protoSnap.headerAbsent} " +
+                    "protocols=${protoSnap.byProtocol.entries.joinToString(",") { "${it.key}:${it.value}" }}"
             )
             log(
                 "BASIC_RESULT run_id=$runId status=$status " +
@@ -351,6 +372,7 @@ class NetworkSpeedEngine internal constructor(
         val averageMbps: Double?,
         val totalBytes: Long,
         val errors: List<String>,
+        val elapsedMs: Double = 0.0,
     )
 
     private suspend fun publishResult(
@@ -639,7 +661,7 @@ class NetworkSpeedEngine internal constructor(
             if (onResponsivenessStage == null && bytes > 0L && completedTransfers.get() == 0) {
                 errors.add("no_transfer_completed_before_phase_deadline")
             }
-            TransferSummary(average, bytes, errors.toList())
+            TransferSummary(average, bytes, errors.toList(), elapsedMs = (endNanos - startNanos) / 1e6)
         }
         if (drainTimedOut) {
             throw CallbackDrainTimeoutException(stageName)

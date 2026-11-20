@@ -1,5 +1,6 @@
 package com.aneb.probe.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -94,6 +95,8 @@ fun ApiProbeScreen(
     val latencyValues = results.mapNotNull { it.ttftMs }
     val avgLatency = latencyValues.takeIf { it.isNotEmpty() }?.average()?.roundToInt()
     val latest = results.firstOrNull()
+
+    BackHandler(enabled = showBack, onBack = onBack)
 
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
         AnebTopBar(

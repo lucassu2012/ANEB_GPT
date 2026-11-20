@@ -15,7 +15,7 @@
     "workloads": [
       {
         "kind": "text",
-        "repetitions": 4,
+        "repetitions": 8,
         "payload_bytes": {"type": "empirical", "values": [2048, 8192, 16384]},
         "chunk_bytes": 2048,
         "upload_chunk_cadence_ms": 1,
@@ -41,7 +41,7 @@
       },
       {
         "kind": "document",
-        "repetitions": 3,
+        "repetitions": 6,
         "payload_bytes": {"type": "empirical", "values": [1048576, 5242880, 10485760]},
         "chunk_bytes": 65536,
         "upload_chunk_cadence_ms": 1,
@@ -67,7 +67,7 @@
       },
       {
         "kind": "image",
-        "repetitions": 3,
+        "repetitions": 6,
         "payload_bytes": {"type": "empirical", "values": [5242880, 10485760, 15728640]},
         "chunk_bytes": 65536,
         "upload_chunk_cadence_ms": 1,

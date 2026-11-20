@@ -38,11 +38,16 @@ class AnebClient private constructor(
     bound: BoundNetwork?,
     private val clock: MonotonicNanosClock,
     private val loadedLocal: Boolean = false,
+    val protocolLog: NegotiatedProtocolLog = NegotiatedProtocolLog(),
+    private val allowLoopbackHttp: Boolean = false,
 ) {
 
     /** Preserve the existing public default-argument constructor and Android clock behavior. */
     @JvmOverloads
-    constructor(bound: BoundNetwork? = null) : this(bound, AndroidMonotonicNanosClock)
+    constructor(
+        bound: BoundNetwork? = null,
+        protocolLog: NegotiatedProtocolLog = NegotiatedProtocolLog(),
+    ) : this(bound, AndroidMonotonicNanosClock, protocolLog = protocolLog)
 
     private val timingFactory = TimingEventListener.Factory.createForTest(clock)
     private val json = Json { ignoreUnknownKeys = true }
@@ -60,8 +65,19 @@ class AnebClient private constructor(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .eventListenerFactory(timingFactory)
-        .addInterceptor(if (loadedLocal && !prototypePrivate) LoadedNodePolicy.interceptor()
-            else EngineeringCleartextPolicy.interceptor(prototypePrivate))
+        .addInterceptor(
+            when {
+                allowLoopbackHttp && !prototypePrivate -> okhttp3.Interceptor { chain ->
+                    val req = chain.request()
+                    if (!(req.url.isHttps || (req.url.scheme == "http" && req.url.host == "127.0.0.1"))) {
+                        throw IOException("loopback_test_http_only")
+                    }
+                    chain.proceed(req)
+                }
+                loadedLocal && !prototypePrivate -> LoadedNodePolicy.interceptor()
+                else -> EngineeringCleartextPolicy.interceptor(prototypePrivate)
+            },
+        )
         .proxy(java.net.Proxy.NO_PROXY) // D-16：测量流量直连，禁走系统代理
         .socketFactory(TcpNoDelaySocketFactory(bound?.socketFactory ?: javax.net.SocketFactory.getDefault()))
         .apply {
@@ -191,7 +207,7 @@ class AnebClient private constructor(
         val call = client.newCall(
             Request.Builder().url(url).header("Accept", "text/event-stream").get().build()
         )
-        val requestStartNanos = SystemClock.elapsedRealtimeNanos()
+        val requestStartNanos = clock.now()
         return try {
             // SSE body 的流式读取整体放在 executeCancellable 的 onResponse 回调内完成
             // （resume 前不关闭 body）：invokeOnCancellation 覆盖从建连到读完的全程，
@@ -334,7 +350,7 @@ class AnebClient private constructor(
                 .get()
                 .build(),
         )
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = clock.now()
         return try {
             executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
@@ -352,12 +368,12 @@ class AnebClient private constructor(
                         sink.skip(n)
                         total += n
                         observation?.bytes(n.toInt())
-                        onBytes(n.toInt(), SystemClock.elapsedRealtimeNanos())
+                        onBytes(n.toInt(), clock.now())
                     }
                     observation?.bodyCompleted()
                     TransferResult(
                         startNanos = startNanos,
-                        endNanos = SystemClock.elapsedRealtimeNanos(),
+                        endNanos = clock.now(),
                         totalBytes = total,
                         httpCode = resp.code,
                         error = null,
@@ -410,14 +426,14 @@ class AnebClient private constructor(
                     val n = minOf(chunk.size.toLong(), remaining).toInt()
                     sink.write(chunk, 0, n)
                     observation?.bytes(n)
-                    onBytes(n, SystemClock.elapsedRealtimeNanos())
+                    onBytes(n, clock.now())
                     remaining -= n
                 }
                 sink.flush()
             }
         }
         val call = client.newCall(Request.Builder().url(url).post(body).build())
-        val startNanos = SystemClock.elapsedRealtimeNanos()
+        val startNanos = clock.now()
         return try {
             executeCancellable(call, beforeDispatch = {}, observation = observation) { resp ->
                 val timing = timingFactory.recordFor(call)
@@ -425,7 +441,7 @@ class AnebClient private constructor(
                 if (resp.isSuccessful) observation?.bodyCompleted()
                 TransferResult(
                     startNanos = startNanos,
-                    endNanos = SystemClock.elapsedRealtimeNanos(),
+                    endNanos = clock.now(),
                     totalBytes = if (resp.isSuccessful) totalBytes else 0L,
                     httpCode = resp.code,
                     error = if (resp.isSuccessful) null else "http ${resp.code}",
@@ -700,6 +716,86 @@ class AnebClient private constructor(
     }
 
     /**
+     * 按行为轨迹计划逐块流式上行（aneb-profile-v2 / behavior_trace 专用）。
+     * 复用单个 64 KiB 缓冲避免大负载 OOM，按 [chunkSizes] 切片写入与 flush。
+     */
+    suspend fun uploadTraceStream(
+        url: String,
+        totalBytes: Long,
+        chunkSizes: List<Int>,
+        chunkCadenceMs: Long = 0L,
+    ): UploadResult {
+        require(totalBytes > 0L) { "totalBytes must be positive" }
+        val stamps = ArrayList<ChunkStamp>(chunkSizes.size.coerceAtLeast(1))
+        val effectiveChunks = if (chunkSizes.isNotEmpty()) chunkSizes else listOf(totalBytes.coerceAtMost(65_536L).toInt())
+        val cancelLatch = java.util.concurrent.CountDownLatch(1)
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            override fun contentLength(): Long = totalBytes
+            override fun writeTo(sink: BufferedSink) {
+                val bufSize = minOf(65_536L, maxOf(1L, effectiveChunks.maxOrNull()?.toLong() ?: 65_536L)).toInt()
+                val buf = ByteArray(bufSize) { idx -> ((idx * 37 + 13) and 0xff).toByte() }
+                var remaining = totalBytes
+                var index = 0
+                while (remaining > 0L) {
+                    if (cancelLatch.count == 0L || Thread.currentThread().isInterrupted) {
+                        throw IOException("cancelled")
+                    }
+                    val planned = if (index < effectiveChunks.size) effectiveChunks[index] else bufSize
+                    var leftInChunk = minOf(planned.toLong().coerceAtLeast(1L), remaining)
+                    while (leftInChunk > 0L) {
+                        val toWrite = minOf(buf.size.toLong(), leftInChunk).toInt()
+                        sink.write(buf, 0, toWrite)
+                        leftInChunk -= toWrite
+                    }
+                    sink.flush()
+                    val writtenChunk = minOf(planned.toLong().coerceAtLeast(1L), remaining).toInt()
+                    stamps.add(ChunkStamp(index, writtenChunk, clock.now()))
+                    remaining -= writtenChunk
+                    index++
+                    if (remaining > 0L && chunkCadenceMs > 0L) {
+                        if (cancelLatch.await(chunkCadenceMs, TimeUnit.MILLISECONDS)) {
+                            throw IOException("cancelled")
+                        }
+                    }
+                }
+            }
+        }
+        val call = client.newCall(Request.Builder().url(url).post(body).build())
+        val startNanos = clock.now()
+        return try {
+            executeCancellable(call, onCancel = { cancelLatch.countDown() }) { resp ->
+                val responseNanos = clock.now()
+                val timing = timingFactory.recordFor(call)
+                val bodyText = resp.body?.string()
+                val serverView = if (resp.isSuccessful && bodyText != null) {
+                    try {
+                        json.decodeFromString(UploadServerView.serializer(), bodyText)
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+                val error = if (resp.isSuccessful) null else "http ${resp.code}"
+                UploadResult(
+                    startNanos, responseNanos, stamps,
+                    totalBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    resp.code, error, timing, serverView = serverView,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            UploadResult(
+                startNanos, null, stamps,
+                totalBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                null, e.toString(), timingFactory.recordFor(call),
+            )
+        }
+    }
+
+    /**
      * `/realtime-sim` 会话工厂（D-38，语音 server-sim 口径）：复用本 client 的 OkHttpClient，
      * 自动继承 NO_PROXY、绑定网 socketFactory/Dns 与 retryOnConnectionFailure(false)。
      */
@@ -832,17 +928,23 @@ class AnebClient private constructor(
      * flowOn(Dispatchers.IO) 的执行线程同为后台线程（TimingEventListener 本就在
      * OkHttp 回调线程打戳）。
      */
-    private suspend fun <T> executeCancellable(call: Call, consume: (Response) -> T): T =
-        executeCancellable(call, beforeDispatch = {}, consume = consume)
+    private suspend fun <T> executeCancellable(
+        call: Call,
+        onCancel: (() -> Unit)? = null,
+        consume: (Response) -> T,
+    ): T =
+        executeCancellable(call, beforeDispatch = {}, onCancel = onCancel, consume = consume)
 
     private suspend fun <T> executeCancellable(
         call: Call,
         beforeDispatch: () -> Unit,
         observation: ThroughputObservation? = null,
+        onCancel: (() -> Unit)? = null,
         consume: (Response) -> T,
     ): T =
         suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { cause ->
+                onCancel?.invoke()
                 if (observation == null) call.cancel() else observation.cancelCall(cause, call)
             }
             try {
@@ -861,6 +963,10 @@ class AnebClient private constructor(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
+                    val protoHeader = response.header(PROTO_EVIDENCE_HEADER)
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                    protocolLog.observe(response.protocol.toString(), protoHeader)
                     observation?.headers(response.code)
                     val result = try {
                         response.use {
@@ -880,18 +986,33 @@ class AnebClient private constructor(
 
     private fun nowUs(): Long = clock.now() / 1_000L
 
-    internal companion object {
+    companion object {
+        const val PROTO_EVIDENCE_HEADER = "X-Aneb-Proto"
+
         internal fun forLoadedResponsiveness(
             bound: BoundNetwork?,
             clock: MonotonicNanosClock = AndroidMonotonicNanosClock,
+            protocolLog: NegotiatedProtocolLog = NegotiatedProtocolLog(),
         ): AnebClient =
-            AnebClient(bound, clock, loadedLocal = true)
+            AnebClient(bound, clock, loadedLocal = true, protocolLog = protocolLog)
 
         /** Construct a clock-injected client without exposing a public overload. */
         @JvmStatic
         @JvmSynthetic
-        internal fun createForTest(bound: BoundNetwork?, clock: MonotonicNanosClock): AnebClient =
-            AnebClient(bound, clock)
+        internal fun createForTest(
+            bound: BoundNetwork?,
+            clock: MonotonicNanosClock,
+            protocolLog: NegotiatedProtocolLog = NegotiatedProtocolLog(),
+        ): AnebClient =
+            AnebClient(bound, clock, protocolLog = protocolLog)
+
+        /** Offline loopback test-only factory allowing http://127.0.0.1 only. */
+        @JvmSynthetic
+        internal fun createForLoopbackTest(
+            clock: MonotonicNanosClock = AndroidMonotonicNanosClock,
+            protocolLog: NegotiatedProtocolLog = NegotiatedProtocolLog(),
+        ): AnebClient =
+            AnebClient(null, clock, protocolLog = protocolLog, allowLoopbackHttp = true)
 
         const val THROUGHPUT_READ_BYTES: Long = 64L * 1024L
         /** 服务端固定 "\n\n" 分隔（与 SseReader 同一 wire 约定） */

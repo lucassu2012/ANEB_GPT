@@ -181,6 +181,22 @@ class LoadedResponsivenessTest {
         assertEquals(late, raw.stages.single().byteObservations.last())
     }
 
+    @Test
+    fun `missing idle stage leaves rttDominanceOk and ratio null and encodes valid JSON`() {
+        val raw = report(
+            listOf(
+                stage("download", listOf(echo("download", 0, 12_000L))),
+                stage("upload", listOf(echo("upload", 0, 15_000L))),
+            ),
+        )
+        val summary = LoadedResponsiveness.summarize(raw)
+        assertNull(summary.idleP50Ms)
+        assertTrue(summary.stages.all { it.rttDominanceOk == null && it.rttDominanceRatio == null })
+
+        val encoded = LoadedResponsiveness.encode(raw)
+        assertTrue(Json.parseToJsonElement(encoded).jsonObject.containsKey("derived_summary"))
+    }
+
     private fun report(stages: List<ResponsivenessStage>) = LoadedResponsivenessReport(
         runId = "run-loaded-1",
         serverBase = "https://node.example",
