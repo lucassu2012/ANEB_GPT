@@ -82,22 +82,24 @@ def scan_ai_phase(phase_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
     sw, sh = 300, 660
     fbytes = sw * sh * 3
     frames = []
-    proc = subprocess.Popen(
-        [ffmpeg, "-nostdin", "-v", "error", "-i", mp4,
-         "-vf", f"scale={sw}:{sh}:flags=area",
-         "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=fbytes * 2,
-    )
-    while True:
-        buf = proc.stdout.read(fbytes)
-        if not buf:
-            break
-        if len(buf) != fbytes:
-            raise RuntimeError(f"Short frame read {cond}")
-        frames.append(np.frombuffer(buf, dtype=np.uint8).reshape((sh, sw, 3)))
-    rc = proc.wait()
-    if rc != 0 or len(frames) != n_frames:
-        raise RuntimeError(f"ffmpeg scan failed {cond}: rc={rc} got={len(frames)} want={n_frames}")
+    scan_err = os.path.join(out_dir, f"ai-scan-{cond}.stderr.txt")
+    with open(scan_err, "wb") as ef:
+        proc = subprocess.Popen(
+            [ffmpeg, "-nostdin", "-v", "error", "-i", mp4,
+             "-vf", f"scale={sw}:{sh}:flags=area",
+             "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=ef, bufsize=fbytes * 2,
+        )
+        while True:
+            buf = proc.stdout.read(fbytes)
+            if not buf:
+                break
+            if len(buf) != fbytes:
+                raise RuntimeError(f"Short frame read {cond}")
+            frames.append(np.frombuffer(buf, dtype=np.uint8).reshape((sh, sw, 3)))
+        rc = proc.wait()
+        if rc != 0 or len(frames) != n_frames:
+            raise RuntimeError(f"ffmpeg scan failed {cond}: rc={rc} got={len(frames)} want={n_frames}")
 
     # Load after-send.png & capture-end.png to anchor exact chat screen vs launcher/consent transition
     # Scan frame-to-frame MAD in upper chat (y=70..190), response body (y=180..500), and composer (y=500..610)
@@ -139,10 +141,13 @@ def scan_ai_phase(phase_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
             os.remove(os.path.join(ddir, old_f))
     expr = "+".join(f"eq(n\\,{i})" for i in picks)
     tmp_pat = os.path.join(ddir, "tmp-%03d.png")
-    rc = subprocess.run(
-        [ffmpeg, "-nostdin", "-v", "error", "-i", mp4,
-         "-vf", f"select={expr}", "-fps_mode", "passthrough", tmp_pat],
-    ).returncode
+    dec_err = os.path.join(out_dir, f"ai-decode-{cond}.stderr.txt")
+    with open(dec_err, "wb") as ef:
+        rc = subprocess.run(
+            [ffmpeg, "-nostdin", "-v", "error", "-i", mp4,
+             "-vf", f"select={expr}", "-fps_mode", "passthrough", tmp_pat],
+            stderr=ef,
+        ).returncode
     if rc != 0:
         raise RuntimeError(f"decode PNG failed {cond}: rc={rc}")
     for k, i in enumerate(picks, 1):
