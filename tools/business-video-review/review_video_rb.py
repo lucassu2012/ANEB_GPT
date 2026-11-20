@@ -133,32 +133,71 @@ def scan_condition(card_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
         prev_pb = pb
         prev_cap = cp
 
-    # Find the swipe window first via the largest sustained pointer-bar + caption scroll cluster
-    # Then backtrack to the exact first pointer activation A (dprev > 2.5 within 60 frames before peak)
-    peak_ptr_n = max(range(1, min(n_frames, 400)), key=lambda i: ptr_diffs0[i])
+    # Full-res pointer_location strip pass (first 450 frames, crop=650:40:0:156) for exact touch-down A & lift-off
+    sw_p, sh_p = 650, 40
+    pbytes = sw_p * sh_p * 3
+    ptr_err = os.path.join(out_dir, f"ptr-{cond}.stderr.txt")
+    strips = []
+    with open(ptr_err, "wb") as ef:
+        pproc = subprocess.Popen(
+            [ffmpeg, "-nostdin", "-v", "error", "-i", mp4,
+             "-vf", f"crop={sw_p}:{sh_p}:0:156",
+             "-frames:v", str(min(450, n_frames)), "-fps_mode", "passthrough",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            stdout=subprocess.PIPE, stderr=ef,
+        )
+        while True:
+            buf = pproc.stdout.read(pbytes)
+            if not buf:
+                break
+            if len(buf) == pbytes:
+                strips.append(np.frombuffer(buf, dtype=np.uint8).reshape((sh_p, sw_p, 3)))
+        pproc.wait()
+
     n_a = None
-    for i in range(max(1, peak_ptr_n - 80), peak_ptr_n + 1):
-        if ptr_dprev[i] > 2.5:
-            # Verify pointer strip remains elevated afterward (not a 1-frame status glitch)
-            if max(ptr_diffs0[i:min(n_frames, i + 10)]) > 4.0:
+    n_liftoff = None
+    if len(strips) >= 10:
+        red_dy = [
+            float(((s[:, 340:515, 0].astype(np.int16) - s[:, 340:515, 1].astype(np.int16)) > 60).mean())
+            for s in strips
+        ]
+        n_liftoff = next((i for i in range(1, len(red_dy)) if red_dy[i] > 0.30 and red_dy[i - 1] < 0.20), None)
+        if n_liftoff is not None:
+            lo = max(1, n_liftoff - 90)
+            for i in range(lo, max(lo, n_liftoff - 4)):
+                m1 = strips[i - 1][:, 0:340, :].mean(axis=2) < 50
+                m2 = strips[i][:, 0:340, :].mean(axis=2) < 50
+                if int(np.logical_xor(m1, m2).sum()) > 450:
+                    n_a = i
+                    break
+
+    if n_a is None:
+        # Fallback to low-res pointer bar transition if red dY box not present
+        peak_ptr_n = max(range(1, min(n_frames, 400)), key=lambda i: ptr_diffs0[i])
+        for i in range(max(1, peak_ptr_n - 80), peak_ptr_n + 1):
+            if ptr_dprev[i] > 2.5 and max(ptr_diffs0[i:min(n_frames, i + 10)]) > 4.0:
                 n_a = i
                 break
-    # Find S: first frame after A where bottom caption shifts sharply (>15.0 or >2x baseline)
+
+    # Find S: first frame after A where bottom caption shifts sharply (>12.0 or >2.2x baseline)
     n_s = None
     if n_a is not None:
         base_cap = float(np.median(cap_diffs[max(1, n_a - 15):n_a])) if n_a > 5 else 0.0
         thresh_s = max(12.0, base_cap * 2.2 + 5.0)
         n_s = next((i for i in range(n_a + 1, min(n_frames, n_a + 25)) if cap_diffs[i] > thresh_s), None)
-    # Find settle: LAST sharp caption movement (>3.5) inside [n_a, n_a + 100], followed by stability (<0.8)
+
+    # Find settle: first caption stability after fling completion (bounded tightly around lift-off!)
     n_settle = None
     if n_a is not None:
+        anchor = n_liftoff if n_liftoff is not None else min(n_frames - 10, n_a + 45)
+        search_hi = min(n_frames - 6, anchor + 42)
         last_scroll = max(
-            (i for i in range(n_a + 15, min(n_frames - 6, n_a + 100)) if cap_diffs[i] > 3.5),
-            default=n_a + 45,
+            (i for i in range(max(n_a + 10, anchor - 5), search_hi) if cap_diffs[i] > 4.5),
+            default=min(n_frames - 6, anchor + 12),
         )
         n_settle = next(
-            (i for i in range(last_scroll + 1, min(n_frames - 5, last_scroll + 20))
-             if all(cap_diffs[j] < 0.8 for j in range(i, i + 3))),
+            (i for i in range(last_scroll + 1, min(n_frames - 5, last_scroll + 18))
+             if all(cap_diffs[j] < 2.2 for j in range(i, i + 3))),
             min(n_frames - 1, last_scroll + 2),
         )
     if n_settle is None:
@@ -257,6 +296,9 @@ def scan_condition(card_dir: str, cond: str, out_dir: str, ffprobe: str, ffmpeg:
 
     ddir = os.path.join(out_dir, f"decoded-{cond}")
     os.makedirs(ddir, exist_ok=True)
+    for old_f in os.listdir(ddir):
+        if old_f.endswith(".png"):
+            os.remove(os.path.join(ddir, old_f))
     expr = "+".join(f"eq(n\\,{i})" for i in picks)
     tmp_pat = os.path.join(ddir, "tmp-%03d.png")
     dec_err = os.path.join(out_dir, f"decode-{cond}.stderr.txt")
