@@ -423,14 +423,6 @@ private fun SettingsRootScreen(
             }
             HairlineDivider()
             SettingsDesignRow(
-                icon = "⌘",
-                tint = colors.brand,
-                title = "API 探针",
-                subtitle = "真实 LLM 端到端对照",
-                onClick = onOpenApiProbe,
-            ) { Text("›", fontSize = 18.sp, color = colors.faint) }
-            HairlineDivider()
-            SettingsDesignRow(
                 icon = "⌖",
                 tint = colors.excellent,
                 title = "GPS 路测",
@@ -453,6 +445,16 @@ private fun SettingsRootScreen(
             "高级",
             Modifier.padding(top = 17.dp, start = 4.dp, bottom = 7.dp),
         )
+        SettingsDesignGroup {
+            SettingsDesignRow(
+                icon = "⌘",
+                tint = colors.brand,
+                title = "API 探针",
+                subtitle = "真实 LLM 端到端对照",
+                onClick = onOpenApiProbe,
+            ) { Text("›", fontSize = 18.sp, color = colors.faint) }
+        }
+        Spacer(Modifier.height(10.dp))
         OutlinedTextField(
             value = serverUrl,
             onValueChange = onServerUrlChange,

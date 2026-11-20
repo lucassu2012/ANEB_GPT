@@ -66,10 +66,9 @@ enum class StepState { Done, On, Todo }
 /** 结果行图标语义：下行(箭头↓) / 上行(箭头↑) / 卡顿(ECG 脉冲)。 */
 enum class ResIcon { Down, Up, Stall }
 
-/** 底部主 tab：严格对应 ANEB_UI 的测试 / 探针 / 结果 / 地图 / 设置。 */
+/** 底部主 tab：严格对应 ANEB_UI 的测试 / 结果 / 地图 / 设置。 */
 enum class MainTab(val label: String) {
     Test("测试"),
-    Probe("探针"),
     Results("结果"),
     Map("地图"),
     Settings("设置"),
@@ -520,11 +519,11 @@ private fun ResIconGlyph(icon: ResIcon, tint: Color, size: Dp) {
 }
 
 // ---------------------------------------------------------------------------
-// AnebTabBar —— ANEB_UI 五栏底部导航
+// AnebTabBar —— ANEB_UI 四栏底部导航
 // ---------------------------------------------------------------------------
 
 /**
- * 原型在所有根页面都使用等宽五栏细线图标；选中为白色，未选为 62% 灰。
+ * 原型在所有根页面都使用等宽四栏细线图标；选中为白色，未选为 62% 灰。
  * 导航覆盖在页面内容之上，所以背景只做由透明到深海军蓝的渐变，不创建凸起 GO 按钮。
  */
 @Composable
@@ -597,14 +596,6 @@ private fun TabGlyph(tab: MainTab, tint: Color, size: Dp) {
                 )
                 drawLine(tint, c, Offset(w * 0.69f, h * 0.34f), st, StrokeCap.Round)
                 drawCircle(tint, st * 0.9f, c)
-            }
-            MainTab.Probe -> {
-                val xs = floatArrayOf(w * 0.27f, w * 0.5f, w * 0.73f)
-                val tops = floatArrayOf(h * 0.56f, h * 0.28f, h * 0.43f)
-                xs.indices.forEach { i ->
-                    drawLine(tint, Offset(xs[i], h * 0.82f), Offset(xs[i], tops[i]), st, StrokeCap.Round)
-                    drawCircle(tint, st * 1.25f, Offset(xs[i], tops[i]))
-                }
             }
             MainTab.Results -> {
                 drawCircle(tint, w * 0.36f, c, style = Stroke(st))

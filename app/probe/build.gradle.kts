@@ -127,6 +127,12 @@ android {
             assets.srcDirs("../../profiles")
         }
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 ksp {
