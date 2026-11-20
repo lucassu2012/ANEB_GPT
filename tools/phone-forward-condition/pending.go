@@ -11,15 +11,25 @@ const maxPendingPackets = 2048
 const maxPendingBufferBytes = 4 << 20
 
 type pendingBudget struct {
-	mu      sync.Mutex
-	packets int
-	bytes   int
+	mu           sync.Mutex
+	packets      int
+	bytes        int
+	limitPackets int
+	limitBytes   int
 }
 
 func (b *pendingBudget) reserve(memory int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.packets >= maxPendingPackets || memory > maxPendingBufferBytes-b.bytes {
+	pktCap := b.limitPackets
+	if pktCap <= 0 || pktCap > maxPendingPackets {
+		pktCap = maxPendingPackets
+	}
+	byteCap := b.limitBytes
+	if byteCap <= 0 || byteCap > maxPendingBufferBytes {
+		byteCap = maxPendingBufferBytes
+	}
+	if b.packets >= pktCap || memory > byteCap-b.bytes {
 		return false
 	}
 	b.packets++

@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+type QueueOverflowPolicy string
+
+const (
+	QueueInvalidate QueueOverflowPolicy = "invalidate"
+	QueueTailDrop   QueueOverflowPolicy = "tail_drop"
+)
+
 type Config struct {
 	PhoneAddresses          []string
 	InterfaceIndex          uint32
@@ -16,6 +23,8 @@ type Config struct {
 	DownlinkDelay           time.Duration
 	DownlinkLossBasisPoints uint32
 	ImpairmentSeed          uint64
+	QueueOverflowPolicy     QueueOverflowPolicy
+	QueueLimitBytes         uint32
 }
 
 type Plan struct {
@@ -36,6 +45,16 @@ func NewPlan(config Config) (Plan, error) {
 	}
 	if config.DownlinkLossBasisPoints > 0 && config.ImpairmentSeed == 0 {
 		return Plan{}, fmt.Errorf("downlink loss requires a nonzero impairment_seed for deterministic replay")
+	}
+	switch config.QueueOverflowPolicy {
+	case "", QueueInvalidate:
+		config.QueueOverflowPolicy = QueueInvalidate
+	case QueueTailDrop:
+	default:
+		return Plan{}, fmt.Errorf("unsupported queue_overflow_policy: %q", config.QueueOverflowPolicy)
+	}
+	if config.QueueLimitBytes != 0 && (config.QueueLimitBytes < 16<<10 || config.QueueLimitBytes > maxPendingBufferBytes) {
+		return Plan{}, fmt.Errorf("queue_limit_bytes must be 0 or within %d..%d", 16<<10, maxPendingBufferBytes)
 	}
 	terms := make([]string, 0, len(config.PhoneAddresses))
 	addresses := make([]string, 0, len(config.PhoneAddresses))

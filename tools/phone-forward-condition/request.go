@@ -18,10 +18,12 @@ type Request struct {
 	InterfaceIndex               uint32   `json:"interface_index"`
 	TTLSeconds                   int64    `json:"ttl_seconds"`
 	DownlinkBytesPerSecond       uint64   `json:"downlink_ip_bytes_per_second"`
-	DownlinkDelayMs              uint64   `json:"downlink_delay_ms,omitempty"`
-	DownlinkLossBps              uint32   `json:"downlink_loss_bps,omitempty"`
-	ImpairmentSeed               uint64   `json:"impairment_seed,omitempty"`
-	DriverDirectory              string   `json:"driver_directory"`
+	DownlinkDelayMs              uint64              `json:"downlink_delay_ms,omitempty"`
+	DownlinkLossBps              uint32              `json:"downlink_loss_bps,omitempty"`
+	ImpairmentSeed               uint64              `json:"impairment_seed,omitempty"`
+	QueueOverflowPolicy          QueueOverflowPolicy `json:"queue_overflow_policy,omitempty"`
+	QueueLimitBytes              uint32              `json:"queue_limit_bytes,omitempty"`
+	DriverDirectory              string              `json:"driver_directory"`
 	OutputDirectory              string   `json:"output_directory"`
 	ExpectedUplinkInterfaceIndex uint32   `json:"expected_uplink_interface_index,omitempty"`
 	ProbeRemoteAddresses         []string `json:"probe_remote_addresses,omitempty"`
@@ -75,6 +77,8 @@ func ParseRequest(data []byte) (Request, Plan, error) {
 		DownlinkDelay:           time.Duration(request.DownlinkDelayMs) * time.Millisecond,
 		DownlinkLossBasisPoints: request.DownlinkLossBps,
 		ImpairmentSeed:          request.ImpairmentSeed,
+		QueueOverflowPolicy:     request.QueueOverflowPolicy,
+		QueueLimitBytes:         request.QueueLimitBytes,
 	})
 	return request, plan, err
 }

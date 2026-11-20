@@ -44,6 +44,8 @@ type Receipt struct {
 	InjectedBytes          uint64
 	DroppedPackets         uint64
 	DroppedBytes           uint64
+	QueueDroppedPackets    uint64
+	QueueDroppedBytes      uint64
 	CleanupInjectedPackets uint64
 	CleanupInjectedBytes   uint64
 	UnconfirmedUserPackets uint64
@@ -104,7 +106,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		overflowDone chan struct{}
 	}
 	packets := make(chan received, maxPendingPackets)
-	var pending pendingBudget
+	pending := pendingBudget{limitPackets: maxPendingPackets, limitBytes: int(plan.Config.QueueLimitBytes)}
 	settled := func(item received) {
 		if item.reserved {
 			pending.release(cap(item.frame.Packet))
@@ -116,6 +118,7 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	done := make(chan struct{})
 	abandon := make(chan struct{})
 	var receivedCount, receivedBytes, ownedReceivedCount atomic.Uint64
+	var queueDroppedPackets, queueDroppedBytes atomic.Uint64
 	var driverDrained atomic.Bool
 	var stopping atomic.Bool
 	var activeCalls atomic.Int32
@@ -140,6 +143,11 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 				item.receivedAt = clock.Now()
 				item.reserved = pending.reserve(cap(frame.Packet))
 				if !item.reserved {
+					if mode == Limit && plan.Config.QueueOverflowPolicy == QueueTailDrop && !frame.Address.IsSniffed() && !stopping.Load() && plan.CheckFrame(mode, frame) == nil {
+						queueDroppedPackets.Add(1)
+						queueDroppedBytes.Add(uint64(len(frame.Packet)))
+						continue
+					}
 					if !stopping.Load() {
 						cancel(ErrQueueOverflow)
 					}
@@ -242,8 +250,10 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		receipt.ReceivedPackets = receivedCount.Load()
 		receipt.ReceivedBytes = receivedBytes.Load()
 		receipt.OwnedReceivedPackets = ownedReceivedCount.Load()
+		receipt.QueueDroppedPackets = queueDroppedPackets.Load()
+		receipt.QueueDroppedBytes = queueDroppedBytes.Load()
 		receipt.DriverDrained = driverDrained.Load()
-		receipt.UnconfirmedUserPackets = receipt.OwnedReceivedPackets - receipt.InjectedPackets - receipt.DroppedPackets - receipt.CleanupInjectedPackets
+		receipt.UnconfirmedUserPackets = receipt.OwnedReceivedPackets - receipt.InjectedPackets - receipt.DroppedPackets - receipt.QueueDroppedPackets - receipt.CleanupInjectedPackets
 		if err != nil {
 			if errors.Is(err, ErrQueueOverflow) {
 				receipt.StopReason = "USER_QUEUE_OVERFLOW"
