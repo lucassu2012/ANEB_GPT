@@ -33,8 +33,9 @@ type app struct {
 	// h3Enabled 记录 -h3 开关状态，仅供 /serverinfo 如实上报（h3_enabled）。
 	// 注意其语义是"服务端配置启用了 h3"，不是"本响应经 h3 协商"——后者
 	// 看 X-Aneb-Proto 头（红队项：QUIC 启用 ≠ 协商 h3）。
-	h3Enabled bool
-	resultsMu sync.Mutex
+	h3Enabled       bool
+	resultsMu       sync.Mutex
+	realtimeSummary realtimeProtocolSummaryEmitter
 }
 
 // routes 构建完整 handler 树（含 X-Aneb-Server 版本头中间件）。
@@ -43,6 +44,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("/api/v1/echo", a.handleEcho)
 	mux.HandleFunc("/api/v1/profiles", a.handleProfiles)
 	mux.HandleFunc("/api/v1/stream", a.handleStream)
+	mux.HandleFunc("/api/v1/realtime-sim", a.handleRealtimeSim)
 	mux.HandleFunc("/api/v1/download", a.handleDownload)
 	mux.HandleFunc("/api/v1/artifact_stream", a.handleArtifactStream)
 	mux.HandleFunc("/api/v1/upload", a.handleUpload)
