@@ -103,10 +103,16 @@ func TestPlanBuildsBidirectionalDualStackFilterAndRejectsInvalidUplinkBounds(t *
 		"missing_uplink_seed":    func(c *Config) { c.UplinkImpairmentSeed = 0 },
 		"uplink_delay_no_rate":   func(c *Config) { c.UplinkBytesPerSecond = 0; c.UplinkLossBasisPoints = 0; c.UplinkImpairmentSeed = 0 },
 		"uplink_seed_no_rate":    func(c *Config) { c.UplinkBytesPerSecond = 0; c.UplinkDelay = 0; c.UplinkLossBasisPoints = 0 },
-		"nat_no_uplink_rate":     func(c *Config) { c.UplinkBytesPerSecond = 0; c.UplinkDelay = 0; c.UplinkLossBasisPoints = 0; c.UplinkImpairmentSeed = 0; c.UplinkNatAddresses = []string{"10.10.8.9"} },
-		"nat_overlaps_phone":     func(c *Config) { c.UplinkNatAddresses = []string{"192.168.137.113"} },
-		"nat_invalid_cidr":       func(c *Config) { c.UplinkNatAddresses = []string{"10.10.8.0/24"} },
-		"nat_loopback":           func(c *Config) { c.UplinkNatAddresses = []string{"127.0.0.1"} },
+		"nat_no_uplink_rate": func(c *Config) {
+			c.UplinkBytesPerSecond = 0
+			c.UplinkDelay = 0
+			c.UplinkLossBasisPoints = 0
+			c.UplinkImpairmentSeed = 0
+			c.UplinkNatAddresses = []string{"10.10.8.9"}
+		},
+		"nat_overlaps_phone": func(c *Config) { c.UplinkNatAddresses = []string{"192.168.137.113"} },
+		"nat_invalid_cidr":   func(c *Config) { c.UplinkNatAddresses = []string{"10.10.8.0/24"} },
+		"nat_loopback":       func(c *Config) { c.UplinkNatAddresses = []string{"127.0.0.1"} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

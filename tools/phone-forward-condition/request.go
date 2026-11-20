@@ -12,11 +12,11 @@ import (
 )
 
 type Request struct {
-	Format                       string   `json:"format"`
-	Mode                         Mode     `json:"mode"`
-	PhoneAddresses               []string `json:"phone_addresses"`
-	InterfaceIndex               uint32   `json:"interface_index"`
-	TTLSeconds                   int64    `json:"ttl_seconds"`
+	Format                       string              `json:"format"`
+	Mode                         Mode                `json:"mode"`
+	PhoneAddresses               []string            `json:"phone_addresses"`
+	InterfaceIndex               uint32              `json:"interface_index"`
+	TTLSeconds                   int64               `json:"ttl_seconds"`
 	DownlinkBytesPerSecond       uint64              `json:"downlink_ip_bytes_per_second"`
 	DownlinkDelayMs              uint64              `json:"downlink_delay_ms,omitempty"`
 	DownlinkLossBps              uint32              `json:"downlink_loss_bps,omitempty"`
