@@ -138,6 +138,10 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             self.assertIn("foreach ($conditionId in @('R', 'B'))", exec_rb)
             self.assertIn("Assert-AnebDouyinUiBindingV2", exec_rb)
             self.assertIn("NativeVideoScenarioInstrumentation", exec_rb)
+            common_rb = (card_rb / "common.ps1").read_text(encoding="ascii")
+            self.assertIn("$bUplinkIpBytesPerSecond   = [uint64]0", common_rb)
+            spec_rb = json.loads((card_rb / "CARD_SPEC.json").read_text(encoding="utf-8"))
+            self.assertIsNone(spec_rb["condition_b"]["uplink"])
 
             # B->R order + immutability check
             card_br = case_root / "douyin-br-1m"
@@ -217,16 +221,50 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
             self.assertIn("$bDownlinkIpBytesPerSecond = [uint64]32000", common_text)
             self.assertIn("$bQueueOverflowPolicy      = 'tail_drop'", common_text)
             self.assertIn("$bQueueLimitBytes          = [uint32]131072", common_text)
+            self.assertIn("$bUplinkIpBytesPerSecond   = [uint64]16000", common_text)
+            self.assertIn("$bUplinkDelayMs            = [uint64]100", common_text)
+            self.assertIn("$bUplinkLossBps            = [uint32]0", common_text)
+            self.assertIn("$bUplinkImpairmentSeed     = [uint64]0", common_text)
 
             exec_text = (out_dir / "execute-once.ps1").read_text(encoding="ascii")
             self.assertIn("DoubaoControlledScenarioInstrumentation", exec_text)
             self.assertIn("Assert-AnebDoubaoUiBinding", exec_text)
-            self.assertNotIn("uplink_ip_bytes_per_second", exec_text)
+            self.assertIn("if ($bUplinkIpBytesPerSecond -gt 0)", exec_text)
+            self.assertIn("$reqPayload['uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond", exec_text)
 
             spec = json.loads((out_dir / "CARD_SPEC.json").read_text(encoding="utf-8"))
             self.assertEqual(spec["condition_b"]["uplink"]["uplink_ip_bytes_per_second"], 16000)
             self.assertEqual(spec["condition_b"]["uplink"]["uplink_delay_ms"], 100)
-            self.assertFalse(spec["condition_b"]["uplink"]["emitted_to_request_json"])
+            self.assertTrue(spec["condition_b"]["uplink"]["emitted_to_request_json"])
+
+            # Verify --uplink-loss-bps defaults --uplink-seed to --seed and supports explicit --uplink-seed
+            out_dir2 = tmp / "doubao-bidir-loss"
+            res2 = self._run_new_card([
+                "--card-id", "doubao-bidir-loss",
+                "--app", "doubao",
+                "--version", "15080040",
+                "--downlink-bps", "250000",
+                "--loss-bps", "100",
+                "--seed", "20261120",
+                "--uplink-bps", "62500",
+                "--uplink-loss-bps", "150",
+                "--uplink-seed", "20261121",
+                "--out-dir", str(out_dir2),
+                "--case-root", str(tmp),
+                "--source-commit", SOURCE_COMMIT,
+                "--target-apk", str(fx["target_apk"]),
+                "--test-apk", str(fx["test_apk"]),
+                "--helper-exe", str(fx["helper_exe"]),
+                "--connection-admission", str(fx["conn_adm"]),
+                "--topology-admission", str(fx["topo_adm"]),
+            ])
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            common2 = (out_dir2 / "common.ps1").read_text(encoding="ascii")
+            self.assertIn("$bUplinkLossBps            = [uint32]150", common2)
+            self.assertIn("$bUplinkImpairmentSeed     = [uint64]20261121", common2)
+            spec2 = json.loads((out_dir2 / "CARD_SPEC.json").read_text(encoding="utf-8"))
+            self.assertEqual(spec2["condition_b"]["uplink"]["uplink_impairment_seed"], 20261121)
+            self.assertTrue(spec2["condition_b"]["uplink"]["emitted_to_request_json"])
 
     def test_invalid_arguments_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp_str:
@@ -250,6 +288,10 @@ class ControlledRbCardGeneratorTests(unittest.TestCase):
                 ("bad-ttl", ["--card-id", "c3", "--downlink-bps", "500000", "--ttl", "120"]),
                 ("bad-prefix", ["--card-id", "c4", "--downlink-bps", "500000", "--run-id-prefix", "bad.prefix!"]),
                 ("non-ascii-id", ["--card-id", "card-\u4e2d\u6587", "--downlink-bps", "500000"]),
+                ("uplink-delay-no-bps", ["--card-id", "c5", "--downlink-bps", "500000", "--uplink-delay-ms", "100"]),
+                ("uplink-loss-no-bps", ["--card-id", "c6", "--downlink-bps", "500000", "--uplink-loss-bps", "100"]),
+                ("uplink-seed-no-bps", ["--card-id", "c7", "--downlink-bps", "500000", "--uplink-seed", "42"]),
+                ("uplink-loss-zero-seed", ["--card-id", "c8", "--downlink-bps", "500000", "--uplink-bps", "62500", "--uplink-loss-bps", "100", "--seed", "0", "--uplink-seed", "0"]),
             ]
             for label, extra in bad_cases:
                 res = self._run_new_card([*common, *extra])

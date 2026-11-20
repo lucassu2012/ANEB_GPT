@@ -34,6 +34,10 @@ $bDownlinkLossBps          = [uint32]{{B_DOWNLINK_LOSS_BPS}}
 $bImpairmentSeed           = [uint64]{{B_IMPAIRMENT_SEED}}
 $bQueueOverflowPolicy      = '{{B_QUEUE_OVERFLOW_POLICY}}'
 $bQueueLimitBytes          = [uint32]{{B_QUEUE_LIMIT_BYTES}}
+$bUplinkIpBytesPerSecond   = [uint64]{{B_UPLINK_IP_BYTES_PER_SECOND}}
+$bUplinkDelayMs            = [uint64]{{B_UPLINK_DELAY_MS}}
+$bUplinkLossBps            = [uint32]{{B_UPLINK_LOSS_BPS}}
+$bUplinkImpairmentSeed     = [uint64]{{B_UPLINK_IMPAIRMENT_SEED}}
 
 $artifactsBindingPath = [IO.Path]::GetFullPath((Join-Path $root 'CANDIDATE_ARTIFACTS.json'))
 $artifactsBindingSHA  = '{{CANDIDATE_ARTIFACTS_SHA256}}'

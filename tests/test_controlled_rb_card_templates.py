@@ -33,12 +33,18 @@ class ControlledRbCardTemplateTests(unittest.TestCase):
         self.assertNotIn("@('R', 'B')", execute_text)
         self.assertIn("FINAL_MEDIA.json", execute_text)
         self.assertIn("[Math]::Max(60, $nativeTtlSeconds - 20)", execute_text)
+        self.assertIn("if ($bUplinkIpBytesPerSecond -gt 0)", execute_text)
+        self.assertIn("$reqPayload['uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond", execute_text)
+        self.assertNotIn("uplink_queue_overflow_policy", execute_text)
+        self.assertNotIn("uplink_queue_limit_bytes", execute_text)
 
     def test_common_defines_condition_arg_and_provenance_helpers(self):
         common_text = (TEMPLATE_DIR / "common.ps1.tmpl").read_text(encoding="ascii")
         self.assertIn("function Get-AnebPhaseInstrumentationConditionArgs", common_text)
         self.assertIn("function Assert-AnebPhaseResultConditionMatch", common_text)
         self.assertIn("function Assert-AnebDoubaoUiBinding", common_text)
+        self.assertIn("$bUplinkIpBytesPerSecond   = [uint64]{{B_UPLINK_IP_BYTES_PER_SECOND}}", common_text)
+        self.assertIn("$bUplinkImpairmentSeed     = [uint64]{{B_UPLINK_IMPAIRMENT_SEED}}", common_text)
         self.assertIn("com\\.larus\\.nova", common_text)
         self.assertIn("com\\.huawei\\.himovie\\b", common_text)
         self.assertNotIn("|himovie|", common_text)

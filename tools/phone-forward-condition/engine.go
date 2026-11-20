@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -33,6 +34,21 @@ type Link interface {
 	Close() error
 }
 
+type DirectionReceipt struct {
+	ReceivedPackets        uint64
+	ReceivedBytes          uint64
+	OwnedReceivedPackets   uint64
+	InjectedPackets        uint64
+	InjectedBytes          uint64
+	DroppedPackets         uint64
+	DroppedBytes           uint64
+	QueueDroppedPackets    uint64
+	QueueDroppedBytes      uint64
+	CleanupInjectedPackets uint64
+	CleanupInjectedBytes   uint64
+	UnconfirmedUserPackets uint64
+}
+
 type Receipt struct {
 	Mode                   Mode
 	State                  string
@@ -54,7 +70,25 @@ type Receipt struct {
 	WorkersJoined          bool
 	PhoneReceivedBytes     *uint64
 	DriverDroppedPackets   *uint64
+	Downlink               *DirectionReceipt `json:",omitempty"`
+	Uplink                 *DirectionReceipt `json:",omitempty"`
 	Failures               []string
+}
+
+type scopeMismatchError struct {
+	err error
+}
+
+func (e scopeMismatchError) Error() string { return e.err.Error() }
+func (e scopeMismatchError) Unwrap() error { return e.err }
+
+const uplinkSeedDomain = uint64(0x55504c494e4b7634) // "UPLINKv4"
+
+func splitMix64Next(z uint64) uint64 {
+	z += 0x9e3779b97f4a7c15
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
 }
 
 // shouldDrop applies a deterministic SplitMix64 hash over (seed, seq) against
@@ -79,9 +113,16 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	if mode != Inspect && mode != Limit {
 		return receipt, fmt.Errorf("unsupported mode: %q", mode)
 	}
-	pacer, err := NewPacer(plan.Config, clock)
+	downPacer, err := NewDirectionalPacer(plan.Config.TTL, plan.Config.DownlinkBytesPerSecond, plan.Config.DownlinkDelay, clock)
 	if err != nil {
 		return receipt, err
+	}
+	var upPacer *Pacer
+	if plan.Config.HasUplink() {
+		upPacer, err = NewDirectionalPacer(plan.Config.TTL, plan.Config.UplinkBytesPerSecond, plan.Config.UplinkDelay, clock)
+		if err != nil {
+			return receipt, err
+		}
 	}
 	lifetimeCtx, lifetimeCancel := context.WithTimeoutCause(ctx, plan.Config.TTL, errPlannedTTL)
 	defer lifetimeCancel()
@@ -100,21 +141,57 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	openErr := err
 	type received struct {
 		frame        Frame
-		err          error
+		classErr     error
 		receivedAt   time.Time
 		reserved     bool
 		overflowDone chan struct{}
 	}
-	packets := make(chan received, maxPendingPackets)
-	pending := pendingBudget{limitPackets: maxPendingPackets, limitBytes: int(plan.Config.QueueLimitBytes)}
-	settled := func(item received) {
+	type dirState struct {
+		ch                     chan received
+		pending                pendingBudget
+		pacer                  *Pacer
+		lossBps                uint32
+		lossSeed               uint64
+		held                   *received
+		receivedPackets        atomic.Uint64
+		receivedBytes          atomic.Uint64
+		ownedReceivedPackets   atomic.Uint64
+		queueDroppedPackets    atomic.Uint64
+		queueDroppedBytes      atomic.Uint64
+		injectedPackets        uint64
+		injectedBytes          uint64
+		droppedPackets         uint64
+		droppedBytes           uint64
+		cleanupInjectedPackets uint64
+		cleanupInjectedBytes   uint64
+	}
+	newDirState := func(pacer *Pacer, lossBps uint32, lossSeed uint64) *dirState {
+		return &dirState{
+			ch:       make(chan received, maxPendingPackets),
+			pending:  pendingBudget{limitPackets: maxPendingPackets, limitBytes: int(plan.Config.QueueLimitBytes)},
+			pacer:    pacer,
+			lossBps:  lossBps,
+			lossSeed: lossSeed,
+		}
+	}
+	settled := func(d *dirState, item received) {
 		if item.reserved {
-			pending.release(cap(item.frame.Packet))
+			d.pending.release(cap(item.frame.Packet))
 		}
 		if item.overflowDone != nil {
 			close(item.overflowDone)
 		}
 	}
+	down := newDirState(downPacer, plan.Config.DownlinkLossBasisPoints, plan.Config.ImpairmentSeed)
+	var up *dirState
+	if plan.Config.HasUplink() {
+		upSeed := uint64(0)
+		if plan.Config.UplinkLossBasisPoints > 0 {
+			upSeed = splitMix64Next(plan.Config.UplinkImpairmentSeed ^ uplinkSeedDomain)
+		}
+		up = newDirState(upPacer, plan.Config.UplinkLossBasisPoints, upSeed)
+	}
+
 	done := make(chan struct{})
 	abandon := make(chan struct{})
 	var receivedCount, receivedBytes, ownedReceivedCount atomic.Uint64
@@ -122,42 +199,82 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 	var driverDrained atomic.Bool
 	var stopping atomic.Bool
 	var activeCalls atomic.Int32
-	var held *received
+	var recvErrMu sync.Mutex
+	var recvErr error
+	var mismatchMu sync.Mutex
+	var mismatchHeld *received
+	setMismatchHeld := func(item *received) {
+		mismatchMu.Lock()
+		if mismatchHeld == nil {
+			mismatchHeld = item
+		}
+		mismatchMu.Unlock()
+	}
+	var workersWg sync.WaitGroup
+
 	go func() {
 		defer close(done)
-		defer close(packets)
+		defer func() {
+			close(down.ch)
+			if up != nil {
+				close(up.ch)
+			}
+		}()
 		for {
 			frame, e := link.Receive()
-			if e == nil {
-				receivedCount.Add(1)
-				receivedBytes.Add(uint64(len(frame.Packet)))
+			if e != nil {
+				if errors.Is(e, io.EOF) {
+					driverDrained.Store(true)
+				} else {
+					recvErrMu.Lock()
+					if recvErr == nil {
+						recvErr = e
+					}
+					recvErrMu.Unlock()
+					cancel(e)
+				}
+				return
+			}
+			receivedCount.Add(1)
+			receivedBytes.Add(uint64(len(frame.Packet)))
+			if !frame.Address.IsSniffed() {
+				ownedReceivedCount.Add(1)
+			}
+			dir, classErr := plan.ClassifyFrame(mode, frame)
+			target := down
+			if classErr == nil {
+				if dir == DirectionUplink {
+					target = up
+				}
+				target.receivedPackets.Add(1)
+				target.receivedBytes.Add(uint64(len(frame.Packet)))
 				if !frame.Address.IsSniffed() {
-					ownedReceivedCount.Add(1)
+					target.ownedReceivedPackets.Add(1)
 				}
 			}
-			if errors.Is(e, io.EOF) {
-				driverDrained.Store(true)
+			item := received{
+				frame:      frame,
+				classErr:   classErr,
+				receivedAt: clock.Now(),
+				reserved:   target.pending.reserve(cap(frame.Packet)),
 			}
-			item := received{frame: frame, err: e}
-			if e == nil {
-				item.receivedAt = clock.Now()
-				item.reserved = pending.reserve(cap(frame.Packet))
-				if !item.reserved {
-					if mode == Limit && plan.Config.QueueOverflowPolicy == QueueTailDrop && !frame.Address.IsSniffed() && !stopping.Load() && plan.CheckFrame(mode, frame) == nil {
-						queueDroppedPackets.Add(1)
-						queueDroppedBytes.Add(uint64(len(frame.Packet)))
-						continue
-					}
-					if !stopping.Load() {
-						cancel(ErrQueueOverflow)
-					}
-					// Receive already transferred this original. Keep exactly one
-					// excess frame, and do not receive again before its disposal.
-					item.overflowDone = make(chan struct{})
+			if !item.reserved {
+				if classErr == nil && mode == Limit && plan.Config.QueueOverflowPolicy == QueueTailDrop && !frame.Address.IsSniffed() && !stopping.Load() {
+					target.queueDroppedPackets.Add(1)
+					target.queueDroppedBytes.Add(uint64(len(frame.Packet)))
+					queueDroppedPackets.Add(1)
+					queueDroppedBytes.Add(uint64(len(frame.Packet)))
+					continue
 				}
+				if !stopping.Load() {
+					cancel(ErrQueueOverflow)
+				}
+				// Receive already transferred this original. Keep exactly one
+				// excess frame, and do not receive again before its disposal.
+				item.overflowDone = make(chan struct{})
 			}
 			select {
-			case packets <- item:
+			case target.ch <- item:
 			case <-abandon:
 				return
 			}
@@ -168,24 +285,23 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 					return
 				}
 			}
-			if e != nil {
-				return
-			}
 		}
 	}()
+
 	defer func() {
 		stopping.Store(true)
 		cancel(nil)
+		workersWg.Wait()
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cleanupCancel()
 		_, shutdownErr, _ := boundedCall(cleanupCtx, &activeCalls, func() (int, error) { return 0, link.ShutdownReceive() })
 		if e := shutdownErr; e != nil {
 			err = errors.Join(err, e)
 		}
-		restore := func(item received) {
+		restore := func(d *dirState, item received, countOnDir bool) {
 			frame := item.frame
 			if mode != Limit || frame.Address.IsSniffed() {
-				settled(item)
+				settled(d, item)
 				return
 			}
 			n, e, _ := boundedCall(cleanupCtx, &activeCalls, func() (int, error) { return link.Inject(frame) })
@@ -195,10 +311,16 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 			if n > 0 {
 				receipt.CleanupInjectedBytes += uint64(n)
+				if countOnDir {
+					d.cleanupInjectedBytes += uint64(n)
+				}
 			}
 			if e == nil && n == len(frame.Packet) {
 				receipt.CleanupInjectedPackets++
-				settled(item)
+				if countOnDir {
+					d.cleanupInjectedPackets++
+				}
+				settled(d, item)
 			} else {
 				if e == nil {
 					e = io.ErrShortWrite
@@ -207,26 +329,42 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			}
 		}
 		if shutdownErr == nil {
-			if held != nil {
-				restore(*held)
+			if mismatchHeld != nil {
+				restore(down, *mismatchHeld, false)
 			}
-		drain:
-			for {
+			if down.held != nil {
+				restore(down, *down.held, true)
+			}
+			if up != nil && up.held != nil {
+				restore(up, *up.held, true)
+			}
+			downOpen := true
+			upOpen := up != nil
+			for downOpen || upOpen {
+				var dCh, uCh <-chan received
+				if downOpen {
+					dCh = down.ch
+				}
+				if upOpen {
+					uCh = up.ch
+				}
 				select {
 				case <-cleanupCtx.Done():
 					err = errors.Join(err, errors.New("owned queue drain exceeded cleanup budget"))
-					break drain
-				case item, ok := <-packets:
+					downOpen = false
+					upOpen = false
+				case item, ok := <-dCh:
 					if !ok {
-						break drain
-					}
-					if item.err != nil {
-						if !errors.Is(item.err, io.EOF) {
-							err = errors.Join(err, item.err)
-						}
+						downOpen = false
 						continue
 					}
-					restore(item)
+					restore(down, item, item.classErr == nil)
+				case item, ok := <-uCh:
+					if !ok {
+						upOpen = false
+						continue
+					}
+					restore(up, item, item.classErr == nil)
 				}
 			}
 		}
@@ -247,6 +385,40 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 		if !receipt.WorkersJoined {
 			err = errors.Join(err, errors.New("owned calls or receiver not joined"))
 		}
+
+		finalizeDir := func(d *dirState) *DirectionReceipt {
+			dr := &DirectionReceipt{
+				ReceivedPackets:        d.receivedPackets.Load(),
+				ReceivedBytes:          d.receivedBytes.Load(),
+				OwnedReceivedPackets:   d.ownedReceivedPackets.Load(),
+				InjectedPackets:        d.injectedPackets,
+				InjectedBytes:          d.injectedBytes,
+				DroppedPackets:         d.droppedPackets,
+				DroppedBytes:           d.droppedBytes,
+				QueueDroppedPackets:    d.queueDroppedPackets.Load(),
+				QueueDroppedBytes:      d.queueDroppedBytes.Load(),
+				CleanupInjectedPackets: d.cleanupInjectedPackets,
+				CleanupInjectedBytes:   d.cleanupInjectedBytes,
+			}
+			dr.UnconfirmedUserPackets = dr.OwnedReceivedPackets - dr.InjectedPackets - dr.DroppedPackets - dr.QueueDroppedPackets - dr.CleanupInjectedPackets
+			return dr
+		}
+
+		downSummary := finalizeDir(down)
+		receipt.InjectedPackets = downSummary.InjectedPackets
+		receipt.InjectedBytes = downSummary.InjectedBytes
+		receipt.DroppedPackets = downSummary.DroppedPackets
+		receipt.DroppedBytes = downSummary.DroppedBytes
+		if up != nil {
+			upSummary := finalizeDir(up)
+			receipt.InjectedPackets += upSummary.InjectedPackets
+			receipt.InjectedBytes += upSummary.InjectedBytes
+			receipt.DroppedPackets += upSummary.DroppedPackets
+			receipt.DroppedBytes += upSummary.DroppedBytes
+			receipt.Downlink = downSummary
+			receipt.Uplink = upSummary
+		}
+
 		receipt.ReceivedPackets = receivedCount.Load()
 		receipt.ReceivedBytes = receivedBytes.Load()
 		receipt.OwnedReceivedPackets = ownedReceivedCount.Load()
@@ -270,103 +442,138 @@ func Run(ctx context.Context, config Config, mode Mode, clock Clock, open func(P
 			receipt.State = "INJECTED_NOT_CALIBRATED"
 		}
 	}()
+
 	if openErr != nil {
 		receipt.StopReason = "OPEN_SETUP_FAILED"
 		return receipt, openErr
 	}
-	var limitSeq uint64
-	for {
-		var current received
-		select {
-		case <-ctx.Done():
-			if errors.Is(context.Cause(ctx), errPlannedTTL) {
-				receipt.StopReason = "TTL_EXPIRED"
-				goto complete
+
+	runDirectionWorker := func(d *dirState) {
+		defer workersWg.Done()
+		var limitSeq uint64
+		for {
+			if ctx.Err() != nil {
+				return
 			}
-			receipt.StopReason = context.Cause(ctx).Error()
-			return receipt, context.Cause(ctx)
-		case item, ok := <-packets:
-			if !ok {
-				receipt.StopReason = "LINK_EOF"
-				goto complete
-			}
-			current = item
-		}
-		frame, e := current.frame, current.err
-		if errors.Is(e, io.EOF) {
-			receipt.DriverDrained = true
-			receipt.StopReason = "LINK_EOF"
-			break
-		}
-		if e != nil {
-			return receipt, e
-		}
-		if e := plan.CheckFrame(mode, frame); e != nil {
-			if mode == Limit && !frame.Address.IsSniffed() {
-				held = &current
-			} else {
-				settled(current)
-			}
-			receipt.StopReason = "PACKET_SCOPE_MISMATCH"
-			return receipt, e
-		}
-		if mode == Inspect {
-			settled(current)
-			continue
-		}
-		limitSeq++
-		if plan.Config.DownlinkLossBasisPoints > 0 && shouldDrop(plan.Config.ImpairmentSeed, limitSeq, plan.Config.DownlinkLossBasisPoints) {
-			receipt.DroppedPackets++
-			receipt.DroppedBytes += uint64(len(frame.Packet))
-			settled(current)
-			continue
-		}
-		attempted := false
-		_, e = pacer.InjectAt(ctx, current.receivedAt, frame.Packet, func(packet []byte) error {
-			frame.Packet = packet
-			n, sendErr, admitted := boundedCall(ctx, &activeCalls, func() (int, error) { return link.Inject(frame) })
-			attempted = admitted
-			if n < 0 || n > len(packet) {
-				n = 0
-				sendErr = errors.Join(sendErr, errors.New("invalid injection byte count"))
-			}
-			if n > 0 {
-				receipt.InjectedBytes += uint64(n)
-			}
-			if sendErr == nil && n != len(packet) {
-				sendErr = io.ErrShortWrite
-			}
-			if sendErr == nil {
-				receipt.InjectedPackets++
-				// Confirmed send is the release boundary, not dequeue or the
-				// later Pacer TTL/clock verdict. An uncertain send keeps its lease.
-				settled(current)
-			}
-			return sendErr
-		})
-		if e != nil {
-			if !attempted {
-				held = &current
-				// A not-yet-dispatched packet that cannot fit is retained until
-				// the original cutoff, then restored in cleanup, not paced early.
-				// Never normalize an admitted/uncertain native send or parent stop.
-				if errors.Is(e, ErrTTL) || (errors.Is(e, context.DeadlineExceeded) && errors.Is(context.Cause(ctx), errPlannedTTL)) {
-					<-ctx.Done()
-					if errors.Is(context.Cause(ctx), errPlannedTTL) {
-						receipt.StopReason = "TTL_EXPIRED"
-						goto complete
-					}
+			var current received
+			var ok bool
+			select {
+			case <-ctx.Done():
+				return
+			case current, ok = <-d.ch:
+				if !ok {
+					return
 				}
 			}
-			e = errors.Join(e, context.Cause(ctx))
-			receipt.StopReason = e.Error()
-			return receipt, e
+			if current.classErr != nil {
+				if mode == Limit && !current.frame.Address.IsSniffed() {
+					setMismatchHeld(&current)
+				} else {
+					settled(d, current)
+				}
+				cancel(scopeMismatchError{err: current.classErr})
+				return
+			}
+			if ctx.Err() != nil {
+				if mode == Limit && !current.frame.Address.IsSniffed() {
+					d.held = &current
+				} else {
+					settled(d, current)
+				}
+				return
+			}
+			if mode == Inspect {
+				settled(d, current)
+				continue
+			}
+			limitSeq++
+			if d.lossBps > 0 && shouldDrop(d.lossSeed, limitSeq, d.lossBps) {
+				d.droppedPackets++
+				d.droppedBytes += uint64(len(current.frame.Packet))
+				settled(d, current)
+				continue
+			}
+			frame := current.frame
+			attempted := false
+			_, injectErr := d.pacer.InjectAt(ctx, current.receivedAt, frame.Packet, func(packet []byte) error {
+				frame.Packet = packet
+				n, sendErr, admitted := boundedCall(ctx, &activeCalls, func() (int, error) { return link.Inject(frame) })
+				attempted = admitted
+				if n < 0 || n > len(packet) {
+					n = 0
+					sendErr = errors.Join(sendErr, errors.New("invalid injection byte count"))
+				}
+				if n > 0 {
+					d.injectedBytes += uint64(n)
+				}
+				if sendErr == nil && n != len(packet) {
+					sendErr = io.ErrShortWrite
+				}
+				if sendErr == nil {
+					d.injectedPackets++
+					// Confirmed send is the release boundary, not dequeue or the
+					// later Pacer TTL/clock verdict. An uncertain send keeps its lease.
+					settled(d, current)
+				}
+				return sendErr
+			})
+			if injectErr != nil {
+				if !attempted {
+					d.held = &current
+					// A not-yet-dispatched packet that cannot fit is retained until
+					// the original cutoff, then restored in cleanup, not paced early.
+					// Never normalize an admitted/uncertain native send or parent stop.
+					if errors.Is(injectErr, ErrTTL) || (errors.Is(injectErr, context.DeadlineExceeded) && errors.Is(context.Cause(ctx), errPlannedTTL)) {
+						<-ctx.Done()
+						if errors.Is(context.Cause(ctx), errPlannedTTL) {
+							return
+						}
+					}
+				}
+				cancel(injectErr)
+				return
+			}
 		}
 	}
-complete:
-	if e := context.Cause(ctx); e != nil && !errors.Is(e, errPlannedTTL) {
-		return receipt, e
+
+	workersWg.Add(1)
+	go runDirectionWorker(down)
+	if up != nil {
+		workersWg.Add(1)
+		go runDirectionWorker(up)
 	}
+	workersDone := make(chan struct{})
+	go func() {
+		workersWg.Wait()
+		close(workersDone)
+	}()
+
+	select {
+	case <-workersDone:
+	case <-ctx.Done():
+	}
+
+	recvErrMu.Lock()
+	rErr := recvErr
+	recvErrMu.Unlock()
+	if rErr != nil {
+		receipt.StopReason = rErr.Error()
+		return receipt, rErr
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		if errors.Is(cause, errPlannedTTL) {
+			receipt.StopReason = "TTL_EXPIRED"
+			return receipt, nil
+		}
+		var sm scopeMismatchError
+		if errors.As(cause, &sm) {
+			receipt.StopReason = "PACKET_SCOPE_MISMATCH"
+			return receipt, sm.err
+		}
+		receipt.StopReason = cause.Error()
+		return receipt, cause
+	}
+	receipt.StopReason = "LINK_EOF"
 	return receipt, nil
 }
 

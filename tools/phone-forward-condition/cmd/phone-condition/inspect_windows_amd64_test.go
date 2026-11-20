@@ -352,3 +352,43 @@ func TestInspectionKeepsPartialEvidenceAndCannotPromoteAWorkerTimeout(t *testing
 		t.Fatal("missing worker evidence was fabricated")
 	}
 }
+
+func TestBidirectionalParentEnforcesDirectionalConservationSubReceipts(t *testing.T) {
+	root := t.TempDir()
+	request := condition.Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         condition.Limit,
+		PhoneAddresses:               []string{"192.168.137.113"},
+		InterfaceIndex:               16,
+		TTLSeconds:                   1,
+		DownlinkBytesPerSecond:       250000,
+		UplinkBytesPerSecond:         62500,
+		ExpectedUplinkInterfaceIndex: 12,
+		DriverDirectory:              filepath.Join(root, "absent-driver"),
+		OutputDirectory:              filepath.Join(root, "bidir-missing-sub"),
+	}
+	data, _ := json.Marshal(request)
+	err := inspectRequest(data, &bytes.Buffer{}, func() error { return nil }, func(application string, args []string, budget time.Duration) (supervisor.ProcessResult, error) {
+		_ = writeNewJSON(filepath.Join(request.OutputDirectory, "worker.json"), inspectionOutcome{
+			Format:              "phone-forward-limit-result-1",
+			RequestSHA256:       args[4],
+			PID:                 123,
+			DriverOpenAttempted: true,
+			OwnedHandleReturned: true,
+			Receipt: condition.Receipt{
+				Mode:              condition.Limit,
+				State:             "INJECTED_NOT_CALIBRATED",
+				StopReason:        "TTL_EXPIRED",
+				InjectedPackets:   1,
+				DriverDrained:     true,
+				OwnedHandleClosed: true,
+				WorkersJoined:     true,
+			},
+		})
+		code := uint32(0)
+		return supervisor.ProcessResult{PID: 123, ExitCode: &code, ExitConfirmed: true, AssignedToOwnedJob: true, DeadlineArmedBeforeResume: true, Resumed: true, OwnedTreeEmpty: true, JobClosed: true, ProcessHandleClosed: true, ThreadHandleClosed: true, TimerHandleClosed: true}, nil
+	})
+	if err == nil {
+		t.Fatal("parent accepted bidirectional receipt without Downlink/Uplink sub-receipts")
+	}
+}

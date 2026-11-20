@@ -34,6 +34,10 @@ function Render-DummyTemplate([string]$Text) {
         '{{B_IMPAIRMENT_SEED}}'           = '0'
         '{{B_QUEUE_OVERFLOW_POLICY}}'     = ''
         '{{B_QUEUE_LIMIT_BYTES}}'         = '0'
+        '{{B_UPLINK_IP_BYTES_PER_SECOND}}' = '0'
+        '{{B_UPLINK_DELAY_MS}}'           = '0'
+        '{{B_UPLINK_LOSS_BPS}}'           = '0'
+        '{{B_UPLINK_IMPAIRMENT_SEED}}'    = '0'
         '{{CANDIDATE_ARTIFACTS_SHA256}}'  = ('c' * 64)
         '{{UI_BINDING_FILENAME}}'         = 'UI_BINDING.json'
         '{{UI_BINDING_SHA256}}'           = ('d' * 64)
@@ -86,6 +90,7 @@ $execBrRendered = (Render-DummyTemplate $execTmpl).Replace("phases              
 $brTokens = $null; $brErrors = $null
 $null = [Management.Automation.Language.Parser]::ParseInput($execBrRendered, [ref]$brTokens, [ref]$brErrors)
 Assert-Card ($brErrors.Count -eq 0 -and $execBrRendered.Contains("phases                            = @('B', 'R')") -and $execBrRendered.Contains("foreach (`$conditionId in @('B', 'R'))")) 'execute-once.ps1.tmpl renders B->R cleanly and parses'
+Assert-Card ($execTmpl.Contains('if ($bUplinkIpBytesPerSecond -gt 0)') -and $execTmpl.Contains("`$reqPayload['uplink_ip_bytes_per_second'] = `$bUplinkIpBytesPerSecond") -and (-not $execTmpl.Contains('uplink_queue_overflow_policy'))) 'execute-once.ps1.tmpl guards uplink_* request.json emission cleanly'
 
 # Part B: Unit test extracted Get-AnebPhaseInstrumentationConditionArgs, Assert-AnebPhaseResultConditionMatch & Assert-AnebDoubaoUiBinding
 $commonRendered = Render-DummyTemplate ([IO.File]::ReadAllText((Join-Path $tmplDir 'common.ps1.tmpl'), [Text.Encoding]::ASCII))

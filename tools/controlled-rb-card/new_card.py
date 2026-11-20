@@ -201,7 +201,19 @@ def validate_condition_args(args: argparse.Namespace) -> None:
     if args.version <= 0:
         raise ValueError(f"version must be > 0, got {args.version}")
 
-    # Validate optional uplink metadata (recorded in CARD_SPEC.json only; not emitted into M2.1 request.json)
+    # Validate optional uplink shaping parameters
+    other_uplink_set = any(
+        v is not None
+        for v in (
+            args.uplink_delay_ms,
+            args.uplink_loss_bps,
+            args.uplink_seed,
+            args.uplink_queue_overflow_policy,
+            args.uplink_queue_limit_bytes,
+        )
+    )
+    if other_uplink_set and args.uplink_bps is None:
+        raise ValueError("--uplink-bps is required when any other --uplink-* option is specified")
     if args.uplink_bps is not None and not (1 <= args.uplink_bps <= 1_000_000_000):
         raise ValueError(f"uplink_bps must be in 1..1000000000, got {args.uplink_bps}")
     if args.uplink_delay_ms is not None and not (0 <= args.uplink_delay_ms <= 2000):
@@ -209,8 +221,12 @@ def validate_condition_args(args: argparse.Namespace) -> None:
     if args.uplink_loss_bps is not None:
         if not (0 <= args.uplink_loss_bps <= 5000):
             raise ValueError(f"uplink_loss_bps must be in 0..5000, got {args.uplink_loss_bps}")
-        if args.uplink_loss_bps > 0 and args.seed <= 0:
-            raise ValueError("seed must be > 0 when uplink_loss_bps > 0")
+    if args.uplink_seed is not None and args.uplink_seed < 0:
+        raise ValueError(f"uplink_seed must be >= 0, got {args.uplink_seed}")
+    if args.uplink_loss_bps is not None and args.uplink_loss_bps > 0:
+        effective_uplink_seed = args.uplink_seed if args.uplink_seed is not None else args.seed
+        if effective_uplink_seed is None or effective_uplink_seed <= 0:
+            raise ValueError("uplink_seed (or --seed) must be > 0 when uplink_loss_bps > 0")
     if args.uplink_queue_overflow_policy is not None and args.uplink_queue_overflow_policy not in ALLOWED_QUEUE_POLICIES:
         raise ValueError(
             f"uplink_queue_overflow_policy must be one of {ALLOWED_QUEUE_POLICIES}, "
@@ -434,12 +450,29 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
     candidate_artifacts_sha = write_lf_bytes(out_dir / "CANDIDATE_ARTIFACTS.json", candidate_artifacts_bytes)
 
     phase_order_ps = "'R', 'B'" if args.order == "R->B" else "'B', 'R'"
+    emit_uplink = args.uplink_bps is not None
+    b_uplink_bps = args.uplink_bps if emit_uplink else 0
+    b_uplink_delay_ms = (args.uplink_delay_ms or 0) if emit_uplink else 0
+    b_uplink_loss_bps = (args.uplink_loss_bps or 0) if emit_uplink else 0
+    if emit_uplink:
+        if args.uplink_seed is not None:
+            b_uplink_seed = args.uplink_seed
+        elif b_uplink_loss_bps > 0:
+            b_uplink_seed = args.seed
+        else:
+            b_uplink_seed = 0
+    else:
+        b_uplink_seed = 0
+
     rate_mbps = (args.downlink_bps * 8) / 1_000_000.0
     card_title = (
         f"{preset['card_title_prefix']} Controlled R/B Card {args.card_id}: "
         f"R=inspect | B={rate_mbps:.3f}Mbps delay={args.delay_ms}ms loss={args.loss_bps}bps "
         f"order={args.order}"
     )
+    if emit_uplink:
+        uplink_rate_mbps = (b_uplink_bps * 8) / 1_000_000.0
+        card_title += f" ul={uplink_rate_mbps:.3f}Mbps ul_delay={b_uplink_delay_ms}ms ul_loss={b_uplink_loss_bps}bps"
     ensure_ascii_ps_safe("card_title", card_title)
 
     common_tokens = {
@@ -463,6 +496,10 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
         "{{B_IMPAIRMENT_SEED}}": str(args.seed),
         "{{B_QUEUE_OVERFLOW_POLICY}}": args.queue_overflow_policy,
         "{{B_QUEUE_LIMIT_BYTES}}": str(args.queue_limit_bytes),
+        "{{B_UPLINK_IP_BYTES_PER_SECOND}}": str(b_uplink_bps),
+        "{{B_UPLINK_DELAY_MS}}": str(b_uplink_delay_ms),
+        "{{B_UPLINK_LOSS_BPS}}": str(b_uplink_loss_bps),
+        "{{B_UPLINK_IMPAIRMENT_SEED}}": str(b_uplink_seed),
         "{{CANDIDATE_ARTIFACTS_SHA256}}": candidate_artifacts_sha,
         "{{UI_BINDING_FILENAME}}": ui_binding_filename,
         "{{UI_BINDING_SHA256}}": ui_binding_sha,
@@ -511,23 +548,15 @@ def build_card(args: argparse.Namespace) -> dict[str, Any]:
     run_sha = write_lf_bytes(out_dir / "run-once.ps1", run_bytes)
 
     uplink_spec = None
-    if any(
-        v is not None
-        for v in (
-            args.uplink_bps,
-            args.uplink_delay_ms,
-            args.uplink_loss_bps,
-            args.uplink_queue_overflow_policy,
-            args.uplink_queue_limit_bytes,
-        )
-    ):
+    if emit_uplink:
         uplink_spec = {
             "uplink_ip_bytes_per_second": args.uplink_bps,
             "uplink_delay_ms": args.uplink_delay_ms,
             "uplink_loss_bps": args.uplink_loss_bps,
+            "uplink_impairment_seed": b_uplink_seed if (args.uplink_seed is not None or b_uplink_loss_bps > 0) else None,
             "uplink_queue_overflow_policy": args.uplink_queue_overflow_policy,
             "uplink_queue_limit_bytes": args.uplink_queue_limit_bytes,
-            "emitted_to_request_json": False,
+            "emitted_to_request_json": True,
         }
 
     # DAG Step 5: CARD_SPEC.json
@@ -595,6 +624,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--uplink-bps", type=int, default=None)
     ap.add_argument("--uplink-delay-ms", type=int, default=None)
     ap.add_argument("--uplink-loss-bps", type=int, default=None)
+    ap.add_argument("--uplink-seed", type=int, default=None,
+                    help="Deterministic uplink PRNG seed (defaults to --seed when --uplink-loss-bps > 0)")
     ap.add_argument("--uplink-queue-overflow-policy", default=None)
     ap.add_argument("--uplink-queue-limit-bytes", type=int, default=None)
     ap.add_argument("--order", choices=("R->B", "B->R"), default="R->B")

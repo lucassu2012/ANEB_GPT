@@ -123,3 +123,48 @@ func TestPlanCommandEchoesQueuePolicyAndLimitWhenConfiguredAndOmitsDefault(t *te
 		t.Fatalf("plan lost queue config: %+v", plan)
 	}
 }
+
+func TestPlanCommandEchoesBidirectionalUplinkFieldsAndOmitsWhenUnset(t *testing.T) {
+	root := t.TempDir()
+	req := condition.Request{
+		Format:                       "phone-forward-condition-1",
+		Mode:                         condition.Limit,
+		PhoneAddresses:               []string{"192.168.137.113"},
+		InterfaceIndex:               16,
+		TTLSeconds:                   35,
+		DownlinkBytesPerSecond:       250000,
+		UplinkBytesPerSecond:         62500,
+		UplinkDelayMs:                40,
+		UplinkLossBps:                100,
+		UplinkImpairmentSeed:         20261120,
+		DriverDirectory:              filepath.Join(root, "unavailable-driver"),
+		OutputDirectory:              filepath.Join(root, "must-not-create"),
+		ExpectedUplinkInterfaceIndex: 12,
+		ProbeRemoteAddresses:         []string{"120.77.174.207"},
+		UplinkNatAddresses:           []string{"10.10.8.9"},
+	}
+	data, _ := json.Marshal(req)
+	path := filepath.Join(root, "bidir-request.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"plan", "-config", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		Filter               string   `json:"filter"`
+		UplinkBytesPerSecond uint64   `json:"uplink_ip_bytes_per_second"`
+		UplinkDelayMs        uint64   `json:"uplink_delay_ms"`
+		UplinkLossBps        uint32   `json:"uplink_loss_bps"`
+		UplinkImpairmentSeed uint64   `json:"uplink_impairment_seed"`
+		UplinkNatAddresses   []string `json:"uplink_nat_addresses"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	wantFilter := "(ifIdx == 16 and (ip.DstAddr == 192.168.137.113)) or (ifIdx == 12 and (ip.SrcAddr == 10.10.8.9))"
+	if plan.Filter != wantFilter || plan.UplinkBytesPerSecond != 62500 || plan.UplinkDelayMs != 40 || plan.UplinkLossBps != 100 || plan.UplinkImpairmentSeed != 20261120 || len(plan.UplinkNatAddresses) != 1 || plan.UplinkNatAddresses[0] != "10.10.8.9" {
+		t.Fatalf("plan lost bidirectional fields: %+v", plan)
+	}
+}

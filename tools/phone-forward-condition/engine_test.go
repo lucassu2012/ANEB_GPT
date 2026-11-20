@@ -3,6 +3,7 @@ package condition
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"sync"
@@ -401,5 +402,161 @@ func TestForwardRunPacesOriginalFramesAndClosesOnlyItsLink(t *testing.T) {
 	}
 	if clock.Now().Sub(time.Unix(0, 0)) != 60*time.Millisecond {
 		t.Fatal("pacer not on forwarding path")
+	}
+}
+
+func TestBidirectionalWorkersPaceIndependentlyWithoutHeadOfLineBlocking(t *testing.T) {
+	down := testForwardFrame(1000)
+	up1 := testUplinkForwardFrame(100, 16, true)
+	up2 := testUplinkForwardFrame(100, 16, true)
+	up3 := testUplinkForwardFrame(100, 16, true)
+	link := &memoryLink{frames: []Frame{down, up1, up2, up3}}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			UplinkInterfaceIndex:   16,
+			TTL:                    2 * time.Second,
+			DownlinkBytesPerSecond: 5000,
+			DownlinkDelay:          200 * time.Millisecond, // 200ms serial + 200ms delay = 400ms
+			UplinkBytesPerSecond:   1_000_000,
+			UplinkDelay:            0,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("bidirectional run failed: %v receipt=%+v", err, receipt)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil ||
+		receipt.Downlink.InjectedPackets != 1 || receipt.Uplink.InjectedPackets != 3 ||
+		receipt.UnconfirmedUserPackets != 0 || receipt.Downlink.UnconfirmedUserPackets != 0 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("unexpected directional counts: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
+	}
+	if len(link.injected) != 4 {
+		t.Fatalf("expected 4 injected frames, got %d", len(link.injected))
+	}
+	// All 3 fast uplink frames must inject BEFORE the slow/delayed downlink frame.
+	for i := range 3 {
+		if link.injected[i].Packet[12] != 192 {
+			t.Fatalf("uplink frame %d was head-of-line blocked behind downlink: injected order=%d", i, len(link.injected[i].Packet))
+		}
+	}
+	if link.injected[3].Packet[16] != 192 {
+		t.Fatal("last injected frame was not the delayed downlink frame")
+	}
+}
+
+func TestBidirectionalQueueOverflowRestoresBothChannelsWithoutDeadlock(t *testing.T) {
+	clock := &heldClock{now: time.Unix(0, 0), entered: make(chan struct{}, 2), release: make(chan struct{})}
+	frames := make([]Frame, 0, maxPendingPackets+7)
+	for range maxPendingPackets + 2 {
+		frames = append(frames, testForwardFrame(100))
+	}
+	for range 5 {
+		frames = append(frames, testUplinkForwardFrame(80, 16, true))
+	}
+	link := &memoryLink{frames: frames}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		r Receipt
+		e error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, e := Run(
+			ctx,
+			Config{
+				PhoneAddresses:         []string{"192.0.2.8"},
+				InterfaceIndex:         12,
+				UplinkInterfaceIndex:   16,
+				TTL:                    4 * time.Second,
+				DownlinkBytesPerSecond: 100,
+				UplinkBytesPerSecond:   100,
+			},
+			Limit,
+			clock,
+			func(Plan, Mode) (Link, error) { return link, nil },
+		)
+		done <- outcome{r, e}
+	}()
+	var got outcome
+	select {
+	case got = <-done:
+	case <-time.After(1 * time.Second):
+		cancel()
+		got = <-done
+		t.Fatal("bidirectional overflow deadlocked during drain")
+	}
+	if !errors.Is(got.e, ErrQueueOverflow) || got.r.StopReason != "USER_QUEUE_OVERFLOW" {
+		t.Fatalf("expected USER_QUEUE_OVERFLOW, got err=%v receipt=%+v", got.e, got.r)
+	}
+	if got.r.Downlink == nil || got.r.Uplink == nil ||
+		got.r.UnconfirmedUserPackets != 0 || got.r.Downlink.UnconfirmedUserPackets != 0 || got.r.Uplink.UnconfirmedUserPackets != 0 ||
+		got.r.CleanupInjectedPackets+got.r.InjectedPackets != uint64(len(frames)) {
+		t.Fatalf("bidirectional overflow restoration mismatch: %+v down=%+v up=%+v", got.r, got.r.Downlink, got.r.Uplink)
+	}
+}
+
+func TestBidirectionalTTLRestoresUnpacedDownlinkWhileKeepingPacedUplink(t *testing.T) {
+	down := testForwardFrame(20)                // 20B @ 100 B/s = 200ms > 50ms TTL -> held & restored
+	up := testUplinkForwardFrame(20, 16, true) // 20B @ 10000 B/s = 2ms < 50ms TTL -> injected
+	link := &idleLink{memoryLink: memoryLink{frames: []Frame{up, down}}, stop: make(chan struct{})}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			UplinkInterfaceIndex:   16,
+			TTL:                    50 * time.Millisecond,
+			DownlinkBytesPerSecond: 100,
+			UplinkBytesPerSecond:   10_000,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil || receipt.StopReason != "TTL_EXPIRED" {
+		t.Fatalf("unexpected bidirectional TTL expiry outcome: %+v err=%v", receipt, err)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil ||
+		receipt.Uplink.InjectedPackets != 1 || receipt.Downlink.InjectedPackets != 0 || receipt.Downlink.CleanupInjectedPackets != 1 ||
+		receipt.UnconfirmedUserPackets != 0 || receipt.Downlink.UnconfirmedUserPackets != 0 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("bidirectional TTL conservation mismatch: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
+	}
+}
+
+func TestBidirectionalRunWithUplinkNatAddresses(t *testing.T) {
+	down := testForwardFrame(100)
+	copy(down.Packet[16:20], []byte{192, 168, 137, 113})
+	binary.LittleEndian.PutUint32(down.Address.Data[0:4], 16)
+	up := testUplinkForwardFrame(100, 12, true)
+	copy(up.Packet[12:16], []byte{10, 10, 8, 9})
+	link := &memoryLink{frames: []Frame{down, up}}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.168.137.113"},
+			InterfaceIndex:         16,
+			UplinkInterfaceIndex:   12,
+			TTL:                    2 * time.Second,
+			DownlinkBytesPerSecond: 250000,
+			UplinkBytesPerSecond:   62500,
+			UplinkNatAddresses:     []string{"10.10.8.9"},
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("NAT bidirectional run failed: %v receipt=%+v", err, receipt)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil ||
+		receipt.Downlink.InjectedPackets != 1 || receipt.Uplink.InjectedPackets != 1 ||
+		receipt.UnconfirmedUserPackets != 0 {
+		t.Fatalf("unexpected NAT receipt counts: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
 	}
 }

@@ -217,3 +217,94 @@ func TestEngineInvalidatePolicyWithSmallQueueLimitFailsClosedOnBurst(t *testing.
 		t.Fatalf("unexpected invalidate overflow receipt: %+v", receipt)
 	}
 }
+
+func TestUplinkSeedDomainSeparationAndPerDirectionTailDropIsolation(t *testing.T) {
+	const seed uint64 = 20261120
+	upSeed := splitMix64Next(seed ^ uplinkSeedDomain)
+	same := true
+	for seq := uint64(1); seq <= 64; seq++ {
+		if shouldDrop(seed, seq, 5000) != shouldDrop(upSeed, seq, 5000) {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("uplink and downlink PRNG sequences collided under identical seeds")
+	}
+
+	frames := make([]Frame, 0, 45)
+	for range 40 {
+		f := testForwardFrame(1000)
+		frames = append(frames, f)
+	}
+	for range 5 {
+		frames = append(frames, testUplinkForwardFrame(100, 16, true))
+	}
+	link := &memoryLink{frames: frames}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:         []string{"192.0.2.8"},
+			InterfaceIndex:         12,
+			UplinkInterfaceIndex:   16,
+			TTL:                    2 * time.Second,
+			DownlinkBytesPerSecond: 16_000,
+			UplinkBytesPerSecond:   1_000_000,
+			QueueOverflowPolicy:    QueueTailDrop,
+			QueueLimitBytes:        16 << 10,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("bidirectional tail_drop failed: %v receipt=%+v", err, receipt)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil {
+		t.Fatalf("missing directional receipts: %+v", receipt)
+	}
+	if receipt.Downlink.QueueDroppedPackets == 0 || receipt.Uplink.QueueDroppedPackets != 0 || receipt.Uplink.InjectedPackets != 5 {
+		t.Fatalf("per-direction tail_drop isolation failed: down=%+v up=%+v", receipt.Downlink, receipt.Uplink)
+	}
+	if receipt.UnconfirmedUserPackets != 0 || receipt.Downlink.UnconfirmedUserPackets != 0 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("bidirectional conservation violated: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
+	}
+}
+
+func TestBidirectionalDeterministicLossConservesPacketsPerDirection(t *testing.T) {
+	frames := make([]Frame, 0, 200)
+	for range 100 {
+		frames = append(frames, testForwardFrame(100))
+		frames = append(frames, testUplinkForwardFrame(80, 16, true))
+	}
+	link := &memoryLink{frames: frames}
+	receipt, err := Run(
+		context.Background(),
+		Config{
+			PhoneAddresses:          []string{"192.0.2.8"},
+			InterfaceIndex:          12,
+			UplinkInterfaceIndex:    16,
+			TTL:                     5 * time.Second,
+			DownlinkBytesPerSecond:  10_000_000,
+			DownlinkLossBasisPoints: 2000,
+			ImpairmentSeed:          20261120,
+			UplinkBytesPerSecond:    10_000_000,
+			UplinkLossBasisPoints:   1000,
+			UplinkImpairmentSeed:    20261120,
+		},
+		Limit,
+		SystemClock{},
+		func(Plan, Mode) (Link, error) { return link, nil },
+	)
+	if err != nil {
+		t.Fatalf("bidirectional loss run failed: %v receipt=%+v", err, receipt)
+	}
+	if receipt.Downlink == nil || receipt.Uplink == nil {
+		t.Fatalf("missing directional receipts: %+v", receipt)
+	}
+	if receipt.Downlink.OwnedReceivedPackets != 100 || receipt.Uplink.OwnedReceivedPackets != 100 ||
+		receipt.Downlink.DroppedPackets == 0 || receipt.Uplink.DroppedPackets == 0 ||
+		receipt.UnconfirmedUserPackets != 0 || receipt.Downlink.UnconfirmedUserPackets != 0 || receipt.Uplink.UnconfirmedUserPackets != 0 {
+		t.Fatalf("bidirectional loss conservation mismatch: %+v down=%+v up=%+v", receipt, receipt.Downlink, receipt.Uplink)
+	}
+}

@@ -15,13 +15,16 @@ type Clock interface {
 }
 
 type Pacer struct {
-	config    Config
-	started   time.Time
-	last      time.Time
-	serialEnd time.Time
-	clock     Clock
-	stopped   atomic.Bool
-	busy      atomic.Bool
+	config         Config
+	ttl            time.Duration
+	bytesPerSecond uint64
+	delay          time.Duration
+	started        time.Time
+	last           time.Time
+	serialEnd      time.Time
+	clock          Clock
+	stopped        atomic.Bool
+	busy           atomic.Bool
 }
 type Injection struct {
 	Bytes            int
@@ -38,8 +41,29 @@ func NewPacer(config Config, clock Clock) (*Pacer, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewDirectionalPacer(plan.Config.TTL, plan.Config.DownlinkBytesPerSecond, plan.Config.DownlinkDelay, clock)
+}
+
+func NewDirectionalPacer(ttl time.Duration, bytesPerSecond uint64, delay time.Duration, clock Clock) (*Pacer, error) {
+	if ttl <= 0 || ttl > 120*time.Second || bytesPerSecond == 0 || bytesPerSecond > 1_000_000_000 {
+		return nil, fmt.Errorf("pacer requires 0<TTL<=120s and 0<IP-bytes/s<=1000000000")
+	}
+	if delay < 0 || delay > 2*time.Second {
+		return nil, fmt.Errorf("pacer delay must be within 0..2000ms")
+	}
+	if clock == nil {
+		return nil, errors.New("pacer requires a non-nil clock")
+	}
 	start := clock.Now()
-	return &Pacer{config: plan.Config, started: start, last: start, serialEnd: start, clock: clock}, nil
+	return &Pacer{
+		ttl:            ttl,
+		bytesPerSecond: bytesPerSecond,
+		delay:          delay,
+		started:        start,
+		last:           start,
+		serialEnd:      start,
+		clock:          clock,
+	}, nil
 }
 
 // Inject paces one unchanged IP packet for a single owner. Overlapping calls
@@ -77,10 +101,10 @@ func (p *Pacer) InjectAt(ctx context.Context, arrivedAt time.Time, packet []byte
 	if now.Before(p.last) {
 		return Injection{}, errors.New("local scheduling clock regressed")
 	}
-	serialDur := time.Duration((uint64(len(packet))*uint64(time.Second) + p.config.DownlinkBytesPerSecond - 1) / p.config.DownlinkBytesPerSecond)
+	serialDur := time.Duration((uint64(len(packet))*uint64(time.Second) + p.bytesPerSecond - 1) / p.bytesPerSecond)
 	var due time.Time
 	var nextSerialEnd time.Time
-	if p.config.DownlinkDelay == 0 {
+	if p.delay == 0 {
 		due = now.Add(serialDur)
 		nextSerialEnd = due
 	} else {
@@ -93,9 +117,9 @@ func (p *Pacer) InjectAt(ctx context.Context, arrivedAt time.Time, packet []byte
 			serialStart = p.serialEnd
 		}
 		nextSerialEnd = serialStart.Add(serialDur)
-		due = nextSerialEnd.Add(p.config.DownlinkDelay)
+		due = nextSerialEnd.Add(p.delay)
 	}
-	deadline := p.started.Add(p.config.TTL)
+	deadline := p.started.Add(p.ttl)
 	if !due.Before(deadline) {
 		return Injection{}, ErrTTL
 	}

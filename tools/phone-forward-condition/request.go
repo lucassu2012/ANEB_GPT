@@ -17,16 +17,21 @@ type Request struct {
 	PhoneAddresses               []string `json:"phone_addresses"`
 	InterfaceIndex               uint32   `json:"interface_index"`
 	TTLSeconds                   int64    `json:"ttl_seconds"`
-	DownlinkBytesPerSecond       uint64   `json:"downlink_ip_bytes_per_second"`
+	DownlinkBytesPerSecond       uint64              `json:"downlink_ip_bytes_per_second"`
 	DownlinkDelayMs              uint64              `json:"downlink_delay_ms,omitempty"`
 	DownlinkLossBps              uint32              `json:"downlink_loss_bps,omitempty"`
 	ImpairmentSeed               uint64              `json:"impairment_seed,omitempty"`
+	UplinkBytesPerSecond         uint64              `json:"uplink_ip_bytes_per_second,omitempty"`
+	UplinkDelayMs                uint64              `json:"uplink_delay_ms,omitempty"`
+	UplinkLossBps                uint32              `json:"uplink_loss_bps,omitempty"`
+	UplinkImpairmentSeed         uint64              `json:"uplink_impairment_seed,omitempty"`
+	UplinkNatAddresses           []string            `json:"uplink_nat_addresses,omitempty"`
 	QueueOverflowPolicy          QueueOverflowPolicy `json:"queue_overflow_policy,omitempty"`
 	QueueLimitBytes              uint32              `json:"queue_limit_bytes,omitempty"`
 	DriverDirectory              string              `json:"driver_directory"`
-	OutputDirectory              string   `json:"output_directory"`
-	ExpectedUplinkInterfaceIndex uint32   `json:"expected_uplink_interface_index,omitempty"`
-	ProbeRemoteAddresses         []string `json:"probe_remote_addresses,omitempty"`
+	OutputDirectory              string              `json:"output_directory"`
+	ExpectedUplinkInterfaceIndex uint32              `json:"expected_uplink_interface_index,omitempty"`
+	ProbeRemoteAddresses         []string            `json:"probe_remote_addresses,omitempty"`
 }
 
 func ParseRequest(data []byte) (Request, Plan, error) {
@@ -72,13 +77,22 @@ func ParseRequest(data []byte) (Request, Plan, error) {
 	plan, err := NewPlan(Config{
 		PhoneAddresses:          request.PhoneAddresses,
 		InterfaceIndex:          request.InterfaceIndex,
+		UplinkInterfaceIndex:    request.ExpectedUplinkInterfaceIndex,
 		TTL:                     time.Duration(request.TTLSeconds) * time.Second,
 		DownlinkBytesPerSecond:  request.DownlinkBytesPerSecond,
 		DownlinkDelay:           time.Duration(request.DownlinkDelayMs) * time.Millisecond,
 		DownlinkLossBasisPoints: request.DownlinkLossBps,
 		ImpairmentSeed:          request.ImpairmentSeed,
+		UplinkBytesPerSecond:    request.UplinkBytesPerSecond,
+		UplinkDelay:             time.Duration(request.UplinkDelayMs) * time.Millisecond,
+		UplinkLossBasisPoints:   request.UplinkLossBps,
+		UplinkImpairmentSeed:    request.UplinkImpairmentSeed,
+		UplinkNatAddresses:      request.UplinkNatAddresses,
 		QueueOverflowPolicy:     request.QueueOverflowPolicy,
 		QueueLimitBytes:         request.QueueLimitBytes,
 	})
+	if err == nil {
+		request.UplinkNatAddresses = plan.Config.UplinkNatAddresses
+	}
 	return request, plan, err
 }

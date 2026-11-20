@@ -280,6 +280,10 @@ try {
  $routeProof = Assert-AnebWinRtHotspotUplinkAndRoute $winrtSnapshot
  Save-New (Join-Path $runtime 'winrt-uplink-route-proof.json') $routeProof
  $uplinkIfIndex = [uint32]$routeProof.expected_uplink_interface_index
+ $uplinkNatAddrs = @(Get-NetIPAddress -InterfaceIndex $uplinkIfIndex -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.AddressState -ceq 'Preferred' } | Select-Object -ExpandProperty IPAddress)
+ if ($bUplinkIpBytesPerSecond -gt 0 -and $uplinkNatAddrs.Count -lt 1) {
+  throw ('Bidirectional uplink shaping requires a preferred non-APIPA IPv4 address on uplink interface ' + $uplinkIfIndex)
+ }
  Prepared; Hotspot-Within
 
  $card = [ordered]@{
@@ -313,6 +317,12 @@ try {
   b_queue_overflow_policy           = $bQueueOverflowPolicy
   b_queue_limit_bytes               = $bQueueLimitBytes
   measurement_clock                 = 'Android elapsedRealtimeNanos'
+ }
+ if ($bUplinkIpBytesPerSecond -gt 0) {
+  $card['b_uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond
+  $card['b_uplink_delay_ms'] = $bUplinkDelayMs
+  $card['b_uplink_loss_bps'] = $bUplinkLossBps
+  $card['b_uplink_impairment_seed'] = $bUplinkImpairmentSeed
  }
  Save-New (Join-Path $runtime 'CARD.json') $card
  $cardSHA = (Get-FileHash -LiteralPath (Join-Path $runtime 'CARD.json')).Hash.ToLowerInvariant()
@@ -349,6 +359,17 @@ try {
    }
    if ($bQueueLimitBytes -gt 0) {
     $reqPayload['queue_limit_bytes'] = $bQueueLimitBytes
+   }
+   if ($bUplinkIpBytesPerSecond -gt 0) {
+    $reqPayload['uplink_ip_bytes_per_second'] = $bUplinkIpBytesPerSecond
+    $reqPayload['uplink_nat_addresses'] = @($uplinkNatAddrs)
+    if ($bUplinkDelayMs -gt 0) { $reqPayload['uplink_delay_ms'] = $bUplinkDelayMs }
+    if ($bUplinkLossBps -gt 0) {
+     $reqPayload['uplink_loss_bps'] = $bUplinkLossBps
+     $reqPayload['uplink_impairment_seed'] = $bUplinkImpairmentSeed
+    } elseif ($bUplinkImpairmentSeed -gt 0) {
+     $reqPayload['uplink_impairment_seed'] = $bUplinkImpairmentSeed
+    }
    }
   }
   Save-New $request $reqPayload
