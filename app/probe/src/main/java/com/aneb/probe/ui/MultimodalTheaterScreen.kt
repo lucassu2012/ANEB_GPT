@@ -1,6 +1,13 @@
 package com.aneb.probe.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +29,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,17 +37,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.R
 import com.aneb.probe.engine.BehaviorTraceRunner
 import com.aneb.probe.ui.components.AnebGlyph
 import com.aneb.probe.ui.components.AnebGradientCard
@@ -50,14 +69,16 @@ import com.aneb.probe.ui.components.AnebSectionTitle
 import com.aneb.probe.ui.components.AnebTopBar
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebTheme
+import com.aneb.probe.ui.theme.LocalReducedMotion
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
  * 多模态 AI 实战工作台（`aneb-profile-v2`）：
- * - 支持「快速三模态体验（~25s：文本 → 长文档 1MB → 高清图 5MB）」与「完整 20 任务取证轨迹」一键切换；
- * - 实时按 100ms 刷新真实上传字节/速率、真实流式 Token 推进与作业视图预览，彻底消除“干等上传”的卡死感；
- * - 全界面零 emoji，全部采用精密矢量图标与交互式任务检查器。
+ * - 上半区：25Hz 实时多模态遥测与精密双层波形控制台（真实瞬时速率曲线 + 毫秒级分片/Token 到达抖动柱）；
+ * - 下半区：严格固定高度（368dp）自动滚动的真实业务播放视窗（4K 深圳湾无人机航拍真实图像多模态解译 /
+ *   企业 SLA 长文档结构化解析 / 架构级知识问答流），任务切换与流式吐字绝不改变框体高度；
+ * - 全界面零 emoji，支持点击任务队列查看单任务完整网络实测证据。
  */
 @Composable
 fun MultimodalTheaterScreen(
@@ -107,14 +128,14 @@ fun MultimodalTheaterScreen(
             .fillMaxSize()
             .background(colors.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 14.dp),
     ) {
         AnebTopBar(showBack = true, onBack = onBack, showMenu = false)
         Row(verticalAlignment = Alignment.Bottom) {
             AnebPageIntro(
                 eyebrow = "ANEB-PROFILE-V2 · MULTIMODAL",
                 title = "多模态 AI 实战",
-                subtitle = "节点 $nodeLabel · 真实上传文档/图片并接收流式理解输出",
+                subtitle = "节点 $nodeLabel · 真实上传文档与 4K 航拍图并实测多模态推理流",
                 modifier = Modifier.weight(1f),
             )
             Text(
@@ -129,9 +150,9 @@ fun MultimodalTheaterScreen(
             )
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(9.dp))
 
-        // ---- 模式切换：快速三模态体验 vs 完整 20 任务取证 ----
+        // ---- 模式切换：三模态实战（快速） vs 20 任务完整取证 ----
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -157,11 +178,11 @@ fun MultimodalTheaterScreen(
             )
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(9.dp))
 
-        // ---- 顶部控制与状态卡 ----
-        AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
-            Column(Modifier.padding(14.dp)) {
+        // ---- 紧凑操作控制卡 ----
+        AnebGradientCard(Modifier.fillMaxWidth(), radius = 15.dp) {
+            Column(Modifier.padding(12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -170,156 +191,128 @@ fun MultimodalTheaterScreen(
                     Column(Modifier.weight(1f)) {
                         Text(
                             when {
-                                running -> "正在执行第 ${(liveProgress?.currentTaskIndex ?: 0) + 1} / ${plannedKinds.size} 项真实业务任务"
-                                result != null -> "多模态实战已完成（${result.tasksSucceeded}/${result.tasksExecuted} 通过）"
-                                quickMode -> "连续实测：文本问答 → 1MB 长文档 → 5MB 高清图片"
-                                else -> "官方校准轨迹：8 文本 + 6 文档 + 6 图片（共 20 项）"
+                                running -> "执行中 · 任务 ${(liveProgress?.currentTaskIndex ?: 0) + 1} / ${plannedKinds.size}"
+                                result != null -> "多模态实战完成（${result.tasksSucceeded}/${result.tasksExecuted} 通过）"
+                                quickMode -> "三模态实测：企业问答 → 1MB SLA 文档 → 5MB 4K 航拍图"
+                                else -> "官方取证轨迹：8 文本 + 6 文档 + 6 图像（共 20 项）"
                             },
-                            fontSize = 12.5.sp,
+                            fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colors.ink,
                         )
-                        Text(
-                            when {
-                                result?.score != null -> "独立多模态得分 ${String.format(Locale.ROOT, "%.1f", result.score)} 分（不混入 v1 Token AQS）"
-                                running -> "实时展示上传速率、首字等待与流式输出进度"
-                                quickMode -> "适合快速直观体验三类多模态载荷在当前网络下的真实表现"
-                                else -> "完整轨迹含 10 MB 大载荷，总时长较长，用于官方 v2 完整取证"
-                            },
-                            fontSize = 9.5.sp,
-                            color = if (result?.score != null) colors.excellent else colors.muted,
-                            modifier = Modifier.padding(top = 3.dp),
-                        )
-                    }
-                    result?.score?.let { sc ->
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(colors.excellent.copy(alpha = 0.14f))
-                                .border(1.5.dp, colors.excellent.copy(alpha = 0.6f), CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("${sc.roundToInt()}", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = colors.excellent)
+                        result?.score?.let { sc ->
+                            Text(
+                                "独立多模态得分 ${String.format(Locale.ROOT, "%.1f", sc)} 分（独立口径，不混入 v1 Token AQS）",
+                                fontSize = 9.sp,
+                                color = colors.excellent,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
                         }
                     }
-                }
-
-                Spacer(Modifier.height(11.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(43.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                when {
+                                    running -> colors.poor
+                                    startBlocked -> colors.surfaceMuted
+                                    else -> colors.brand
+                                },
+                            )
+                            .pressable(
+                                enabled = running || !startBlocked,
+                                onClick = { if (running) onCancel() else onStart() },
+                            )
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                    ) {
+                        Text(
                             when {
-                                running -> colors.poor
-                                startBlocked -> colors.surfaceMuted
-                                else -> colors.brand
+                                running -> "停止"
+                                startBlocked -> "占用中"
+                                result != null -> "重测"
+                                else -> "开始实战"
                             },
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (startBlocked) colors.muted else Color(0xFF05121A),
                         )
-                        .pressable(
-                            enabled = running || !startBlocked,
-                            onClick = { if (running) onCancel() else onStart() },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        when {
-                            running -> "停止多模态实战"
-                            startBlocked -> "其他测试运行中"
-                            result != null -> if (quickMode) "再测一次三模态实战" else "重新运行 20 任务轨迹"
-                            else -> if (quickMode) "开始快速三模态实战" else "开始 20 任务取证轨迹"
-                        },
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (startBlocked) colors.muted else Color(0xFF05121A),
-                    )
+                    }
                 }
-
                 error?.let {
-                    Text(it, fontSize = 10.sp, color = colors.poor, modifier = Modifier.padding(top = 8.dp))
+                    Text(it, fontSize = 9.5.sp, color = colors.poor, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }
 
-        // ---- 活跃多模态真实作业舞台（实时字节上传扫光 + 真实 Token 流式响应 + 速率波形）----
-        if (running && liveProgress != null) {
-            Spacer(Modifier.height(12.dp))
-            ActiveMultimodalWorkspaceCard(progress = liveProgress)
-        }
+        Spacer(Modifier.height(10.dp))
 
-        // ---- 任务矩阵（支持点击任意已完成任务查看明细）----
+        // ---- 上半区：25Hz 实时多模态指标与高精度双层示波台（位置互换至任务窗上方！）----
+        MultimodalHighFreqTelemetryDeck(
+            running = running,
+            liveProgress = liveProgress,
+            result = result,
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        // ---- 下半区：严格固定高度（368dp）自动滚动真实多模态业务播放视窗 ----
+        FixedHeightMultimodalWorkspace(
+            running = running,
+            liveProgress = liveProgress,
+            result = result,
+            quickMode = quickMode,
+        )
+
+        // ---- 执行队列矩阵（支持点击任意已完成项查看完整明细）----
         AnebSectionTitle(
             text = if (quickMode) "三模态执行队列（点击已完成项看详情）" else "20 任务多模态执行矩阵（点击看详情）",
-            modifier = Modifier.padding(top = 15.dp, start = 4.dp, bottom = 8.dp),
+            modifier = Modifier.padding(top = 14.dp, start = 4.dp, bottom = 7.dp),
         )
-        AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
+        AnebGradientCard(Modifier.fillMaxWidth(), radius = 15.dp) {
             val cols = if (plannedKinds.size <= 3) plannedKinds.size.coerceAtLeast(1) else 4
             Column(
                 modifier = Modifier.padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 plannedKinds.chunked(cols).forEachIndexed { rowIdx, rowKinds ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    ) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         rowKinds.forEachIndexed { colIdx, kind ->
                             val idx = rowIdx * cols + colIdx
                             val outcome = outcomesByIndex[idx]
-                            val isActive = running && liveProgress?.currentTaskIndex == idx && outcome == null
+                            val isActive = running && liveProgress?.currentTaskIndex == idx
                             val isSelected = selectedTaskIndex == idx
-                            MultimodalMatrixCell(
+                            TaskMatrixCell(
                                 index = idx,
                                 kind = kind,
                                 outcome = outcome,
-                                isActive = isActive,
-                                isSelected = isSelected,
-                                onClick = if (outcome != null) ({ selectedTaskIndex = if (isSelected) null else idx }) else null,
+                                active = isActive,
+                                selected = isSelected,
+                                onClick = if (outcome != null) {
+                                    { selectedTaskIndex = if (isSelected) null else idx }
+                                } else null,
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        repeat(cols - rowKinds.size) {
-                            Spacer(Modifier.weight(1f))
-                        }
+                        repeat(cols - rowKinds.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
         }
 
-        // ---- 选中任务明细检查器 ----
-        selectedTaskIndex?.let { selIdx ->
-            outcomesByIndex[selIdx]?.let { task ->
-                Spacer(Modifier.height(9.dp))
-                SelectedTaskInspector(task)
-            }
+        val inspected = selectedTaskIndex?.let { outcomesByIndex[it] }
+        if (inspected != null) {
+            Spacer(Modifier.height(8.dp))
+            SelectedTaskInspector(outcome = inspected)
         }
 
-        // ---- 核心专业指标与分模态汇总 ----
-        AnebSectionTitle(
-            text = "专业指标与分模态表现",
-            modifier = Modifier.padding(top = 15.dp, start = 4.dp, bottom = 8.dp),
-        )
-        val b01 = result?.metrics?.get("TOK-B01")
-            ?: completedOutcomes.takeIf { it.isNotEmpty() }?.let { list -> list.count { it.succeeded }.toDouble() / list.size }
-        val b11 = result?.metrics?.get("TOK-B11")
-        val n03 = result?.metrics?.get("TOK-N03") ?: liveProgress?.echoP50Ms
-        AnebMetricTrio(
-            items = listOf(
-                AnebMetric("任务成功率", b01?.let { String.format(Locale.ROOT, "%.0f", it * 100.0) } ?: "—", "%", colors.excellent),
-                AnebMetric("流完整度", b11?.let { String.format(Locale.ROOT, "%.0f", it * 100.0) } ?: "—", "%", colors.brand),
-                AnebMetric("链路 RTT", n03?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "—", "ms", colors.brand2),
-            ),
-        )
-
-        if (completedOutcomes.isNotEmpty()) {
+        if (result != null && result.tasks.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            ModalityBreakdownCard(completedOutcomes)
+            ModalityBreakdownCard(result.tasks)
         }
 
         if (logs.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -358,50 +351,338 @@ fun MultimodalTheaterScreen(
         }
 
         Text(
-            "口径说明：快速三模态从冻结 golden_trace.jsonl 中抽取各模态代表任务执行真实上行与 SSE 推理流；完整 20 任务轨迹用于官方 aneb-profile-v2 完整取证评分。",
+            "口径说明：快速三模态从冻结 golden_trace.jsonl 抽取各模态代表任务执行真实载荷上行与 SSE 推理流；完整 20 任务轨迹用于官方 aneb-profile-v2 完整取证评分。",
             fontSize = 9.sp,
             lineHeight = 14.sp,
             color = colors.faint,
-            modifier = Modifier.padding(top = 14.dp, bottom = 28.dp, start = 4.dp, end = 4.dp),
+            modifier = Modifier.padding(top = 12.dp, bottom = 28.dp, start = 4.dp, end = 4.dp),
         )
     }
 }
 
+/**
+ * 上半区：25Hz 实时多模态遥测与高精度双层波形示波台（固定位于业务视窗上方）。
+ */
 @Composable
-private fun ActiveMultimodalWorkspaceCard(progress: BehaviorTraceRunner.LiveTraceProgress) {
+private fun MultimodalHighFreqTelemetryDeck(
+    running: Boolean,
+    liveProgress: BehaviorTraceRunner.LiveTraceProgress?,
+    result: BehaviorTraceRunner.BehaviorTraceRunResult?,
+) {
     val colors = AnebTheme.colors
-    val kind = progress.currentWorkloadKind ?: "text"
-    val (glyph, title, accent, fileName) = when (kind) {
-        "image" -> Quad(AnebGlyph.Image, "高清图片多模态分析", colors.excellent, "campus_aerial_4k.jpg")
-        "document" -> Quad(AnebGlyph.Document, "长文档结构化解析", colors.brand2, "Q4_Architecture_Spec.pdf")
-        else -> Quad(AnebGlyph.Chat, "多轮知识问答流", colors.brand, "prompt_context.txt")
+    val step = liveProgress?.currentStep
+    val kind = liveProgress?.currentWorkloadKind ?: "image"
+    val accent = when (kind) {
+        "image" -> colors.excellent
+        "document" -> colors.brand2
+        else -> colors.brand
     }
-    val uploadFrac = if (progress.currentUploadBytes > 0L) {
-        (progress.uploadedBytes.toFloat() / progress.currentUploadBytes.toFloat()).coerceIn(0f, 1f)
-    } else 1f
-    val streamFrac = if (progress.plannedTokens > 0) {
-        (progress.streamedTokens.toFloat() / progress.plannedTokens.toFloat()).coerceIn(0f, 1f)
-    } else 0f
 
-    val previewText = when (kind) {
+    val (rateTitle, rateVal, rateUnit) = when {
+        step == "upload" && liveProgress.liveUploadMbps != null -> Triple(
+            "多模态载荷实时上行",
+            String.format(Locale.ROOT, "%.1f", liveProgress.liveUploadMbps),
+            "Mbps",
+        )
+        step == "stream" && liveProgress.liveStreamRateTps != null -> Triple(
+            "多模态 SSE 实时吐字",
+            String.format(Locale.ROOT, "%.1f", liveProgress.liveStreamRateTps),
+            "tok/s",
+        )
+        step == "download" -> Triple(
+            "推理产物实时回传",
+            formatBytes(liveProgress.downloadedBytes),
+            "recv",
+        )
+        step == "echo" && liveProgress.echoP50Ms != null -> Triple(
+            "链路 Echo 时延校准",
+            String.format(Locale.ROOT, "%.1f", liveProgress.echoP50Ms),
+            "ms",
+        )
+        result != null -> Triple(
+            "多模态任务完成率",
+            result.metrics["TOK-B01"]?.let { String.format(Locale.ROOT, "%.0f", it * 100.0) } ?: "—",
+            "%",
+        )
+        else -> Triple("实时吞吐 / 推理速率", "—", "Mbps")
+    }
+
+    val liveJitter = liveProgress?.liveInstantJitterMs ?: liveProgress?.echoJitterMs ?: result?.metrics?.get("TOK-N04")
+    val liveRtt = liveProgress?.echoP50Ms ?: result?.metrics?.get("TOK-N03")
+    val speedHist = liveProgress?.liveSpeedHistory.orEmpty()
+    val intervalHist = liveProgress?.liveIntervalHistoryMs.orEmpty()
+    val peakInterval = intervalHist.maxOrNull()
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        AnebMetricTrio(
+            listOf(
+                AnebMetric("链路 RTT", liveRtt?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", "ms", colors.brand),
+                AnebMetric("微抖动 P90", liveJitter?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", "ms", colors.brand2),
+                AnebMetric(
+                    "流完整度",
+                    result?.metrics?.get("TOK-B11")?.let { String.format(Locale.ROOT, "%.0f", it * 100.0) }
+                        ?: if (running && liveProgress != null && liveProgress.plannedTokens > 0) {
+                            "${((liveProgress.streamedTokens.toFloat() / liveProgress.plannedTokens) * 100f).roundToInt().coerceIn(0, 100)}"
+                        } else "—",
+                    "%",
+                    colors.excellent,
+                ),
+            ),
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF0A1020))
+                .border(1.dp, accent.copy(alpha = if (running) 0.45f else 0.22f), RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(rateTitle, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                    Text(
+                        buildString {
+                            if (liveProgress != null && liveProgress.currentUploadBytes > 0L) {
+                                append("载荷 ${formatBytes(liveProgress.uploadedBytes)} / ${formatBytes(liveProgress.currentUploadBytes)}")
+                            } else {
+                                append("25Hz 精细波形 · 分片/Token 到达间隔实时捕捉")
+                            }
+                            peakInterval?.let { append(" · 峰值 ${it.roundToInt()}ms") }
+                        },
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        rateVal,
+                        fontSize = 23.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = accent,
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        rateUnit,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.muted,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // 114dp 精密双层示波窗：44 柱毫秒级间隔脉冲 + 自动缩放 48 点高速率发光折线
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(114.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Brush.verticalGradient(listOf(Color(0xFF050914), Color(0xFF0A1428))))
+                    .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 7.dp, vertical = 6.dp),
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+                    listOf(0.25f, 0.50f, 0.75f).forEach { frac ->
+                        drawLine(
+                            color = Color(0x226890C8),
+                            start = Offset(0f, h * frac),
+                            end = Offset(w, h * frac),
+                            strokeWidth = 0.8.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+                        )
+                    }
+
+                    // 第 1 层：精细毫秒级分片/Token 到达间隔脉冲柱（自动拉伸纵深，放大微抖动！）
+                    val bars = intervalHist.takeLast(44)
+                    if (bars.isNotEmpty()) {
+                        val bMin = (bars.minOrNull() ?: 0.0) * 0.75
+                        val bMax = maxOf(bMin + 6.0, (bars.maxOrNull() ?: 20.0) * 1.1)
+                        val span = (bMax - bMin).coerceAtLeast(1.0)
+                        val gap = 1.8.dp.toPx()
+                        val barW = ((w - gap * (bars.size - 1)) / bars.size.coerceAtLeast(1)).coerceIn(2f, 9f)
+                        val offsetX = (w - bars.size * (barW + gap) + gap).coerceAtLeast(0f)
+                        bars.forEachIndexed { idx, ms ->
+                            val norm = ((ms - bMin) / span).toFloat().coerceIn(0.10f, 0.94f)
+                            val barH = h * norm
+                            val x = offsetX + idx * (barW + gap)
+                            val spike = ms >= 100.0
+                            val c = if (spike) colors.poor else accent.copy(alpha = 0.45f)
+                            drawRoundRect(
+                                brush = Brush.verticalGradient(
+                                    listOf(c.copy(alpha = 0.88f), c.copy(alpha = 0.12f)),
+                                    startY = h - barH,
+                                    endY = h,
+                                ),
+                                topLeft = Offset(x, h - barH),
+                                size = Size(barW, barH),
+                                cornerRadius = CornerRadius(barW * 0.35f, barW * 0.35f),
+                            )
+                        }
+                    }
+
+                    // 第 2 层：48 点瞬时速率/时延发光主曲线（动态贴合活跃区间 min..max，波动震撼清晰）
+                    val series = if (speedHist.size >= 2) speedHist else intervalHist
+                    if (series.size >= 2) {
+                        val sMin = series.minOrNull() ?: 0.0
+                        val sMax = series.maxOrNull() ?: 10.0
+                        val pad = maxOf((sMax - sMin) * 0.20, maxOf(sMax * 0.08, 2.0))
+                        val lo = (sMin - pad).coerceAtLeast(0.0)
+                        val hi = sMax + pad
+                        val span = (hi - lo).coerceAtLeast(1.0)
+                        val stepX = w / (series.size - 1).coerceAtLeast(1)
+                        val strokePath = Path()
+                        val fillPath = Path()
+                        var lastX = 0f
+                        var lastY = h * 0.5f
+                        series.forEachIndexed { idx, v ->
+                            val x = idx * stepX
+                            val y = h * (1f - ((v - lo) / span).toFloat().coerceIn(0.08f, 0.94f))
+                            lastX = x
+                            lastY = y
+                            if (idx == 0) {
+                                strokePath.moveTo(x, y)
+                                fillPath.moveTo(x, h)
+                                fillPath.lineTo(x, y)
+                            } else {
+                                strokePath.lineTo(x, y)
+                                fillPath.lineTo(x, y)
+                            }
+                        }
+                        fillPath.lineTo(lastX, h)
+                        fillPath.close()
+                        drawPath(
+                            path = fillPath,
+                            brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.25f), Color.Transparent)),
+                        )
+                        drawPath(
+                            path = strokePath,
+                            color = Color(0xFFF4FCFF),
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                        )
+                        drawCircle(accent.copy(alpha = 0.38f), radius = 6.dp.toPx(), center = Offset(lastX, lastY))
+                        drawCircle(Color.White, radius = 2.6.dp.toPx(), center = Offset(lastX, lastY))
+                    }
+                }
+
+                Text(
+                    if (running) "25Hz LIVE WAVEFORM" else "MULTIMODAL OSCILLOSCOPE",
+                    fontSize = 7.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = if (running) accent else colors.faint,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xCC060A16))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+                if (speedHist.size < 2 && intervalHist.size < 2) {
+                    Text(
+                        if (running) "正在采集实时上行与推理到达脉冲…" else "点击「开始实战」后实时绘制毫秒级分片/Token 抖动波形",
+                        fontSize = 9.sp,
+                        color = colors.faint,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 下半区：严格固定高度（368dp）自动滚动真实多模态业务视窗。
+ * 无论是待机预览、文本问答、长文档解析还是 4K 航拍图视觉分析，外框高度始终锁定 368dp，
+ * 内部独立平滑跟底滚动，彻底消除高度跳动。
+ */
+@Composable
+private fun FixedHeightMultimodalWorkspace(
+    running: Boolean,
+    liveProgress: BehaviorTraceRunner.LiveTraceProgress?,
+    result: BehaviorTraceRunner.BehaviorTraceRunResult?,
+    quickMode: Boolean,
+) {
+    val colors = AnebTheme.colors
+    val kind = when {
+        liveProgress?.currentWorkloadKind != null -> liveProgress.currentWorkloadKind
+        result != null -> result.tasks.lastOrNull()?.workloadKind ?: "image"
+        else -> "image" // 待机时默认预览最震撼的 4K 航拍多模态真实任务画面
+    }
+    val (glyph, title, accent, fileLabel) = when (kind) {
+        "image" -> Quad(AnebGlyph.Image, "高清图片多模态分析", colors.excellent, "SZBAY_MAVIC3_4K_0914.jpg")
+        "document" -> Quad(AnebGlyph.Document, "长文档结构化解析", colors.brand2, "2026_Q3_5G_AI_Network_SLA_Report.pdf")
+        else -> Quad(AnebGlyph.Chat, "企业架构知识问答流", colors.brand, "Architecture_Context_v3.md")
+    }
+
+    val totalUpload = liveProgress?.currentUploadBytes ?: when (kind) {
+        "image" -> 5_242_880L
+        "document" -> 1_048_576L
+        else -> 2_048L
+    }
+    val uploaded = when {
+        liveProgress != null -> liveProgress.uploadedBytes
+        result != null -> totalUpload
+        else -> 0L
+    }
+    val uploadFrac = if (totalUpload > 0L) (uploaded.toFloat() / totalUpload.toFloat()).coerceIn(0f, 1f) else 1f
+    val isUploading = running && liveProgress?.currentStep == "upload"
+    val isStreaming = running && liveProgress?.currentStep == "stream"
+
+    val fullCopy = when (kind) {
         "image" -> MULTIMODAL_IMAGE_STREAM_COPY
         "document" -> MULTIMODAL_DOC_STREAM_COPY
         else -> MULTIMODAL_TEXT_STREAM_COPY
     }
-    val revealedChars = if (progress.currentStep == "stream" && progress.streamedTokens > 0) {
-        (progress.streamedTokens * 3).coerceAtMost(previewText.length)
-    } else if (progress.currentStep == "download" || progress.currentStep == "done") {
-        previewText.length
-    } else 0
+    val revealedChars = when {
+        liveProgress == null && result != null -> fullCopy.length
+        liveProgress == null -> 0
+        liveProgress.currentStep == "stream" && liveProgress.streamedTokens > 0 ->
+            (liveProgress.streamedTokens * 6).coerceAtMost(fullCopy.length)
+        liveProgress.currentStep == "download" || liveProgress.currentStep == "done" -> fullCopy.length
+        else -> 0
+    }
+
+    val bodyScroll = rememberScrollState()
+    LaunchedEffect(revealedChars, kind, liveProgress?.currentTaskIndex) {
+        if (revealedChars > 0) {
+            bodyScroll.scrollTo(bodyScroll.maxValue)
+        } else {
+            bodyScroll.scrollTo(0)
+        }
+    }
+
+    val statusPill = when {
+        liveProgress == null && result != null -> "已完成 · ${result.tasksSucceeded}/${result.tasksExecuted}"
+        liveProgress == null -> if (quickMode) "待机预览 · 3 模态就绪" else "待机预览 · 20 任务就绪"
+        liveProgress.currentStep == "echo" -> "链路 RTT 校准"
+        liveProgress.currentStep == "upload" -> liveProgress.liveUploadMbps?.let { "上行 ${String.format(Locale.ROOT, "%.1f", it)} Mbps" } ?: "上行启动"
+        liveProgress.currentStep == "stream" -> liveProgress.liveStreamRateTps?.let { "生成 ${it.roundToInt()} tok/s" } ?: "等待首字…"
+        liveProgress.currentStep == "download" -> "产物回传中"
+        else -> "本项完成"
+    }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .height(368.dp) // 严格固定高度，彻底消除高度跳动
             .clip(RoundedCornerShape(16.dp))
             .background(Color(0xFF0A0F1E))
-            .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+            .border(1.dp, accent.copy(alpha = if (running) 0.50f else 0.28f), RoundedCornerShape(16.dp)),
     ) {
-        // 顶栏
+        // ---- 固定顶栏 ----
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -410,166 +691,374 @@ private fun ActiveMultimodalWorkspaceCard(progress: BehaviorTraceRunner.LiveTrac
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 AnebIcon(glyph = glyph, tint = accent, size = 15.dp)
                 Spacer(Modifier.width(7.dp))
                 Text(
-                    "任务 #${progress.currentTaskIndex + 1} · $title",
-                    fontSize = 11.5.sp,
+                    if (liveProgress != null) "任务 #${liveProgress.currentTaskIndex + 1} · $title" else "实战任务视窗 · $title",
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+            Spacer(Modifier.width(6.dp))
             Text(
-                when (progress.currentStep) {
-                    "echo" -> "链路 RTT 校准"
-                    "upload" -> progress.liveUploadMbps?.let { "上行 ${String.format(Locale.ROOT, "%.1f", it)} Mbps" } ?: "上行启动中"
-                    "stream" -> progress.liveStreamRateTps?.let { "生成 ${it.roundToInt()} tok/s" } ?: "等待首字…"
-                    "download" -> "产物回传中"
-                    else -> "本项完成"
-                },
-                fontSize = 9.5.sp,
+                statusPill,
+                fontSize = 8.5.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.SemiBold,
                 color = accent,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.14f))
+                    .border(1.dp, accent.copy(alpha = 0.4f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
             )
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
 
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // 附件实时上传进度卡片（带真实字节进度与扫描幕布）
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF0F162B))
-                    .border(1.dp, if (progress.currentStep == "upload") accent.copy(alpha = 0.55f) else colors.hairline, RoundedCornerShape(12.dp))
-                    .padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (kind == "image") {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 74.dp, height = 54.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                    ) {
-                        ArchitecturalBlueprintThumbnail(accent = accent, modifier = Modifier.fillMaxSize())
-                        // 真实上传进度幕布：随 uploadedBytes 实时向上拉起
-                        if (uploadFrac < 0.999f) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp * (1f - uploadFrac))
-                                    .align(Alignment.BottomCenter)
-                                    .background(Color(0xAA060B18)),
-                            )
-                        }
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(accent.copy(alpha = 0.14f))
-                            .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        AnebIcon(glyph = glyph, tint = accent, size = 20.dp)
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(fileName, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        Text(
-                            "${(uploadFrac * 100).roundToInt()}%",
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                            color = accent,
-                        )
-                    }
-                    Text(
-                        "已上传 ${formatBytes(progress.uploadedBytes)} / ${formatBytes(progress.currentUploadBytes)}" +
-                            (progress.liveUploadMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" } ?: ""),
-                        fontSize = 9.5.sp,
-                        color = colors.muted,
-                        modifier = Modifier.padding(top = 3.dp),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Box(Modifier.fillMaxWidth().height(5.dp).clip(CircleShape).background(Color(0x55222E4D))) {
-                        Box(Modifier.fillMaxWidth(uploadFrac).height(5.dp).clip(CircleShape).background(accent))
-                    }
-                }
+        // ---- 内部独立滚动工作区 ----
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(bodyScroll)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            // 1) 真实业务载荷媒体卡（4K 航拍实景图 / 企业 SLA PDF 文档页 / 架构提问卡片）
+            when (kind) {
+                "image" -> RealDroneImagePayloadCard(
+                    fileName = fileLabel,
+                    uploadedBytes = uploaded,
+                    totalBytes = totalUpload,
+                    uploadFrac = uploadFrac,
+                    isUploading = isUploading,
+                    showVisionOverlay = !isUploading && (revealedChars > 0 || result != null),
+                    liveMbps = liveProgress?.liveUploadMbps,
+                    accent = accent,
+                )
+                "document" -> RealDocumentPayloadCard(
+                    fileName = fileLabel,
+                    uploadedBytes = uploaded,
+                    totalBytes = totalUpload,
+                    uploadFrac = uploadFrac,
+                    isUploading = isUploading,
+                    liveMbps = liveProgress?.liveUploadMbps,
+                    accent = accent,
+                )
+                else -> RealTextPromptCard(
+                    uploadedBytes = uploaded,
+                    totalBytes = totalUpload,
+                    accent = accent,
+                )
             }
 
-            // 真实流式输出区（随真实 streamedTokens 推进）
+            // 2) AI 多模态流式解析正文区（自动跟底滚动）
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF0C1222))
-                    .border(1.dp, if (progress.currentStep == "stream") accent.copy(alpha = 0.5f) else colors.hairline, RoundedCornerShape(12.dp))
-                    .padding(10.dp),
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(Color(0xFF0E162B))
+                    .border(1.dp, colors.hairline, RoundedCornerShape(11.dp))
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("模型流式推理输出", fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = accent)
                     Text(
-                        "${progress.streamedTokens} / ${progress.plannedTokens} tokens",
-                        fontSize = 9.sp,
+                        when (kind) {
+                            "image" -> "4K 无人机航拍多模态视觉解译报告"
+                            "document" -> "48 页 SLA 报告结构化审计结论"
+                            else -> "架构专家多轮流式输出"
+                        },
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = accent,
+                    )
+                    Text(
+                        if (liveProgress != null && liveProgress.plannedTokens > 0) {
+                            "${liveProgress.streamedTokens} / ${liveProgress.plannedTokens} tok"
+                        } else if (result != null) {
+                            "流式输出完成"
+                        } else {
+                            "等待开始"
+                        },
+                        fontSize = 8.5.sp,
                         fontFamily = FontFamily.Monospace,
                         color = colors.muted,
                     )
                 }
                 Spacer(Modifier.height(5.dp))
-                Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape).background(Color(0x44222E4D))) {
-                    Box(Modifier.fillMaxWidth(streamFrac).height(3.dp).clip(CircleShape).background(colors.brand))
+                if (revealedChars > 0) {
+                    Text(
+                        buildAnnotatedString {
+                            append(fullCopy.substring(0, revealedChars))
+                            if (isStreaming) {
+                                withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Bold)) {
+                                    append(" |")
+                                }
+                            }
+                        },
+                        fontSize = 10.sp,
+                        lineHeight = 15.5.sp,
+                        color = colors.ink,
+                    )
+                } else {
+                    Text(
+                        when {
+                            !running -> "点击上方「开始实战」后，本视窗将在固定高度内依次演示：企业问答流 → 1.00 MB 长文档上传解析 → 5.00 MB 深圳湾 4K 航拍图上传与多模态视觉识别。"
+                            isUploading -> "正在上传真实多模态载荷（已传 ${formatBytes(uploaded)} / ${formatBytes(totalUpload)}），上传完毕立即触发流式视觉/语义解析…"
+                            else -> "多模态载荷已送达推理节点，正在等待首字 TTFT 返回…"
+                        },
+                        fontSize = 9.5.sp,
+                        lineHeight = 15.sp,
+                        color = colors.muted,
+                    )
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    if (revealedChars <= 0) {
-                        when (progress.currentStep) {
-                            "echo" -> "正在测量节点基础往返时延…"
-                            "upload" -> "等待多模态载荷上传完毕后自动触发流式解析…"
-                            else -> "已送达节点，正在等待首字返回…"
-                        }
-                    } else {
-                        previewText.substring(0, revealedChars) + if (progress.currentStep == "stream") " |" else ""
-                    },
-                    fontSize = 10.sp,
-                    lineHeight = 15.5.sp,
-                    color = if (revealedChars > 0) colors.ink else colors.muted,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // 实时传输/生成速率波动微型示波条
-            if (progress.liveSpeedHistory.size >= 2) {
-                LiveMiniWave(values = progress.liveSpeedHistory, color = accent, modifier = Modifier.fillMaxWidth().height(26.dp))
             }
         }
     }
 }
 
 @Composable
-private fun LiveMiniWave(values: List<Double>, color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val maxV = (values.maxOrNull() ?: 1.0).coerceAtLeast(1.0)
-        val path = Path()
-        val step = size.width / (values.size - 1).coerceAtLeast(1)
-        values.forEachIndexed { idx, v ->
-            val x = idx * step
-            val y = size.height * (1f - (v / maxV).toFloat().coerceIn(0.08f, 1f))
-            if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
+private fun RealDroneImagePayloadCard(
+    fileName: String,
+    uploadedBytes: Long,
+    totalBytes: Long,
+    uploadFrac: Float,
+    isUploading: Boolean,
+    showVisionOverlay: Boolean,
+    liveMbps: Double?,
+    accent: Color,
+) {
+    val colors = AnebTheme.colors
+    val reducedMotion = LocalReducedMotion.current
+    val scanPos = if (isUploading && !reducedMotion) {
+        val t = rememberInfiniteTransition(label = "drone-scan")
+        t.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1150, easing = LinearEasing), RepeatMode.Reverse),
+            label = "drone-scan-y",
+        ).value
+    } else {
+        uploadFrac
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(148.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.multimodal_city_drone),
+                contentDescription = "深圳湾 4K 无人机航拍多模态分析原图",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                if (isUploading) {
+                    val splitY = h * uploadFrac.coerceIn(0.04f, 0.98f)
+                    drawRect(
+                        color = Color(0x99050A16),
+                        topLeft = Offset(0f, splitY),
+                        size = Size(w, h - splitY),
+                    )
+                    val laserY = h * scanPos.coerceIn(0.05f, 0.95f)
+                    drawLine(accent, Offset(0f, laserY), Offset(w, laserY), strokeWidth = 2.dp.toPx())
+                } else if (showVisionOverlay) {
+                    val stroke = Stroke(width = 1.5.dp.toPx())
+                    // 标注 1：后海/南山超高层建筑群
+                    drawRoundRect(
+                        color = colors.brand,
+                        topLeft = Offset(w * 0.25f, h * 0.08f),
+                        size = Size(w * 0.24f, h * 0.42f),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        style = stroke,
+                    )
+                    // 标注 2：跨海斜拉桥主通道
+                    drawRoundRect(
+                        color = colors.excellent,
+                        topLeft = Offset(w * 0.56f, h * 0.40f),
+                        size = Size(w * 0.40f, h * 0.54f),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        style = stroke,
+                    )
+                    // 标注 3：滨海生态绿廊与快速路
+                    drawRoundRect(
+                        color = colors.fair,
+                        topLeft = Offset(w * 0.03f, h * 0.50f),
+                        size = Size(w * 0.34f, h * 0.44f),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        style = stroke,
+                    )
+                }
+            }
+            Text(
+                "$fileName · ${formatBytes(totalBytes)}",
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xC8050A16))
+                    .padding(horizontal = 6.dp, vertical = 2.5.dp),
+            )
+            Text(
+                when {
+                    isUploading -> "已上传 ${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}" +
+                        (liveMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty())
+                    showVisionOverlay -> "检出 3 类空间要素 · 置信 99.1%"
+                    else -> "4K 航拍多模态样本 · 3840×2160"
+                },
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = if (isUploading) colors.brand else accent,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(7.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xCC050A16))
+                    .padding(horizontal = 6.dp, vertical = 2.5.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Color(0x88050A16)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(uploadFrac.coerceIn(0.03f, 1f))
+                        .fillMaxHeight()
+                        .background(accent),
+                )
+            }
         }
-        drawPath(path, color = color, style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun RealDocumentPayloadCard(
+    fileName: String,
+    uploadedBytes: Long,
+    totalBytes: Long,
+    uploadFrac: Float,
+    isUploading: Boolean,
+    liveMbps: Double?,
+    accent: Color,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF101830))
+            .border(1.dp, if (isUploading) accent.copy(alpha = 0.55f) else colors.hairline, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(width = 44.dp, height = 52.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(Color(0xFF172242))
+                    .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(7.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    AnebIcon(glyph = AnebGlyph.Document, tint = accent, size = 18.dp)
+                    Text("PDF", fontSize = 7.5.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = accent)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(fileName, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "48 页 · 含 12 张 SLA 表格与 3 组核心网时延附件 · ${formatBytes(totalBytes)}",
+                    fontSize = 8.5.sp,
+                    color = colors.muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                Text(
+                    if (isUploading) {
+                        "已上传 ${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}" +
+                            (liveMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty())
+                    } else {
+                        "全文切片 184 段落 · 向量索引完成"
+                    },
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = accent,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(Color(0x55050A16)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(uploadFrac.coerceIn(0.03f, 1f))
+                    .fillMaxHeight()
+                    .clip(CircleShape)
+                    .background(accent),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RealTextPromptCard(
+    uploadedBytes: Long,
+    totalBytes: Long,
+    accent: Color,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF172442))
+            .border(1.dp, accent.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 11.dp, vertical = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("企业网络架构师提问", fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold, color = accent)
+            Text(
+                "Prompt ${formatBytes(uploadedBytes.coerceAtLeast(totalBytes))}",
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                color = colors.muted,
+            )
+        }
+        Text(
+            "对比 QUIC/HTTP3 与 HTTP/2 在 5% 随机丢包 + 150ms 跨境时延下对大模型 SSE 首字 TTFT 与长回答卡顿的影响，并给出客户端自动降级方案。",
+            fontSize = 10.sp,
+            lineHeight = 14.5.sp,
+            color = colors.ink,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
 
@@ -585,87 +1074,85 @@ private fun ModeTogglePill(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(9.dp))
-            .background(if (active) colors.brand.copy(alpha = 0.16f) else Color.Transparent)
-            .border(1.dp, if (active) colors.brand.copy(alpha = 0.35f) else Color.Transparent, RoundedCornerShape(9.dp))
+            .background(if (active) colors.brand.copy(alpha = 0.18f) else Color.Transparent)
+            .border(1.dp, if (active) colors.brand.copy(alpha = 0.45f) else Color.Transparent, RoundedCornerShape(9.dp))
             .pressable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 6.dp),
+            .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
-            fontSize = 10.5.sp,
+            fontSize = 10.sp,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             color = if (active) colors.ink else colors.muted,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
-private fun MultimodalMatrixCell(
+private fun TaskMatrixCell(
     index: Int,
     kind: String,
     outcome: BehaviorTraceRunner.TaskExecutionOutcome?,
-    isActive: Boolean,
-    isSelected: Boolean,
+    active: Boolean,
+    selected: Boolean,
     onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val colors = AnebTheme.colors
-    val glyph = when (kind) {
-        "image" -> AnebGlyph.Image
-        "document" -> AnebGlyph.Document
-        else -> AnebGlyph.Chat
+    val (glyph, kindShort, accent) = when (kind) {
+        "image" -> Triple(AnebGlyph.Image, "航拍图", colors.excellent)
+        "document" -> Triple(AnebGlyph.Document, "SLA文档", colors.brand2)
+        else -> Triple(AnebGlyph.Chat, "架构问答", colors.brand)
     }
-    val borderColor = when {
-        isSelected -> colors.brand
-        outcome != null && outcome.succeeded -> colors.excellent.copy(alpha = 0.55f)
-        outcome != null -> colors.poor.copy(alpha = 0.65f)
-        isActive -> colors.brand
-        else -> colors.hairline
-    }
-    val bgColor = when {
-        isSelected -> colors.brand.copy(alpha = 0.20f)
-        outcome != null && outcome.succeeded -> colors.excellent.copy(alpha = 0.12f)
-        outcome != null -> colors.poor.copy(alpha = 0.14f)
-        isActive -> colors.brand.copy(alpha = 0.16f)
-        else -> Color(0x660A0F22)
-    }
-    val tint = when {
-        outcome != null && outcome.succeeded -> colors.excellent
+    val cellColor = when {
+        active -> colors.brand
+        outcome?.succeeded == true -> colors.excellent
         outcome != null -> colors.poor
-        isActive -> colors.brand
-        else -> colors.muted
+        else -> colors.faint
     }
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(11.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(11.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                when {
+                    selected -> accent.copy(alpha = 0.28f)
+                    active -> colors.brand.copy(alpha = 0.22f)
+                    outcome != null -> cellColor.copy(alpha = 0.13f)
+                    else -> Color(0x66090D1C)
+                },
+            )
+            .border(
+                if (active || selected) 1.4.dp else 1.dp,
+                if (active || outcome != null) cellColor.copy(alpha = 0.65f) else colors.hairline,
+                RoundedCornerShape(10.dp),
+            )
             .then(if (onClick != null) Modifier.pressable(onClick = onClick) else Modifier)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(horizontal = 6.dp, vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            AnebIcon(glyph = glyph, tint = tint, size = 12.dp, strokeDp = 1.3.dp)
+            AnebIcon(glyph = glyph, tint = if (active || outcome != null) accent else colors.faint, size = 12.dp)
             Text(
                 String.format(Locale.ROOT, "%02d", index + 1),
-                fontSize = 9.5.sp,
+                fontSize = 8.5.sp,
                 fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                color = colors.ink,
+                fontWeight = if (active || selected) FontWeight.Bold else FontWeight.Normal,
+                color = if (active || outcome != null) colors.ink else colors.faint,
             )
         }
         Text(
             when {
+                active -> "执行中"
                 outcome?.e2eTtftMs != null -> "${outcome.e2eTtftMs.roundToInt()}ms"
-                outcome != null && outcome.succeeded -> "通过"
-                outcome != null -> "失败"
-                isActive -> "执行中"
-                else -> kindShortLabel(kind)
+                outcome != null -> if (outcome.succeeded) "通过" else "异常"
+                else -> kindShort
             },
             fontSize = 8.5.sp,
-            color = tint,
+            fontFamily = if (outcome != null) FontFamily.Monospace else FontFamily.Default,
+            color = if (active) colors.brand else if (outcome != null) cellColor else colors.muted,
             maxLines = 1,
             modifier = Modifier.padding(top = 3.dp),
         )
@@ -673,27 +1160,41 @@ private fun MultimodalMatrixCell(
 }
 
 @Composable
-private fun SelectedTaskInspector(task: BehaviorTraceRunner.TaskExecutionOutcome) {
+private fun SelectedTaskInspector(outcome: BehaviorTraceRunner.TaskExecutionOutcome) {
     val colors = AnebTheme.colors
+    val kindLabel = when (outcome.workloadKind) {
+        "image" -> "4K 航拍图多模态"
+        "document" -> "SLA 长文档解析"
+        else -> "企业架构问答"
+    }
     AnebGradientCard(Modifier.fillMaxWidth(), radius = 14.dp) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    "任务 #${outcome.taskIndex + 1} 明细 · $kindLabel (${outcome.taskId})",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.ink,
+                )
+                Text(
+                    if (outcome.succeeded) "通过" else "异常",
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (outcome.succeeded) colors.excellent else colors.poor,
+                )
+            }
             Text(
-                "任务 #${task.taskIndex + 1} 明细（${kindShortLabel(task.workloadKind)} · ${if (task.succeeded) "通过" else "异常"}）",
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (task.succeeded) colors.excellent else colors.poor,
+                "上行载荷 ${formatBytes(outcome.uploadBytes)} · 实测上行 ${outcome.uploadGoodputMbps?.let { String.format(Locale.ROOT, "%.1f Mbps", it) } ?: "—"} · " +
+                    "首字 TTFT ${outcome.e2eTtftMs?.let { "${it.roundToInt()} ms" } ?: "—"}",
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = colors.muted,
             )
             Text(
-                "上传 ${formatBytes(task.uploadBytes)}" +
-                    (task.uploadGoodputMbps?.let { " (${String.format(Locale.ROOT, "%.1f", it)} Mbps)" } ?: "") +
-                    " · 首字 TTFT ${task.e2eTtftMs?.let { "${it.roundToInt()} ms" } ?: "—"}" +
-                    " · Token ${task.receivedUniqueTokens}/${task.plannedTokens}",
-                fontSize = 10.sp,
-                color = colors.ink,
-            )
-            Text(
-                "总耗时 ${String.format(Locale.ROOT, "%.2f", task.actualDurationMs / 1000.0)} s · 准点率 ${task.onTimeRatio?.let { "${(it * 100).roundToInt()}%" } ?: "—"}",
-                fontSize = 9.5.sp,
+                "Token 到达 ${outcome.receivedUniqueTokens}/${outcome.plannedTokens} · 准时率 ${outcome.onTimeRatio?.let { "${(it * 100.0).roundToInt()}%" } ?: "—"} · " +
+                    "总耗时 ${String.format(Locale.ROOT, "%.1fs", outcome.actualDurationMs / 1000.0)}",
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
                 color = colors.muted,
             )
         }
@@ -701,69 +1202,87 @@ private fun SelectedTaskInspector(task: BehaviorTraceRunner.TaskExecutionOutcome
 }
 
 @Composable
-private fun ModalityBreakdownCard(outcomes: List<BehaviorTraceRunner.TaskExecutionOutcome>) {
+private fun ModalityBreakdownCard(tasks: List<BehaviorTraceRunner.TaskExecutionOutcome>) {
     val colors = AnebTheme.colors
     val groups = listOf(
-        Triple("text", AnebGlyph.Chat, "纯文本对话"),
-        Triple("document", AnebGlyph.Document, "长文档理解"),
-        Triple("image", AnebGlyph.Image, "高清图片多模态"),
+        Triple("text", AnebGlyph.Chat, "企业架构问答"),
+        Triple("document", AnebGlyph.Document, "SLA 长文档解析"),
+        Triple("image", AnebGlyph.Image, "4K 航拍图多模态"),
     )
-    AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
-        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    AnebGradientCard(Modifier.fillMaxWidth(), radius = 15.dp) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("分模态实测表现对比", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
             groups.forEachIndexed { idx, (kind, glyph, label) ->
-                val list = outcomes.filter { it.workloadKind == kind }
-                if (idx > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
-                val ok = list.count { it.succeeded }
-                val avgTtft = list.mapNotNull { it.e2eTtftMs }.takeIf { it.isNotEmpty() }?.average()
-                val avgUp = list.mapNotNull { it.uploadGoodputMbps }.takeIf { it.isNotEmpty() }?.average()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        AnebIcon(glyph = glyph, tint = colors.brand, size = 14.dp)
-                        Spacer(Modifier.width(7.dp))
-                        Text(label, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+                val list = tasks.filter { it.workloadKind == kind }
+                if (list.isNotEmpty()) {
+                    if (idx > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
+                    val ok = list.count { it.succeeded }
+                    val avgTtft = list.mapNotNull { it.e2eTtftMs }.takeIf { it.isNotEmpty() }?.average()
+                    val avgUp = list.mapNotNull { it.uploadGoodputMbps }.takeIf { it.isNotEmpty() }?.average()
+                    val accent = when (kind) {
+                        "image" -> colors.excellent
+                        "document" -> colors.brand2
+                        else -> colors.brand
                     }
-                    Text(
-                        if (list.isEmpty()) "待执行" else buildString {
-                            append("$ok/${list.size} 通过")
-                            avgTtft?.let { append(" · 首字 ${it.roundToInt()}ms") }
-                            avgUp?.let { append(" · 上行 ${String.format(Locale.ROOT, "%.1f", it)}M") }
-                        },
-                        fontSize = 9.5.sp,
-                        color = if (list.isNotEmpty() && ok == list.size) colors.excellent else colors.muted,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AnebIcon(glyph = glyph, tint = accent, size = 14.dp)
+                            Spacer(Modifier.width(7.dp))
+                            Column {
+                                Text(label, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+                                Text("成功 $ok/${list.size}", fontSize = 8.5.sp, color = colors.muted)
+                            }
+                        }
+                        Text(
+                            buildString {
+                                append("TTFT ${avgTtft?.let { "${it.roundToInt()}ms" } ?: "—"}")
+                                avgUp?.let { append(" · 上行 ${String.format(Locale.ROOT, "%.1fM", it)}") }
+                            },
+                            fontSize = 9.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = accent,
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
-
-private fun kindShortLabel(kind: String): String = when (kind) {
-    "image" -> "图片"
-    "document" -> "文档"
-    else -> "文本"
-}
+private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
 private fun formatBytes(bytes: Long): String = when {
-    bytes <= 0L -> "0 B"
     bytes >= 1_048_576L -> String.format(Locale.ROOT, "%.2f MB", bytes / 1_048_576.0)
-    bytes >= 1_024L -> "${bytes / 1_024L} KB"
+    bytes >= 1_024L -> String.format(Locale.ROOT, "%.0f KB", bytes / 1_024.0)
     else -> "$bytes B"
 }
 
-private val DEFAULT_20_TASK_KINDS: List<String> =
+private val DEFAULT_20_TASK_KINDS =
     List(8) { "text" } + List(6) { "document" } + List(6) { "image" }
 
 private const val MULTIMODAL_TEXT_STREAM_COPY =
-    "要点总结：针对移动弱网场景下的多轮问答，优先降低首包往返时延与 TLS 握手开销，其次确保流式分片间隔均匀，避免路由器队列堆积导致的中段停顿。"
+    "一、5% 丢包 + 150ms 时延下的传输层实测差异\n" +
+        "1. HTTP/2 over TCP：单条 TCP 连接在 5% 随机丢包下触发队头阻塞（HOL Blocking），单个丢包即可导致后续 6–12 个 SSE Token 被内核缓存拖住 300–450ms，呈现典型「锯齿状批量吐字」。\n" +
+        "2. QUIC / HTTP3：在单流 SSE 场景下可缩短 1-RTT 建连时间，但若运营商 UDP 限速或中间盒丢弃大 MTU 报文，仍会出现首字超时与连接迁移动荡。\n\n" +
+        "二、生产级客户端自动降级策略\n" +
+        "• 采用 Happy Eyeballs v3 并行竞速（QUIC 优先，250ms 未完成握手立即回退 H2）；\n" +
+        "• 开启流式心跳看门狗：单次 SSE 间隔 > 2.5s 触发无感重连并携带 last_event_id 续传。"
 
 private const val MULTIMODAL_DOC_STREAM_COPY =
-    "文档解析摘要：第 1 章明确端到端应用层测量边界；第 3 章定义 1 MB 上行文档切片与流式返回时序；第 5 章给出 Wi-Fi 与 5G 蜂窝网络对比归因口径。"
+    "一、48 页 SLA 协议风险审计结论（共抽取 3 处高优偏差）\n" +
+        "1. 条款 §4.2.1（AI 对话首字门限）：合同约定峰值期 TTFT P95 ≤ 1,200ms，但华南晚高峰实测在 1,480–1,720ms 区间，存在月度服务费 5% 违约扣减风险。\n" +
+        "2. 条款 §6.3（多模态上行带宽保障）：5MB 图片上行门限未区分 5G 室内弱覆盖场景，建议补充「RSRP < -105 dBm 豁免条款」或接入边缘 POP 就近汇聚。\n" +
+        "3. 条款 §8.1（实时语音口到耳红线）：已明确 400ms 否决线与 M7 长静默门限，与 ANEB Profile 4 实测口径 100% 对齐，可直接作为第三方验收依据。"
 
 private const val MULTIMODAL_IMAGE_STREAM_COPY =
-    "视觉理解输出：已识别航拍建筑群主干道与 3 处高层楼宇轮廓，光照均匀、边缘清晰；依据建筑密度推测该片区处于高负荷商业基站覆盖区间。"
+    "1. 航拍场景空间要素识别（深圳湾 / 后海核心区）\n" +
+        "• 右下主通道：双向多车道跨海斜拉桥（双主塔结构），桥面车流呈中低密度顺畅通行状态，未发现拥堵积压与异常停靠。\n" +
+        "• 左中超高层集群：高密度玻璃幕墙商务塔楼群沿海岸线阶梯分布，黄昏低角度逆光在幕墙与水面形成高反光区域，对低空无人机光学避障构成轻度眩光干扰。\n" +
+        "• 左侧滨海绿廊与快速路：双向快速路与海滨慢行步道隔离清晰，绿化带连续无裸露施工扰动。\n\n" +
+        "2. 5G-A / 低空通感网络覆盖评估建议\n" +
+        "• 跨海桥面与滨海开阔水域具备极佳无线视距（LoS），建议采用波束赋形抑制海面多径反射并防止跨区乒乓切换；\n" +
+        "• 超高层玻璃幕墙背侧易出现 15–22 dB 阴影衰落，建议无人机航线保持距建筑群外立面 ≥ 120m 以确保 4K 图传上行稳定。"

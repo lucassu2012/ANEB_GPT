@@ -264,18 +264,82 @@ class TestEngine(private val context: Context) {
             val latestRadio = AtomicReference<RadioSample?>(null)
             collectors += launch { radioFlow.collect { radioBuf.add(it); latestRadio.set(it) } }
 
-            // ---- 实时遥测采样协程（观测通道，非测量；Dispatchers.Default, ~100ms 节流）----
+            // ---- 实时遥测采样协程（观测通道，非测量；Dispatchers.Default, ~45ms 高频刷新）----
             // 只读 latestRadio 引用（O(1)，不消费队列）+ telemetrySource 投影 → derive → conflated
             // 发射。绝不在 SSE 读线程/计时回调发射（R-16）；随 collectors 在 finally 统一取消。
+            val liveEchoRtts = java.util.concurrent.ConcurrentLinkedDeque<Double>()
+            val liveSubPhaseRef = AtomicReference<String?>(null)
+            val liveUploadWritten = java.util.concurrent.atomic.AtomicLong(0L)
+            val liveUploadTotal = java.util.concurrent.atomic.AtomicLong(0L)
+            val liveUploadStartNs = java.util.concurrent.atomic.AtomicLong(0L)
+            val liveToolRoundRef = java.util.concurrent.atomic.AtomicInteger(0)
+            val liveToolTotalRef = java.util.concurrent.atomic.AtomicInteger(0)
+            val livePhaseObserver = object : LivePhaseObserver {
+                override fun onSubPhase(subPhase: String) {
+                    liveSubPhaseRef.set(subPhase)
+                    if (subPhase == "upload") {
+                        liveUploadWritten.set(0L)
+                        liveUploadTotal.set(0L)
+                        liveUploadStartNs.set(SystemClock.elapsedRealtimeNanos())
+                    }
+                }
+
+                override fun onEchoRtt(rttMs: Double) {
+                    if (rttMs.isFinite() && rttMs >= 0.0) {
+                        liveEchoRtts.addLast(rttMs)
+                        while (liveEchoRtts.size > 48) liveEchoRtts.pollFirst()
+                    }
+                }
+
+                override fun onUploadBytes(writtenBytes: Long, totalBytes: Long, nowNanos: Long) {
+                    liveUploadStartNs.compareAndSet(0L, nowNanos)
+                    liveUploadTotal.set(totalBytes)
+                    liveUploadWritten.set(writtenBytes)
+                }
+
+                override fun onToolRound(round: Int, totalRounds: Int, rttMs: Double?) {
+                    liveToolRoundRef.set(round)
+                    liveToolTotalRef.set(totalRounds)
+                    if (rttMs != null && rttMs.isFinite() && rttMs > 0.0) {
+                        liveEchoRtts.addLast(rttMs)
+                        while (liveEchoRtts.size > 48) liveEchoRtts.pollFirst()
+                    }
+                }
+            }
             collectors += launch(Dispatchers.Default) {
                 while (true) {
-                    val liveStream = liveStreamWindow.snapshot(SystemClock.elapsedRealtimeNanos())
-                    val snapshot = telemetrySource.read(latestRadio.get()).copy(
+                    val nowNs = SystemClock.elapsedRealtimeNanos()
+                    val liveStream = liveStreamWindow.snapshot(nowNs)
+                    val echoSnap = liveEchoRtts.toList()
+                    val sub = liveSubPhaseRef.get()
+                    val upTotal = liveUploadTotal.get()
+                    val upWritten = liveUploadWritten.get()
+                    val upProg = if (upTotal > 0L) (upWritten.toFloat() / upTotal.toFloat()).coerceIn(0f, 1f) else null
+                    val liveUpMbpsNow = if (sub == "upload" && upWritten > 0L) {
+                        val elapsedSec = ((nowNs - liveUploadStartNs.get()) / 1e9).coerceAtLeast(0.03)
+                        (upWritten * 8.0) / elapsedSec / 1e6
+                    } else null
+                    val baseSnap = telemetrySource.read(latestRadio.get())
+                    val snapshot = baseSnap.copy(
+                        rttSamplesMs = if (echoSnap.isNotEmpty()) echoSnap else baseSnap.rttSamplesMs,
+                        latestUpMbps = liveUpMbpsNow ?: baseSnap.latestUpMbps,
                         streamArrivalRatePerSec = liveStream.arrivalRatePerSec,
                         streamTargetRatePerSec = liveStream.targetRatePerSec,
                         streamActive = liveStream.active,
                         liveStreamEvents = liveStream.eventsObserved,
                         liveStreamGapMs = liveStream.latestGapMs,
+                        fastStreamRatePerSec = liveStream.fastRatePerSec,
+                        liveRecentIntervalsMs = if (liveStream.active && liveStream.recentIntervalsMs.isNotEmpty()) {
+                            liveStream.recentIntervalsMs
+                        } else {
+                            echoSnap
+                        },
+                        liveSubPhase = sub,
+                        liveUploadProgress = upProg,
+                        liveUploadBytes = upWritten,
+                        liveUploadTotalBytes = upTotal,
+                        liveToolRound = liveToolRoundRef.get(),
+                        liveToolTotalRounds = liveToolTotalRef.get(),
                     )
                     _telemetry.value = LiveTelemetry.derive(snapshot)
                     delay(TELEMETRY_SAMPLE_MS)
@@ -288,7 +352,7 @@ class TestEngine(private val context: Context) {
                 Mode.QUICK -> LatinSquare.quickOrder(ids.size)
                 Mode.FORENSIC -> LatinSquare.orders(ids.size)
             }
-            val runner = ScenarioRunner(client, liveStreamWindow)
+            val runner = ScenarioRunner(client, liveStreamWindow, livePhaseObserver)
             val kpiByScenario = LinkedHashMap<String, MutableList<KpiResult>>()
             var orderIndex = 0
             // 实时遥测累计投影（观测通道，非测量）：总场景数用于进度分母；ITL/token 累计
@@ -876,8 +940,8 @@ class TestEngine(private val context: Context) {
     companion object {
         const val KPI_SET = "agent-qoe-kpi-v0.2"
 
-        /** 实时遥测采样节流间隔（ms）：观测通道节流上限，不影响任何测量计时 */
-        private const val TELEMETRY_SAMPLE_MS = 100L
+        /** 实时遥测采样节流间隔（ms）：22Hz 高频观测通道，不影响任何测量计时 */
+        private const val TELEMETRY_SAMPLE_MS = 45L
 
         /** 与 MainActivity 的 logcat 镜像同 tag，模拟器自动化统一从该 tag 提取 */
         private const val LOG_TAG = "AnebProbe"

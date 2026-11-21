@@ -610,7 +610,12 @@ class AnebClient private constructor(
         val serverView: UploadServerView? = null,
     )
 
-    suspend fun uploadBurst(url: String, payload: ByteArray, chunkBytes: Int = 2048): UploadResult {
+    suspend fun uploadBurst(
+        url: String,
+        payload: ByteArray,
+        chunkBytes: Int = 2048,
+        onBytesWritten: ((writtenBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): UploadResult {
         val stamps = ArrayList<ChunkStamp>(payload.size / chunkBytes + 1)
         val body = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaType()
@@ -625,6 +630,7 @@ class AnebClient private constructor(
                     // 注意：这测的是写入本地 socket buffer 的时刻，不是线上发出时刻（R-07）
                     stamps.add(ChunkStamp(index, len, SystemClock.elapsedRealtimeNanos()))
                     offset += len
+                    onBytesWritten?.invoke(offset.toLong(), payload.size.toLong())
                     index++
                 }
             }

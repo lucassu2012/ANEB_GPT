@@ -15,6 +15,7 @@ import com.aneb.probe.engine.BasicSpeedResult
 import com.aneb.probe.engine.BasicSpeedTelemetry
 import com.aneb.probe.engine.BehaviorTracePlan
 import com.aneb.probe.engine.BehaviorTraceRunner
+import com.aneb.probe.engine.LiveStreamWindow
 import com.aneb.probe.engine.LiveTelemetry
 import com.aneb.probe.engine.LoadedResponsiveness
 import com.aneb.probe.engine.LoadedResponsivenessReport
@@ -157,7 +158,7 @@ class PhaseAVisualTheatersUiTest {
     }
 
     @Test
-    fun `TestingScreen renders authentic chat workspace and live stall badge without contrived meta copy`() {
+    fun `TestingScreen renders top 22Hz telemetry deck and fixed-height authentic chat workspace`() {
         val controller = Robolectric.buildActivity(ComponentActivity::class.java)
         val activity = controller.get()
         val telemetry = LiveTelemetry(
@@ -169,10 +170,13 @@ class PhaseAVisualTheatersUiTest {
             stallCount = 1,
             tokensReceived = 18,
             streamArrivalRatePerSec = 42.0,
+            fastStreamRatePerSec = 46.8,
+            liveRecentIntervalsMs = listOf(19.5, 22.1, 25.0, 340.0, 21.0),
             streamTargetRatePerSec = 40.0,
             streamActive = true,
             liveStreamEvents = 25,
             liveStreamGapMs = 340.0,
+            liveSubPhase = "stream",
             phase = "s1_chat#0",
             fraction = 0.35,
         )
@@ -194,9 +198,11 @@ class PhaseAVisualTheatersUiTest {
             controller.setup()
             idleMain()
             val texts = collectTexts(composeView)
-            assertTrue("expected authentic AI assistant header: $texts", texts.any { it.contains("AI 对话助手 · 实时流式会话") })
+            assertTrue("expected 22Hz telemetry console: $texts", texts.any { it.contains("22Hz TELEMETRY") })
+            assertTrue("expected 250ms fast SSE rate: $texts", texts.any { it.contains("46.8") })
+            assertTrue("expected authentic AI assistant header: $texts", texts.any { it.contains("AI 对话助手 · DeepThink 实时会话") })
             assertTrue("expected live stall badge: $texts", texts.any { it.contains("流式停顿 340 ms") })
-            assertTrue("expected realistic itinerary stream copy: $texts", texts.any { it.contains("Day 1 上午") })
+            assertTrue("expected realistic executive chat copy: $texts", texts.any { it.contains("高管决策摘要") })
             assertFalse("must not show fake meta-text: $texts", texts.any { it.contains("正在实时监测首字响应") })
         } finally {
             controller.destroy()
@@ -204,7 +210,7 @@ class PhaseAVisualTheatersUiTest {
     }
 
     @Test
-    fun `VoiceScreen renders live 10Hz jitter oscilloscope direction status and 400ms veto line`() {
+    fun `VoiceScreen renders studio 32-band audio spectrum direction status and 400ms veto line`() {
         val controller = Robolectric.buildActivity(ComponentActivity::class.java)
         val activity = controller.get()
         val sample = VoiceRunner.Sample(
@@ -263,7 +269,8 @@ class PhaseAVisualTheatersUiTest {
             controller.setup()
             idleMain()
             val texts = collectTexts(composeView)
-            assertTrue("expected bidirectional cockpit header: $texts", texts.any { it.contains("实时双向语音示波座舱") })
+            assertTrue("expected studio spectrum HUD: $texts", texts.any { it.contains("LIVE · 25Hz SPECTRUM") })
+            assertTrue("expected frequency calibration scale: $texts", texts.any { it == "125Hz" } && texts.any { it == "8kHz" })
             assertTrue("expected live direction label: $texts", texts.any { it.contains("第 4 轮 · AI 回复中") })
             assertTrue("expected real-time jitter readout: $texts", texts.any { it.contains("实时抖动 6.4 ms") })
             assertTrue("expected 400ms veto line legend: $texts", texts.any { it.contains("400ms") })
@@ -274,7 +281,7 @@ class PhaseAVisualTheatersUiTest {
     }
 
     @Test
-    fun `MultimodalTheaterScreen renders quick mode toggle live byte upload progress and task queue`() {
+    fun `MultimodalTheaterScreen renders top 25Hz telemetry deck and fixed-height real drone workspace`() {
         val controller = Robolectric.buildActivity(ComponentActivity::class.java)
         val activity = controller.get()
         var started = false
@@ -289,6 +296,9 @@ class PhaseAVisualTheatersUiTest {
             uploadedBytes = 2_621_440L,
             liveUploadMbps = 32.5,
             currentArtifactBytes = 65_536L,
+            liveSpeedHistory = listOf(22.0, 29.4, 35.1, 32.5),
+            liveIntervalHistoryMs = listOf(12.0, 18.5, 9.2, 24.0),
+            liveInstantJitterMs = 6.5,
             echoP50Ms = 42.0,
             echoJitterMs = 5.0,
         )
@@ -318,10 +328,12 @@ class PhaseAVisualTheatersUiTest {
             controller.setup()
             idleMain()
             val texts = collectTexts(composeView)
+            assertTrue("expected 25Hz live waveform deck: $texts", texts.any { it.contains("25Hz LIVE WAVEFORM") })
             assertTrue("expected quick mode pill: $texts", texts.any { it.contains("快速三模态（~25s）") })
-            assertTrue("expected active image task header: $texts", texts.any { it.contains("高清图片多模态分析") })
-            assertTrue("expected live upload Mbps readout: $texts", texts.any { it.contains("32.5 Mbps") })
-            assertTrue("expected live 5.00 MB total size: $texts", texts.any { it.contains("2.50 MB / 5.00 MB") })
+            assertTrue("expected real drone image task header: $texts", texts.any { it.contains("高清图片多模态分析") })
+            assertTrue("expected real drone filename: $texts", texts.any { it.contains("SZBAY_MAVIC3_4K_0914.jpg") })
+            assertTrue("expected live upload Mbps readout: $texts", texts.any { it.contains("32.5") })
+            assertTrue("expected live 2.50 MB / 5.00 MB progress: $texts", texts.any { it.contains("2.50 MB / 5.00 MB") })
             assertTrue(!started)
         } finally {
             controller.destroy()
@@ -457,6 +469,98 @@ class PhaseAVisualTheatersUiTest {
         } finally {
             controller2.destroy()
         }
+    }
+
+    @Test
+    fun `TestingScreen renders authentic Coding Agent IDE diff and real 4K DC rack multimodal inspection`() {
+        // 1) Coding Agent
+        val controller1 = Robolectric.buildActivity(ComponentActivity::class.java)
+        val activity1 = controller1.get()
+        val codingView = ComposeView(activity1).apply {
+            setContent {
+                AnebTheme(reducedMotion = true) {
+                    TestingScreen(
+                        logs = listOf("SCENARIO_START scenario=s2_coding_agent#0 round=0 order_index=1"),
+                        telemetry = LiveTelemetry(
+                            rttMs = 34.0,
+                            jitterMs = 2.8,
+                            streamActive = true,
+                            fastStreamRatePerSec = 52.4,
+                            liveStreamEvents = 30,
+                            liveToolRound = 2,
+                            liveToolTotalRounds = 4,
+                            liveSubPhase = "stream",
+                            phase = "s2_coding_agent#0",
+                            fraction = 0.55,
+                        ),
+                        nodeLabel = "miw2",
+                        radioEvidenceLimited = false,
+                        onCancel = {},
+                    )
+                }
+            }
+        }
+        try {
+            activity1.setContentView(codingView)
+            controller1.setup()
+            idleMain()
+            val texts = collectTexts(codingView)
+            assertTrue("expected Coding Agent IDE header: $texts", texts.any { it.contains("ConnectionPoolGuard.kt · Coding Agent") })
+            assertTrue("expected tool chain strip: $texts", texts.any { it.contains("AGENT TOOL CHAIN") })
+            assertTrue("expected fast SSE rate: $texts", texts.any { it.contains("52.4") })
+        } finally {
+            controller1.destroy()
+        }
+
+        // 2) Multimodal DC Rack real photo inspection
+        val controller2 = Robolectric.buildActivity(ComponentActivity::class.java)
+        val activity2 = controller2.get()
+        val mmView = ComposeView(activity2).apply {
+            setContent {
+                AnebTheme(reducedMotion = true) {
+                    TestingScreen(
+                        logs = listOf("SCENARIO_START scenario=s3_multimodal#0 round=0 order_index=2"),
+                        telemetry = LiveTelemetry(
+                            rttMs = 36.0,
+                            jitterMs = 3.1,
+                            upMbps = 44.2,
+                            streamActive = true,
+                            fastStreamRatePerSec = 39.5,
+                            liveStreamEvents = 24,
+                            liveUploadProgress = 1.0f,
+                            liveSubPhase = "stream",
+                            phase = "s3_multimodal#0",
+                            fraction = 0.85,
+                        ),
+                        nodeLabel = "miw2",
+                        radioEvidenceLimited = false,
+                        onCancel = {},
+                    )
+                }
+            }
+        }
+        try {
+            activity2.setContentView(mmView)
+            controller2.setup()
+            idleMain()
+            val texts = collectTexts(mmView)
+            assertTrue("expected DC rack vision header: $texts", texts.any { it.contains("机房光路 AI 视觉巡检 · 多模态工作台") })
+            assertTrue("expected real photo filename: $texts", texts.any { it.contains("DC_B04_U28_FIBER_4K.jpg") })
+            assertTrue("expected AI Ops inspection report: $texts", texts.any { it.contains("AI Ops 现场光路视觉巡检报告") })
+        } finally {
+            controller2.destroy()
+        }
+
+        // 3) LiveStreamWindow 250ms fastRatePerSec & recentIntervalsMs
+        val win = LiveStreamWindow()
+        win.onStreamStarted(40.0, 1_000_000_000L)
+        for (k in 0..8) {
+            win.onEventArrival(1_000_000_000L + k * 20_000_000L)
+        }
+        val snap = win.snapshot(1_170_000_000L)
+        assertTrue("expected fast 250ms rate before 250ms 1s floor: $snap", snap.fastRatePerSec != null && snap.fastRatePerSec!! > 20.0)
+        assertEquals(8, snap.recentIntervalsMs.size)
+        assertEquals(20.0, snap.recentIntervalsMs.first(), 0.5)
     }
 
     private fun idleMain() {

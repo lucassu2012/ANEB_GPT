@@ -110,6 +110,8 @@ class BehaviorTraceRunner internal constructor(
         val currentArtifactBytes: Long = 0L,
         val downloadedBytes: Long = 0L,
         val liveSpeedHistory: List<Double> = emptyList(),
+        val liveIntervalHistoryMs: List<Double> = emptyList(),
+        val liveInstantJitterMs: Double? = null,
         val echoP50Ms: Double? = null,
         val echoJitterMs: Double? = null,
         val completedTasks: List<TaskExecutionOutcome> = emptyList(),
@@ -163,15 +165,52 @@ class BehaviorTraceRunner internal constructor(
         var totalRequests = 0
         var failedRequests = 0
 
+        val liveSpeedHistory = ArrayDeque<Double>(48)
+        val liveIntervalHistory = ArrayDeque<Double>(48)
+        fun recordLiveSpeed(value: Double) {
+            if (!value.isFinite() || value < 0.0) return
+            liveSpeedHistory.addLast(value)
+            while (liveSpeedHistory.size > 48) liveSpeedHistory.removeFirst()
+        }
+        fun recordLiveInterval(ms: Double) {
+            if (!ms.isFinite() || ms < 0.0) return
+            liveIntervalHistory.addLast(ms)
+            while (liveIntervalHistory.size > 48) liveIntervalHistory.removeFirst()
+        }
+        fun currentJitterMs(): Double? {
+            if (liveIntervalHistory.size < 3) return null
+            val diffs = liveIntervalHistory.zipWithNext { a, b -> abs(b - a) }
+            return percentile(diffs, 0.90)
+        }
+
         for (i in 0 until sampleCount) {
             totalRequests++
             val echo = client.echo("$base/api/v1/echo")
             val ok = echo.error == null && echo.httpCode in 200..299 && echo.rttUs != null
             if (ok) {
+                val rttMs = checkNotNull(echo.rttUs) / 1_000.0
+                recordLiveInterval(rttMs)
                 // Drop warmup echo sample 0 when >2 samples are collected.
                 if (sampleCount <= 2 || i > 0) {
-                    echoRttsMs.add(checkNotNull(echo.rttUs) / 1_000.0)
+                    echoRttsMs.add(rttMs)
                 }
+                val liveP50 = percentile(echoRttsMs, 0.50) ?: rttMs
+                val liveP95 = percentile(echoRttsMs, 0.95)
+                val liveJit = if (liveP95 != null) (liveP95 - liveP50).coerceAtLeast(0.0) else currentJitterMs()
+                _liveProgress.value = LiveTraceProgress(
+                    totalTasks = tasksToRun.size,
+                    plannedKinds = plannedKinds,
+                    currentTaskIndex = 0,
+                    currentTaskId = tasksToRun.firstOrNull()?.taskId,
+                    currentWorkloadKind = tasksToRun.firstOrNull()?.workloadKind,
+                    currentStep = "echo",
+                    currentUploadBytes = tasksToRun.firstOrNull()?.uploadBytes ?: 0L,
+                    plannedTokens = tasksToRun.firstOrNull()?.tokenPlans?.size ?: 0,
+                    liveIntervalHistoryMs = liveIntervalHistory.toList(),
+                    liveInstantJitterMs = liveJit,
+                    echoP50Ms = liveP50,
+                    echoJitterMs = liveJit,
+                )
             } else {
                 failedRequests++
             }
@@ -191,13 +230,6 @@ class BehaviorTraceRunner internal constructor(
         var totalOnTimeTokens = 0
         var totalEvaluatedOnTimeTokens = 0
 
-        val liveSpeedHistory = ArrayDeque<Double>(40)
-        fun recordLiveSpeed(value: Double) {
-            if (!value.isFinite() || value < 0.0) return
-            liveSpeedHistory.addLast(value)
-            while (liveSpeedHistory.size > 40) liveSpeedHistory.removeFirst()
-        }
-
         for ((idx, task) in tasksToRun.withIndex()) {
             val taskStartNanos = clock.now()
             val taskErrors = mutableListOf<String>()
@@ -210,7 +242,7 @@ class BehaviorTraceRunner internal constructor(
             var lastEmitNanos = 0L
             fun emitStep(step: String, force: Boolean = true) {
                 val now = clock.now()
-                if (!force && now - lastEmitNanos < 90_000_000L) return
+                if (!force && now - lastEmitNanos < 40_000_000L) return
                 lastEmitNanos = now
                 _liveProgress.value = LiveTraceProgress(
                     totalTasks = tasksToRun.size,
@@ -228,6 +260,8 @@ class BehaviorTraceRunner internal constructor(
                     currentArtifactBytes = task.artifactBytes,
                     downloadedBytes = taskDownloadedBytes,
                     liveSpeedHistory = liveSpeedHistory.toList(),
+                    liveIntervalHistoryMs = liveIntervalHistory.toList(),
+                    liveInstantJitterMs = currentJitterMs(),
                     echoP50Ms = echoP50Ms,
                     echoJitterMs = echoJitterMs,
                     completedTasks = taskOutcomes.toList(),
@@ -241,6 +275,9 @@ class BehaviorTraceRunner internal constructor(
             var uploadDeviationMs: Double? = null
             if (task.uploadBytes > 0L) {
                 val uploadStartNs = clock.now()
+                var prevWinNs = uploadStartNs
+                var prevWinBytes = 0L
+                var prevChunkNs = uploadStartNs
                 emitStep("upload", force = true)
                 totalRequests++
                 val up = client.uploadTraceStream(
@@ -249,9 +286,22 @@ class BehaviorTraceRunner internal constructor(
                     chunkSizes = task.uploadChunks,
                     chunkCadenceMs = task.uploadChunkCadenceMs.roundToLong(),
                     onBytesWritten = { written ->
+                        val now = clock.now()
                         taskUploadedBytes = written
-                        val elapsedSec = ((clock.now() - uploadStartNs) / 1e9).coerceAtLeast(0.02)
-                        val mbps = (written * 8.0) / elapsedSec / 1e6
+                        val chunkDtMs = ((now - prevChunkNs) / 1e6).coerceIn(0.1, 500.0)
+                        prevChunkNs = now
+                        recordLiveInterval(chunkDtMs)
+                        val winDtNs = now - prevWinNs
+                        val deltaBytes = written - prevWinBytes
+                        val mbps = if (winDtNs >= 45_000_000L && deltaBytes > 0L) {
+                            val inst = (deltaBytes * 8.0) / (winDtNs / 1e9) / 1e6
+                            prevWinNs = now
+                            prevWinBytes = written
+                            inst
+                        } else {
+                            val elapsedSec = ((now - uploadStartNs) / 1e9).coerceAtLeast(0.015)
+                            (written * 8.0) / elapsedSec / 1e6
+                        }
                         taskLiveUpMbps = mbps
                         recordLiveSpeed(mbps)
                         emitStep("upload", force = false)
@@ -302,16 +352,25 @@ class BehaviorTraceRunner internal constructor(
                 val rateStr = String.format(Locale.ROOT, "%.3f", rateTps)
                 val streamUrl = "$base/api/v1/stream?tokens=$plannedTokens&rate_tps=$rateStr" +
                     "&seed=${config.tracePlan.seed + task.taskIndex}&ttft_inject_us=$ttftInjectUs&run=${config.runId}"
-                var firstEvNs = 0L
+                val recentArrivals = ArrayDeque<Long>(64)
+                var prevEvNs = 0L
                 val sr = client.stream(
                     url = streamUrl,
                     expectedTokens = plannedTokens,
                     onEventArrival = { arrivalNs ->
                         taskStreamedTokens++
-                        if (firstEvNs == 0L) firstEvNs = arrivalNs
-                        val spanSec = ((arrivalNs - firstEvNs) / 1e9).coerceAtLeast(0.05)
-                        val tps = if (taskStreamedTokens >= 2) (taskStreamedTokens - 1) / spanSec else 0.0
-                        if (tps > 0.0) {
+                        if (prevEvNs > 0L) {
+                            val dtMs = ((arrivalNs - prevEvNs) / 1e6).coerceIn(0.1, 2000.0)
+                            recordLiveInterval(dtMs)
+                        }
+                        prevEvNs = arrivalNs
+                        recentArrivals.addLast(arrivalNs)
+                        while (recentArrivals.size > 1 && arrivalNs - recentArrivals.first() > 250_000_000L) {
+                            recentArrivals.removeFirst()
+                        }
+                        if (recentArrivals.size >= 2) {
+                            val winSec = ((arrivalNs - recentArrivals.first()) / 1e9).coerceAtLeast(0.03)
+                            val tps = (recentArrivals.size - 1) / winSec
                             taskLiveStreamTps = tps
                             recordLiveSpeed(tps)
                         }

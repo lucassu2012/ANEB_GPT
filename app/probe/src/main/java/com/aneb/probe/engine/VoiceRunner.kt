@@ -347,7 +347,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
         // ---- Uplink（v1 相位原样保留专供 M3：wire 无逐上行帧服务端时戳，chunk_us 仍是唯一权威）----
         val sent = AtomicInteger(0)
         val uplinkLiveLock = Any()
-        val uplinkLiveIntervals = ArrayDeque<Double>(48)
+        val uplinkLiveIntervals = ArrayDeque<Double>(64)
         var prevUplinkCbNs = 0L
         var upResult: AnebClient.UploadResult? = null
         val upJob = launch(Dispatchers.IO) {
@@ -361,7 +361,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                         val dtMs = ((tsNs - prevUplinkCbNs) / 1e6).coerceIn(0.0, 500.0)
                         synchronized(uplinkLiveLock) {
                             uplinkLiveIntervals.addLast(dtMs)
-                            while (uplinkLiveIntervals.size > 48) uplinkLiveIntervals.removeFirst()
+                            while (uplinkLiveIntervals.size > 64) uplinkLiveIntervals.removeFirst()
                         }
                     }
                     prevUplinkCbNs = tsNs
@@ -381,7 +381,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                     liveInstantJitterMs = rollingUpJit,
                 )
             )
-            delay(80)
+            delay(40)
         }
         val upIntervalsUs = upResult?.serverView?.chunkUs.orEmpty().zipWithNext { a, b -> b - a }
         val upJitter = frameJitterP95Ms(upIntervalsUs, FRAME_INTERVAL_MS * 1000)
@@ -409,7 +409,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
             var framesRecvTotal = 0
             var turnUpSentTotal = 0
             var backpressure = false
-            val liveWave = ArrayDeque<Double>(48)
+            val liveWave = ArrayDeque<Double>(64)
             var runningMaxGapMs = 0.0
             var runningTurnHistory = emptyList<TurnLivePoint>()
             var runningMouthEar: Double? = null
@@ -430,10 +430,10 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                     if (prevUpEnqUs > 0L) {
                         val dtMs = ((lastUpEnqUs - prevUpEnqUs) / 1000.0).coerceIn(0.0, 400.0)
                         liveWave.addLast(dtMs)
-                        while (liveWave.size > 48) liveWave.removeFirst()
+                        while (liveWave.size > 64) liveWave.removeFirst()
                     }
                     prevUpEnqUs = lastUpEnqUs
-                    if (seq % 4 == 0 || seq == t.uplinkFrames - 1) {
+                    if (seq % 2 == 0 || seq == t.uplinkFrames - 1) {
                         val frac = (0.35f + (i + (seq + 1f) / (t.uplinkFrames * 2.2f)) / plan.turns.size * 0.6f).coerceIn(0.35f, 0.97f)
                         val waveSnap = liveWave.toList()
                         val instJit = if (waveSnap.size >= 4) p95(waveSnap.map { abs(it - plan.frameMs) }) else upJitter
@@ -505,7 +505,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                                 if (prevDownArrivalUs > 0L) {
                                     dtMs = ((f.arrivalUs - prevDownArrivalUs) / 1000.0).coerceIn(0.0, 2000.0)
                                     liveWave.addLast(dtMs)
-                                    while (liveWave.size > 48) liveWave.removeFirst()
+                                    while (liveWave.size > 64) liveWave.removeFirst()
                                     if (dtMs > runningMaxGapMs) runningMaxGapMs = dtMs
                                 }
                                 prevDownArrivalUs = f.arrivalUs
@@ -515,7 +515,7 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                                     triggeredBargeNow = true
                                     session.sendText(RealtimeWire.jsonOut.encodeToString(RealtimeWire.BargeIn.serializer(), RealtimeWire.BargeIn(turnId = t.turnId)))
                                 }
-                                if (triggeredBargeNow || frames.size == 1 || frames.size % 3 == 0 || dtMs > 45.0) {
+                                if (triggeredBargeNow || frames.size == 1 || frames.size % 2 == 0 || dtMs > 45.0) {
                                     val waveSnap = liveWave.toList()
                                     val liveDownJit = if (waveSnap.size >= 4) p95(waveSnap.map { abs(it - plan.frameMs) }) else null
                                     val frac = (0.35f + (i + 0.55f + (frames.size.toFloat() / t.plannedDownlinkFrames.coerceAtLeast(1)) * 0.42f) / plan.turns.size * 0.6f).coerceIn(0.35f, 0.97f)

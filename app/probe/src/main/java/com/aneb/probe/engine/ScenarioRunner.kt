@@ -28,6 +28,7 @@ import kotlin.random.Random
 class ScenarioRunner(
     private val client: AnebClient,
     private val liveStreamObserver: LiveStreamObserver? = null,
+    private val livePhaseObserver: LivePhaseObserver? = null,
 ) {
 
     class ClockSyncOutcome(
@@ -115,6 +116,7 @@ class ScenarioRunner(
                         runUpload(base, runId, phase, outcome, emit)
 
                     ProfilePhase.TYPE_THINK_PAUSE -> {
+                        livePhaseObserver?.onSubPhase("think")
                         emit("THINK_PAUSE scenario=${outcome.scenarioKey} duration_ms=${phase.durationMs}")
                         delay(phase.durationMs.toLong())
                     }
@@ -152,6 +154,7 @@ class ScenarioRunner(
         outcome: ScenarioOutcome,
         emit: suspend (String) -> Unit,
     ) {
+        livePhaseObserver?.onSubPhase("echo")
         val n = if (samples > 0) samples else 20
         val records = ArrayList<EchoRecord>(n)
         val valid = ArrayList<AnebClient.EchoResult>(n)
@@ -160,7 +163,10 @@ class ScenarioRunner(
             val warmup = i < ECHO_WARMUP
             records.add(EchoRecord(i, warmup, r))
             r.observed?.let { outcome.observedAddr = it }
-            if (!warmup && r.error == null && r.rttUs != null) valid.add(r)
+            if (r.error == null && r.rttUs != null) {
+                if (!warmup) valid.add(r)
+                livePhaseObserver?.onEchoRtt(r.rttUs / 1000.0)
+            }
             // R-23：样本间 100–300ms 随机间隔去相关
             delay(Random.nextLong(100L, 301L))
         }
@@ -193,6 +199,7 @@ class ScenarioRunner(
         outcome: ScenarioOutcome,
         emit: suspend (String) -> Unit,
     ) {
+        livePhaseObserver?.onSubPhase("upload")
         val bytes = phase.bytes.toInt().coerceAtLeast(1)
         val chunk = (phase.chunkKb * 1024).coerceAtLeast(1024)
         val idx = outcome.uploads.size
@@ -200,6 +207,9 @@ class ScenarioRunner(
             "$base/api/v1/upload?run=$runId",
             ByteArray(bytes) { 'A'.code.toByte() },
             chunk,
+            onBytesWritten = livePhaseObserver?.let { obs ->
+                { written, total -> obs.onUploadBytes(written, total, SystemClock.elapsedRealtimeNanos()) }
+            },
         )
         val up = UploadOutcome(idx, phase.bytes, r)
         outcome.uploads.add(up)
@@ -227,6 +237,7 @@ class ScenarioRunner(
         outcome: ScenarioOutcome,
         emit: suspend (String) -> Unit,
     ): Boolean {
+        livePhaseObserver?.onSubPhase("stream")
         var url = "$base/api/v1/stream?profile=${outcome.profile.profileId}&phase=$streamOrdinal&run=$runId"
         if (!inject.isNullOrBlank()) url += "&inject=$inject" // C09 前置：debug 注入透传
         liveStreamObserver?.onStreamStarted(phase.rateTps, SystemClock.elapsedRealtimeNanos())
@@ -291,15 +302,19 @@ class ScenarioRunner(
         outcome: ScenarioOutcome,
         emit: suspend (String) -> Unit,
     ) {
+        livePhaseObserver?.onSubPhase("tool_loop")
         val rounds = if (phase.rounds > 0) phase.rounds else 8
         val procMs = if (phase.serverProcMs > 0) phase.serverProcMs else 200
         val downBytes = if (phase.downBytes > 0) phase.downBytes else 2048
         val upBytes = (if (phase.upBytes > 0) phase.upBytes else 8192).toInt()
         val url = "$base/api/v1/toolloop?run=$runId&proc_ms=$procMs&down_bytes=$downBytes"
         for (round in 0 until rounds) {
+            livePhaseObserver?.onToolRound(round + 1, rounds, null)
             val r = client.toolLoop(url, upBytes)
             outcome.toolLoops.add(ToolLoopOutcome(round, procMs, r))
-            val totalMs = r.bodyEndNanos?.let { "%.2f".format((it - r.startNanos) / 1e6) } ?: "null"
+            val totalMsVal = r.bodyEndNanos?.let { (it - r.startNanos) / 1e6 }
+            livePhaseObserver?.onToolRound(round + 1, rounds, totalMsVal)
+            val totalMs = totalMsVal?.let { "%.2f".format(it) } ?: "null"
             val actualProcUs = if (r.trecvUs != null && r.tsendUs != null) r.tsendUs - r.trecvUs else null
             emit(
                 "TOOLLOOP scenario=${outcome.scenarioKey} round=$round up_bytes=$upBytes " +
