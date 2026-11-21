@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.engine.AnebTestMode
@@ -62,6 +63,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+/**
+ * 公网正式版（`release`：`probe-release.apk`）面向外部手机测速用户，默认隐藏首页右上角
+ * 局域网 `PROTOTYPE` 入口；仅在 `prototypeRelease`、`prototypeEngineering` 及 `debug` 变体展示。
+ */
+internal fun shouldShowPrototypeEntry(
+    isPrototypeRelease: Boolean = BuildConfig.PROTOTYPE_RELEASE,
+    isPrototypeEngineering: Boolean = BuildConfig.PROTOTYPE_ENGINEERING,
+    isDebug: Boolean = BuildConfig.DEBUG,
+): Boolean = isPrototypeRelease || isPrototypeEngineering || isDebug
 
 /** 首页：原生复刻 `ANEB_UI/screens/home.html` 的 idle 状态与三档网络抽屉。 */
 @Composable
@@ -80,6 +91,7 @@ fun HomeScreen(
     onOpenLastResult: (String) -> Unit,
     onOpenLastBasicResult: (String) -> Unit,
     onOpenVoice: (() -> Unit)? = null,
+    showPrototypeEntry: Boolean = shouldShowPrototypeEntry(),
 ) {
     val colors = AnebTheme.colors
     var sheetSnap by remember { mutableStateOf(SheetSnap.Collapsed) }
@@ -116,21 +128,23 @@ fun HomeScreen(
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp),
         )
-        Text(
-            "PROTOTYPE",
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            color = colors.brand,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 14.dp, end = 16.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(Color(0x1F32D9F5))
-                .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
-                .pressable(onClick = onOpenPrototype)
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-        )
+        if (showPrototypeEntry) {
+            Text(
+                "PROTOTYPE",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                color = colors.brand,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 14.dp, end = 16.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0x1F32D9F5))
+                    .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+                    .pressable(onClick = onOpenPrototype)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            )
+        }
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -356,40 +370,49 @@ private enum class SheetSnap {
 private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
-    val transition = rememberInfiniteTransition(label = "idle-start-ring")
-    val breath by transition.animateFloat(
-        initialValue = 0.985f,
-        targetValue = 1.025f,
-        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
-        label = "idle-start-breath",
-    )
-    val glow by transition.animateFloat(
-        initialValue = 0.16f,
-        targetValue = 0.46f,
-        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
-        label = "idle-start-glow",
-    )
-    val rotation by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
-        label = "idle-start-rotation",
-    )
+    val breath: Float
+    val glow: Float
+    val rotation: Float
+    if (reducedMotion) {
+        breath = 1f
+        glow = 0.18f
+        rotation = 0f
+    } else {
+        val transition = rememberInfiniteTransition(label = "idle-start-ring")
+        breath = transition.animateFloat(
+            initialValue = 0.985f,
+            targetValue = 1.025f,
+            animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+            label = "idle-start-breath",
+        ).value
+        glow = transition.animateFloat(
+            initialValue = 0.16f,
+            targetValue = 0.46f,
+            animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+            label = "idle-start-glow",
+        ).value
+        rotation = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
+            label = "idle-start-rotation",
+        ).value
+    }
     Box(
         modifier = Modifier
             .size(198.dp)
-            .scale(if (reducedMotion) 1f else breath)
+            .scale(breath)
             .pressable(onClick = onStart, enabled = !running),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
             val stroke = 1.25.dp.toPx()
             drawCircle(
-                color = Color(0xFF43E1E6).copy(alpha = if (reducedMotion) 0.18f else glow),
+                color = Color(0xFF43E1E6).copy(alpha = glow),
                 radius = size.minDimension / 2f - stroke,
                 style = Stroke(8.dp.toPx(), cap = StrokeCap.Round),
             )
-            rotate(if (reducedMotion) 0f else rotation, pivot = center) {
+            rotate(rotation, pivot = center) {
                 drawCircle(
                     brush = Brush.sweepGradient(
                         listOf(Color(0xFF67EDCC), Color(0xFF43E1E6), Color(0xFF3EB4F1), Color(0xFF67EDCC)),

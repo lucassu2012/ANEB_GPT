@@ -112,6 +112,11 @@ param(
 $port = __PORT__
 $mode = '__MODE__'
 $serverBinarySha256 = '__SERVER_BINARY_SHA256__'
+[System.IO.File]::WriteAllText(
+    (Join-Path (Split-Path -Parent $PSScriptRoot) 'results\observed-server-addr.txt'),
+    $addr,
+    (New-Object System.Text.UTF8Encoding($false, $true))
+)
 $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $port)
 $listener.Start()
 try {
@@ -1096,6 +1101,9 @@ exit 0
         Assert-AnEbTest -Condition ($null -eq $ownedProcess) -Message ('launcher cleanup leaves no owned process for ' + $launchMode)
         if ($launchMode -eq 'success') {
             Assert-AnEbTest -Condition ($launchTestResult.ExitCode -eq 0 -and $launchTestResult.Output -match 'ANEB Prototype 0.1 - READY') -Message 'launcher success path exits cleanly after readiness'
+            $observedAddrPath = Join-Path $launchFixture 'results\observed-server-addr.txt'
+            $observedAddr = if (Test-Path -LiteralPath $observedAddrPath -PathType Leaf) { [System.IO.File]::ReadAllText($observedAddrPath).Trim() } else { '' }
+            Assert-AnEbTest -Condition ($observedAddr -ceq ('127.0.0.1:' + $launchPort)) -Message ('launcher -ExitAfterReady binds loopback to avoid firewall prompts observed=' + $observedAddr)
         }
         else {
             Assert-AnEbTest -Condition ($launchTestResult.ExitCode -ne 0 -and $launchTestResult.Output -notmatch 'ANEB Prototype 0.1 - READY') -Message ('launcher rejects ' + $launchMode + ' and still cleans up')

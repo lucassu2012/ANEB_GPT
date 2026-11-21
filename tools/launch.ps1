@@ -372,6 +372,14 @@ try {
     if (-not ($serverArgs -ccontains '-prototype-only')) {
         $serverArgs = [string[]]($serverArgs + @('-prototype-only'))
     }
+    if ($ExitAfterReady) {
+        # ExitAfterReady only probes http://127.0.0.1:$Port and terminates immediately.
+        # Binding loopback here prevents Windows Defender Firewall inbound prompts for
+        # ephemeral test/smoke binaries while keeping the all-interface VERSION.json
+        # contract check enforced above.
+        $serverArgs = [string[]]@($serverArgs)
+        $serverArgs[$addrIndexes[0] + 1] = '127.0.0.1:' + $Port
+    }
 
     $serverProcess = Start-Process -FilePath $serverPath -ArgumentList $serverArgs -WorkingDirectory $rootFull -PassThru -WindowStyle Hidden
     if ($null -eq $serverProcess) {

@@ -1232,6 +1232,7 @@ class MainActivity : ComponentActivity() {
             onOpenLastResult = onOpenResult,
             onOpenLastBasicResult = onOpenBasicResult,
             onOpenVoice = onOpenVoice,
+            showPrototypeEntry = shouldShowPrototypeEntry(),
         )
     }
 

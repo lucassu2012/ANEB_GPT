@@ -27,6 +27,7 @@ class PilotV02DocsAndTemplatesTests(unittest.TestCase):
     def test_pilot_readiness_required_files_exist_and_historical_preserved(self) -> None:
         expected_files = [
             "README.md",
+            "MOBILE_PILOT_QUICKSTART_ZH.md",
             "PILOT_V02_QUICKSTART_ZH.md",
             "PILOT_V02_FEEDBACK_TEMPLATE.md",
             "PILOT_V02_FEEDBACK_TEMPLATE.json",
@@ -41,6 +42,7 @@ class PilotV02DocsAndTemplatesTests(unittest.TestCase):
         readme = self._read_utf8_no_bom(PILOT_DIR / "README.md")
         self.assertIn("NOT_RUN", readme)
         for target in (
+            "MOBILE_PILOT_QUICKSTART_ZH.md",
             "PILOT_V02_QUICKSTART_ZH.md",
             "PILOT_V02_FEEDBACK_TEMPLATE.md",
             "PILOT_V02_FEEDBACK_TEMPLATE.json",
@@ -92,6 +94,24 @@ class PilotV02DocsAndTemplatesTests(unittest.TestCase):
             "NOT_RUN",
         ):
             self.assertIn(token, qs)
+
+    def test_mobile_pilot_quickstart_is_phone_only_and_covers_miw2_sharing_and_boundaries(self) -> None:
+        qs = self._read_utf8_no_bom(PILOT_DIR / "MOBILE_PILOT_QUICKSTART_ZH.md")
+        for token in (
+            "ANEB-Probe-v0.2.0-public-pilot.apk",
+            "probe-release.apk",
+            "无需电脑",
+            "https://120.77.174.207:8443",
+            "b33df25ffa3b1bedc7e08af77b442bc205aeab553c07ee72344e19ed0f7b6003",
+            "LoadedResponsiveness v2",
+            "分享图片",
+            "导出 MD",
+            "不会静默上传",
+            "NOT_RUN",
+        ):
+            self.assertIn(token, qs)
+        self.assertNotIn("START_ANEB.bat", qs)
+        self.assertNotIn("verify-pilot-v0.2-kit.ps1", qs)
 
     def test_feedback_template_json_schema_and_enums(self) -> None:
         tpl_path = PILOT_DIR / "PILOT_V02_FEEDBACK_TEMPLATE.json"
