@@ -46,7 +46,9 @@ import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.radio.GeoTrack
+import com.aneb.probe.ui.components.AnebGlyph
 import com.aneb.probe.ui.components.AnebGradientCard
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.GlassChrome
 import com.aneb.probe.ui.components.AnebMetric
 import com.aneb.probe.ui.components.AnebMetricTrio
@@ -689,11 +691,19 @@ private fun AqsHeadline(
                 Text("T4 一票否决生效（封顶 54）", color = colors.poor, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             }
             if (run.aqsLowConfidence == true) {
-                Text(
-                    "⚠ ${ResultFormat.LOW_CONFIDENCE_LABEL}：证据不完整，本分数仅供参考",
-                    color = colors.lowConf, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 4.dp),
-                )
+                ) {
+                    AnebIcon(glyph = AnebGlyph.Alert, tint = colors.lowConf, size = 14.dp)
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        "${ResultFormat.LOW_CONFIDENCE_LABEL}：证据不完整，本分数仅供参考",
+                        color = colors.lowConf,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         } else {
             Text("AQS —", fontSize = 44.sp, fontWeight = FontWeight.Black, color = colors.invalidNeutral)

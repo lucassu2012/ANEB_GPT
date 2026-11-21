@@ -47,7 +47,9 @@ import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.ui.components.AnebGlyph
 import com.aneb.probe.ui.components.AnebGradientCard
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebPalette
@@ -164,7 +166,7 @@ fun HomeScreen(
             Text(
                 when (testMode) {
                     AnebTestMode.NETWORK_RESPONSIVENESS ->
-                        "实测空闲、下载与上传满载时的延迟膨胀（边传边聊 AI 卡不卡）；不产生综合分"
+                        "模拟后台下载或传大图时，前台聊 AI / 打语音会不会突然变卡（测延迟膨胀 Δ）"
                     AnebTestMode.NETWORK_BASIC ->
                         "测下载、上传、Ping、抖动，并按实机校准拐点评估抖音 1080P 与 6 大 AI 场景"
                     AnebTestMode.TOKEN_EXPERIENCE ->
@@ -222,17 +224,17 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 FeatureQuickCard(
-                    symbol = "◉",
+                    glyph = AnebGlyph.Voice,
                     accent = colors.excellent,
                     title = "实时 AI 语音",
                     badge = voiceBadge,
-                    subtitle = "双向帧示波 · 400ms 红线",
+                    subtitle = "10Hz 实时抖动示波 · 8 轮可点查",
                     enabled = onOpenVoice != null,
                     onClick = { onOpenVoice?.invoke() },
                     modifier = Modifier.weight(1f),
                 )
                 FeatureQuickCard(
-                    symbol = "▶",
+                    glyph = AnebGlyph.Video,
                     accent = colors.brand,
                     title = "抖音 / 豆包体验",
                     badge = appBadge,
@@ -248,17 +250,17 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 FeatureQuickCard(
-                    symbol = "◇",
+                    glyph = AnebGlyph.Image,
                     accent = colors.brand2,
                     title = "多模态 AI 轨迹",
-                    badge = "20 任务实战",
-                    subtitle = "文本/文档/图片可视矩阵剧场",
+                    badge = "~25s 三模态",
+                    subtitle = "文本/1MB文档/5MB高清图实时实战",
                     enabled = onOpenProfiles != null,
                     onClick = { onOpenProfiles?.invoke() },
                     modifier = Modifier.weight(1f),
                 )
                 FeatureQuickCard(
-                    symbol = "⌁",
+                    glyph = AnebGlyph.Pulse,
                     accent = colors.fair,
                     title = "主流 AI 直连测通",
                     badge = "REACH",
@@ -314,7 +316,7 @@ fun HomeScreen(
                         SheetDetailRow(
                             symbol = "↕",
                             label = if (lastBasicRun.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID)
-                                "上次抗负载响应性" else "上次基础 / 抖音测速",
+                                "上次高负载并发" else "上次基础 / 抖音测速",
                             value = "↓ $down  ↑ $up Mbps",
                             action = "查看",
                             onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
@@ -338,7 +340,7 @@ fun HomeScreen(
 
 @Composable
 private fun FeatureQuickCard(
-    symbol: String,
+    glyph: AnebGlyph,
     accent: Color,
     title: String,
     badge: String,
@@ -365,7 +367,7 @@ private fun FeatureQuickCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(symbol, fontSize = 13.sp, color = accent)
+            AnebIcon(glyph = glyph, tint = accent, size = 16.dp)
             Text(
                 badge,
                 fontSize = 8.5.sp,
@@ -409,7 +411,7 @@ private fun TestModeSwitch(
     val colors = AnebTheme.colors
     val orderedModes = listOf(
         AnebTestMode.TOKEN_EXPERIENCE to "AI 对话/编码",
-        AnebTestMode.NETWORK_RESPONSIVENESS to "抗负载响应",
+        AnebTestMode.NETWORK_RESPONSIVENESS to "高负载并发",
         AnebTestMode.NETWORK_BASIC to "基础/抖音",
     )
     Row(
@@ -441,25 +443,37 @@ private fun TestModeSwitch(
     }
 }
 
-/** 动态模式实测预览条：随顶部三模式切换实时变换主题色与实测环节，一眼分清三者差异。 */
+/** 动态模式实测预览条：随顶部三模式切换实时变换主题色与实测环节，零 emoji，一眼分清三者差异。 */
 @Composable
 private fun ActiveModePreviewStrip(testMode: AnebTestMode) {
     val colors = AnebTheme.colors
     val (accent, stages, outputLine) = when (testMode) {
         AnebTestMode.TOKEN_EXPERIENCE -> Triple(
             colors.brand,
-            listOf("💬 AI 打字流", "💻 编码 Agent", "🖼️ 多模态上传"),
-            "点击开始 → 实测首字 TTFT · 吐字间隔 ITL · 卡顿 · AI 体验分 AQS",
+            listOf(
+                AnebGlyph.Chat to "AI 对话流",
+                AnebGlyph.Code to "编码 Diff",
+                AnebGlyph.Image to "多模态图检",
+            ),
+            "点击开始 → 真实模拟对话/写代码/传图识图 · 测 TTFT/ITL/卡顿",
         )
         AnebTestMode.NETWORK_RESPONSIVENESS -> Triple(
             colors.brand2,
-            listOf("空闲基线 RTT", "满载下载+回声", "满载上传+回声"),
-            "点击开始 → 实时绘制 Bufferbloat 延迟膨胀曲线与增量 Δ（不出分）",
+            listOf(
+                AnebGlyph.Pulse to "01 空闲反应",
+                AnebGlyph.Load to "02 边下载边交互",
+                AnebGlyph.Load to "03 边上传边交互",
+            ),
+            "目的：查清后台下载或传大图时，前台聊 AI/打语音会不会突然卡顿",
         )
         AnebTestMode.NETWORK_BASIC -> Triple(
             colors.excellent,
-            listOf("Ping / 抖动", "并发下载/上传", "抖音 1080P 拐点"),
-            "点击开始 → 实测上下行 Mbps + 抖音流畅度 + 6 大 AI 场景适配",
+            listOf(
+                AnebGlyph.Pulse to "Ping / 抖动",
+                AnebGlyph.Load to "并发上下行",
+                AnebGlyph.Video to "抖音 1080P 拐点",
+            ),
+            "点击开始 → 实测上下行 Mbps + 抖音流畅度 + 6 大 AI 场景",
         )
     }
     Column(
@@ -475,17 +489,27 @@ private fun ActiveModePreviewStrip(testMode: AnebTestMode) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            stages.forEach { stage ->
-                Box(
+            stages.forEach { (glyph, stage) ->
+                Row(
                     modifier = Modifier
                         .weight(1f)
                         .clip(CircleShape)
                         .background(Color(0x880B1022))
                         .border(1.dp, accent.copy(alpha = 0.25f), CircleShape)
-                        .padding(vertical = 4.dp, horizontal = 4.dp),
-                    contentAlignment = Alignment.Center,
+                        .padding(vertical = 4.dp, horizontal = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
                 ) {
-                    Text(stage, fontSize = 8.5.sp, fontWeight = FontWeight.Medium, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    AnebIcon(glyph = glyph, tint = accent, size = 11.dp, strokeDp = 1.3.dp)
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        stage,
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -514,7 +538,7 @@ private fun IdleStartRing(testMode: AnebTestMode, running: Boolean, onStart: () 
         AnebTestMode.NETWORK_RESPONSIVENESS -> Triple(
             Color(0xFF9C7BFF),
             listOf(Color(0xFF7C8BFF), Color(0xFFA97BFF), Color(0xFFF5A94C), Color(0xFF7C8BFF)),
-            "抗负载响应",
+            "高负载并发",
         )
         AnebTestMode.NETWORK_BASIC -> Triple(
             Color(0xFF46E3A6),

@@ -184,6 +184,16 @@ private fun LiveBufferbloatOscilloscopeCard(
         deltaMs == null -> "等待满载回声…"
         else -> String.format(Locale.ROOT, "%+.0f ms 膨胀", deltaMs)
     }
+    val phasePurpose = when (phase) {
+        BasicSpeedPhase.IDLE, BasicSpeedPhase.PREPARING, BasicSpeedPhase.LATENCY ->
+            "阶段 1/3 · 测空闲基准：记录网络空闲时的正常交互反应时间"
+        BasicSpeedPhase.DOWNLOAD ->
+            "阶段 2/3 · 模拟「边满载下载/刷高清视频边聊 AI」：观察延迟是否暴涨"
+        BasicSpeedPhase.UPLOAD ->
+            "阶段 3/3 · 模拟「边传大图/同步网盘边打 AI 语音」：检验上行排队卡顿"
+        else ->
+            "正在汇总高负载并发结论：对比空闲基准与满载延迟膨胀 Δ"
+    }
     AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
         Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -193,7 +203,7 @@ private fun LiveBufferbloatOscilloscopeCard(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "满载延迟膨胀示波器（Bufferbloat）",
+                        "高负载并发延迟监控（Bufferbloat）",
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = colors.ink,
@@ -217,6 +227,18 @@ private fun LiveBufferbloatOscilloscopeCard(
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
+            Text(
+                phasePurpose,
+                fontSize = 9.5.sp,
+                lineHeight = 14.sp,
+                color = colors.ink,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x66121A30))
+                    .border(1.dp, statusColor.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

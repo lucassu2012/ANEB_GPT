@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -35,7 +36,10 @@ import androidx.compose.ui.unit.sp
 import com.aneb.probe.data.Exporter
 import com.aneb.probe.engine.BasicSpeedResult
 import com.aneb.probe.engine.LoadedResponsiveness
+import com.aneb.probe.engine.LoadedResponsivenessSummary
+import com.aneb.probe.ui.components.AnebGlyph
 import com.aneb.probe.ui.components.AnebGradientCard
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.AnebMetric
 import com.aneb.probe.ui.components.AnebMetricTrio
 import com.aneb.probe.ui.components.AnebPageIntro
@@ -47,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** Unscored directional facts. Historical Basic conclusions and scores are never reused here. */
 @Composable
@@ -76,13 +81,16 @@ fun LoadedResponsivenessScreen(result: BasicSpeedResult, onBack: () -> Unit) {
         ) {
             AnebTopBar(showBack = true, onBack = onBack, showMenu = false)
             AnebPageIntro(
-                eyebrow = "LOADED RESPONSIVENESS",
-                title = "抗负载响应性",
-                subtitle = "状态：${report?.status ?: result.status} · 节点 ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
+                eyebrow = "CONCURRENT LOAD",
+                title = "高负载并发",
+                subtitle = "边下载/传大图边用 AI 会不会卡 · 状态：${report?.status ?: result.status} · 节点 ${ProbeNodeCatalog.labelForUrl(result.serverBase)}",
                 modifier = Modifier.padding(top = 3.dp, bottom = 12.dp),
             )
 
             ExperienceVerdictCard(verdict = verdict)
+            Spacer(Modifier.height(10.dp))
+
+            ConcurrentScenarioConclusionsCard(summary = summary)
             Spacer(Modifier.height(12.dp))
 
             if (summary == null) {
@@ -224,6 +232,78 @@ fun LoadedResponsivenessScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                 color = colors.faint,
                 modifier = Modifier.padding(top = 6.dp, bottom = 28.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun ConcurrentScenarioConclusionsCard(summary: LoadedResponsivenessSummary?) {
+    val colors = AnebTheme.colors
+    val dlDelta = summary?.downloadDeltaMs?.takeIf { it.isFinite() }
+    val ulDelta = summary?.uploadDeltaMs?.takeIf { it.isFinite() }
+
+    val (dlOk, dlText) = when {
+        dlDelta == null -> false to "下载满载样本不足，无法判定边下载边聊 AI 的卡顿风险。"
+        dlDelta <= 40.0 -> true to "几乎无感（+${dlDelta.roundToInt()} ms）：后台下载或刷高清视频时，前台聊 AI 依然流畅不卡。"
+        dlDelta <= 120.0 -> true to "轻微变慢（+${dlDelta.roundToInt()} ms）：普通 AI 文本对话可用，但连续追问可能偶有半秒迟滞。"
+        else -> false to "明显变卡（+${dlDelta.roundToInt()} ms）：下载流量占满队列，会明显拖慢 AI 首字响应与吐字。"
+    }
+    val (ulOk, ulText) = when {
+        ulDelta == null -> false to "上传满载样本不足，无法判定边传大图边打 AI 语音的卡顿风险。"
+        ulDelta <= 40.0 -> true to "排队极轻（+${ulDelta.roundToInt()} ms）：上传大图或同步网盘的同时，实时 AI 语音仍可自然插话。"
+        ulDelta <= 120.0 -> true to "轻度排队（+${ulDelta.roundToInt()} ms）：实时语音偶有停顿，建议传大文件时错峰使用。"
+        else -> false to "极易卡顿（+${ulDelta.roundToInt()} ms）：上行缓冲区积压严重，边传图边语音极易抢话或断句。"
+    }
+    val (adviceOk, adviceText) = when {
+        dlDelta == null && ulDelta == null ->
+            false to "本次未采集到足够满载回声样本，请在稳定连接下重测一次。"
+        (dlDelta ?: 0.0) <= 40.0 && (ulDelta ?: 0.0) <= 40.0 ->
+            true to "当前网络队列管理表现优秀，日常多设备并发下载与使用 AI 无需额外限速。"
+        (ulDelta ?: 0.0) > 120.0 && (ulDelta ?: 0.0) >= (dlDelta ?: 0.0) ->
+            false to "主要瓶颈在上行队列膨胀：发大图/相册备份时建议暂停实时 AI 语音，或在路由器开启智能流控（SQM）。"
+        (dlDelta ?: 0.0) > 120.0 ->
+            false to "主要瓶颈在下行缓冲膨胀：后台全速下载会挤压前台交互，建议给大文件下载适当限速或切换 5G 对比。"
+        else ->
+            true to "并发负载存在轻度延迟抬升：常规 AI 对话不受影响，高敏实时语音建议避开大文件同步。"
+    }
+
+    AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(
+                "为什么测高负载并发？3 条直接结论",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.ink,
+            )
+            Text(
+                "普通测速只看空网最大带宽，但实际经常「边下载/传图边用 AI」。一旦路由器缓存膨胀，哪怕网速很高，前台对话与语音也会突然卡死。",
+                fontSize = 9.5.sp,
+                lineHeight = 14.5.sp,
+                color = colors.muted,
+            )
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
+            ScenarioConclusionRow("边下载 / 刷高清视频边聊 AI", dlText, dlOk)
+            ScenarioConclusionRow("边传大图 / 同步网盘边打 AI 语音", ulText, ulOk)
+            ScenarioConclusionRow("原因诊断与使用建议", adviceText, adviceOk)
+        }
+    }
+}
+
+@Composable
+private fun ScenarioConclusionRow(title: String, body: String, good: Boolean) {
+    val colors = AnebTheme.colors
+    val tint = if (good) colors.excellent else colors.fair
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        AnebIcon(
+            glyph = if (good) AnebGlyph.Check else AnebGlyph.Alert,
+            tint = tint,
+            size = 14.dp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+            Text(body, fontSize = 9.5.sp, lineHeight = 14.5.sp, color = colors.muted, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }

@@ -27,15 +27,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlin.math.roundToInt
 import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.engine.VoiceRunner
@@ -321,39 +329,182 @@ private fun VoiceBidirectionalCockpit(
     val colors = AnebTheme.colors
     val turns = sample?.liveTurnHistory.orEmpty()
     val totalTurns = (sample?.totalPlannedTurns ?: 8).coerceAtLeast(1)
-    val upProgress = ((sample?.framesSent ?: 0).toFloat() / (totalTurns * 75f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+    var selectedTurn by remember(turns.size, running) { mutableStateOf<Int?>(null) }
+    val upProgress = ((sample?.framesSent ?: 0).toFloat() / (totalTurns * 75f + VoiceRunner.SIM_M3_FRAMES).coerceAtLeast(1f)).coerceIn(0f, 1f)
     val downProgress = ((sample?.framesRecv ?: 0).toFloat() / (totalTurns * 80f).coerceAtLeast(1f)).coerceIn(0f, 1f)
     val m7Gap = sample?.m7MaxFrameGapMs
     val m7Alert = m7Gap != null && m7Gap.isFinite() && m7Gap > 150.0
+    val wave = sample?.liveFrameIntervalsMs.orEmpty()
+    val direction = sample?.liveDirection
+    val activeTurnIdx = sample?.liveActiveTurnIndex
+
+    val (dirLabel, dirAccent) = when (direction) {
+        "PING" -> "时延基线探测中" to colors.brand
+        "UPLINK" -> (if (activeTurnIdx != null) "第 ${activeTurnIdx + 1} 轮 · 上行发声中（20ms 帧）" else "上行 20ms 帧节奏校准中") to colors.brand
+        "WAITING_AI" -> (if (activeTurnIdx != null) "第 ${activeTurnIdx + 1} 轮 · 等待 AI 首帧开口" else "建立全双工会话中") to colors.fair
+        "DOWNLINK" -> (if (activeTurnIdx != null) "第 ${activeTurnIdx + 1} 轮 · AI 回复中（50fps 帧）" else "下行语音流接收中") to colors.excellent
+        "BARGE_IN" -> (if (activeTurnIdx != null) "第 ${activeTurnIdx + 1} 轮 · 触发打断停帧测试" else "打断停帧测试") to colors.brand2
+        "DONE" -> "8 轮双工测量完成" to colors.excellent
+        else -> (if (running) "准备实时语音会话…" else "待机 · 等待开始") to colors.muted
+    }
+
+    val instJit = sample?.liveInstantJitterMs ?: sample?.downNetJitterMs ?: sample?.upFrameJitterMs ?: sample?.jitterMs
+    val wavePeak = wave.maxOrNull()
 
     AnebGradientCard(Modifier.fillMaxWidth(), radius = 18.dp) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-            // 双工帧轨：上行说话 vs 下行 AI TTS 回复
+            // 1) 实时 10-15Hz 帧间隔与抖动波形示波器（肉眼可见每一次网络抖动尖峰）
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            Modifier
+                                .width(7.dp)
+                                .height(7.dp)
+                                .clip(CircleShape)
+                                .background(dirAccent),
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(dirLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1)
+                    }
+                    Text(
+                        instJit?.takeIf { it.isFinite() }?.let { "实时抖动 ${String.format(Locale.ROOT, "%.1f", it)} ms" }
+                            ?: "20ms 基准",
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if ((instJit ?: 0.0) > 25.0) colors.poor else dirAccent,
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(104.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF060A15))
+                        .border(1.dp, dirAccent.copy(alpha = if (running) 0.42f else 0.18f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val isPing = direction == "PING"
+                        val ceilingMs = maxOf(
+                            if (isPing) 120.0 else 75.0,
+                            (wavePeak ?: 0.0) * 1.2,
+                        )
+                        // 20ms 名义帧间隔参考基线（虚线）
+                        if (!isPing) {
+                            val nominalY = size.height * (1f - (20.0 / ceilingMs).toFloat().coerceIn(0f, 1f))
+                            drawLine(
+                                color = colors.excellent.copy(alpha = 0.45f),
+                                start = Offset(0f, nominalY),
+                                end = Offset(size.width, nominalY),
+                                strokeWidth = 1.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f)),
+                            )
+                        }
+                        if (wave.size >= 2) {
+                            val stepX = size.width / (wave.size - 1).coerceAtLeast(1)
+                            val strokePath = Path()
+                            val fillPath = Path()
+                            wave.forEachIndexed { idx, ms ->
+                                val x = idx * stepX
+                                val y = size.height * (1f - (ms / ceilingMs).toFloat().coerceIn(0.05f, 1f))
+                                if (idx == 0) {
+                                    strokePath.moveTo(x, y)
+                                    fillPath.moveTo(x, size.height)
+                                    fillPath.lineTo(x, y)
+                                } else {
+                                    strokePath.lineTo(x, y)
+                                    fillPath.lineTo(x, y)
+                                }
+                            }
+                            fillPath.lineTo(size.width, size.height)
+                            fillPath.close()
+                            drawPath(
+                                path = fillPath,
+                                brush = Brush.verticalGradient(
+                                    listOf(dirAccent.copy(alpha = 0.28f), Color.Transparent),
+                                ),
+                            )
+                            drawPath(
+                                path = strokePath,
+                                color = dirAccent,
+                                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                            )
+                            // 对超出 45ms 的抖动尖峰叠加醒目红/黄脉冲点
+                            wave.forEachIndexed { idx, ms ->
+                                if (!isPing && ms > 45.0) {
+                                    val x = idx * stepX
+                                    val y = size.height * (1f - (ms / ceilingMs).toFloat().coerceIn(0.05f, 1f))
+                                    drawCircle(
+                                        color = if (ms > 100.0) colors.poor else colors.fair,
+                                        radius = 3.2.dp.toPx(),
+                                        center = Offset(x, y),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (wave.size < 2) {
+                        Text(
+                            if (running) "正在采集实时帧间隔波动…" else "开始测量后以 10Hz 实时绘制双向帧间隔与抖动尖峰",
+                            fontSize = 9.5.sp,
+                            color = colors.faint,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.align(Alignment.TopEnd),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "峰值 ${wavePeak?.roundToInt() ?: 0} ms",
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = if ((wavePeak ?: 0.0) > 60.0) colors.fair else colors.muted,
+                            )
+                            Text(
+                                if (direction == "PING") "RTT" else "基准 20ms",
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = colors.faint,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2) 双工帧进度轨：上行说话 vs 下行 AI 回复
             VoiceDuplexRail(
-                label = "↑ 上行语音轨（我说话 · 20ms 帧）",
+                label = "上行语音轨（我说话 · 20ms 帧）",
                 stats = "已发 ${sample?.framesSent ?: 0} 帧 · M3 抖动 ${VoiceFormat.msOrDash(sample?.upFrameJitterMs)} ms",
                 fraction = upProgress,
                 accent = colors.brand,
             )
             VoiceDuplexRail(
-                label = "↓ 下行语音轨（AI 回复 · 50fps 帧）",
+                label = "下行语音轨（AI 回复 · 50fps 帧）",
                 stats = "已收 ${sample?.framesRecv ?: 0} 帧 · M7 静默 ${VoiceFormat.msOrDash(m7Gap)} ms",
                 fraction = downProgress,
                 accent = if (m7Alert) colors.poor else colors.excellent,
             )
 
-            // 8 轮对话打断进度条（T1..T8，T4/T7 为打断轮）
+            // 3) 交互式 8 轮对话打断选择器（点击任意已完成轮次查看明细）
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("多轮双工与打断节奏（⚡=打断轮）", fontSize = 9.5.sp, color = colors.muted)
+                    Text("8 轮双工对话（T4/T7 为打断轮 · 点击查明细）", fontSize = 9.5.sp, color = colors.muted)
                     Text(
-                        if (turns.isEmpty()) (if (running) "等待首轮回包…" else "0/$totalTurns 轮")
-                        else "已完成 ${turns.size}/$totalTurns 轮",
+                        "${turns.size}/$totalTurns 轮",
                         fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.SemiBold,
                         color = colors.brand,
                     )
@@ -362,8 +513,11 @@ private fun VoiceBidirectionalCockpit(
                     for (idx in 0 until totalTurns) {
                         val point = turns.firstOrNull { it.turnIndex == idx }
                         val isBarge = idx == 3 || idx == 6
+                        val isActiveNow = running && activeTurnIdx == idx && point == null
+                        val isSelected = selectedTurn == idx
                         val mouthEar = point?.mouthEarMs?.takeIf { it.isFinite() }
                         val cellAccent = when {
+                            isActiveNow -> colors.brand
                             mouthEar == null && point == null -> colors.faint
                             mouthEar == null -> colors.fair
                             mouthEar <= 260.0 -> colors.excellent
@@ -374,25 +528,40 @@ private fun VoiceBidirectionalCockpit(
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(if (point != null) cellAccent.copy(alpha = 0.16f) else Color(0x55090D1D))
+                                .background(
+                                    when {
+                                        isSelected -> cellAccent.copy(alpha = 0.28f)
+                                        point != null || isActiveNow -> cellAccent.copy(alpha = 0.14f)
+                                        else -> Color(0x55090D1D)
+                                    },
+                                )
                                 .border(
-                                    1.dp,
-                                    if (point != null) cellAccent.copy(alpha = 0.55f) else colors.hairline,
+                                    if (isSelected || isActiveNow) 1.3.dp else 1.dp,
+                                    if (point != null || isActiveNow) cellAccent.copy(alpha = 0.65f) else colors.hairline,
                                     RoundedCornerShape(8.dp),
+                                )
+                                .then(
+                                    if (point != null) Modifier.pressable(onClick = { selectedTurn = if (isSelected) null else idx })
+                                    else Modifier,
                                 )
                                 .padding(vertical = 5.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Text(
-                                if (isBarge) "T${idx + 1}⚡" else "T${idx + 1}",
+                                if (isBarge) "T${idx + 1}*" else "T${idx + 1}",
                                 fontSize = 8.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (point != null) colors.ink else colors.faint,
+                                fontWeight = if (isActiveNow || isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (point != null || isActiveNow) colors.ink else colors.faint,
                                 maxLines = 1,
                             )
                             Text(
-                                mouthEar?.let { "${it.roundToInt()}" } ?: "—",
+                                when {
+                                    mouthEar != null -> "${mouthEar.roundToInt()}"
+                                    isActiveNow -> "…"
+                                    else -> "—"
+                                },
                                 fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.SemiBold,
                                 color = cellAccent,
                                 maxLines = 1,
@@ -402,19 +571,48 @@ private fun VoiceBidirectionalCockpit(
                 }
             }
 
-            // 双向口到耳实时柱状示波图 + 400ms 红线
+            // 选中轮次剖析条
+            selectedTurn?.let { selIdx ->
+                turns.firstOrNull { it.turnIndex == selIdx }?.let { pt ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xAA0C1327))
+                            .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "T${pt.turnIndex + 1}${if (pt.interrupted) "（打断轮）" else ""}",
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.brand,
+                        )
+                        Text(
+                            "口到耳 ${VoiceFormat.msOrDash(pt.mouthEarMs, 0)}ms · TTFB ${VoiceFormat.msOrDash(pt.ttfbMs, 0)}ms · 静默 ${VoiceFormat.msOrDash(pt.maxGapMs, 0)}ms" +
+                                (pt.bargeStopMs?.let { " · 停帧 ${it.roundToInt()}ms" } ?: ""),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = colors.ink,
+                        )
+                    }
+                }
+            }
+
+            // 4) 逐轮口到耳 M1' vs 400ms 红线柱状图
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("逐轮口到耳 M1' vs 400ms 流畅红线", fontSize = 9.5.sp, color = colors.muted)
-                    Text("红虚线=400ms 否决线", fontSize = 8.5.sp, color = colors.poor.copy(alpha = 0.85f))
+                    Text("逐轮口到耳 M1' 对比（浅紫内柱=下行 TTFB）", fontSize = 9.5.sp, color = colors.muted)
+                    Text("红虚线=400ms 流畅线", fontSize = 8.5.sp, color = colors.poor.copy(alpha = 0.85f))
                 }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(82.dp)
+                        .height(78.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0x99070B17))
                         .border(1.dp, colors.hairline, RoundedCornerShape(12.dp))
@@ -446,7 +644,7 @@ private fun VoiceBidirectionalCockpit(
                                 else -> colors.poor
                             }
                             drawRoundRect(
-                                color = barColor.copy(alpha = 0.85f),
+                                color = barColor.copy(alpha = if (selectedTurn == idx) 1f else 0.82f),
                                 topLeft = Offset(left, size.height - barH),
                                 size = Size(barW, barH),
                                 cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
@@ -466,7 +664,7 @@ private fun VoiceBidirectionalCockpit(
                     }
                     if (turns.isEmpty()) {
                         Text(
-                            if (running) "正在建立双工会话并采集逐轮口到耳波形…" else "点击上方「开始实时语音测量」后实时绘制 8 轮双向时延",
+                            if (running) "完成首轮对话后逐轮绘制口到耳对比柱…" else "点击上方开始后逐轮记录口到耳延迟",
                             fontSize = 9.5.sp,
                             color = colors.faint,
                             modifier = Modifier.align(Alignment.Center),

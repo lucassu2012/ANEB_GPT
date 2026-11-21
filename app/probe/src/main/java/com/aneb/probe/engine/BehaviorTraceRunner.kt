@@ -102,7 +102,14 @@ class BehaviorTraceRunner internal constructor(
         val currentWorkloadKind: String?,
         val currentStep: String, // "echo" | "upload" | "stream" | "download" | "done"
         val currentUploadBytes: Long = 0L,
+        val uploadedBytes: Long = 0L,
+        val liveUploadMbps: Double? = null,
+        val plannedTokens: Int = 0,
+        val streamedTokens: Int = 0,
+        val liveStreamRateTps: Double? = null,
         val currentArtifactBytes: Long = 0L,
+        val downloadedBytes: Long = 0L,
+        val liveSpeedHistory: List<Double> = emptyList(),
         val echoP50Ms: Double? = null,
         val echoJitterMs: Double? = null,
         val completedTasks: List<TaskExecutionOutcome> = emptyList(),
@@ -184,10 +191,27 @@ class BehaviorTraceRunner internal constructor(
         var totalOnTimeTokens = 0
         var totalEvaluatedOnTimeTokens = 0
 
+        val liveSpeedHistory = ArrayDeque<Double>(40)
+        fun recordLiveSpeed(value: Double) {
+            if (!value.isFinite() || value < 0.0) return
+            liveSpeedHistory.addLast(value)
+            while (liveSpeedHistory.size > 40) liveSpeedHistory.removeFirst()
+        }
+
         for ((idx, task) in tasksToRun.withIndex()) {
             val taskStartNanos = clock.now()
             val taskErrors = mutableListOf<String>()
-            fun emitStep(step: String) {
+            val taskPlannedTokens = task.tokenPlans.size
+            var taskUploadedBytes = 0L
+            var taskLiveUpMbps: Double? = null
+            var taskStreamedTokens = 0
+            var taskLiveStreamTps: Double? = null
+            var taskDownloadedBytes = 0L
+            var lastEmitNanos = 0L
+            fun emitStep(step: String, force: Boolean = true) {
+                val now = clock.now()
+                if (!force && now - lastEmitNanos < 90_000_000L) return
+                lastEmitNanos = now
                 _liveProgress.value = LiveTraceProgress(
                     totalTasks = tasksToRun.size,
                     plannedKinds = plannedKinds,
@@ -196,7 +220,14 @@ class BehaviorTraceRunner internal constructor(
                     currentWorkloadKind = task.workloadKind,
                     currentStep = step,
                     currentUploadBytes = task.uploadBytes,
+                    uploadedBytes = taskUploadedBytes,
+                    liveUploadMbps = taskLiveUpMbps,
+                    plannedTokens = taskPlannedTokens,
+                    streamedTokens = taskStreamedTokens,
+                    liveStreamRateTps = taskLiveStreamTps,
                     currentArtifactBytes = task.artifactBytes,
+                    downloadedBytes = taskDownloadedBytes,
+                    liveSpeedHistory = liveSpeedHistory.toList(),
                     echoP50Ms = echoP50Ms,
                     echoJitterMs = echoJitterMs,
                     completedTasks = taskOutcomes.toList(),
@@ -209,14 +240,24 @@ class BehaviorTraceRunner internal constructor(
             var uploadGoodputMbps: Double? = null
             var uploadDeviationMs: Double? = null
             if (task.uploadBytes > 0L) {
-                emitStep("upload")
+                val uploadStartNs = clock.now()
+                emitStep("upload", force = true)
                 totalRequests++
                 val up = client.uploadTraceStream(
                     url = "$base/api/v1/upload?run=${config.runId}",
                     totalBytes = task.uploadBytes,
                     chunkSizes = task.uploadChunks,
                     chunkCadenceMs = task.uploadChunkCadenceMs.roundToLong(),
+                    onBytesWritten = { written ->
+                        taskUploadedBytes = written
+                        val elapsedSec = ((clock.now() - uploadStartNs) / 1e9).coerceAtLeast(0.02)
+                        val mbps = (written * 8.0) / elapsedSec / 1e6
+                        taskLiveUpMbps = mbps
+                        recordLiveSpeed(mbps)
+                        emitStep("upload", force = false)
+                    },
                 )
+                taskUploadedBytes = if (up.error == null && up.httpCode in 200..299) task.uploadBytes else taskUploadedBytes
                 uploadOk = up.error == null && up.httpCode in 200..299
                 if (!uploadOk) {
                     failedRequests++
@@ -261,7 +302,22 @@ class BehaviorTraceRunner internal constructor(
                 val rateStr = String.format(Locale.ROOT, "%.3f", rateTps)
                 val streamUrl = "$base/api/v1/stream?tokens=$plannedTokens&rate_tps=$rateStr" +
                     "&seed=${config.tracePlan.seed + task.taskIndex}&ttft_inject_us=$ttftInjectUs&run=${config.runId}"
-                val sr = client.stream(streamUrl, expectedTokens = plannedTokens)
+                var firstEvNs = 0L
+                val sr = client.stream(
+                    url = streamUrl,
+                    expectedTokens = plannedTokens,
+                    onEventArrival = { arrivalNs ->
+                        taskStreamedTokens++
+                        if (firstEvNs == 0L) firstEvNs = arrivalNs
+                        val spanSec = ((arrivalNs - firstEvNs) / 1e9).coerceAtLeast(0.05)
+                        val tps = if (taskStreamedTokens >= 2) (taskStreamedTokens - 1) / spanSec else 0.0
+                        if (tps > 0.0) {
+                            taskLiveStreamTps = tps
+                            recordLiveSpeed(tps)
+                        }
+                        emitStep("stream", force = false)
+                    },
+                )
                 val body = sr.stream
                 val httpOk = sr.error == null && sr.httpCode in 200..299
                 if (!httpOk || body == null) {
@@ -344,12 +400,15 @@ class BehaviorTraceRunner internal constructor(
             var artifactLatencyMs: Double? = null
             var downGoodputMbps: Double? = null
             if (task.artifactBytes > 0L) {
-                emitStep("download")
+                emitStep("download", force = true)
                 totalRequests++
                 val chunkKb = (task.artifactChunkBytes / 1024).coerceIn(16, 1024)
                 val dl = client.downloadThroughput(
                     "$base/api/v1/download?bytes=${task.artifactBytes}&chunk_kb=$chunkKb",
-                ) { _, _ -> }
+                ) { count, _ ->
+                    taskDownloadedBytes += count.toLong()
+                    emitStep("download", force = false)
+                }
                 val endNs = dl.endNanos
                 downloadOk = dl.error == null && dl.httpCode in 200..299 && endNs != null && dl.totalBytes >= task.artifactBytes
                 if (!downloadOk) {

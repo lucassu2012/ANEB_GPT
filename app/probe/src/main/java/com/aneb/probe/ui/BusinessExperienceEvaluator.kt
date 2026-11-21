@@ -307,11 +307,11 @@ object BusinessExperienceEvaluator {
         if (summary == null || summary.idleP50Ms == null) {
             return Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "待实测",
                 tone = Tone.NEUTRAL,
                 headline = "尚未获得有效负载响应证据",
-                detail = "运行「抗负载响应」可测出边下载/边上传文件时，交互延迟会暴涨多少毫秒。",
+                detail = "运行「高负载并发」可测出边下载/边上传文件时，交互延迟会暴涨多少毫秒。",
                 calibrationBasis = basis,
             )
         }
@@ -322,7 +322,7 @@ object BusinessExperienceEvaluator {
         return when {
             maxDelta == null -> Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "部分样本",
                 tone = Tone.CAUTION,
                 headline = "仅部分方向获得负载响应样本",
@@ -331,7 +331,7 @@ object BusinessExperienceEvaluator {
             )
             maxDelta <= 40.0 -> Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "缓冲控制优秀",
                 tone = Tone.EXCELLENT,
                 headline = "满载下载/上传时延迟几乎不膨胀",
@@ -340,7 +340,7 @@ object BusinessExperienceEvaluator {
             )
             maxDelta <= 120.0 -> Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "轻度膨胀",
                 tone = Tone.GOOD,
                 headline = "高负载下延迟有可控抬升",
@@ -349,7 +349,7 @@ object BusinessExperienceEvaluator {
             )
             maxDelta <= 250.0 -> Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "明显排队",
                 tone = Tone.CAUTION,
                 headline = "满载传输存在明显 Bufferbloat 排队膨胀",
@@ -358,7 +358,7 @@ object BusinessExperienceEvaluator {
             )
             else -> Verdict(
                 id = "loaded_responsiveness",
-                title = "抗负载响应（边传边聊 AI）",
+                title = "高负载并发（边传边聊 AI）",
                 badge = "严重膨胀",
                 tone = Tone.POOR,
                 headline = "满载期间延迟暴涨，并发交互极易卡顿",

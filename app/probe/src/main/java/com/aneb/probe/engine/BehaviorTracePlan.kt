@@ -71,6 +71,35 @@ data class BehaviorTracePlan(
 ) {
     val totalPlannedTokens: Int get() = tasks.sumOf { it.tokenPlans.size }
 
+    /**
+     * 快速三模态抽样计划（文本对话 → 长文档上传理解 → 高清图片多模态，共 3 项约 20–30 秒）：
+     * 从同一份冻结 `golden_trace.jsonl` 中各取 1 项代表性真实模态任务，控制单次流式 token 上限，
+     * 专供移动端交互式快速体验；完整 20 任务取证评分仍使用原始 [BehaviorTracePlan]。
+     */
+    fun quickMultimodalSample(maxTokensPerTask: Int = 96): BehaviorTracePlan {
+        val textTask = tasks.firstOrNull { it.workloadKind == "text" }
+        val docTask = tasks.filter { it.workloadKind == "document" }.minByOrNull { it.uploadBytes }
+        val imageTask = tasks.filter { it.workloadKind == "image" }.minByOrNull { it.uploadBytes }
+        val picked = listOfNotNull(textTask, docTask, imageTask).ifEmpty { tasks.take(3) }
+        val compact = picked.mapIndexed { idx, task ->
+            val cappedTokens = task.tokenPlans.take(maxTokensPerTask.coerceAtLeast(24))
+            val firstOff = cappedTokens.firstOrNull()?.plannedOffsetMs ?: 0.0
+            val lastOff = cappedTokens.lastOrNull()?.plannedOffsetMs ?: firstOff
+            val estDur = (lastOff - firstOff).coerceAtLeast(1_500.0) + task.processingDelayMs
+            task.copy(
+                taskIndex = idx,
+                uploadChunkCadenceMs = 0.0,
+                tokenPlans = cappedTokens,
+                plannedDurationMs = estDur,
+                interTaskGapMs = 0.0,
+            )
+        }
+        return copy(
+            tasks = compact,
+            totalPlannedSpanMs = compact.sumOf { it.plannedDurationMs },
+        )
+    }
+
     companion object {
         const val CONTRACT_VERSION = "aneb-behavior-trace-v1"
         private val FORBIDDEN_NETWORK_KEYS = setOf(

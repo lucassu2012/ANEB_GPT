@@ -97,7 +97,7 @@ class ProfileCatalogLaunchUiTest {
             assertTrue("voice profile launch button must fire onOpenVoice", openedVoice)
 
             assertTrue(clickNodeWithText(composeView, "发起基础测速"))
-            assertTrue(clickNodeWithText(composeView, "抗负载响应性"))
+            assertTrue(clickNodeWithText(composeView, "高负载并发"))
             assertTrue(clickNodeWithText(composeView, "发起 AI 体验测试（含本场景）"))
             idleMain()
             assertEquals(

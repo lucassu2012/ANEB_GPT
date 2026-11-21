@@ -76,7 +76,7 @@ object ResultFormat {
         val srcRunId = run.aqsV02ContinuityRunId ?: return null
         val score = run.aqsV02Score
         val head = if (score != null) {
-            val lowConf = if (run.aqsV02LowConfidence == true) "　⚠ $LOW_CONFIDENCE_LABEL" else ""
+            val lowConf = if (run.aqsV02LowConfidence == true) "　[$LOW_CONFIDENCE_LABEL]" else ""
             val veto = if (run.aqsV02VetoApplied == true) "　T4 否决封顶" else ""
             String.format(Locale.ROOT, "AQS v0.2 = %.1f（%s）%s%s", score, gradeLabel(aqsGrade(score)), veto, lowConf)
         } else {

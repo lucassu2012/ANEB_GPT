@@ -93,6 +93,14 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
         // ── 实时双向示波座舱只读投影（additive 默认值，零测量/落库影响）──
         val liveTurnHistory: List<TurnLivePoint> = emptyList(),
         val totalPlannedTurns: Int = 8,
+        /** 当前实时方向状态：PING / UPLINK / WAITING_AI / DOWNLINK / BARGE_IN / DONE */
+        val liveDirection: String? = null,
+        /** 当前正在进行的轮次索引（0 起）；非轮次阶段 null */
+        val liveActiveTurnIndex: Int? = null,
+        /** 最近 48 个实时帧间隔或 RTT 样本（ms），10-15Hz 驱动实时示波波形 */
+        val liveFrameIntervalsMs: List<Double> = emptyList(),
+        /** 实时滚动抖动估计（ms），测中持续刷新供用户观察波动 */
+        val liveInstantJitterMs: Double? = null,
     )
 
     companion object {
@@ -321,7 +329,16 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
             val r = withContext(Dispatchers.IO) { runCatching { client.echo("$base/api/v1/echo") }.getOrNull() }
             val rttMs = (System.nanoTime() - t0) / 1e6
             if (i > 0 && r != null && r.error == null) rtts.add(rttMs)
-            send(Sample(Phase.Ping, median(rtts), quantJitter(rtts), null, null, null, 0, 0, i / 12f * 0.15f, caliber = SIM_CALIBER))
+            val liveJit = quantJitter(rtts)
+            send(
+                Sample(
+                    Phase.Ping, median(rtts), liveJit, null, null, null, 0, 0,
+                    i / 12f * 0.15f, caliber = SIM_CALIBER,
+                    liveDirection = "PING",
+                    liveFrameIntervalsMs = rtts.takeLast(48),
+                    liveInstantJitterMs = liveJit,
+                )
+            )
             delay(70)
         }
         val rttMed = median(rtts)
@@ -329,24 +346,55 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
 
         // ---- Uplink（v1 相位原样保留专供 M3：wire 无逐上行帧服务端时戳，chunk_us 仍是唯一权威）----
         val sent = AtomicInteger(0)
+        val uplinkLiveLock = Any()
+        val uplinkLiveIntervals = ArrayDeque<Double>(48)
+        var prevUplinkCbNs = 0L
         var upResult: AnebClient.UploadResult? = null
         val upJob = launch(Dispatchers.IO) {
             upResult = runCatching {
                 client.uploadPaced(
                     "$base/api/v1/upload?run=voice_sim",
                     frames = SIM_M3_FRAMES, frameBytes = FRAME_BYTES, intervalMs = FRAME_INTERVAL_MS,
-                ) { n, _ -> sent.set(n) }
+                ) { n, tsNs ->
+                    sent.set(n)
+                    if (prevUplinkCbNs > 0L) {
+                        val dtMs = ((tsNs - prevUplinkCbNs) / 1e6).coerceIn(0.0, 500.0)
+                        synchronized(uplinkLiveLock) {
+                            uplinkLiveIntervals.addLast(dtMs)
+                            while (uplinkLiveIntervals.size > 48) uplinkLiveIntervals.removeFirst()
+                        }
+                    }
+                    prevUplinkCbNs = tsNs
+                }
             }.getOrNull()
         }
         while (upJob.isActive) {
-            send(Sample(Phase.Uplink, rttMed, nJit, null, null, null, sent.get(), 0, (0.15f + sent.get().toFloat() / SIM_M3_FRAMES * 0.15f).coerceIn(0f, 0.3f), caliber = SIM_CALIBER))
-            delay(100)
+            val snap = synchronized(uplinkLiveLock) { uplinkLiveIntervals.toList() }
+            val rollingUpJit = if (snap.size >= 4) p95(snap.map { abs(it - FRAME_INTERVAL_MS) }) else null
+            send(
+                Sample(
+                    Phase.Uplink, rttMed, nJit, rollingUpJit, null, null, sent.get(), 0,
+                    (0.15f + sent.get().toFloat() / SIM_M3_FRAMES * 0.15f).coerceIn(0f, 0.3f),
+                    caliber = SIM_CALIBER,
+                    liveDirection = "UPLINK",
+                    liveFrameIntervalsMs = snap,
+                    liveInstantJitterMs = rollingUpJit,
+                )
+            )
+            delay(80)
         }
         val upIntervalsUs = upResult?.serverView?.chunkUs.orEmpty().zipWithNext { a, b -> b - a }
         val upJitter = frameJitterP95Ms(upIntervalsUs, FRAME_INTERVAL_MS * 1000)
 
         // ---- Handshake：WS 升级 + 计划首帧 + session_ready ----
-        send(Sample(Phase.Handshake, rttMed, nJit, upJitter, null, null, sent.get(), 0, 0.32f, caliber = SIM_CALIBER))
+        send(
+            Sample(
+                Phase.Handshake, rttMed, nJit, upJitter, null, null, sent.get(), 0, 0.32f,
+                caliber = SIM_CALIBER,
+                liveDirection = "WAITING_AI",
+                liveInstantJitterMs = upJitter,
+            )
+        )
         val plan = defaultSimPlan(seed = System.nanoTime())
         val session = client.realtimeSim(base, plan)
         session.connect()
@@ -359,19 +407,58 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
             // ---- Turns：逐轮 上行发帧→commit→收下行(可打断)→turn_summary ----
             val ledger = ArrayList<TurnLedger>(plan.turns.size)
             var framesRecvTotal = 0
+            var turnUpSentTotal = 0
             var backpressure = false
+            val liveWave = ArrayDeque<Double>(48)
+            var runningMaxGapMs = 0.0
+            var runningTurnHistory = emptyList<TurnLivePoint>()
+            var runningMouthEar: Double? = null
+            var runningTtfb: Double? = null
+            var runningBargeMax: Double? = null
             val payload = ByteArray(plan.turns.first().uplinkFrameBytes) { (it * 31 + 17).toByte() }
             for ((i, t) in plan.turns.withIndex()) {
                 session.sendText(RealtimeWire.jsonOut.encodeToString(RealtimeWire.TurnStart.serializer(), RealtimeWire.TurnStart(turnId = t.turnId, turnIndex = i)))
                 // 上行绝对期限调度（不累积漂移）
                 val t0 = android.os.SystemClock.elapsedRealtimeNanos()
                 var lastUpEnqUs = 0L
+                var prevUpEnqUs = 0L
                 for (seq in 0 until t.uplinkFrames) {
                     val lagNs = t0 + seq * plan.frameMs * 1_000_000L - android.os.SystemClock.elapsedRealtimeNanos()
                     if (lagNs > 0) delay(lagNs / 1_000_000)
                     lastUpEnqUs = nowUs()
                     session.sendFrame(RealtimeWire.encodeUplink(i, seq, payload))
+                    if (prevUpEnqUs > 0L) {
+                        val dtMs = ((lastUpEnqUs - prevUpEnqUs) / 1000.0).coerceIn(0.0, 400.0)
+                        liveWave.addLast(dtMs)
+                        while (liveWave.size > 48) liveWave.removeFirst()
+                    }
+                    prevUpEnqUs = lastUpEnqUs
+                    if (seq % 4 == 0 || seq == t.uplinkFrames - 1) {
+                        val frac = (0.35f + (i + (seq + 1f) / (t.uplinkFrames * 2.2f)) / plan.turns.size * 0.6f).coerceIn(0.35f, 0.97f)
+                        val waveSnap = liveWave.toList()
+                        val instJit = if (waveSnap.size >= 4) p95(waveSnap.map { abs(it - plan.frameMs) }) else upJitter
+                        trySend(
+                            Sample(
+                                Phase.Turns, rttMed, nJit, upJitter, null, null,
+                                sent.get() + turnUpSentTotal + seq + 1, framesRecvTotal, frac,
+                                ttfbP50Ms = runningTtfb,
+                                downNetJitterMs = instJit,
+                                mouthEarProxyMs = runningMouthEar,
+                                bargeStopMaxMs = runningBargeMax,
+                                turnsOk = ledger.count { it.summary.protocolOk == true },
+                                caliber = SIM_CALIBER, lowConfidence = backpressure,
+                                m7MaxFrameGapMs = runningMaxGapMs.takeIf { it > 0.0 },
+                                liveTurnHistory = runningTurnHistory,
+                                totalPlannedTurns = plan.turns.size,
+                                liveDirection = "UPLINK",
+                                liveActiveTurnIndex = i,
+                                liveFrameIntervalsMs = waveSnap,
+                                liveInstantJitterMs = instJit,
+                            )
+                        )
+                    }
                 }
+                turnUpSentTotal += t.uplinkFrames
                 // 背压：入队打戳含排队 → 低置信。但采样点不能是"末帧刚入队时"——
                 // 那一刻末帧自己就在队列里，queueSize>0 几乎恒真（T65/D-507 实证 35/35
                 // 全 run 低置信，N1/M1/M3 置信标记失去区分力）。等一个帧周期让 socket
@@ -381,12 +468,32 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                 if (session.queueSize() > 0) backpressure = true
                 val commitEnqUs = nowUs()
                 session.sendText(RealtimeWire.jsonOut.encodeToString(RealtimeWire.SpeechCommit.serializer(), RealtimeWire.SpeechCommit(turnId = t.turnId)))
+                trySend(
+                    Sample(
+                        Phase.Turns, rttMed, nJit, upJitter, null, null,
+                        sent.get() + turnUpSentTotal, framesRecvTotal,
+                        (0.35f + (i + 0.5f) / plan.turns.size * 0.6f).coerceIn(0.35f, 0.97f),
+                        ttfbP50Ms = runningTtfb,
+                        mouthEarProxyMs = runningMouthEar,
+                        bargeStopMaxMs = runningBargeMax,
+                        turnsOk = ledger.count { it.summary.protocolOk == true },
+                        caliber = SIM_CALIBER, lowConfidence = backpressure,
+                        m7MaxFrameGapMs = runningMaxGapMs.takeIf { it > 0.0 },
+                        liveTurnHistory = runningTurnHistory,
+                        totalPlannedTurns = plan.turns.size,
+                        liveDirection = "WAITING_AI",
+                        liveActiveTurnIndex = i,
+                        liveFrameIntervalsMs = liveWave.toList(),
+                        liveInstantJitterMs = upJitter,
+                    )
+                )
 
                 // 收下行帧直至 turn_summary；打断轮在第 bargeInAfterFrames 帧后发 barge_in
                 val frames = ArrayList<RealtimeWire.DownFrame>(t.plannedDownlinkFrames)
                 var bargeEnqUs: Long? = null
                 var summary: RealtimeWire.InboundControl? = null
                 var summaryArrivalUs = 0L
+                var prevDownArrivalUs = 0L
                 kotlinx.coroutines.withTimeout(20_000) {
                     while (summary == null) {
                         when (val m = session.inbound.receive()) {
@@ -394,9 +501,43 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                                 val f = RealtimeWire.decodeDownlink(m.bytes, m.arrivalUs) ?: continue
                                 if (f.turnIndex != i) continue // 迷途帧不入统计
                                 frames.add(f)
+                                var dtMs = plan.frameMs.toDouble()
+                                if (prevDownArrivalUs > 0L) {
+                                    dtMs = ((f.arrivalUs - prevDownArrivalUs) / 1000.0).coerceIn(0.0, 2000.0)
+                                    liveWave.addLast(dtMs)
+                                    while (liveWave.size > 48) liveWave.removeFirst()
+                                    if (dtMs > runningMaxGapMs) runningMaxGapMs = dtMs
+                                }
+                                prevDownArrivalUs = f.arrivalUs
+                                var triggeredBargeNow = false
                                 if (t.interrupted && bargeEnqUs == null && frames.size == t.bargeInAfterFrames) {
                                     bargeEnqUs = nowUs()
+                                    triggeredBargeNow = true
                                     session.sendText(RealtimeWire.jsonOut.encodeToString(RealtimeWire.BargeIn.serializer(), RealtimeWire.BargeIn(turnId = t.turnId)))
+                                }
+                                if (triggeredBargeNow || frames.size == 1 || frames.size % 3 == 0 || dtMs > 45.0) {
+                                    val waveSnap = liveWave.toList()
+                                    val liveDownJit = if (waveSnap.size >= 4) p95(waveSnap.map { abs(it - plan.frameMs) }) else null
+                                    val frac = (0.35f + (i + 0.55f + (frames.size.toFloat() / t.plannedDownlinkFrames.coerceAtLeast(1)) * 0.42f) / plan.turns.size * 0.6f).coerceIn(0.35f, 0.97f)
+                                    trySend(
+                                        Sample(
+                                            Phase.Turns, rttMed, nJit, upJitter, null, null,
+                                            sent.get() + turnUpSentTotal, framesRecvTotal + frames.size, frac,
+                                            ttfbP50Ms = runningTtfb,
+                                            downNetJitterMs = liveDownJit,
+                                            mouthEarProxyMs = runningMouthEar,
+                                            bargeStopMaxMs = runningBargeMax,
+                                            turnsOk = ledger.count { it.summary.protocolOk == true },
+                                            caliber = SIM_CALIBER, lowConfidence = backpressure,
+                                            m7MaxFrameGapMs = runningMaxGapMs.takeIf { it > 0.0 },
+                                            liveTurnHistory = runningTurnHistory,
+                                            totalPlannedTurns = plan.turns.size,
+                                            liveDirection = if (bargeEnqUs != null) "BARGE_IN" else "DOWNLINK",
+                                            liveActiveTurnIndex = i,
+                                            liveFrameIntervalsMs = waveSnap,
+                                            liveInstantJitterMs = liveDownJit,
+                                        )
+                                    )
                                 }
                             }
                             is RealtimeSimSession.In.Text -> {
@@ -432,21 +573,30 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                         protocolOk = l.summary.protocolOk == true,
                     )
                 }
-                val runningMouthEar = median(liveHistory.mapNotNull { it.mouthEarMs })
-                val runningTtfb = median(liveHistory.mapNotNull { it.ttfbMs })
+                runningTurnHistory = liveHistory
+                runningMouthEar = median(liveHistory.mapNotNull { it.mouthEarMs })
+                runningTtfb = median(liveHistory.mapNotNull { it.ttfbMs })
+                runningBargeMax = liveHistory.mapNotNull { it.bargeStopMs }.maxOrNull()
                 val runningM7 = liveHistory.mapNotNull { it.maxGapMs }.maxOrNull()
+                val waveSnap = liveWave.toList()
+                val liveDownJit = if (waveSnap.size >= 4) p95(waveSnap.map { abs(it - plan.frameMs) }) else null
                 send(
                     Sample(
-                        Phase.Turns, rttMed, nJit, upJitter, null, null, sent.get(), framesRecvTotal,
+                        Phase.Turns, rttMed, nJit, upJitter, null, null, sent.get() + turnUpSentTotal, framesRecvTotal,
                         (0.35f + (i + 1f) / plan.turns.size * 0.6f).coerceIn(0f, 0.97f),
                         ttfbP50Ms = runningTtfb,
+                        downNetJitterMs = liveDownJit,
                         mouthEarProxyMs = runningMouthEar,
-                        bargeStopMaxMs = liveHistory.mapNotNull { it.bargeStopMs }.maxOrNull(),
+                        bargeStopMaxMs = runningBargeMax,
                         turnsOk = ledger.count { it.summary.protocolOk == true },
                         caliber = SIM_CALIBER, lowConfidence = backpressure,
                         m7MaxFrameGapMs = runningM7,
                         liveTurnHistory = liveHistory,
                         totalPlannedTurns = plan.turns.size,
+                        liveDirection = "DOWNLINK",
+                        liveActiveTurnIndex = i,
+                        liveFrameIntervalsMs = waveSnap,
+                        liveInstantJitterMs = liveDownJit,
                     )
                 )
             }
@@ -518,6 +668,9 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                     voiceNearZeroArrivalRatio = nearZeroArrivalRatio(downRawIntervalsUs),
                     liveTurnHistory = finalLiveHistory,
                     totalPlannedTurns = plan.turns.size,
+                    liveDirection = "DONE",
+                    liveFrameIntervalsMs = liveWave.toList(),
+                    liveInstantJitterMs = if (jitterDevsUs.size < 2) null else p95(jitterDevsUs.map { it / 1000.0 }),
                 )
             )
         } finally {

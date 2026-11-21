@@ -26,7 +26,7 @@ import com.aneb.probe.ui.theme.AnebTheme
  * 材质实现（毛玻璃 API31/降级方案）：
  * - **API 31+（RenderEffect 可用，真机 P40 Pro 支持）**：半透材质底色 [AnebColors.material]
  *   叠加 [glassBlur] —— 用 `Modifier.graphicsLayer { renderEffect = createBlurEffect(saturate 近似) }`
- *   软化材质层，读作"真实材质"。⚠️ Compose 无原生 backdrop-filter：renderEffect 作用于层
+ *   软化材质层，读作"真实材质"。注意：Compose 无原生 backdrop-filter：renderEffect 作用于层
  *   **自身**绘制而非其背后像素，故此处是"半透材质 + 软化"的高保真近似；若需 iOS 那样的真·背景
  *   模糊（采样身后已绘内容），须引入 backdrop 捕获（haze 类）方案，留待后续。
  * - **API < 31（降级）**：仅半透遮罩（scrim）——同一 [AnebColors.material] 半透底色、稍加不透明，

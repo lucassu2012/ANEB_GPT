@@ -415,7 +415,7 @@ private fun ProfileContractCard(
                                 .padding(horizontal = 13.dp, vertical = 7.dp),
                         )
                         Text(
-                            "抗负载响应性",
+                            "高负载并发",
                             fontSize = 10.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (anyBusy) colors.faint else colors.brand2,

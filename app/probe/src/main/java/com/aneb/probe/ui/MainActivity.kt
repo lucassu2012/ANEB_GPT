@@ -1643,6 +1643,7 @@ class MainActivity : ComponentActivity() {
         onBack: () -> Unit,
     ) {
         val scope = rememberCoroutineScope()
+        var quickMode by rememberSaveable { mutableStateOf(true) }
         var simJob by remember { mutableStateOf<Job?>(null) }
         var simRunning by remember { mutableStateOf(false) }
         val simLogs = remember { mutableStateListOf<String>() }
@@ -1652,6 +1653,15 @@ class MainActivity : ComponentActivity() {
 
         MultimodalTheaterScreen(
             nodeLabel = nodeLabel,
+            quickMode = quickMode,
+            onQuickModeChange = { next ->
+                if (!simRunning) {
+                    quickMode = next
+                    simProgress = null
+                    simResult = null
+                    simError = null
+                }
+            },
             running = simRunning,
             otherRunActive = otherRunActive,
             liveProgress = simProgress,
@@ -1670,6 +1680,7 @@ class MainActivity : ComponentActivity() {
                     simResult = null
                     simError = null
                     simRunning = true
+                    val useQuickMode = quickMode
                     simJob = scope.launch {
                         var progressJob: Job? = null
                         try {
@@ -1685,9 +1696,10 @@ class MainActivity : ComponentActivity() {
                                 it.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION
                             } ?: error("未找到内置多模态 v2 Profile")
                             val jsonl = repo.loadV2TraceJsonl(v2Profile.profileId)
-                            val plan = withContext(Dispatchers.Default) {
+                            val fullPlan = withContext(Dispatchers.Default) {
                                 BehaviorTracePlan.parse(jsonl, v2Profile)
                             }
+                            val plan = if (useQuickMode) fullPlan.quickMultimodalSample() else fullPlan
                             val runner = BehaviorTraceRunner()
                             progressJob = launch {
                                 runner.liveProgress.collect { p -> simProgress = p }
