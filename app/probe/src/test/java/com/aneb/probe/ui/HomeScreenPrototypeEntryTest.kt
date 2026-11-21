@@ -4,7 +4,6 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
@@ -13,7 +12,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.ui.theme.AnebTheme
-import com.aneb.probe.ui.theme.LocalReducedMotion
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,37 +66,39 @@ class HomeScreenPrototypeEntryTest {
         var started = false
         val composeView = ComposeView(activity).apply {
             setContent {
-                CompositionLocalProvider(LocalReducedMotion provides true) {
-                    AnebTheme {
-                        HomeScreen(
-                            lastRun = null,
-                            lastBasicRun = null,
-                            testMode = AnebTestMode.TOKEN_EXPERIENCE,
-                            onTestModeChange = {},
-                            running = false,
-                            notice = null,
-                            connectionLabel = "自动选择网络",
-                            nodeLabel = "阿里云深圳 miw2",
-                            onStart = { started = true },
-                            onOpenServer = {},
-                            onOpenPrototype = {},
-                            onOpenLastResult = {},
-                            onOpenLastBasicResult = {},
-                            onOpenVoice = {},
-                            showPrototypeEntry = false,
-                        )
-                    }
+                AnebTheme(reducedMotion = true) {
+                    HomeScreen(
+                        lastRun = null,
+                        lastBasicRun = null,
+                        testMode = AnebTestMode.TOKEN_EXPERIENCE,
+                        onTestModeChange = {},
+                        running = false,
+                        notice = null,
+                        connectionLabel = "自动选择网络",
+                        nodeLabel = "阿里云深圳 miw2",
+                        onStart = { started = true },
+                        onOpenServer = {},
+                        onOpenPrototype = {},
+                        onOpenLastResult = {},
+                        onOpenLastBasicResult = {},
+                        onOpenVoice = {},
+                        showPrototypeEntry = false,
+                    )
                 }
             }
         }
-        activity.setContentView(composeView)
-        controller.setup()
-        idleMain()
+        try {
+            activity.setContentView(composeView)
+            controller.setup()
+            idleMain()
 
-        val texts = collectTexts(composeView)
-        assertFalse("Public release HomeScreen must hide PROTOTYPE capsule: $texts", texts.contains("PROTOTYPE"))
-        assertTrue(texts.any { it.contains("评估网络是否适合 AI 对话") })
-        assertFalse(started)
+            val texts = collectTexts(composeView)
+            assertFalse("Public release HomeScreen must hide PROTOTYPE capsule: $texts", texts.contains("PROTOTYPE"))
+            assertTrue(texts.any { it.contains("评估网络是否适合 AI 对话") })
+            assertFalse(started)
+        } finally {
+            controller.destroy()
+        }
     }
 
     @Test
@@ -109,38 +109,40 @@ class HomeScreenPrototypeEntryTest {
         var openedPrototype = false
         val composeView = ComposeView(activity).apply {
             setContent {
-                CompositionLocalProvider(LocalReducedMotion provides true) {
-                    AnebTheme {
-                        HomeScreen(
-                            lastRun = null,
-                            lastBasicRun = null,
-                            testMode = AnebTestMode.TOKEN_EXPERIENCE,
-                            onTestModeChange = {},
-                            running = false,
-                            notice = null,
-                            connectionLabel = "自动选择网络",
-                            nodeLabel = "阿里云深圳 miw2",
-                            onStart = {},
-                            onOpenServer = {},
-                            onOpenPrototype = { openedPrototype = true },
-                            onOpenLastResult = {},
-                            onOpenLastBasicResult = {},
-                            onOpenVoice = {},
-                            showPrototypeEntry = true,
-                        )
-                    }
+                AnebTheme(reducedMotion = true) {
+                    HomeScreen(
+                        lastRun = null,
+                        lastBasicRun = null,
+                        testMode = AnebTestMode.TOKEN_EXPERIENCE,
+                        onTestModeChange = {},
+                        running = false,
+                        notice = null,
+                        connectionLabel = "自动选择网络",
+                        nodeLabel = "阿里云深圳 miw2",
+                        onStart = {},
+                        onOpenServer = {},
+                        onOpenPrototype = { openedPrototype = true },
+                        onOpenLastResult = {},
+                        onOpenLastBasicResult = {},
+                        onOpenVoice = {},
+                        showPrototypeEntry = true,
+                    )
                 }
             }
         }
-        activity.setContentView(composeView)
-        controller.setup()
-        idleMain()
+        try {
+            activity.setContentView(composeView)
+            controller.setup()
+            idleMain()
 
-        val texts = collectTexts(composeView)
-        assertTrue("Prototype/debug HomeScreen should show PROTOTYPE capsule: $texts", texts.contains("PROTOTYPE"))
-        assertTrue(clickNodeWithText(composeView, "PROTOTYPE"))
-        idleMain()
-        assertTrue(openedPrototype)
+            val texts = collectTexts(composeView)
+            assertTrue("Prototype/debug HomeScreen should show PROTOTYPE capsule: $texts", texts.contains("PROTOTYPE"))
+            assertTrue(clickNodeWithText(composeView, "PROTOTYPE"))
+            idleMain()
+            assertTrue(openedPrototype)
+        } finally {
+            controller.destroy()
+        }
     }
 
     private fun idleMain() {

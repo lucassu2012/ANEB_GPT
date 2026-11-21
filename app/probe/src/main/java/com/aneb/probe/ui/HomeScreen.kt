@@ -370,40 +370,49 @@ private enum class SheetSnap {
 private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
-    val transition = rememberInfiniteTransition(label = "idle-start-ring")
-    val breath by transition.animateFloat(
-        initialValue = 0.985f,
-        targetValue = 1.025f,
-        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
-        label = "idle-start-breath",
-    )
-    val glow by transition.animateFloat(
-        initialValue = 0.16f,
-        targetValue = 0.46f,
-        animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
-        label = "idle-start-glow",
-    )
-    val rotation by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
-        label = "idle-start-rotation",
-    )
+    val breath: Float
+    val glow: Float
+    val rotation: Float
+    if (reducedMotion) {
+        breath = 1f
+        glow = 0.18f
+        rotation = 0f
+    } else {
+        val transition = rememberInfiniteTransition(label = "idle-start-ring")
+        breath = transition.animateFloat(
+            initialValue = 0.985f,
+            targetValue = 1.025f,
+            animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+            label = "idle-start-breath",
+        ).value
+        glow = transition.animateFloat(
+            initialValue = 0.16f,
+            targetValue = 0.46f,
+            animationSpec = infiniteRepeatable(tween(1_650), RepeatMode.Reverse),
+            label = "idle-start-glow",
+        ).value
+        rotation = transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(7_000, easing = LinearEasing)),
+            label = "idle-start-rotation",
+        ).value
+    }
     Box(
         modifier = Modifier
             .size(198.dp)
-            .scale(if (reducedMotion) 1f else breath)
+            .scale(breath)
             .pressable(onClick = onStart, enabled = !running),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
             val stroke = 1.25.dp.toPx()
             drawCircle(
-                color = Color(0xFF43E1E6).copy(alpha = if (reducedMotion) 0.18f else glow),
+                color = Color(0xFF43E1E6).copy(alpha = glow),
                 radius = size.minDimension / 2f - stroke,
                 style = Stroke(8.dp.toPx(), cap = StrokeCap.Round),
             )
-            rotate(if (reducedMotion) 0f else rotation, pivot = center) {
+            rotate(rotation, pivot = center) {
                 drawCircle(
                     brush = Brush.sweepGradient(
                         listOf(Color(0xFF67EDCC), Color(0xFF43E1E6), Color(0xFF3EB4F1), Color(0xFF67EDCC)),
