@@ -6,9 +6,11 @@
 
 ## Pilot v0.2 交付与反馈文档
 
-1. [Pilot v0.2 中文快速上手手册（《5 分钟上手卡》）](PILOT_V02_QUICKSTART_ZH.md)：覆盖收包离线校验（`verify-pilot-v0.2-kit.ps1`）、双正式签名 APK（`probe-release.apk` 公网 `miw2` HTTPS 与 `probe-prototypeRelease.apk` 本地局域网 Prototype）安装切换、Stage 2 UI 流程、Windows 便携启动器操作、结果边界声明与退出清场。
-2. [Pilot v0.2 外部试用反馈表（Markdown）](PILOT_V02_FEEDBACK_TEMPLATE.md) & [机器可读 JSON 模板（`aneb-pilot-v0.2-feedback-0.1`）](PILOT_V02_FEEDBACK_TEMPLATE.json)：供操作员、独立复核者与外部试用者按步骤填写状态、耗时、原话反馈与数据保管确认。
-3. [ANEB AI 网络体验基线综合报告 v0.2](../research/ANEB_AI_NETWORK_EXPERIENCE_BASELINE_REPORT_V02.md)：整合 Douyin `410101`（10 卡 / 20 相位）、Doubao `com.larus.nova` / KimiChat、外场 `W1` Wi-Fi vs `C1` 5G NR 配对、Profile 4 语音相关性及 Stage 0–3 工程基线。
+- **模式一（外部试用用户首选·纯手机单 APK）**：[ANEB 手机测速版快速试用卡（1 分钟上手）](MOBILE_PILOT_QUICKSTART_ZH.md) —— 面向受邀外部手机用户，仅分发 1 枚官方签名公网版 APK（`ANEB-Probe-v0.2.0-public-pilot.apk` / `probe-release.apk`，隐藏局域网 `PROTOTYPE` 入口，开箱直连阿里云 `miw2` HTTPS 节点），零电脑、零启动器、点开即测，并通过 App 内「分享图片 / 导出 MD / JSON」回收反馈。
+- **模式二（工程师/操作员双端套件·含 Windows 本地节点）**：
+  1. [Pilot v0.2 中文快速上手手册（《5 分钟上手卡》）](PILOT_V02_QUICKSTART_ZH.md)：覆盖收包离线校验（`verify-pilot-v0.2-kit.ps1`）、双正式签名 APK（`probe-release.apk` 公网 `miw2` HTTPS 与 `probe-prototypeRelease.apk` 本地局域网 Prototype）安装切换、Stage 2 UI 流程、Windows 便携启动器操作、结果边界声明与退出清场。
+  2. [Pilot v0.2 外部试用反馈表（Markdown）](PILOT_V02_FEEDBACK_TEMPLATE.md) & [机器可读 JSON 模板（`aneb-pilot-v0.2-feedback-0.1`）](PILOT_V02_FEEDBACK_TEMPLATE.json)：供操作员、独立复核者与外部试用者按步骤填写状态、耗时、原话反馈与数据保管确认。
+  3. [ANEB AI 网络体验基线综合报告 v0.2](../research/ANEB_AI_NETWORK_EXPERIENCE_BASELINE_REPORT_V02.md)：整合 Douyin `410101`（10 卡 / 20 相位）、Doubao `com.larus.nova` / KimiChat、外场 `W1` Wi-Fi vs `C1` 5G NR 配对、Profile 4 语音相关性及 Stage 0–3 工程基线。
 
 ## 保留的历史 Prototype 0.1 / N3 文档（原样保留以兼容链接）
 

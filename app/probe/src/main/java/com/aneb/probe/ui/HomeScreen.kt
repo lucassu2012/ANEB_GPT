@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.BuildConfig
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.BasicSpeedResultEntity
 import com.aneb.probe.engine.AnebTestMode
@@ -62,6 +63,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+
+/**
+ * 公网正式版（`release`：`probe-release.apk`）面向外部手机测速用户，默认隐藏首页右上角
+ * 局域网 `PROTOTYPE` 入口；仅在 `prototypeRelease`、`prototypeEngineering` 及 `debug` 变体展示。
+ */
+internal fun shouldShowPrototypeEntry(
+    isPrototypeRelease: Boolean = BuildConfig.PROTOTYPE_RELEASE,
+    isPrototypeEngineering: Boolean = BuildConfig.PROTOTYPE_ENGINEERING,
+    isDebug: Boolean = BuildConfig.DEBUG,
+): Boolean = isPrototypeRelease || isPrototypeEngineering || isDebug
 
 /** 首页：原生复刻 `ANEB_UI/screens/home.html` 的 idle 状态与三档网络抽屉。 */
 @Composable
@@ -80,6 +91,7 @@ fun HomeScreen(
     onOpenLastResult: (String) -> Unit,
     onOpenLastBasicResult: (String) -> Unit,
     onOpenVoice: (() -> Unit)? = null,
+    showPrototypeEntry: Boolean = shouldShowPrototypeEntry(),
 ) {
     val colors = AnebTheme.colors
     var sheetSnap by remember { mutableStateOf(SheetSnap.Collapsed) }
@@ -116,21 +128,23 @@ fun HomeScreen(
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp),
         )
-        Text(
-            "PROTOTYPE",
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            color = colors.brand,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 14.dp, end = 16.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(Color(0x1F32D9F5))
-                .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
-                .pressable(onClick = onOpenPrototype)
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-        )
+        if (showPrototypeEntry) {
+            Text(
+                "PROTOTYPE",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+                color = colors.brand,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 14.dp, end = 16.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color(0x1F32D9F5))
+                    .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+                    .pressable(onClick = onOpenPrototype)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            )
+        }
 
         Column(
             modifier = Modifier.fillMaxSize(),
