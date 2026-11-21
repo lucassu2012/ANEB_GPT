@@ -214,6 +214,7 @@ class MainActivity : ComponentActivity() {
         data object ApiProbe : Screen
         data object ReachBoard : Screen
         data object Profiles : Screen
+        data object MultimodalTheater : Screen
         data object Voice : Screen
         data object AppCompanion : Screen
         data object Research : Screen
@@ -906,7 +907,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         onOpenVoice = { screen = Screen.Voice },
                                         onOpenAppCompanion = { screen = Screen.AppCompanion },
-                                        onOpenProfiles = { screen = Screen.Profiles },
+                                        onOpenProfiles = { screen = Screen.MultimodalTheater },
                                         onOpenReachBoard = { screen = Screen.ReachBoard },
                                     )
                                     MainTab.Results -> HistoryRoute(
@@ -1123,6 +1124,13 @@ class MainActivity : ComponentActivity() {
                                         requestManualRun(targetMode)
                                     },
                                     onOpenVoice = { screen = Screen.Voice },
+                                    onBack = { screen = Screen.Home },
+                                )
+                                is Screen.MultimodalTheater -> MultimodalTheaterRoute(
+                                    serverUrl = serverUrl,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    otherRunActive = running,
+                                    onOpenCatalog = { screen = Screen.Profiles },
                                     onBack = { screen = Screen.Home },
                                 )
                                 is Screen.AppCompanion -> AppCompanionRoute(
@@ -1625,6 +1633,99 @@ class MainActivity : ComponentActivity() {
         val error: String? = null,
         val resolvedBase: String = "",
     )
+
+    @Composable
+    private fun MultimodalTheaterRoute(
+        serverUrl: String,
+        nodeLabel: String,
+        otherRunActive: Boolean,
+        onOpenCatalog: () -> Unit,
+        onBack: () -> Unit,
+    ) {
+        val scope = rememberCoroutineScope()
+        var simJob by remember { mutableStateOf<Job?>(null) }
+        var simRunning by remember { mutableStateOf(false) }
+        val simLogs = remember { mutableStateListOf<String>() }
+        var simProgress by remember { mutableStateOf<BehaviorTraceRunner.LiveTraceProgress?>(null) }
+        var simResult by remember { mutableStateOf<BehaviorTraceRunner.BehaviorTraceRunResult?>(null) }
+        var simError by remember { mutableStateOf<String?>(null) }
+
+        MultimodalTheaterScreen(
+            nodeLabel = nodeLabel,
+            running = simRunning,
+            otherRunActive = otherRunActive,
+            liveProgress = simProgress,
+            result = simResult,
+            logs = simLogs.toList(),
+            error = simError,
+            onStart = {
+                if (!simRunning && !otherRunActive) {
+                    if (!hasActiveNetwork()) {
+                        simError = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                        return@MultimodalTheaterScreen
+                    }
+                    simJob?.cancel()
+                    simLogs.clear()
+                    simProgress = null
+                    simResult = null
+                    simError = null
+                    simRunning = true
+                    simJob = scope.launch {
+                        var progressJob: Job? = null
+                        try {
+                            val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                            val reach = if (pair == null) null else {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { ReachabilityProbe().probeDual(pair.first, pair.second) }.getOrNull()
+                                }
+                            }
+                            val targetBase = ReachabilityProbe.preferredMeasureBase(serverUrl, reach)
+                            val repo = ProfileRepository(applicationContext)
+                            val v2Profile = repo.loadV2Profiles().firstOrNull {
+                                it.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION
+                            } ?: error("未找到内置多模态 v2 Profile")
+                            val jsonl = repo.loadV2TraceJsonl(v2Profile.profileId)
+                            val plan = withContext(Dispatchers.Default) {
+                                BehaviorTracePlan.parse(jsonl, v2Profile)
+                            }
+                            val runner = BehaviorTraceRunner()
+                            progressJob = launch {
+                                runner.liveProgress.collect { p -> simProgress = p }
+                            }
+                            runner.run(
+                                BehaviorTraceRunner.Config(
+                                    serverBase = targetBase,
+                                    profile = v2Profile,
+                                    tracePlan = plan,
+                                    runId = "v2-${UUID.randomUUID()}",
+                                ),
+                            ).collect { line ->
+                                simLogs.add(line)
+                            }
+                            simResult = runner.result.value
+                        } catch (e: CancellationException) {
+                            simLogs.add("V2_RUN_CANCELLED")
+                            throw e
+                        } catch (e: Exception) {
+                            simError = "多模态实战失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            progressJob?.cancel()
+                            simRunning = false
+                        }
+                    }
+                }
+            },
+            onCancel = { simJob?.cancel() },
+            onOpenCatalog = {
+                simJob?.cancel()
+                onOpenCatalog()
+            },
+            onBack = {
+                simJob?.cancel()
+                onBack()
+            },
+        )
+    }
 
     @Composable
     private fun ProfileCatalogRoute(

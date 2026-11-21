@@ -55,6 +55,10 @@ data class LiveTelemetry(
     val streamTargetRatePerSec: Double? = null,
     /** 当前是否正在读取 token_stream；用于 UI 区分“尚未测量”和“速率为 0”。 */
     val streamActive: Boolean = false,
+    /** 当前活跃流已到达的 SSE 事件计数（只读观测代理量，驱动实时打字机/代码流展示）。 */
+    val liveStreamEvents: Int = 0,
+    /** 当前活跃流最近一次事件间隔或距今等待（ms，只读观测代理量，供实时卡顿高亮）。 */
+    val liveStreamGapMs: Double? = null,
 
     // ---------------- 进度 ----------------
     /** 当前场景+阶段标识（如 profileId#round）；未开始＝null */
@@ -115,6 +119,8 @@ data class LiveTelemetry(
                 streamArrivalRatePerSec = s.streamArrivalRatePerSec,
                 streamTargetRatePerSec = s.streamTargetRatePerSec,
                 streamActive = s.streamActive,
+                liveStreamEvents = s.liveStreamEvents,
+                liveStreamGapMs = s.liveStreamGapMs,
                 phase = s.phase,
                 fraction = s.fraction.coerceIn(0.0, 1.0),
                 aqsRunning = s.aqsRunning,
@@ -174,6 +180,10 @@ data class TelemetrySnapshot(
     val streamTargetRatePerSec: Double? = null,
     /** 当前是否处于 token_stream 读循环。 */
     val streamActive: Boolean = false,
+    /** 当前活跃流已观察到的 SSE 事件数（只读观测）。 */
+    val liveStreamEvents: Int = 0,
+    /** 当前活跃流实时事件间隔/等待（ms，只读观测）。 */
+    val liveStreamGapMs: Double? = null,
     /** 当前场景+阶段标识；未开始＝null */
     val phase: String? = null,
     /** 全局完成度 0..1 */
@@ -242,6 +252,8 @@ class LiveStreamWindow(
         val active: Boolean,
         val arrivalRatePerSec: Double?,
         val targetRatePerSec: Double?,
+        val eventsObserved: Int = 0,
+        val latestGapMs: Double? = null,
     )
 
     private val capacity = capacity
@@ -275,15 +287,38 @@ class LiveStreamWindow(
     fun snapshot(nowNanos: Long): Snapshot {
         val isActive = active
         val target = targetRatePerSec
-        if (!isActive) return Snapshot(active = false, arrivalRatePerSec = null, targetRatePerSec = target)
+        val totalWritten = written.get()
+        val observedCount = totalWritten.coerceAtMost(Int.MAX_VALUE.toLong()).toInt().coerceAtLeast(0)
+        if (!isActive) return Snapshot(active = false, arrivalRatePerSec = null, targetRatePerSec = target, eventsObserved = observedCount)
+
+        val latestGapMs: Double? = when {
+            totalWritten >= 2L -> {
+                val last = arrivals.get(((totalWritten - 1L) % capacity).toInt())
+                val prev = arrivals.get(((totalWritten - 2L) % capacity).toInt())
+                val sinceLast = (nowNanos - last).coerceAtLeast(0L)
+                val between = (last - prev).coerceAtLeast(0L)
+                maxOf(sinceLast, between) / 1_000_000.0
+            }
+            totalWritten == 1L -> {
+                val last = arrivals.get(0)
+                (nowNanos - last).coerceAtLeast(0L) / 1_000_000.0
+            }
+            else -> (nowNanos - startedAtNanos).coerceAtLeast(0L) / 1_000_000.0
+        }
 
         val elapsed = nowNanos - startedAtNanos
         if (elapsed < MIN_SAMPLE_NANOS) {
-            return Snapshot(active = true, arrivalRatePerSec = null, targetRatePerSec = target)
+            return Snapshot(
+                active = true,
+                arrivalRatePerSec = null,
+                targetRatePerSec = target,
+                eventsObserved = observedCount,
+                latestGapMs = latestGapMs,
+            )
         }
 
         val lowerBound = maxOf(startedAtNanos, nowNanos - windowNanos)
-        val sampleCount = minOf(written.get(), capacity.toLong()).toInt()
+        val sampleCount = minOf(totalWritten, capacity.toLong()).toInt()
         var inWindow = 0
         for (i in 0 until sampleCount) {
             val stamp = arrivals.get(i)
@@ -291,7 +326,13 @@ class LiveStreamWindow(
         }
         val denominatorNanos = minOf(windowNanos, elapsed).coerceAtLeast(MIN_SAMPLE_NANOS)
         val rate = inWindow * 1_000_000_000.0 / denominatorNanos
-        return Snapshot(active = true, arrivalRatePerSec = rate, targetRatePerSec = target)
+        return Snapshot(
+            active = true,
+            arrivalRatePerSec = rate,
+            targetRatePerSec = target,
+            eventsObserved = observedCount,
+            latestGapMs = latestGapMs,
+        )
     }
 
     fun reset() {

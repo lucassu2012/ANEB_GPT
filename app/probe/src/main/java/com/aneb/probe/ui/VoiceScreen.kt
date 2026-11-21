@@ -1,5 +1,6 @@
 package com.aneb.probe.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -22,7 +24,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -30,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.engine.VoiceRunner
 import com.aneb.probe.scoring.AqsScorer
@@ -218,6 +225,13 @@ fun VoiceScreen(
             }
         }
 
+        // ---- 实时双向语音示波座舱（8 轮对话打断轨 + 400ms 红线时延图 + 上下行帧脉冲）----
+        AnebSectionTitle(
+            text = "实时双向语音示波座舱",
+            modifier = Modifier.padding(top = 16.dp, start = 4.dp, bottom = 7.dp),
+        )
+        VoiceBidirectionalCockpit(sample = sample, running = running)
+
         // ---- 实时指标栅格（null 恒显 "—"，遵守 R-10） ----
         AnebSectionTitle(
             text = "语音核心指标",
@@ -296,6 +310,206 @@ fun VoiceScreen(
             color = colors.faint,
             modifier = Modifier.padding(bottom = 28.dp),
         )
+    }
+}
+
+@Composable
+private fun VoiceBidirectionalCockpit(
+    sample: VoiceRunner.Sample?,
+    running: Boolean,
+) {
+    val colors = AnebTheme.colors
+    val turns = sample?.liveTurnHistory.orEmpty()
+    val totalTurns = (sample?.totalPlannedTurns ?: 8).coerceAtLeast(1)
+    val upProgress = ((sample?.framesSent ?: 0).toFloat() / (totalTurns * 75f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val downProgress = ((sample?.framesRecv ?: 0).toFloat() / (totalTurns * 80f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val m7Gap = sample?.m7MaxFrameGapMs
+    val m7Alert = m7Gap != null && m7Gap.isFinite() && m7Gap > 150.0
+
+    AnebGradientCard(Modifier.fillMaxWidth(), radius = 18.dp) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            // 双工帧轨：上行说话 vs 下行 AI TTS 回复
+            VoiceDuplexRail(
+                label = "↑ 上行语音轨（我说话 · 20ms 帧）",
+                stats = "已发 ${sample?.framesSent ?: 0} 帧 · M3 抖动 ${VoiceFormat.msOrDash(sample?.upFrameJitterMs)} ms",
+                fraction = upProgress,
+                accent = colors.brand,
+            )
+            VoiceDuplexRail(
+                label = "↓ 下行语音轨（AI 回复 · 50fps 帧）",
+                stats = "已收 ${sample?.framesRecv ?: 0} 帧 · M7 静默 ${VoiceFormat.msOrDash(m7Gap)} ms",
+                fraction = downProgress,
+                accent = if (m7Alert) colors.poor else colors.excellent,
+            )
+
+            // 8 轮对话打断进度条（T1..T8，T4/T7 为打断轮）
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("多轮双工与打断节奏（⚡=打断轮）", fontSize = 9.5.sp, color = colors.muted)
+                    Text(
+                        if (turns.isEmpty()) (if (running) "等待首轮回包…" else "0/$totalTurns 轮")
+                        else "已完成 ${turns.size}/$totalTurns 轮",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.brand,
+                    )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (idx in 0 until totalTurns) {
+                        val point = turns.firstOrNull { it.turnIndex == idx }
+                        val isBarge = idx == 3 || idx == 6
+                        val mouthEar = point?.mouthEarMs?.takeIf { it.isFinite() }
+                        val cellAccent = when {
+                            mouthEar == null && point == null -> colors.faint
+                            mouthEar == null -> colors.fair
+                            mouthEar <= 260.0 -> colors.excellent
+                            mouthEar <= 400.0 -> colors.brand
+                            else -> colors.poor
+                        }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (point != null) cellAccent.copy(alpha = 0.16f) else Color(0x55090D1D))
+                                .border(
+                                    1.dp,
+                                    if (point != null) cellAccent.copy(alpha = 0.55f) else colors.hairline,
+                                    RoundedCornerShape(8.dp),
+                                )
+                                .padding(vertical = 5.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                if (isBarge) "T${idx + 1}⚡" else "T${idx + 1}",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (point != null) colors.ink else colors.faint,
+                                maxLines = 1,
+                            )
+                            Text(
+                                mouthEar?.let { "${it.roundToInt()}" } ?: "—",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = cellAccent,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 双向口到耳实时柱状示波图 + 400ms 红线
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("逐轮口到耳 M1' vs 400ms 流畅红线", fontSize = 9.5.sp, color = colors.muted)
+                    Text("红虚线=400ms 否决线", fontSize = 8.5.sp, color = colors.poor.copy(alpha = 0.85f))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(82.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x99070B17))
+                        .border(1.dp, colors.hairline, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val maxMs = maxOf(
+                            520.0,
+                            (turns.mapNotNull { it.mouthEarMs }.maxOrNull() ?: 0.0) * 1.15,
+                        )
+                        val vetoY = size.height * (1f - (400.0 / maxMs).toFloat().coerceIn(0f, 1f))
+                        drawLine(
+                            color = colors.poor.copy(alpha = 0.72f),
+                            start = Offset(0f, vetoY),
+                            end = Offset(size.width, vetoY),
+                            strokeWidth = 1.2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 7f)),
+                        )
+                        val slotW = size.width / totalTurns.coerceAtLeast(1)
+                        val barW = (slotW * 0.56f).coerceAtLeast(6f)
+                        for (idx in 0 until totalTurns) {
+                            val pt = turns.firstOrNull { it.turnIndex == idx } ?: continue
+                            val m1 = pt.mouthEarMs?.takeIf { it.isFinite() } ?: continue
+                            val barH = (size.height * (m1 / maxMs).toFloat().coerceIn(0.06f, 1f))
+                            val left = idx * slotW + (slotW - barW) / 2f
+                            val barColor = when {
+                                m1 <= 260.0 -> colors.excellent
+                                m1 <= 400.0 -> colors.brand
+                                else -> colors.poor
+                            }
+                            drawRoundRect(
+                                color = barColor.copy(alpha = 0.85f),
+                                topLeft = Offset(left, size.height - barH),
+                                size = Size(barW, barH),
+                                cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                            )
+                            val ttfb = pt.ttfbMs?.takeIf { it.isFinite() && it > 0.0 }
+                            if (ttfb != null) {
+                                val ttfbH = (size.height * (ttfb / maxMs).toFloat().coerceIn(0.03f, 1f))
+                                    .coerceAtMost(barH)
+                                drawRoundRect(
+                                    color = colors.brand2,
+                                    topLeft = Offset(left, size.height - ttfbH),
+                                    size = Size(barW, ttfbH),
+                                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                                )
+                            }
+                        }
+                    }
+                    if (turns.isEmpty()) {
+                        Text(
+                            if (running) "正在建立双工会话并采集逐轮口到耳波形…" else "点击上方「开始实时语音测量」后实时绘制 8 轮双向时延",
+                            fontSize = 9.5.sp,
+                            color = colors.faint,
+                            modifier = Modifier.align(Alignment.Center),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceDuplexRail(
+    label: String,
+    stats: String,
+    fraction: Float,
+    accent: Color,
+) {
+    val colors = AnebTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, fontSize = 10.sp, fontWeight = FontWeight.Medium, color = colors.ink)
+            Text(stats, fontSize = 9.sp, color = accent)
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(CircleShape)
+                .background(Color(0x55222C4A)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                    .height(6.dp)
+                    .clip(CircleShape)
+                    .background(accent),
+            )
+        }
     }
 }
 

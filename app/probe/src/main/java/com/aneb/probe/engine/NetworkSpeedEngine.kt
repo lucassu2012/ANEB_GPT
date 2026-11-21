@@ -61,6 +61,12 @@ data class BasicSpeedTelemetry(
     val requestLossRate: Double? = null,
     val progress: Double = 0.0,
     val historyMbps: List<Double> = emptyList(),
+    /** 是否为“抗负载响应”模式（只读观测，供测试中实时展示 Bufferbloat 延迟膨胀曲线）。 */
+    val isResponsivenessMode: Boolean = false,
+    /** 满载传输期间最近一次成功 echo RTT（ms，只读观测）。 */
+    val liveLoadedRttMs: Double? = null,
+    /** 满载传输期间的实时 echo RTT 历史序列（ms，只读观测）。 */
+    val loadedRttHistoryMs: List<Double> = emptyList(),
 )
 
 data class BasicSpeedResult(
@@ -132,7 +138,10 @@ class NetworkSpeedEngine internal constructor(
             publishResult(observed, emit)
         }
         _result.value = null
-        _telemetry.value = BasicSpeedTelemetry(phase = BasicSpeedPhase.PREPARING)
+        _telemetry.value = BasicSpeedTelemetry(
+            phase = BasicSpeedPhase.PREPARING,
+            isResponsivenessMode = config.captureResponsiveness,
+        )
         log("BASIC_START run_id=$runId transport=$transport server=$configuredBase")
 
         val guard = NetGuard.guardCheck(context)
@@ -465,6 +474,8 @@ class NetworkSpeedEngine internal constructor(
 
             val rateWindow = ByteRateWindow()
             val history = ArrayDeque<Double>()
+            val loadedRttLock = Any()
+            val loadedRttHistory = ArrayDeque<Double>()
             val uiPhase = if (direction == TransferDirection.DOWNLOAD) BasicSpeedPhase.DOWNLOAD else BasicSpeedPhase.UPLOAD
 
             val sampler: Job = launch(Dispatchers.Default) {
@@ -476,6 +487,9 @@ class NetworkSpeedEngine internal constructor(
                         history.addLast(live)
                         while (history.size > HISTORY_POINTS) history.removeFirst()
                     }
+                    val loadedRtts = if (onResponsivenessStage != null) {
+                        synchronized(loadedRttLock) { loadedRttHistory.toList() }
+                    } else emptyList()
                     val phaseProgress = ((now - startNanos).toDouble() / (durationMs * 1_000_000.0)).coerceIn(0.0, 1.0)
                     _telemetry.value = _telemetry.value.copy(
                         phase = uiPhase,
@@ -483,6 +497,9 @@ class NetworkSpeedEngine internal constructor(
                         phaseAverageMbps = BasicSpeedMath.mbps(bytes, now - startNanos),
                         progress = progressStart + (progressEnd - progressStart) * phaseProgress,
                         historyMbps = history.toList(),
+                        isResponsivenessMode = onResponsivenessStage != null,
+                        liveLoadedRttMs = loadedRtts.lastOrNull(),
+                        loadedRttHistoryMs = loadedRtts,
                     )
                     delay(TELEMETRY_MS)
                 }
@@ -564,6 +581,13 @@ class NetworkSpeedEngine internal constructor(
                             before to after
                         }
                         echoSamples += echo.asResponsiveness(stageName, echoSamples.size, counts.first, counts.second)
+                        val rttUs = echo.rttUs
+                        if (echo.error == null && echo.httpCode in 200..299 && rttUs != null && rttUs >= 0L) {
+                            synchronized(loadedRttLock) {
+                                loadedRttHistory.addLast(rttUs / 1_000.0)
+                                while (loadedRttHistory.size > HISTORY_POINTS) loadedRttHistory.removeFirst()
+                            }
+                        }
                     } catch (cancel: CancellationException) {
                         echoSamples += ResponsivenessEcho(stageName, echoSamples.size, probeStart,
                             null, null, null, null, "cancelled_at_phase_boundary")

@@ -274,6 +274,8 @@ class TestEngine(private val context: Context) {
                         streamArrivalRatePerSec = liveStream.arrivalRatePerSec,
                         streamTargetRatePerSec = liveStream.targetRatePerSec,
                         streamActive = liveStream.active,
+                        liveStreamEvents = liveStream.eventsObserved,
+                        liveStreamGapMs = liveStream.latestGapMs,
                     )
                     _telemetry.value = LiveTelemetry.derive(snapshot)
                     delay(TELEMETRY_SAMPLE_MS)

@@ -33,6 +33,17 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
 
     enum class Phase { Ping, Uplink, Downlink, Handshake, Turns, Done }
 
+    /** 单轮实时语音观测点（只读 UI 示波投影，绝不改写 KPI/AQS/Room 落库口径）。 */
+    data class TurnLivePoint(
+        val turnIndex: Int,
+        val interrupted: Boolean,
+        val mouthEarMs: Double?,
+        val ttfbMs: Double?,
+        val maxGapMs: Double?,
+        val bargeStopMs: Double?,
+        val protocolOk: Boolean,
+    )
+
     data class Sample(
         val phase: Phase,
         val rttMs: Double?,
@@ -79,6 +90,9 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
         val m7MaxFrameGapMs: Double? = null,
         /** 近零到达间隔占比（[0,1]；补充信号，答"有没有发生"，M7 答"有多严重"） */
         val voiceNearZeroArrivalRatio: Double? = null,
+        // ── 实时双向示波座舱只读投影（additive 默认值，零测量/落库影响）──
+        val liveTurnHistory: List<TurnLivePoint> = emptyList(),
+        val totalPlannedTurns: Int = 8,
     )
 
     companion object {
@@ -397,13 +411,42 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                     }
                 }
                 framesRecvTotal += frames.size
-                ledger.add(TurnLedger(t, commitEnqUs, lastUpEnqUs, bargeEnqUs, frames, summary!!, summaryArrivalUs))
+                val turnLedger = TurnLedger(t, commitEnqUs, lastUpEnqUs, bargeEnqUs, frames, summary!!, summaryArrivalUs)
+                ledger.add(turnLedger)
+                val liveHistory = ledger.map { l ->
+                    val first = l.frames.firstOrNull()
+                    val dwellUs = if (l.summary.firstDownlinkPreWriteUs != null && l.summary.commitRecvUs != null) {
+                        l.summary.firstDownlinkPreWriteUs - l.summary.commitRecvUs
+                    } else null
+                    val turnTtfb = if (first != null && dwellUs != null) (first.arrivalUs - l.commitEnqUs - dwellUs) / 1000.0 else null
+                    val turnMouthEar = if (first != null && dwellUs != null) (first.arrivalUs - l.lastUpEnqUs - dwellUs) / 1000.0 + CODEC_JB_BUDGET_MS else null
+                    val turnGaps = l.frames.zipWithNext { a, b -> b.arrivalUs - a.arrivalUs }
+                    val turnBarge = if (l.bargeEnqUs != null && l.frames.isNotEmpty()) (l.frames.last().arrivalUs - l.bargeEnqUs) / 1000.0 else null
+                    TurnLivePoint(
+                        turnIndex = l.plan.turnIndex,
+                        interrupted = l.plan.interrupted,
+                        mouthEarMs = turnMouthEar,
+                        ttfbMs = turnTtfb,
+                        maxGapMs = maxFrameGapMs(turnGaps),
+                        bargeStopMs = turnBarge,
+                        protocolOk = l.summary.protocolOk == true,
+                    )
+                }
+                val runningMouthEar = median(liveHistory.mapNotNull { it.mouthEarMs })
+                val runningTtfb = median(liveHistory.mapNotNull { it.ttfbMs })
+                val runningM7 = liveHistory.mapNotNull { it.maxGapMs }.maxOrNull()
                 send(
                     Sample(
                         Phase.Turns, rttMed, nJit, upJitter, null, null, sent.get(), framesRecvTotal,
                         (0.35f + (i + 1f) / plan.turns.size * 0.6f).coerceIn(0f, 0.97f),
+                        ttfbP50Ms = runningTtfb,
+                        mouthEarProxyMs = runningMouthEar,
+                        bargeStopMaxMs = liveHistory.mapNotNull { it.bargeStopMs }.maxOrNull(),
                         turnsOk = ledger.count { it.summary.protocolOk == true },
                         caliber = SIM_CALIBER, lowConfidence = backpressure,
+                        m7MaxFrameGapMs = runningM7,
+                        liveTurnHistory = liveHistory,
+                        totalPlannedTurns = plan.turns.size,
                     )
                 )
             }
@@ -440,6 +483,25 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                 val last = l.frames.lastOrNull() ?: return@mapNotNull null
                 (last.arrivalUs - enq) / 1000.0
             }
+            val finalLiveHistory = ledger.map { l ->
+                val first = l.frames.firstOrNull()
+                val dwellUs = if (l.summary.firstDownlinkPreWriteUs != null && l.summary.commitRecvUs != null) {
+                    l.summary.firstDownlinkPreWriteUs - l.summary.commitRecvUs
+                } else null
+                val turnTtfb = if (first != null && dwellUs != null) (first.arrivalUs - l.commitEnqUs - dwellUs) / 1000.0 else null
+                val turnMouthEar = if (first != null && dwellUs != null) (first.arrivalUs - l.lastUpEnqUs - dwellUs) / 1000.0 + CODEC_JB_BUDGET_MS else null
+                val turnGaps = l.frames.zipWithNext { a, b -> b.arrivalUs - a.arrivalUs }
+                val turnBarge = if (l.bargeEnqUs != null && l.frames.isNotEmpty()) (l.frames.last().arrivalUs - l.bargeEnqUs) / 1000.0 else null
+                TurnLivePoint(
+                    turnIndex = l.plan.turnIndex,
+                    interrupted = l.plan.interrupted,
+                    mouthEarMs = turnMouthEar,
+                    ttfbMs = turnTtfb,
+                    maxGapMs = maxFrameGapMs(turnGaps),
+                    bargeStopMs = turnBarge,
+                    protocolOk = l.summary.protocolOk == true,
+                )
+            }
             send(
                 Sample(
                     Phase.Done, rttMed, nJit, upJitter, null, null, sent.get(), framesRecvTotal, 1f,
@@ -454,6 +516,8 @@ class VoiceRunner(private val client: AnebClient = AnebClient()) {
                     lowConfidence = backpressure,
                     m7MaxFrameGapMs = maxFrameGapMs(downRawIntervalsUs),
                     voiceNearZeroArrivalRatio = nearZeroArrivalRatio(downRawIntervalsUs),
+                    liveTurnHistory = finalLiveHistory,
+                    totalPlannedTurns = plan.turns.size,
                 )
             )
         } finally {

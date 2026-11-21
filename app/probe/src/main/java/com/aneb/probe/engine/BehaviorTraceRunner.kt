@@ -93,11 +93,30 @@ class BehaviorTraceRunner internal constructor(
         val suppressionReasons: List<String>,
     )
 
+    /** 实时多模态任务剧场观测投影（只读观测通道，零测量影响）。 */
+    data class LiveTraceProgress(
+        val totalTasks: Int,
+        val plannedKinds: List<String>,
+        val currentTaskIndex: Int,
+        val currentTaskId: String?,
+        val currentWorkloadKind: String?,
+        val currentStep: String, // "echo" | "upload" | "stream" | "download" | "done"
+        val currentUploadBytes: Long = 0L,
+        val currentArtifactBytes: Long = 0L,
+        val echoP50Ms: Double? = null,
+        val echoJitterMs: Double? = null,
+        val completedTasks: List<TaskExecutionOutcome> = emptyList(),
+    )
+
     private val _result = MutableStateFlow<BehaviorTraceRunResult?>(null)
     val result: StateFlow<BehaviorTraceRunResult?> = _result.asStateFlow()
 
+    private val _liveProgress = MutableStateFlow<LiveTraceProgress?>(null)
+    val liveProgress: StateFlow<LiveTraceProgress?> = _liveProgress.asStateFlow()
+
     fun run(config: Config): Flow<String> = channelFlow {
         _result.value = null
+        _liveProgress.value = null
         val assessment = ProfileCapability.assess(config.profile)
         require(assessment.executable) {
             "profile_not_executable:${config.profile.profileId}:${assessment.unsupportedPhaseTypes}:${assessment.contractIssues}"
@@ -112,6 +131,15 @@ class BehaviorTraceRunner internal constructor(
         require(tasksToRun.isNotEmpty()) { "trace_plan_has_no_tasks" }
         val measurementsById = config.profile.measurements.associateBy { it.metricId }
 
+        val plannedKinds = tasksToRun.map { it.workloadKind }
+        _liveProgress.value = LiveTraceProgress(
+            totalTasks = tasksToRun.size,
+            plannedKinds = plannedKinds,
+            currentTaskIndex = 0,
+            currentTaskId = tasksToRun.firstOrNull()?.taskId,
+            currentWorkloadKind = tasksToRun.firstOrNull()?.workloadKind,
+            currentStep = "echo",
+        )
         send(
             "V2_RUN_START run_id=${config.runId} profile=${config.profile.profileId}@${config.profile.version} " +
                 "seed=${config.tracePlan.seed} tasks=${tasksToRun.size}",
@@ -159,6 +187,21 @@ class BehaviorTraceRunner internal constructor(
         for ((idx, task) in tasksToRun.withIndex()) {
             val taskStartNanos = clock.now()
             val taskErrors = mutableListOf<String>()
+            fun emitStep(step: String) {
+                _liveProgress.value = LiveTraceProgress(
+                    totalTasks = tasksToRun.size,
+                    plannedKinds = plannedKinds,
+                    currentTaskIndex = idx,
+                    currentTaskId = task.taskId,
+                    currentWorkloadKind = task.workloadKind,
+                    currentStep = step,
+                    currentUploadBytes = task.uploadBytes,
+                    currentArtifactBytes = task.artifactBytes,
+                    echoP50Ms = echoP50Ms,
+                    echoJitterMs = echoJitterMs,
+                    completedTasks = taskOutcomes.toList(),
+                )
+            }
 
             // 1. Upload
             var uploadOk = task.uploadBytes <= 0L
@@ -166,6 +209,7 @@ class BehaviorTraceRunner internal constructor(
             var uploadGoodputMbps: Double? = null
             var uploadDeviationMs: Double? = null
             if (task.uploadBytes > 0L) {
+                emitStep("upload")
                 totalRequests++
                 val up = client.uploadTraceStream(
                     url = "$base/api/v1/upload?run=${config.runId}",
@@ -202,6 +246,7 @@ class BehaviorTraceRunner internal constructor(
             val taskResiduals = ArrayList<Double>()
 
             if (plannedTokens > 0) {
+                emitStep("stream")
                 totalRequests++
                 val firstOffset = task.tokenPlans.first().plannedOffsetMs
                 val lastOffset = task.tokenPlans.last().plannedOffsetMs
@@ -299,6 +344,7 @@ class BehaviorTraceRunner internal constructor(
             var artifactLatencyMs: Double? = null
             var downGoodputMbps: Double? = null
             if (task.artifactBytes > 0L) {
+                emitStep("download")
                 totalRequests++
                 val chunkKb = (task.artifactChunkBytes / 1024).coerceIn(16, 1024)
                 val dl = client.downloadThroughput(
@@ -348,6 +394,7 @@ class BehaviorTraceRunner internal constructor(
                 errors = taskErrors,
             )
             taskOutcomes.add(outcome)
+            emitStep("done")
             send(
                 "V2_TASK_DONE task=${task.taskId} kind=${task.workloadKind} ok=$succeeded " +
                     "tokens=$receivedUnique/$plannedTokens ttft_ms=${e2eTtftMs?.let { fmt1(it) } ?: "null"} " +

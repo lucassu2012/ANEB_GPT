@@ -155,8 +155,11 @@ fun HomeScreen(
                 onSelect = onTestModeChange,
             )
 
-            Spacer(Modifier.height(18.dp))
-            IdleStartRing(running = running, onStart = onStart)
+            Spacer(Modifier.height(10.dp))
+            ActiveModePreviewStrip(testMode = testMode)
+
+            Spacer(Modifier.height(14.dp))
+            IdleStartRing(testMode = testMode, running = running, onStart = onStart)
 
             Text(
                 when (testMode) {
@@ -167,11 +170,11 @@ fun HomeScreen(
                     AnebTestMode.TOKEN_EXPERIENCE ->
                         "评估网络是否适合 AI 对话、编码、豆包流畅吐字和文件上传"
                 },
-                fontSize = 10.5.sp,
-                lineHeight = 16.sp,
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
                 textAlign = TextAlign.Center,
                 color = colors.muted,
-                modifier = Modifier.padding(top = 11.dp, start = 14.dp, end = 14.dp),
+                modifier = Modifier.padding(top = 10.dp, start = 12.dp, end = 12.dp),
             )
 
             notice?.let {
@@ -191,21 +194,23 @@ fun HomeScreen(
                 }
             }
 
-            // ---- ANEB 特色体验入口（首屏直达，区别于传统 Speedtest）----
-            Spacer(Modifier.height(18.dp))
+            // ---- 清晰视觉分隔：以下为独立专项剧场（不随上方模式切换）----
+            Spacer(Modifier.height(16.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
+            Spacer(Modifier.height(12.dp))
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "ANEB 特色体验实测",
+                    "独立专项实测（不随上方切换）",
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.ink,
                 )
                 Text(
-                    "AI 语音 · 抖音/豆包 · 多模态",
+                    "一键直达专页",
                     fontSize = 9.5.sp,
                     color = colors.faint,
                 )
@@ -221,7 +226,7 @@ fun HomeScreen(
                     accent = colors.excellent,
                     title = "实时 AI 语音",
                     badge = voiceBadge,
-                    subtitle = "Profile 4 · 口到耳 / M7 静默",
+                    subtitle = "双向帧示波 · 400ms 红线",
                     enabled = onOpenVoice != null,
                     onClick = { onOpenVoice?.invoke() },
                     modifier = Modifier.weight(1f),
@@ -246,8 +251,8 @@ fun HomeScreen(
                     symbol = "◇",
                     accent = colors.brand2,
                     title = "多模态 AI 轨迹",
-                    badge = "v2 20任务",
-                    subtitle = "全方案目录 · 全部可直接发起",
+                    badge = "20 任务实战",
+                    subtitle = "文本/文档/图片可视矩阵剧场",
                     enabled = onOpenProfiles != null,
                     onClick = { onOpenProfiles?.invoke() },
                     modifier = Modifier.weight(1f),
@@ -436,10 +441,87 @@ private fun TestModeSwitch(
     }
 }
 
+/** 动态模式实测预览条：随顶部三模式切换实时变换主题色与实测环节，一眼分清三者差异。 */
 @Composable
-private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
+private fun ActiveModePreviewStrip(testMode: AnebTestMode) {
+    val colors = AnebTheme.colors
+    val (accent, stages, outputLine) = when (testMode) {
+        AnebTestMode.TOKEN_EXPERIENCE -> Triple(
+            colors.brand,
+            listOf("💬 AI 打字流", "💻 编码 Agent", "🖼️ 多模态上传"),
+            "点击开始 → 实测首字 TTFT · 吐字间隔 ITL · 卡顿 · AI 体验分 AQS",
+        )
+        AnebTestMode.NETWORK_RESPONSIVENESS -> Triple(
+            colors.brand2,
+            listOf("空闲基线 RTT", "满载下载+回声", "满载上传+回声"),
+            "点击开始 → 实时绘制 Bufferbloat 延迟膨胀曲线与增量 Δ（不出分）",
+        )
+        AnebTestMode.NETWORK_BASIC -> Triple(
+            colors.excellent,
+            listOf("Ping / 抖动", "并发下载/上传", "抖音 1080P 拐点"),
+            "点击开始 → 实测上下行 Mbps + 抖音流畅度 + 6 大 AI 场景适配",
+        )
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(accent.copy(alpha = 0.08f))
+            .border(1.dp, accent.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            stages.forEach { stage ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(CircleShape)
+                        .background(Color(0x880B1022))
+                        .border(1.dp, accent.copy(alpha = 0.25f), CircleShape)
+                        .padding(vertical = 4.dp, horizontal = 4.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(stage, fontSize = 8.5.sp, fontWeight = FontWeight.Medium, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        Text(
+            outputLine,
+            fontSize = 8.5.sp,
+            color = accent,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 5.dp),
+        )
+    }
+}
+
+@Composable
+private fun IdleStartRing(testMode: AnebTestMode, running: Boolean, onStart: () -> Unit) {
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
+    val (ringGlowColor, sweepColors, modeCaption) = when (testMode) {
+        AnebTestMode.TOKEN_EXPERIENCE -> Triple(
+            Color(0xFF43E1E6),
+            listOf(Color(0xFF67EDCC), Color(0xFF43E1E6), Color(0xFF3EB4F1), Color(0xFF67EDCC)),
+            "AI 对话 / 编码",
+        )
+        AnebTestMode.NETWORK_RESPONSIVENESS -> Triple(
+            Color(0xFF9C7BFF),
+            listOf(Color(0xFF7C8BFF), Color(0xFFA97BFF), Color(0xFFF5A94C), Color(0xFF7C8BFF)),
+            "抗负载响应",
+        )
+        AnebTestMode.NETWORK_BASIC -> Triple(
+            Color(0xFF46E3A6),
+            listOf(Color(0xFF46E3A6), Color(0xFF39D9C2), Color(0xFF4CC6F7), Color(0xFF46E3A6)),
+            "基础 / 抖音评估",
+        )
+    }
     val breath: Float
     val glow: Float
     val rotation: Float
@@ -470,22 +552,22 @@ private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
     }
     Box(
         modifier = Modifier
-            .size(176.dp)
+            .size(164.dp)
             .scale(breath)
             .pressable(onClick = onStart, enabled = !running),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
-            val stroke = 1.35.dp.toPx()
+            val stroke = 1.4.dp.toPx()
             drawCircle(
-                color = Color(0xFF43E1E6).copy(alpha = glow),
+                color = ringGlowColor.copy(alpha = glow),
                 radius = size.minDimension / 2f - stroke,
                 style = Stroke(8.dp.toPx(), cap = StrokeCap.Round),
             )
             rotate(rotation, pivot = center) {
                 drawCircle(
                     brush = Brush.sweepGradient(
-                        listOf(Color(0xFF67EDCC), Color(0xFF43E1E6), Color(0xFF3EB4F1), Color(0xFF67EDCC)),
+                        sweepColors,
                         center = center,
                     ),
                     radius = size.minDimension / 2f - stroke,
@@ -493,13 +575,22 @@ private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
                 )
             }
         }
-        Text(
-            if (running) "进行中" else "开始",
-            fontSize = 31.sp,
-            fontWeight = FontWeight(320),
-            letterSpacing = (-1.2).sp,
-            color = colors.ink,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (running) "进行中" else "开始",
+                fontSize = 30.sp,
+                fontWeight = FontWeight(320),
+                letterSpacing = (-1.2).sp,
+                color = colors.ink,
+            )
+            Text(
+                modeCaption,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = ringGlowColor,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
 
