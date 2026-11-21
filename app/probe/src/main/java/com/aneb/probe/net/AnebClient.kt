@@ -610,7 +610,12 @@ class AnebClient private constructor(
         val serverView: UploadServerView? = null,
     )
 
-    suspend fun uploadBurst(url: String, payload: ByteArray, chunkBytes: Int = 2048): UploadResult {
+    suspend fun uploadBurst(
+        url: String,
+        payload: ByteArray,
+        chunkBytes: Int = 2048,
+        onBytesWritten: ((writtenBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ): UploadResult {
         val stamps = ArrayList<ChunkStamp>(payload.size / chunkBytes + 1)
         val body = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaType()
@@ -625,6 +630,7 @@ class AnebClient private constructor(
                     // 注意：这测的是写入本地 socket buffer 的时刻，不是线上发出时刻（R-07）
                     stamps.add(ChunkStamp(index, len, SystemClock.elapsedRealtimeNanos()))
                     offset += len
+                    onBytesWritten?.invoke(offset.toLong(), payload.size.toLong())
                     index++
                 }
             }
@@ -724,6 +730,7 @@ class AnebClient private constructor(
         totalBytes: Long,
         chunkSizes: List<Int>,
         chunkCadenceMs: Long = 0L,
+        onBytesWritten: ((Long) -> Unit)? = null,
     ): UploadResult {
         require(totalBytes > 0L) { "totalBytes must be positive" }
         val stamps = ArrayList<ChunkStamp>(chunkSizes.size.coerceAtLeast(1))
@@ -736,6 +743,7 @@ class AnebClient private constructor(
                 val bufSize = minOf(65_536L, maxOf(1L, effectiveChunks.maxOrNull()?.toLong() ?: 65_536L)).toInt()
                 val buf = ByteArray(bufSize) { idx -> ((idx * 37 + 13) and 0xff).toByte() }
                 var remaining = totalBytes
+                var writtenSoFar = 0L
                 var index = 0
                 while (remaining > 0L) {
                     if (cancelLatch.count == 0L || Thread.currentThread().isInterrupted) {
@@ -752,6 +760,8 @@ class AnebClient private constructor(
                     val writtenChunk = minOf(planned.toLong().coerceAtLeast(1L), remaining).toInt()
                     stamps.add(ChunkStamp(index, writtenChunk, clock.now()))
                     remaining -= writtenChunk
+                    writtenSoFar += writtenChunk
+                    onBytesWritten?.invoke(writtenSoFar)
                     index++
                     if (remaining > 0L && chunkCadenceMs > 0L) {
                         if (cancelLatch.await(chunkCadenceMs, TimeUnit.MILLISECONDS)) {

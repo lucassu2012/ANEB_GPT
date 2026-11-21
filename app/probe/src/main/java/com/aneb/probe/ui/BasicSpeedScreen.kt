@@ -3,6 +3,7 @@ package com.aneb.probe.ui
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +29,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -131,6 +137,16 @@ fun BasicSpeedTestingScreen(
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 12.dp),
         )
 
+        if (telemetry.isResponsivenessMode) {
+            LiveBufferbloatOscilloscopeCard(
+                idlePingMs = telemetry.pingMs,
+                liveLoadedRttMs = telemetry.liveLoadedRttMs,
+                historyMs = telemetry.loadedRttHistoryMs,
+                phase = telemetry.phase,
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         AnebGradientCard(Modifier.fillMaxWidth(), radius = 14.dp) {
             Column(Modifier.padding(horizontal = 13.dp, vertical = 11.dp)) {
                 Text("真实测试节点", fontSize = 9.sp, color = colors.muted)
@@ -146,6 +162,136 @@ fun BasicSpeedTestingScreen(
             ),
         )
         Spacer(Modifier.height(22.dp))
+    }
+}
+
+@Composable
+private fun LiveBufferbloatOscilloscopeCard(
+    idlePingMs: Double?,
+    liveLoadedRttMs: Double?,
+    historyMs: List<Double>,
+    phase: BasicSpeedPhase,
+) {
+    val colors = AnebTheme.colors
+    val deltaMs = if (idlePingMs != null && liveLoadedRttMs != null) liveLoadedRttMs - idlePingMs else null
+    val statusColor = when {
+        deltaMs == null -> colors.brand
+        deltaMs <= 40.0 -> colors.excellent
+        deltaMs <= 120.0 -> colors.fair
+        else -> colors.poor
+    }
+    val deltaBadge = when {
+        deltaMs == null -> "等待满载回声…"
+        else -> String.format(Locale.ROOT, "%+.0f ms 膨胀", deltaMs)
+    }
+    val phasePurpose = when (phase) {
+        BasicSpeedPhase.IDLE, BasicSpeedPhase.PREPARING, BasicSpeedPhase.LATENCY ->
+            "阶段 1/3 · 测空闲基准：记录网络空闲时的正常交互反应时间"
+        BasicSpeedPhase.DOWNLOAD ->
+            "阶段 2/3 · 模拟「边满载下载/刷高清视频边聊 AI」：观察延迟是否暴涨"
+        BasicSpeedPhase.UPLOAD ->
+            "阶段 3/3 · 模拟「边传大图/同步网盘边打 AI 语音」：检验上行排队卡顿"
+        else ->
+            "正在汇总高负载并发结论：对比空闲基准与满载延迟膨胀 Δ"
+    }
+    AnebGradientCard(Modifier.fillMaxWidth(), radius = 16.dp) {
+        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "高负载并发延迟监控（Bufferbloat）",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.ink,
+                    )
+                    Text(
+                        "绿虚线=空闲基线 ${idlePingMs.oneOrDash()} ms · 实线=${if (phase == BasicSpeedPhase.UPLOAD) "上传" else "下载"}满载实时 RTT",
+                        fontSize = 9.sp,
+                        color = colors.muted,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Text(
+                    deltaBadge,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = statusColor,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(statusColor.copy(alpha = 0.14f))
+                        .border(1.dp, statusColor.copy(alpha = 0.35f), CircleShape)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+            Text(
+                phasePurpose,
+                fontSize = 9.5.sp,
+                lineHeight = 14.sp,
+                color = colors.ink,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x66121A30))
+                    .border(1.dp, statusColor.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(70.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x99070B17))
+                    .border(1.dp, colors.hairline, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            ) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val maxMs = maxOf(
+                        120.0,
+                        (idlePingMs ?: 0.0) * 2.5,
+                        (historyMs.maxOrNull() ?: 0.0) * 1.15,
+                    )
+                    if (idlePingMs != null && idlePingMs.isFinite()) {
+                        val baseY = size.height * (1f - (idlePingMs / maxMs).toFloat().coerceIn(0f, 1f))
+                        drawLine(
+                            color = colors.excellent.copy(alpha = 0.7f),
+                            start = Offset(0f, baseY),
+                            end = Offset(size.width, baseY),
+                            strokeWidth = 1.2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 6f)),
+                        )
+                    }
+                    if (historyMs.size >= 2) {
+                        val path = Path()
+                        val stepX = size.width / (historyMs.size - 1).coerceAtLeast(1)
+                        historyMs.forEachIndexed { idx, v ->
+                            val x = idx * stepX
+                            val y = size.height * (1f - (v / maxMs).toFloat().coerceIn(0.04f, 1f))
+                            if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                        }
+                        drawPath(
+                            path = path,
+                            color = statusColor,
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                        )
+                    } else if (historyMs.size == 1) {
+                        val y = size.height * (1f - (historyMs.first() / maxMs).toFloat().coerceIn(0.04f, 1f))
+                        drawCircle(statusColor, 3.dp.toPx(), Offset(size.width / 2f, y))
+                    }
+                }
+                if (historyMs.isEmpty()) {
+                    Text(
+                        "进入满载下载/上传阶段后实时绘制延迟膨胀轨迹",
+                        fontSize = 9.sp,
+                        color = colors.faint,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -174,7 +320,11 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 
 /** 基础测速结果页：分离“测量事实”与版本化产品结论。 */
 @Composable
-fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
+fun BasicSpeedResultScreen(
+    result: BasicSpeedResult,
+    onBack: () -> Unit,
+    onOpenAppCompanion: (() -> Unit)? = null,
+) {
     if (result.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID) {
         LoadedResponsivenessScreen(result, onBack)
         return
@@ -228,6 +378,21 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                     }
                 }
             }
+            val douyinVerdict = remember(result.downloadMbps, result.pingMs, result.requestLossRate) {
+                BusinessExperienceEvaluator.evaluateDouyin(result)
+            }
+            Text(
+                "抖音短视频体验评估（P40 Pro 实测拐点校准）",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.ink,
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+            )
+            ExperienceVerdictCard(
+                verdict = douyinVerdict,
+                actionLabel = if (onOpenAppCompanion != null) "打开抖音 / 豆包对照实测 ›" else null,
+                onAction = onOpenAppCompanion,
+            )
             val verdicts = remember(result.downloadMbps, result.uploadMbps, result.pingMs, result.jitterMs) {
                 AiScenarioAdvisor.advise(
                     downMbps = result.downloadMbps,

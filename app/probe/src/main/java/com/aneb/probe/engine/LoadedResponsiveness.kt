@@ -99,7 +99,114 @@ data class LoadedResponsivenessSummary(
 
 /** Independent, unscored application-echo evidence. Never changes Basic/AQS/RPI. */
 object LoadedResponsiveness {
-    private val codec = Json { encodeDefaults = true; prettyPrint = true }
+    private val codec = Json { encodeDefaults = true; prettyPrint = false }
+
+    /**
+     * 无损压缩字节观测序列：以阶段边界（startUs/endUs）和每次 echo 采样点（t0Us/t3Us）
+     * 为切分点，把同一区间内同一 requestId 的高频分片累加为单条观测。
+     *
+     * 数学不变式：
+     * 1. 每个 requestId 累加字节和保持完全一致；
+     * 2. 保留的 atUs 均为该 requestId 的真实观测戳，严格位于 [bodyStartedUs, callbackFinishedUs]；
+     * 3. 每次 echo 对应的 bytesBefore (< t0Us) 与 bytesAfter (<= t3Us) 与原始序列逐位一致；
+     * 4. 若输入本身存在异常（逆序/回退），原样返回以保留审计拒判证据。
+     */
+    fun compactByteObservations(
+        stageStartUs: Long,
+        stageEndUs: Long,
+        samples: List<ResponsivenessEcho>,
+        observations: List<ResponsivenessByteObservation>,
+    ): List<ResponsivenessByteObservation> {
+        if (observations.size <= 2) return observations
+
+        data class Cut(val us: Long, val inclusiveOnLeft: Boolean)
+        // Strict (< us) cuts come BEFORE inclusive (<= us) cuts at the same timestamp.
+        val cuts = buildList {
+            add(Cut(stageStartUs, inclusiveOnLeft = false))
+            add(Cut(stageEndUs, inclusiveOnLeft = true))
+            samples.forEach { sample ->
+                add(Cut(sample.t0Us, inclusiveOnLeft = false))
+                sample.t3Us?.let { add(Cut(it, inclusiveOnLeft = true)) }
+            }
+        }.sortedWith(compareBy<Cut>({ it.us }, { if (it.inclusiveOnLeft) 1 else 0 }))
+            .distinct()
+
+        fun bucketIndex(atUs: Long): Int {
+            var lo = 0
+            var hi = cuts.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                val cut = cuts[mid]
+                val onRight = if (cut.inclusiveOnLeft) atUs > cut.us else atUs >= cut.us
+                if (onRight) lo = mid + 1 else hi = mid
+            }
+            return lo
+        }
+
+        // Preserve anomalous raw evidence verbatim so summarize() catches it accurately.
+        var checkPrevAt = Long.MIN_VALUE
+        var checkPrevBytes = 0L
+        for (obs in observations) {
+            if (obs.atUs < checkPrevAt || obs.totalBytes < checkPrevBytes) return observations
+            checkPrevAt = obs.atUs
+            checkPrevBytes = obs.totalBytes
+        }
+
+        data class RequestAgg(
+            val requestId: String?,
+            var deltaBytes: Long,
+            var lastAtUs: Long,
+            val firstOrder: Int,
+        )
+
+        val result = ArrayList<ResponsivenessByteObservation>()
+        var currentBucket = -1
+        var runningTotal = 0L
+        var rawPrevTotal = 0L
+        var orderSeq = 0
+        val bucketAgg = LinkedHashMap<String?, RequestAgg>()
+
+        fun flushBucket() {
+            if (bucketAgg.isEmpty()) return
+            val entries = bucketAgg.values.sortedWith(compareBy<RequestAgg>({ it.lastAtUs }, { it.firstOrder }))
+            for (entry in entries) {
+                if (entry.deltaBytes == 0L) {
+                    if (result.isEmpty()) {
+                        result += ResponsivenessByteObservation(entry.lastAtUs, runningTotal, entry.requestId)
+                    }
+                } else {
+                    runningTotal += entry.deltaBytes
+                    result += ResponsivenessByteObservation(entry.lastAtUs, runningTotal, entry.requestId)
+                }
+            }
+            bucketAgg.clear()
+        }
+
+        for (obs in observations) {
+            val b = bucketIndex(obs.atUs)
+            if (b != currentBucket) {
+                flushBucket()
+                currentBucket = b
+            }
+            val delta = obs.totalBytes - rawPrevTotal
+            rawPrevTotal = obs.totalBytes
+            if (delta == 0L) {
+                if (result.isEmpty() && bucketAgg.isEmpty()) {
+                    bucketAgg[obs.requestId] = RequestAgg(obs.requestId, 0L, obs.atUs, orderSeq++)
+                }
+            } else {
+                val existing = bucketAgg[obs.requestId]
+                if (existing == null) {
+                    bucketAgg[obs.requestId] = RequestAgg(obs.requestId, delta, obs.atUs, orderSeq++)
+                } else {
+                    existing.deltaBytes += delta
+                    existing.lastAtUs = obs.atUs
+                }
+            }
+        }
+        flushBucket()
+        return if (result.isEmpty()) observations.take(1) else result
+    }
 
     /** Raw observations remain authoritative; the summary is a reproducible export convenience. */
     fun encode(report: LoadedResponsivenessReport): String {

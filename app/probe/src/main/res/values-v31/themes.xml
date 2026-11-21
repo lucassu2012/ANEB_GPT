@@ -8,8 +8,8 @@
         <item name="android:navigationBarColor">#010207</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:windowSplashScreenBackground">#070A18</item>
+        <item name="android:windowSplashScreenBackground">#081024</item>
         <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">#070A18</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#081024</item>
     </style>
 </resources>

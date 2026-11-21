@@ -28,6 +28,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.apiprobe.AiReachabilityProbe
+import com.aneb.probe.ui.components.AnebGlyph
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebShapes
 import com.aneb.probe.ui.theme.AnebTheme
@@ -173,8 +175,12 @@ private fun ReachRow(row: AiReachabilityProbe.Result) {
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     Spacer(Modifier.width(6.dp))
-                    // verified：✅ 已核实 / ⚠️ 以官方文档为准
-                    Text(if (row.verified) "✅" else "⚠️", fontSize = 11.sp)
+                    // verified：矢量对勾表示已核实，矢量叹号表示以官方文档为准
+                    AnebIcon(
+                        glyph = if (row.verified) AnebGlyph.Check else AnebGlyph.Alert,
+                        tint = if (row.verified) colors.excellent else colors.fair,
+                        size = 13.dp,
+                    )
                 }
                 Spacer(Modifier.height(2.dp))
                 Text(

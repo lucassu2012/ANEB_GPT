@@ -55,6 +55,23 @@ data class LiveTelemetry(
     val streamTargetRatePerSec: Double? = null,
     /** 当前是否正在读取 token_stream；用于 UI 区分“尚未测量”和“速率为 0”。 */
     val streamActive: Boolean = false,
+    /** 当前活跃流已到达的 SSE 事件计数（只读观测代理量，驱动实时打字机/代码流展示）。 */
+    val liveStreamEvents: Int = 0,
+    /** 当前活跃流最近一次事件间隔或距今等待（ms，只读观测代理量，供实时卡顿高亮）。 */
+    val liveStreamGapMs: Double? = null,
+    /** 短窗（250ms）瞬时 SSE 事件到达速率（event/s，比 1s 均值灵敏 4 倍，专供高频实时速率刷新与波峰展示）。 */
+    val fastStreamRatePerSec: Double? = null,
+    /** 最近 48 次真实到达间隔或 echo RTT（ms，只读观测波形缓冲）。 */
+    val liveRecentIntervalsMs: List<Double> = emptyList(),
+    /** 当前细分阶段标识（"echo" / "upload" / "think" / "stream" / "tool_loop"），只读展示。 */
+    val liveSubPhase: String? = null,
+    /** 当前上行突发实时进度（0..1，只读展示）。 */
+    val liveUploadProgress: Float? = null,
+    val liveUploadBytes: Long = 0L,
+    val liveUploadTotalBytes: Long = 0L,
+    /** 当前工具循环实时轮次（如 2 / 8，只读展示）。 */
+    val liveToolRound: Int = 0,
+    val liveToolTotalRounds: Int = 0,
 
     // ---------------- 进度 ----------------
     /** 当前场景+阶段标识（如 profileId#round）；未开始＝null */
@@ -115,6 +132,16 @@ data class LiveTelemetry(
                 streamArrivalRatePerSec = s.streamArrivalRatePerSec,
                 streamTargetRatePerSec = s.streamTargetRatePerSec,
                 streamActive = s.streamActive,
+                liveStreamEvents = s.liveStreamEvents,
+                liveStreamGapMs = s.liveStreamGapMs,
+                fastStreamRatePerSec = s.fastStreamRatePerSec,
+                liveRecentIntervalsMs = s.liveRecentIntervalsMs,
+                liveSubPhase = s.liveSubPhase,
+                liveUploadProgress = s.liveUploadProgress,
+                liveUploadBytes = s.liveUploadBytes,
+                liveUploadTotalBytes = s.liveUploadTotalBytes,
+                liveToolRound = s.liveToolRound,
+                liveToolTotalRounds = s.liveToolTotalRounds,
                 phase = s.phase,
                 fraction = s.fraction.coerceIn(0.0, 1.0),
                 aqsRunning = s.aqsRunning,
@@ -174,6 +201,21 @@ data class TelemetrySnapshot(
     val streamTargetRatePerSec: Double? = null,
     /** 当前是否处于 token_stream 读循环。 */
     val streamActive: Boolean = false,
+    /** 当前活跃流已观察到的 SSE 事件数（只读观测）。 */
+    val liveStreamEvents: Int = 0,
+    /** 当前活跃流实时事件间隔/等待（ms，只读观测）。 */
+    val liveStreamGapMs: Double? = null,
+    /** 短窗（250ms）高频瞬时 SSE 到达速率（event/s）。 */
+    val fastStreamRatePerSec: Double? = null,
+    /** 最近 48 次实时到达间隔或 echo RTT（ms）。 */
+    val liveRecentIntervalsMs: List<Double> = emptyList(),
+    /** 当前细分阶段（"echo"/"upload"/"think"/"stream"/"tool_loop"）。 */
+    val liveSubPhase: String? = null,
+    val liveUploadProgress: Float? = null,
+    val liveUploadBytes: Long = 0L,
+    val liveUploadTotalBytes: Long = 0L,
+    val liveToolRound: Int = 0,
+    val liveToolTotalRounds: Int = 0,
     /** 当前场景+阶段标识；未开始＝null */
     val phase: String? = null,
     /** 全局完成度 0..1 */
@@ -223,6 +265,14 @@ interface LiveStreamObserver {
     fun onStreamFinished()
 }
 
+/** 场景子阶段只读实时观察合同（R-16：仅做无锁原子写入，绝不阻塞测量或改动任何计时/KPI）。 */
+interface LivePhaseObserver {
+    fun onSubPhase(subPhase: String) {}
+    fun onEchoRtt(rttMs: Double) {}
+    fun onUploadBytes(writtenBytes: Long, totalBytes: Long, nowNanos: Long) {}
+    fun onToolRound(round: Int, totalRounds: Int, rttMs: Double?) {}
+}
+
 /**
  * 无锁固定容量滑窗：SSE 读线程只写到达戳，遥测协程按需读取最近窗口的事件速率。
  *
@@ -242,6 +292,10 @@ class LiveStreamWindow(
         val active: Boolean,
         val arrivalRatePerSec: Double?,
         val targetRatePerSec: Double?,
+        val eventsObserved: Int = 0,
+        val latestGapMs: Double? = null,
+        val fastRatePerSec: Double? = null,
+        val recentIntervalsMs: List<Double> = emptyList(),
     )
 
     private val capacity = capacity
@@ -275,15 +329,67 @@ class LiveStreamWindow(
     fun snapshot(nowNanos: Long): Snapshot {
         val isActive = active
         val target = targetRatePerSec
-        if (!isActive) return Snapshot(active = false, arrivalRatePerSec = null, targetRatePerSec = target)
+        val totalWritten = written.get()
+        val observedCount = totalWritten.coerceAtMost(Int.MAX_VALUE.toLong()).toInt().coerceAtLeast(0)
+        if (!isActive) return Snapshot(active = false, arrivalRatePerSec = null, targetRatePerSec = target, eventsObserved = observedCount)
+
+        val latestGapMs: Double? = when {
+            totalWritten >= 2L -> {
+                val last = arrivals.get(((totalWritten - 1L) % capacity).toInt())
+                val prev = arrivals.get(((totalWritten - 2L) % capacity).toInt())
+                val sinceLast = (nowNanos - last).coerceAtLeast(0L)
+                val between = (last - prev).coerceAtLeast(0L)
+                maxOf(sinceLast, between) / 1_000_000.0
+            }
+            totalWritten == 1L -> {
+                val last = arrivals.get(0)
+                (nowNanos - last).coerceAtLeast(0L) / 1_000_000.0
+            }
+            else -> (nowNanos - startedAtNanos).coerceAtLeast(0L) / 1_000_000.0
+        }
+
+        // 提取最近 48 个连续事件到达间隔（ms），精确呈现毫秒级网络微抖动
+        val recentIntervals = if (totalWritten >= 2L) {
+            val count = minOf(totalWritten - 1L, 48L).toInt()
+            val startSeq = totalWritten - 1L - count
+            val list = ArrayList<Double>(count)
+            for (k in 0 until count) {
+                val tPrev = arrivals.get(((startSeq + k) % capacity).toInt())
+                val tCurr = arrivals.get(((startSeq + k + 1L) % capacity).toInt())
+                val dt = ((tCurr - tPrev).coerceAtLeast(0L)) / 1_000_000.0
+                if (dt.isFinite()) list.add(dt)
+            }
+            list
+        } else emptyList()
 
         val elapsed = nowNanos - startedAtNanos
+        // 250ms 高敏短窗瞬时速率（80ms 后即出值），让 SSE 速率与波形紧跟网络真实起伏
+        val fastRate: Double? = if (elapsed >= FAST_MIN_SAMPLE_NANOS) {
+            val fastLower = maxOf(startedAtNanos, nowNanos - FAST_WINDOW_NANOS)
+            val sampleCount = minOf(totalWritten, capacity.toLong()).toInt()
+            var fastInWindow = 0
+            for (i in 0 until sampleCount) {
+                val stamp = arrivals.get(i)
+                if (stamp in fastLower..nowNanos) fastInWindow++
+            }
+            val fastDenom = minOf(FAST_WINDOW_NANOS, elapsed).coerceAtLeast(FAST_MIN_SAMPLE_NANOS)
+            fastInWindow * 1_000_000_000.0 / fastDenom
+        } else null
+
         if (elapsed < MIN_SAMPLE_NANOS) {
-            return Snapshot(active = true, arrivalRatePerSec = null, targetRatePerSec = target)
+            return Snapshot(
+                active = true,
+                arrivalRatePerSec = null,
+                targetRatePerSec = target,
+                eventsObserved = observedCount,
+                latestGapMs = latestGapMs,
+                fastRatePerSec = fastRate,
+                recentIntervalsMs = recentIntervals,
+            )
         }
 
         val lowerBound = maxOf(startedAtNanos, nowNanos - windowNanos)
-        val sampleCount = minOf(written.get(), capacity.toLong()).toInt()
+        val sampleCount = minOf(totalWritten, capacity.toLong()).toInt()
         var inWindow = 0
         for (i in 0 until sampleCount) {
             val stamp = arrivals.get(i)
@@ -291,7 +397,15 @@ class LiveStreamWindow(
         }
         val denominatorNanos = minOf(windowNanos, elapsed).coerceAtLeast(MIN_SAMPLE_NANOS)
         val rate = inWindow * 1_000_000_000.0 / denominatorNanos
-        return Snapshot(active = true, arrivalRatePerSec = rate, targetRatePerSec = target)
+        return Snapshot(
+            active = true,
+            arrivalRatePerSec = rate,
+            targetRatePerSec = target,
+            eventsObserved = observedCount,
+            latestGapMs = latestGapMs,
+            fastRatePerSec = fastRate,
+            recentIntervalsMs = recentIntervals,
+        )
     }
 
     fun reset() {
@@ -304,6 +418,8 @@ class LiveStreamWindow(
     companion object {
         const val DEFAULT_WINDOW_NANOS: Long = 1_000_000_000L
         const val MIN_SAMPLE_NANOS: Long = 250_000_000L
+        const val FAST_WINDOW_NANOS: Long = 250_000_000L
+        const val FAST_MIN_SAMPLE_NANOS: Long = 80_000_000L
         const val DEFAULT_CAPACITY: Int = 2_048
     }
 }

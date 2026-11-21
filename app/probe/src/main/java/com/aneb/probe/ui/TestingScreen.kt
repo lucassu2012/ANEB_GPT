@@ -2,12 +2,12 @@ package com.aneb.probe.ui
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,31 +30,53 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.R
 import com.aneb.probe.engine.LiveTelemetry
+import com.aneb.probe.ui.components.AnebGlyph
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.AnebMetric
 import com.aneb.probe.ui.components.AnebMetricTrio
-import com.aneb.probe.ui.components.AnebScoreRing
-import com.aneb.probe.ui.components.AnebSparkline
 import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebTheme
 import com.aneb.probe.ui.theme.LocalReducedMotion
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** 测试中页：复刻 `testing.html`，所有读数仍来自真实 [LiveTelemetry]。 */
+/**
+ * AI 对话 / 编码 Agent / 多模态巡检实时测试工作台：
+ * - 上半区：22Hz 高频网络与 SSE 实时遥测控制台（自动缩放微抖动脉冲柱 + 250ms 瞬时速率曲线，
+ *   从启动首 150ms 即实时跳动，清晰放大真实网络波动与卡顿尖峰）；
+ * - 下半区：严格固定高度（368dp）自动滚动的真实业务作业窗口（商业决策深度对话 /
+ *   Cursor 级 Coding Agent Diff + 工具执行轨 / 4K 真实机房光路 AI 视觉巡检），绝不因内容增长抖动高度；
+ * - 100% R-16 只读投影，零 emoji，零测量路径干预。
+ */
 @Composable
 fun TestingScreen(
     logs: List<String>,
@@ -70,35 +93,30 @@ fun TestingScreen(
     }
     val colors = AnebTheme.colors
     val progress = remember(logs.size) { TestProgressParser.parse(logs) }
-    val score = telemetry.aqsRunning?.roundToInt()
-    val reducedMotion = LocalReducedMotion.current
-    val gaugeMax = ((telemetry.streamTargetRatePerSec ?: 100.0) * 1.6).coerceAtLeast(20.0)
-    val liveTargetFraction = telemetry.streamArrivalRatePerSec
-        ?.div(gaugeMax)
-        ?.toFloat()
-        ?.coerceIn(0f, 1f)
-        ?: 0f
-    val animatedLiveFraction by animateFloatAsState(
-        targetValue = liveTargetFraction,
-        animationSpec = if (reducedMotion) tween(0) else spring(dampingRatio = 0.72f, stiffness = 260f),
-        label = "live-arrival-gauge",
-    )
-    val displayedRate = if (telemetry.streamActive && telemetry.streamArrivalRatePerSec != null) {
-        animatedLiveFraction * gaugeMax
-    } else {
-        null
+    val activeProfileId = remember(telemetry.phase, progress.currentProfileId) {
+        telemetry.phase?.substringBefore('#')?.takeIf { it.isNotBlank() } ?: progress.currentProfileId
     }
-    val hasLiveRate = telemetry.streamActive && telemetry.streamArrivalRatePerSec != null
-    val rateHistory = remember { mutableStateListOf<Float>() }
-    LaunchedEffect(telemetry.streamArrivalRatePerSec, telemetry.streamActive, gaugeMax) {
-        val sample = telemetry.streamArrivalRatePerSec
-        if (telemetry.streamActive && sample != null) {
-            rateHistory += (sample / gaugeMax).toFloat().coerceIn(0f, 1f)
-            while (rateHistory.size > 40) rateHistory.removeAt(0)
+
+    // 优先使用 250ms 高敏短窗瞬时 SSE 到达速率，大幅提升刷新灵敏度与波动幅度表现
+    val instantRate = telemetry.fastStreamRatePerSec ?: telemetry.streamArrivalRatePerSec
+    val rateHistory = remember { mutableStateListOf<Double>() }
+    LaunchedEffect(
+        instantRate,
+        telemetry.upMbps,
+        telemetry.liveRecentIntervalsMs.size,
+        telemetry.liveStreamEvents,
+        telemetry.liveSubPhase,
+    ) {
+        val sample = when {
+            telemetry.streamActive && instantRate != null -> instantRate
+            telemetry.liveSubPhase == "upload" && telemetry.upMbps != null -> telemetry.upMbps
+            telemetry.liveRecentIntervalsMs.isNotEmpty() -> telemetry.liveRecentIntervalsMs.last()
+            else -> null
         }
-    }
-    val chartPoints = if (rateHistory.size >= 2) rateHistory.toList() else telemetry.itlRecentMs.map {
-        (1.0 - (it / (LiveTelemetry.LIVE_STALL_MS * 2.0)).coerceIn(0.0, 1.0)).toFloat()
+        if (sample != null && sample.isFinite() && sample >= 0.0) {
+            rateHistory += sample
+            while (rateHistory.size > 48) rateHistory.removeAt(0)
+        }
     }
 
     Column(
@@ -106,9 +124,10 @@ fun TestingScreen(
             .fillMaxSize()
             .background(colors.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 14.dp),
     ) {
-        Box(Modifier.fillMaxWidth().height(52.dp)) {
+        // ---- 顶栏 ----
+        Box(Modifier.fillMaxWidth().height(46.dp)) {
             Text(
                 "×",
                 fontSize = 28.sp,
@@ -120,126 +139,98 @@ fun TestingScreen(
                     .padding(horizontal = 3.dp, vertical = 6.dp),
             )
             AnebWordmark(Modifier.align(Alignment.Center))
-        }
-
-        TopQualityMetrics(telemetry)
-        AnebSparkline(
-            values = chartPoints,
-            color = colors.brand,
-            modifier = Modifier.fillMaxWidth().height(31.dp).padding(top = 5.dp),
-        )
-
-        TestStepRow(progress)
-
-        AnebScoreRing(
-            score = displayedRate?.roundToInt() ?: score ?: if (telemetry.streamActive) null else (progress.fraction * 100).roundToInt(),
-            fraction = if (hasLiveRate) animatedLiveFraction else score?.div(100f) ?: progress.fraction,
-            accent = colors.brand,
-            label = when {
-                hasLiveRate -> "事件 / 秒"
-                telemetry.streamActive -> "建立速率窗口"
-                else -> "${(progress.fraction * 100).roundToInt()}%"
-            },
-            supporting = if (hasLiveRate) {
-                "AI 流式到达速率 · 1 秒窗口"
-            } else if (telemetry.streamActive) {
-                "测试进度 · 等待首批流式事件"
-            } else if (score != null) {
-                "AI 体验分 · 测量中"
-            } else {
-                "测试进度 · ${progress.phaseName}"
-            },
-            modifier = Modifier.align(Alignment.CenterHorizontally).size(190.dp),
-            needleFraction = if (hasLiveRate) animatedLiveFraction else null,
-            speedometerLayout = telemetry.streamActive,
-        )
-
-        Row(
-            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 2.dp, bottom = 11.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            LiveDot(colors.brand)
-            Spacer(Modifier.width(7.dp))
             Text(
-                if (telemetry.streamActive) "正在实时观察 ${progress.phaseName} 的流式到达" else "正在检查 ${progress.phaseName} 的稳定性",
-                fontSize = 10.sp,
-                color = colors.muted,
+                "${(progress.fraction * 100).roundToInt()}%",
+                fontSize = 10.5.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = colors.brand,
+                modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
 
-        ConnectionCard(
-            title = telemetry.rat ?: "自动选择网络",
-            subtitle = "$nodeLabel${if (radioEvidenceLimited) " · 无线归因低置信" else " · 真实测试节点"}",
+        // ---- 场景流水线指示 ----
+        ScenarioPipelineStepper(activeProfileId = activeProfileId, progress = progress)
+
+        // ---- 上半区：高频实时指标与动态放大波形示波台（位置固定在业务窗上方）----
+        TopQualityMetrics(telemetry = telemetry, activeProfileId = activeProfileId)
+        Spacer(Modifier.height(8.dp))
+        LiveHighFreqTelemetryConsole(
+            telemetry = telemetry,
+            activeProfileId = activeProfileId,
+            instantRate = instantRate,
+            rateHistory = rateHistory.toList(),
         )
 
-        Spacer(Modifier.height(12.dp))
-        AnebMetricTrio(
-            items = listOf(
-                AnebMetric("首字响应", telemetry.ttftMs?.let { String.format(Locale.ROOT, "%.2f", it / 1_000.0) } ?: "—", "秒", colors.brand),
-                AnebMetric("流式到达", displayedRate?.let { "${it.roundToInt()}" } ?: "—", "事件/秒", colors.excellent),
-                AnebMetric("卡顿", telemetry.stallCount.toString(), "次", colors.ink),
-            ),
+        Spacer(Modifier.height(10.dp))
+
+        // ---- 下半区：严格固定高度（368dp）真实业务场景滚动视窗（大小恒定不跳动）----
+        AuthenticWorkloadViewport(
+            profileId = activeProfileId,
+            runId = progress.runId,
+            telemetry = telemetry,
+            instantRate = instantRate,
+            phaseName = progress.phaseName,
         )
 
-        if (telemetry.upMbps != null || telemetry.rsrp != null || telemetry.sinr != null) {
-            Spacer(Modifier.height(12.dp))
-            AnebMetricTrio(
-                items = listOf(
-                    AnebMetric("上行", telemetry.upMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", "Mbps", colors.brand2),
-                    AnebMetric("RSRP", telemetry.rsrp?.toString() ?: "—", "dBm"),
-                    AnebMetric("SINR", telemetry.sinr?.toString() ?: "—", "dB"),
-                ),
-            )
-        }
-        Spacer(Modifier.height(22.dp))
+        // ---- 底部紧凑链路与节点信息条 ----
+        Spacer(Modifier.height(8.dp))
+        FooterStatusStrip(
+            nodeLabel = nodeLabel,
+            telemetry = telemetry,
+            radioEvidenceLimited = radioEvidenceLimited,
+        )
+        Spacer(Modifier.height(18.dp))
     }
 }
 
 @Composable
-private fun TopQualityMetrics(telemetry: LiveTelemetry) {
+private fun ScenarioPipelineStepper(
+    activeProfileId: String?,
+    progress: TestProgressParser.LiveProgress,
+) {
     val colors = AnebTheme.colors
-    val entries = listOf(
-        "Ping" to (telemetry.rttMs?.let { "${it.roundToInt()} ms" } ?: "—"),
-        "抖动" to (telemetry.jitterMs?.let { String.format(Locale.ROOT, "%.1f ms", it) } ?: "—"),
-        "丢包" to "—",
+    val steps = listOf(
+        Triple("s1_chat", AnebGlyph.Chat, "01 AI 对话"),
+        Triple("s2_coding_agent", AnebGlyph.Code, "02 编码 Agent"),
+        Triple("s3_multimodal", AnebGlyph.Image, "03 多模态巡检"),
     )
-    Row(Modifier.fillMaxWidth()) {
-        entries.forEachIndexed { index, entry ->
-            if (index > 0) Box(Modifier.width(1.dp).height(35.dp).background(colors.hairline))
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(entry.first, fontSize = 10.sp, color = colors.muted)
-                Text(entry.second, fontSize = 12.sp, fontWeight = FontWeight(560), color = colors.ink, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
-    }
-}
+    val activeIdx = steps.indexOfFirst { it.first == activeProfileId }.takeIf { it >= 0 }
+        ?: progress.scenarioIndex.coerceIn(0, 2)
 
-@Composable
-private fun TestStepRow(progress: TestProgressParser.LiveProgress) {
-    val colors = AnebTheme.colors
-    val active = when {
-        progress.finished -> 2
-        progress.scenarioIndex >= 2 -> 2
-        else -> 1
-    }
-    val labels = listOf("连接", "流式", "上传")
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        labels.forEachIndexed { index, label ->
-            Text(
-                label,
-                fontSize = 9.sp,
-                color = if (index == active) colors.brand else colors.faint,
-            )
-            if (index < labels.lastIndex) {
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .padding(horizontal = 7.dp)
-                        .height(1.dp)
-                        .background(if (index < active) colors.brand else colors.hairline),
+        steps.forEachIndexed { idx, (_, glyph, label) ->
+            val current = idx == activeIdx
+            val done = idx < activeIdx || progress.finished
+            val accent = when {
+                current -> colors.brand
+                done -> colors.excellent
+                else -> colors.faint
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (current) accent.copy(alpha = 0.14f) else Color(0x660B1020))
+                    .border(1.dp, if (current) accent.copy(alpha = 0.55f) else colors.hairline, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                AnebIcon(glyph = if (done && !current) AnebGlyph.Check else glyph, tint = accent, size = 12.dp)
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    label,
+                    fontSize = 9.sp,
+                    fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (current || done) colors.ink else colors.faint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -247,40 +238,982 @@ private fun TestStepRow(progress: TestProgressParser.LiveProgress) {
 }
 
 @Composable
-private fun ConnectionCard(title: String, subtitle: String) {
+private fun TopQualityMetrics(
+    telemetry: LiveTelemetry,
+    activeProfileId: String?,
+) {
     val colors = AnebTheme.colors
-    Row(
+    val thirdMetric = if (activeProfileId == "s3_multimodal" && telemetry.upMbps != null) {
+        AnebMetric("上行吞吐", String.format(Locale.ROOT, "%.1f", telemetry.upMbps), "Mbps", colors.excellent)
+    } else if (telemetry.ttftMs != null) {
+        AnebMetric("首字 TTFT", "${telemetry.ttftMs.roundToInt()}", "ms", colors.brand2)
+    } else if (telemetry.liveStreamGapMs != null && telemetry.streamActive) {
+        AnebMetric("实时间隔", "${telemetry.liveStreamGapMs.roundToInt()}", "ms", colors.brand2)
+    } else {
+        AnebMetric("首字 TTFT", "—", "ms")
+    }
+    AnebMetricTrio(
+        listOf(
+            AnebMetric("链路 RTT", telemetry.rttMs?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", "ms", colors.brand),
+            AnebMetric("实时抖动", telemetry.jitterMs?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", "ms"),
+            thirdMetric,
+        ),
+    )
+}
+
+/**
+ * 22Hz 高频实时网络与 SSE 示波台：
+ * - 上方主读数以 250ms 高敏短窗速率实时跳动；
+ * - 116dp 固定示波窗同时绘制「36 柱毫秒级到达间隔微脉冲（自动缩放放大波动幅度）」+
+ *   「自动缩放高速率折线 + 末尾发光扫描点」，确保任何 2–50ms 网络波动与停顿瞬间肉眼可见。
+ */
+@Composable
+private fun LiveHighFreqTelemetryConsole(
+    telemetry: LiveTelemetry,
+    activeProfileId: String?,
+    instantRate: Double?,
+    rateHistory: List<Double>,
+) {
+    val colors = AnebTheme.colors
+    val gapMs = telemetry.liveStreamGapMs
+    val stallingNow = telemetry.streamActive && gapMs != null && gapMs >= 250.0
+    val subPhase = telemetry.liveSubPhase
+    val accent = when {
+        stallingNow -> colors.poor
+        activeProfileId == "s2_coding_agent" -> colors.brand2
+        activeProfileId == "s3_multimodal" -> colors.excellent
+        else -> colors.brand
+    }
+
+    val (metricTitle, metricValue, metricUnit) = when {
+        telemetry.streamActive && instantRate != null -> Triple(
+            "SSE 实时到达速率（250ms 瞬时窗）",
+            String.format(Locale.ROOT, "%.1f", instantRate),
+            "ev/s",
+        )
+        subPhase == "upload" && telemetry.upMbps != null -> Triple(
+            "多模态载荷实时上行速率",
+            String.format(Locale.ROOT, "%.1f", telemetry.upMbps),
+            "Mbps",
+        )
+        subPhase == "tool_loop" -> Triple(
+            "Agent 工具链往返调用",
+            "${telemetry.liveToolRound}/${telemetry.liveToolTotalRounds.coerceAtLeast(1)}",
+            "rounds",
+        )
+        telemetry.rttMs != null -> Triple(
+            "链路 Echo 实时时延探测",
+            String.format(Locale.ROOT, "%.1f", telemetry.rttMs),
+            "ms",
+        )
+        else -> Triple("SSE 实时到达速率", "—", "ev/s")
+    }
+
+    val intervals = telemetry.liveRecentIntervalsMs
+    val peakInterval = intervals.maxOrNull()
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xB811162C))
-            .border(1.dp, colors.hairline, RoundedCornerShape(14.dp))
-            .padding(horizontal = 11.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(Color(0xFF0A1020))
+            .border(1.dp, if (stallingNow) colors.poor.copy(alpha = 0.6f) else accent.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        Box(Modifier.size(28.dp).clip(CircleShape).border(1.dp, colors.hairline, CircleShape), contentAlignment = Alignment.Center) {
-            Text("◎", fontSize = 11.sp, color = colors.muted)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LivePulseDot(accent)
+                    Spacer(Modifier.width(6.dp))
+                    Text(metricTitle, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1)
+                }
+                Text(
+                    buildString {
+                        append("事件 ${telemetry.liveStreamEvents.takeIf { it > 0 } ?: telemetry.tokensReceived}")
+                        if (telemetry.stallCount > 0) append(" · 累计卡顿 ${telemetry.stallCount}")
+                        peakInterval?.let { append(" · 峰值间隔 ${it.roundToInt()}ms") }
+                    },
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    metricValue,
+                    fontSize = 24.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = accent,
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    metricUnit,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.muted,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
         }
-        Spacer(Modifier.width(9.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colors.ink)
-            Text(subtitle, fontSize = 10.sp, color = colors.muted, maxLines = 1)
+
+        Spacer(Modifier.height(8.dp))
+
+        // 116dp 固定高度双层高动态示波窗（脉冲柱 + 自动缩放高速率曲线）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(116.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    Brush.verticalGradient(listOf(Color(0xFF050914), Color(0xFF0A1328))),
+                )
+                .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 7.dp, vertical = 6.dp),
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                // 背景刻度网格
+                listOf(0.25f, 0.50f, 0.75f).forEach { frac ->
+                    drawLine(
+                        color = Color(0x226890C8),
+                        start = Offset(0f, h * frac),
+                        end = Offset(w, h * frac),
+                        strokeWidth = 0.8.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+                    )
+                }
+
+                // 第 1 层：毫秒级到达间隔脉冲柱（自动以 min..max 动态拉伸，放大真实微抖动！）
+                val bars = intervals.takeLast(36)
+                if (bars.isNotEmpty()) {
+                    val bMin = (bars.minOrNull() ?: 0.0) * 0.75
+                    val bMax = maxOf(bMin + 8.0, (bars.maxOrNull() ?: 25.0) * 1.08)
+                    val span = (bMax - bMin).coerceAtLeast(1.0)
+                    val gap = 2.dp.toPx()
+                    val barW = ((w - gap * (bars.size - 1)) / bars.size.coerceAtLeast(1)).coerceIn(2f, 10f)
+                    val offsetX = (w - bars.size * (barW + gap) + gap).coerceAtLeast(0f)
+                    bars.forEachIndexed { idx, v ->
+                        val norm = ((v - bMin) / span).toFloat().coerceIn(0.10f, 0.94f)
+                        val barH = h * norm
+                        val x = offsetX + idx * (barW + gap)
+                        val isSpike = v >= 120.0
+                        val barColor = if (isSpike) colors.poor else accent.copy(alpha = 0.42f)
+                        drawRoundRect(
+                            brush = Brush.verticalGradient(
+                                listOf(barColor.copy(alpha = 0.85f), barColor.copy(alpha = 0.12f)),
+                                startY = h - barH,
+                                endY = h,
+                            ),
+                            topLeft = Offset(x, h - barH),
+                            size = Size(barW, barH),
+                            cornerRadius = CornerRadius(barW * 0.35f, barW * 0.35f),
+                        )
+                    }
+                }
+
+                // 第 2 层：250ms 高敏瞬时速率/时延发光折线（自动围绕活跃区间 min..max 缩放，充满 75% 纵深！）
+                if (rateHistory.size >= 2) {
+                    val rMinRaw = rateHistory.minOrNull() ?: 0.0
+                    val rMaxRaw = rateHistory.maxOrNull() ?: 10.0
+                    val pad = maxOf((rMaxRaw - rMinRaw) * 0.22, maxOf(rMaxRaw * 0.08, 2.5))
+                    val lo = (rMinRaw - pad).coerceAtLeast(0.0)
+                    val hi = rMaxRaw + pad
+                    val span = (hi - lo).coerceAtLeast(1.0)
+                    val stepX = w / (rateHistory.size - 1).coerceAtLeast(1)
+
+                    val strokePath = Path()
+                    val fillPath = Path()
+                    var lastX = 0f
+                    var lastY = h * 0.5f
+                    rateHistory.forEachIndexed { idx, v ->
+                        val x = idx * stepX
+                        val norm = ((v - lo) / span).toFloat().coerceIn(0.08f, 0.94f)
+                        val y = h * (1f - norm)
+                        lastX = x
+                        lastY = y
+                        if (idx == 0) {
+                            strokePath.moveTo(x, y)
+                            fillPath.moveTo(x, h)
+                            fillPath.lineTo(x, y)
+                        } else {
+                            strokePath.lineTo(x, y)
+                            fillPath.lineTo(x, y)
+                        }
+                    }
+                    fillPath.lineTo(lastX, h)
+                    fillPath.close()
+                    drawPath(
+                        path = fillPath,
+                        brush = Brush.verticalGradient(
+                            listOf(accent.copy(alpha = 0.25f), Color.Transparent),
+                        ),
+                    )
+                    drawPath(
+                        path = strokePath,
+                        color = Color(0xFFF2FBFF),
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    // 右端发光实时扫描点
+                    drawCircle(accent.copy(alpha = 0.35f), radius = 6.5.dp.toPx(), center = Offset(lastX, lastY))
+                    drawCircle(Color.White, radius = 2.8.dp.toPx(), center = Offset(lastX, lastY))
+                }
+            }
+
+            // 角标 HUD
+            Row(
+                modifier = Modifier.align(Alignment.TopStart),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    "22Hz TELEMETRY",
+                    fontSize = 7.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = accent,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xCC060A16))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+                if (stallingNow) {
+                    Text(
+                        "流式停顿 ${gapMs?.roundToInt()} ms",
+                        fontSize = 8.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.poor,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(colors.poor.copy(alpha = 0.18f))
+                            .border(1.dp, colors.poor.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.5.dp),
+                    )
+                }
+            }
+            if (rateHistory.size < 2 && intervals.isEmpty()) {
+                Text(
+                    "正在建立测试链路并采集首个 Echo / SSE 到达样本…",
+                    fontSize = 9.sp,
+                    color = colors.faint,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
         }
-        Text("节点", fontSize = 10.sp, color = colors.brand, modifier = Modifier.border(1.dp, colors.brand.copy(alpha = 0.18f), CircleShape).padding(horizontal = 9.dp, vertical = 6.dp))
+    }
+}
+
+/**
+ * 固定高度（368dp）真实业务场景滚动视窗：
+ * - 框体高度严格锁定 368dp，切换场景或持续吐字时绝不撑开、绝不跳动；
+ * - 内部独立垂直滚动并随真实 SSE 到达自动平滑跟底，呈现真实生产级对话 / IDE / 视觉巡检体验。
+ */
+@Composable
+private fun AuthenticWorkloadViewport(
+    profileId: String?,
+    runId: String?,
+    telemetry: LiveTelemetry,
+    instantRate: Double?,
+    phaseName: String,
+) {
+    val colors = AnebTheme.colors
+    val gapMs = telemetry.liveStreamGapMs
+    val stallingNow = telemetry.streamActive && gapMs != null && gapMs >= 250.0
+    val chatCase = remember(runId) {
+        RealisticScenarioCatalog.chatCases[RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.chatCases.size)]
+    }
+    val codingCase = remember(runId) {
+        RealisticScenarioCatalog.codingCases[RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.codingCases.size)]
+    }
+    val visionCase = remember(runId) {
+        RealisticScenarioCatalog.multimodalVisionCases[
+            RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.multimodalVisionCases.size),
+        ]
+    }
+    val stageAccent = when (profileId) {
+        "s2_coding_agent" -> colors.brand2
+        "s3_multimodal" -> colors.excellent
+        else -> colors.brand
+    }
+    val glyph = when (profileId) {
+        "s2_coding_agent" -> AnebGlyph.Code
+        "s3_multimodal" -> AnebGlyph.Image
+        else -> AnebGlyph.Chat
+    }
+    val headerTitle = when (profileId) {
+        "s2_coding_agent" -> "${codingCase.fileName} · Coding Agent (${codingCase.language})"
+        "s3_multimodal" -> visionCase.headerTitle
+        else -> "AI 对话助手 · ${chatCase.headerTitle}"
+    }
+
+    val statusText = when {
+        stallingNow -> "流式停顿 ${gapMs?.roundToInt()} ms"
+        telemetry.streamActive && instantRate != null -> "生成中 · ${instantRate.roundToInt()} ev/s"
+        telemetry.liveSubPhase == "upload" -> telemetry.liveUploadProgress?.let { "上传 ${(it * 100).roundToInt()}%" } ?: "上行传输中"
+        telemetry.liveSubPhase == "tool_loop" -> "工具调用 ${telemetry.liveToolRound}/${telemetry.liveToolTotalRounds.coerceAtLeast(1)}"
+        telemetry.liveSubPhase == "echo" -> "Echo 时延校准"
+        telemetry.liveSubPhase == "think" -> "深度推理中…"
+        else -> "$phaseName 就绪"
+    }
+    val statusColor = when {
+        stallingNow -> colors.poor
+        telemetry.streamActive -> colors.excellent
+        else -> stageAccent
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(368.dp) // 严格固定高度：内容在内部自动滚动，外框大小永不变动
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0A0E1B))
+            .border(
+                1.dp,
+                if (stallingNow) colors.poor.copy(alpha = 0.65f) else stageAccent.copy(alpha = 0.38f),
+                RoundedCornerShape(16.dp),
+            ),
+    ) {
+        // ---- 仿真实应用固定顶栏 ----
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF10172B))
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                AnebIcon(glyph = glyph, tint = stageAccent, size = 15.dp)
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    headerTitle,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                statusText,
+                fontSize = 8.5.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = statusColor,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(statusColor.copy(alpha = 0.14f))
+                    .border(1.dp, statusColor.copy(alpha = 0.4f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
+
+        // ---- 内部独立滚动工作区（自动跟随最新流式输出滚动）----
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(12.dp),
+        ) {
+            when (profileId) {
+                "s2_coding_agent" -> CodingWorkspaceBody(codingCase = codingCase, telemetry = telemetry)
+                "s3_multimodal" -> MultimodalWorkspaceBody(visionCase = visionCase, telemetry = telemetry)
+                else -> ChatWorkspaceBody(chatCase = chatCase, telemetry = telemetry)
+            }
+        }
     }
 }
 
 @Composable
-private fun LiveDot(color: Color) {
-    val reduced = LocalReducedMotion.current
-    val transition = rememberInfiniteTransition(label = "testing-live")
-    val pulse by transition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(750, easing = LinearEasing), RepeatMode.Reverse),
-        label = "testing-live-alpha",
+private fun ChatWorkspaceBody(
+    chatCase: RealisticScenarioCatalog.ChatCase,
+    telemetry: LiveTelemetry,
+) {
+    val colors = AnebTheme.colors
+    val bodyScroll = rememberScrollState()
+    // 1:1 绑定真实 SSE 到达事件（每事件约 2.1 个汉字），与上方 250ms 瞬时速率曲线完全同速启停
+    val revealed = revealedCountFloat(telemetry, chatCase.answerBody.length, charsPerEvent = 2.1)
+    val shown = if (revealed > 0) chatCase.answerBody.substring(0, revealed) else ""
+    val thinkRevealed = when {
+        telemetry.streamActive || revealed > 0 -> chatCase.thinkingBody.length
+        telemetry.liveSubPhase == "think" -> (chatCase.thinkingBody.length * 0.72f).roundToInt()
+        telemetry.rttMs != null -> (chatCase.thinkingBody.length * 0.35f).roundToInt()
+        else -> 0
+    }
+
+    LaunchedEffect(revealed, thinkRevealed) {
+        bodyScroll.scrollTo(bodyScroll.maxValue)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(bodyScroll),
+    ) {
+        // 用户真实业务提问气泡
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                chatCase.prompt,
+                fontSize = 10.5.sp,
+                lineHeight = 15.5.sp,
+                color = colors.ink,
+                modifier = Modifier
+                    .fillMaxWidth(0.88f)
+                    .clip(RoundedCornerShape(13.dp, 13.dp, 3.dp, 13.dp))
+                    .background(Color(0xFF1A294A))
+                    .border(1.dp, colors.brand.copy(alpha = 0.28f), RoundedCornerShape(13.dp, 13.dp, 3.dp, 13.dp))
+                    .padding(horizontal = 11.dp, vertical = 8.dp),
+            )
+        }
+
+        Spacer(Modifier.height(9.dp))
+
+        // 真实深度思考块（类似 DeepSeek / 豆包深度思考折叠区）
+        if (thinkRevealed > 0) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF0D1426))
+                    .border(1.dp, colors.hairline, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            ) {
+                Text(
+                    if (revealed > 0) chatCase.thinkingLabelDone else chatCase.thinkingLabelActive,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.brand,
+                )
+                Text(
+                    chatCase.thinkingBody.substring(0, thinkRevealed),
+                    fontSize = 9.sp,
+                    lineHeight = 13.5.sp,
+                    color = colors.faint,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+            Spacer(Modifier.height(9.dp))
+        }
+
+        // AI 流式回复正文（按真实 SSE 到达逐字推进，自动跟底滚动）
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(colors.brand.copy(alpha = 0.16f))
+                    .border(1.dp, colors.brand.copy(alpha = 0.55f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("AI", fontSize = 8.5.sp, fontWeight = FontWeight.Bold, color = colors.brand)
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(4.dp, 13.dp, 13.dp, 13.dp))
+                    .background(Color(0xFF101930))
+                    .border(1.dp, colors.hairline, RoundedCornerShape(4.dp, 13.dp, 13.dp, 13.dp))
+                    .padding(horizontal = 11.dp, vertical = 9.dp),
+            ) {
+                if (shown.isEmpty()) {
+                    Text(
+                        "正在等待首字流式响应到达…",
+                        fontSize = 10.sp,
+                        color = colors.muted,
+                    )
+                } else {
+                    Text(
+                        buildAnnotatedString {
+                            append(shown)
+                            if (telemetry.streamActive) {
+                                withStyle(SpanStyle(color = colors.brand, fontWeight = FontWeight.Bold)) {
+                                    append(" |")
+                                }
+                            }
+                        },
+                        fontSize = 10.5.sp,
+                        lineHeight = 16.5.sp,
+                        color = colors.ink,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodingWorkspaceBody(
+    codingCase: RealisticScenarioCatalog.CodingCase,
+    telemetry: LiveTelemetry,
+) {
+    val colors = AnebTheme.colors
+    val bodyScroll = rememberScrollState()
+    // 严格 1:1 按真实 SSE 事件逐字符打字（每 SSE event ~4.2 字符），确保代码生成快慢与上方实时 ev/s 曲线严丝合缝！
+    val totalChars = codingCase.totalChars
+    val charBudget = when {
+        telemetry.liveStreamEvents > 0 ->
+            (telemetry.liveStreamEvents * 4.2).roundToInt().coerceIn(24, totalChars)
+        telemetry.tokensReceived > 0 ->
+            (telemetry.tokensReceived * 2.4).roundToInt().coerceIn(24, totalChars)
+        telemetry.streamActive -> 28
+        else -> 0
+    }
+
+    // 把 charBudget 切分为“已完成整行 + 当前正在逐字符敲击的活动行”
+    val visibleLines = remember(codingCase.id, charBudget) {
+        if (charBudget <= 0) {
+            codingCase.diffLines.take(2).mapIndexed { idx, (m, l) -> Triple(idx, m, l) }
+        } else {
+            var remaining = charBudget
+            val out = ArrayList<Triple<Int, Char, String>>()
+            for ((idx, pair) in codingCase.diffLines.withIndex()) {
+                if (remaining <= 0) break
+                val (marker, line) = pair
+                if (remaining >= line.length + 1) {
+                    out.add(Triple(idx, marker, line))
+                    remaining -= (line.length + 1)
+                } else {
+                    out.add(Triple(idx, marker, line.substring(0, remaining.coerceAtMost(line.length))))
+                    remaining = 0
+                }
+            }
+            out
+        }
+    }
+
+    val toolRound = telemetry.liveToolRound
+    val toolSteps = codingCase.toolSteps
+    val completedTools = when {
+        toolRound > 0 -> toolRound.coerceIn(1, toolSteps.size)
+        charBudget >= (totalChars * 0.85).roundToInt() -> 3
+        telemetry.streamActive -> 2
+        telemetry.rttMs != null -> 1
+        else -> 0
+    }
+
+    LaunchedEffect(charBudget, completedTools) {
+        bodyScroll.scrollTo(bodyScroll.maxValue)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(bodyScroll),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // 真实 Agent 工具执行流水线
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF0C1223))
+                .border(1.dp, colors.brand2.copy(alpha = 0.28f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "AGENT TOOL CHAIN · ${codingCase.branch}",
+                    fontSize = 8.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.brand2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "$completedTools/${toolSteps.size}",
+                    fontSize = 8.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.muted,
+                )
+            }
+            toolSteps.forEachIndexed { idx, step ->
+                val done = idx < completedTools
+                val active = idx == completedTools
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AnebIcon(
+                        glyph = if (done) AnebGlyph.Check else AnebGlyph.Code,
+                        tint = when {
+                            done -> colors.excellent
+                            active -> colors.brand2
+                            else -> colors.faint
+                        },
+                        size = 11.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        step,
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (done || active) colors.ink else colors.faint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        // 真实 IDE 行号 + 多语言语法高亮 + 逐字符实时键入 Diff 窗口
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF070B16))
+                .border(1.dp, colors.hairline, RoundedCornerShape(10.dp))
+                .padding(vertical = 6.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    codingCase.fullPath,
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    codingCase.diffStat,
+                    fontSize = 8.5.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.excellent,
+                )
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
+            Spacer(Modifier.height(4.dp))
+            visibleLines.forEachIndexed { pos, (origIdx, marker, partialLine) ->
+                val isTypingTail = telemetry.streamActive && pos == visibleLines.lastIndex && charBudget < totalChars
+                val bg = when (marker) {
+                    '+' -> Color(0x2629D99A)
+                    '-' -> Color(0x26FF5B73)
+                    else -> Color.Transparent
+                }
+                val markerColor = when (marker) {
+                    '+' -> colors.excellent
+                    '-' -> colors.poor
+                    else -> colors.faint
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(bg)
+                        .padding(horizontal = 8.dp, vertical = 1.8.dp),
+                ) {
+                    Text(
+                        String.format(Locale.ROOT, "%3d", codingCase.baseLineNumber + origIdx),
+                        fontSize = 8.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = colors.faint,
+                        modifier = Modifier.width(24.dp),
+                    )
+                    Text(
+                        marker.toString(),
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = markerColor,
+                        modifier = Modifier.width(12.dp),
+                    )
+                    Text(
+                        highlightCodeLine(
+                            line = partialLine,
+                            showCursor = isTypingTail,
+                            ink = colors.ink,
+                            kwColor = colors.brand2,
+                            typeColor = colors.brand,
+                            litColor = colors.fair,
+                        ),
+                        fontSize = 9.sp,
+                        lineHeight = 13.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MultimodalWorkspaceBody(
+    visionCase: RealisticScenarioCatalog.MultimodalVisionCase,
+    telemetry: LiveTelemetry,
+) {
+    val colors = AnebTheme.colors
+    val bodyScroll = rememberScrollState()
+    val reducedMotion = LocalReducedMotion.current
+    val upFrac = when {
+        telemetry.liveUploadProgress != null -> telemetry.liveUploadProgress
+        telemetry.streamActive || telemetry.upMbps != null -> 1f
+        else -> 0.12f
+    }
+    val isUploading = telemetry.liveSubPhase == "upload" || (upFrac < 0.99f && !telemetry.streamActive)
+    val revealed = revealedCountFloat(telemetry, visionCase.analysisBody.length, charsPerEvent = 2.2)
+    val shown = if (revealed > 0) visionCase.analysisBody.substring(0, revealed) else ""
+
+    val scanPos = if (isUploading && !reducedMotion) {
+        val transition = rememberInfiniteTransition(label = "vision-upload-scan")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse),
+            label = "vision-scan-line",
+        ).value
+    } else {
+        upFrac
+    }
+
+    LaunchedEffect(revealed) {
+        bodyScroll.scrollTo(bodyScroll.maxValue)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(bodyScroll),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        // 真实 4K 巡检/航拍/AOI 实拍照片 + AI 视觉识别框 + 激光扫描幕布
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(146.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, colors.excellent.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
+        ) {
+            Image(
+                painter = painterResource(id = visionCase.imageRes),
+                contentDescription = visionCase.headerTitle,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                if (isUploading) {
+                    val splitY = h * upFrac.coerceIn(0.05f, 0.98f)
+                    drawRect(
+                        color = Color(0x99050A16),
+                        topLeft = Offset(0f, splitY),
+                        size = Size(w, h - splitY),
+                    )
+                    val laserY = h * scanPos.coerceIn(0.04f, 0.96f)
+                    drawLine(
+                        color = colors.excellent,
+                        start = Offset(0f, laserY),
+                        end = Offset(w, laserY),
+                        strokeWidth = 2.dp.toPx(),
+                    )
+                } else {
+                    val boxStroke = Stroke(width = 1.5.dp.toPx())
+                    visionCase.boxes.forEach { b ->
+                        val boxColor = when (b.tone) {
+                            "fair" -> colors.fair
+                            "brand" -> colors.brand
+                            else -> colors.excellent
+                        }
+                        drawRoundRect(
+                            color = boxColor,
+                            topLeft = Offset(w * b.x, h * b.y),
+                            size = Size(w * b.w, h * b.h),
+                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                            style = boxStroke,
+                        )
+                    }
+                }
+            }
+            Text(
+                "${visionCase.fileName} · ${visionCase.resolutionTag}",
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xC8050A16))
+                    .padding(horizontal = 6.dp, vertical = 2.5.dp),
+            )
+            Text(
+                if (isUploading) {
+                    val mbpsTxt = telemetry.upMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty()
+                    "上行 ${(upFrac * 100).roundToInt()}%$mbpsTxt"
+                } else {
+                    visionCase.detectionSummary
+                },
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = if (isUploading) colors.brand else colors.excellent,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(7.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xCC050A16))
+                    .padding(horizontal = 6.dp, vertical = 2.5.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Color(0x88050A16)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(upFrac.coerceIn(0.04f, 1f))
+                        .fillMaxHeight()
+                        .background(colors.excellent),
+                )
+            }
+        }
+
+        // AI 视觉多模态诊断流式报告
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xFF0E162B))
+                .border(1.dp, colors.hairline, RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            Text(
+                visionCase.reportTitle,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.excellent,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (shown.isNotEmpty()) {
+                    shown + if (telemetry.streamActive) " |" else ""
+                } else if (isUploading) {
+                    "正在上传 4K 现场原图至视觉多模态推理节点，上传完毕立即启动结构化视觉识别…"
+                } else {
+                    "原图已送达推理节点，正在执行目标检测与多模态深度诊断…"
+                },
+                fontSize = 10.sp,
+                lineHeight = 15.5.sp,
+                color = if (shown.isNotEmpty()) colors.ink else colors.muted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FooterStatusStrip(
+    nodeLabel: String,
+    telemetry: LiveTelemetry,
+    radioEvidenceLimited: Boolean,
+) {
+    val colors = AnebTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(Color(0x77101629))
+            .border(1.dp, colors.hairline, RoundedCornerShape(11.dp))
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            "节点 $nodeLabel · ${telemetry.rat ?: if (radioEvidenceLimited) "网络基线" else "实时链路"}",
+            fontSize = 8.5.sp,
+            color = colors.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            telemetry.rsrp?.let { "RSRP $it dBm" } ?: "R-16 只读遥测",
+            fontSize = 8.5.sp,
+            fontFamily = FontFamily.Monospace,
+            color = colors.faint,
+        )
+    }
+}
+
+private fun highlightCodeLine(
+    line: String,
+    showCursor: Boolean,
+    ink: Color,
+    kwColor: Color,
+    typeColor: Color,
+    litColor: Color,
+) = buildAnnotatedString {
+    val keywords = setOf(
+        "override", "fun", "val", "var", "if", "else", "return", "try", "catch", "while", "for",
+        "true", "false", "throw", "private", "suspend", "class", "func", "defer", "select", "case",
+        "export", "readonly", "const", "void", "new", "def", "self", "not", "and", "or", "in", "raise", "continue",
     )
-    Box(Modifier.size(6.dp).clip(CircleShape).background(color.copy(alpha = if (reduced) 1f else pulse)))
+    val types = setOf(
+        "QuicSession", "IOException", "Endpoint", "ConnectionResult", "AtomicLong",
+        "StreamScheduler", "StreamPlan", "AudioPacket", "PlayoutChunk", "InferenceRequest",
+        "RoutingDecision", "WorkerState", "PrefixHashRing", "ClusterOverloadedError",
+    )
+    val tokens = Regex("(\"[^\"]*\")|(\\b[A-Za-z_][A-Za-z0-9_]*\\b)|([^A-Za-z0-9_\"]+)").findAll(line)
+    for (m in tokens) {
+        val tok = m.value
+        val color = when {
+            tok.startsWith("\"") -> litColor
+            tok in keywords -> kwColor
+            tok in types -> typeColor
+            else -> ink
+        }
+        withStyle(SpanStyle(color = color)) { append(tok) }
+    }
+    if (showCursor) {
+        withStyle(SpanStyle(color = typeColor, fontWeight = FontWeight.Bold)) { append("|") }
+    }
+}
+
+private fun revealedCountFloat(telemetry: LiveTelemetry, maxLen: Int, charsPerEvent: Double): Int {
+    val events = when {
+        telemetry.liveStreamEvents > 0 -> telemetry.liveStreamEvents
+        telemetry.tokensReceived > 0 -> telemetry.tokensReceived
+        else -> 0
+    }
+    if (events <= 0) return 0
+    return (events * charsPerEvent).roundToInt().coerceIn(1, maxLen)
+}
+
+@Composable
+private fun LivePulseDot(color: Color) {
+    val reducedMotion = LocalReducedMotion.current
+    val alpha = if (reducedMotion) {
+        1f
+    } else {
+        val transition = rememberInfiniteTransition(label = "testing-live-dot")
+        transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(650, easing = LinearEasing), RepeatMode.Reverse),
+            label = "testing-live-alpha",
+        ).value
+    }
+    Box(Modifier.size(6.dp).clip(CircleShape).background(color.copy(alpha = alpha)))
 }
 
 /** run 进度派生；只解析既有日志合同，不改测量语义。 */
@@ -295,6 +1228,7 @@ object TestProgressParser {
         val stallCount: Int,
         val finished: Boolean,
         val finishedRunId: String?,
+        val currentProfileId: String? = null,
     ) {
         val liveHint: String get() = "正在测：${phaseName}的 token 流是否顺滑"
         val stallTickPositions: List<Int>
@@ -304,9 +1238,9 @@ object TestProgressParser {
     }
 
     private val profileNames = mapOf(
-        "s1_chat" to "闲聊对话",
-        "s2_coding_agent" to "编码 Agent 流",
-        "s3_multimodal" to "多模态上传",
+        "s1_chat" to "对话助手",
+        "s2_coding_agent" to "编码 Agent",
+        "s3_multimodal" to "多模态巡检",
     )
 
     fun parse(logs: List<String>): LiveProgress {
@@ -350,6 +1284,7 @@ object TestProgressParser {
             stallCount = stalls,
             finished = finished,
             finishedRunId = finishedRunId,
+            currentProfileId = currentProfile,
         )
     }
 

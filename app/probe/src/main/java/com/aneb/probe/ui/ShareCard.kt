@@ -62,10 +62,12 @@ object ShareCard {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(
-                Intent.createChooser(send, "分享成绩").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-            status = "SHARE status=ok uri=$uri"
+            val launched = runCatching {
+                context.startActivity(
+                    Intent.createChooser(send, "分享成绩").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }.isSuccess
+            status = if (launched) "SHARE status=ok uri=$uri" else "SHARE status=fail uri=$uri"
         } else {
             status = "SHARE status=fail uri=null"
         }

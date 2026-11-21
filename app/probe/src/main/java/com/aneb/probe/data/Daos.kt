@@ -35,7 +35,43 @@ interface ReportBodyDao {
     suspend fun insert(body: ReportBodyEntity)
 
     @Query("SELECT * FROM report_body WHERE runId = :runId")
-    suspend fun forRun(runId: String): ReportBodyEntity?
+    suspend fun forRunRaw(runId: String): ReportBodyEntity?
+
+    @Query("SELECT length(body) FROM report_body WHERE runId = :runId")
+    suspend fun bodyLength(runId: String): Int?
+
+    @Query("SELECT substr(body, :startOneBased, :chunkLength) FROM report_body WHERE runId = :runId")
+    suspend fun bodySlice(runId: String, startOneBased: Int, chunkLength: Int): String?
+
+    /**
+     * 安全读取报告体：Android SQLite CursorWindow 单行上限约 2 MB，超长 report_body 直接
+     * SELECT * 会抛 SQLiteBlobTooBigException。先查字符长度，超阈值或捕获异常时自动按
+     * 250K 字符分片拼接，不改 Room v15 schema 且可无损读取既有超大历史记录。
+     */
+    suspend fun forRun(runId: String): ReportBodyEntity? {
+        val len = bodyLength(runId) ?: return null
+        if (len <= SAFE_DIRECT_READ_CHARS) {
+            try {
+                return forRunRaw(runId)
+            } catch (_: android.database.sqlite.SQLiteBlobTooBigException) {
+                // Multi-byte UTF-8 body exceeded 2 MB CursorWindow despite char count <= threshold.
+            }
+        }
+        val sb = StringBuilder(len.coerceAtLeast(0))
+        var offset = 1
+        while (offset <= len) {
+            val slice = bodySlice(runId, offset, CHUNK_READ_CHARS) ?: break
+            sb.append(slice)
+            if (slice.length < CHUNK_READ_CHARS) break
+            offset += slice.length
+        }
+        return ReportBodyEntity(runId = runId, body = sb.toString())
+    }
+
+    companion object {
+        private const val SAFE_DIRECT_READ_CHARS = 400_000
+        private const val CHUNK_READ_CHARS = 250_000
+    }
 }
 
 @Dao

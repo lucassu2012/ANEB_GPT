@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -75,6 +76,7 @@ import com.aneb.probe.engine.PrototypeReleaseProbeBoundary
 import com.aneb.probe.engine.ScenarioProfile
 import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.engine.VideoStreamingEngine
 import com.aneb.probe.engine.VoiceRunner
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
@@ -213,7 +215,11 @@ class MainActivity : ComponentActivity() {
         data object ApiProbe : Screen
         data object ReachBoard : Screen
         data object Profiles : Screen
+        data object MultimodalTheater : Screen
         data object Voice : Screen
+        data object AppCompanion : Screen
+        data object VideoTheater : Screen
+        data object Research : Screen
         data object Servers : Screen
         data object PrototypeMode : Screen
         data class PrototypeResult(val campaignId: String) : Screen
@@ -424,20 +430,21 @@ class MainActivity : ComponentActivity() {
                     var nodeReachError by remember { mutableStateOf<String?>(null) }
 
                     // ---- 主 run 由前台 Service 持有；Activity 只发配置并观察状态 ----
-                    fun startRun(fromAutorun: Boolean) {
+                    fun startRun(fromAutorun: Boolean, modeOverride: AnebTestMode? = null) {
                         if (running) return
+                        val effectiveTestMode = modeOverride ?: testMode
                         homeNotice = null
-                        radioEvidenceLimited = testMode == AnebTestMode.TOKEN_EXPERIENCE &&
+                        radioEvidenceLimited = effectiveTestMode == AnebTestMode.TOKEN_EXPERIENCE &&
                             !radioPermissionState().hasFullRadioEvidence
                         if (!fromAutorun) {
                             acceptManualSessions = true
-                            screen = if (testMode.isBasic) Screen.BasicTesting else Screen.Testing
+                            screen = if (effectiveTestMode.isBasic) Screen.BasicTesting else Screen.Testing
                         }
                         ProbeRunService.start(
                             context = applicationContext,
                             config = ProbeRunService.Config(
                                 serverBase = serverUrl,
-                                testMode = testMode,
+                                testMode = effectiveTestMode,
                                 mode = mode,
                                 transport = transport,
                                 inject = intentInject,
@@ -447,14 +454,21 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    fun requestManualRun() {
+                    fun requestManualRun(modeOverride: AnebTestMode? = null) {
+                        val effectiveTestMode = modeOverride ?: testMode
+                        if (modeOverride != null) {
+                            testMode = modeOverride
+                            settingsStore.saveTestMode(modeOverride)
+                        }
                         if (!hasActiveNetwork()) {
                             homeNotice = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                            screen = Screen.Home
+                            tab = MainTab.Test
                             return
                         }
                         val state = radioPermissionState()
-                        if (testMode.isBasic || state.hasFullRadioEvidence) {
-                            requestRunNotificationPermission { startRun(fromAutorun = false) }
+                        if (effectiveTestMode.isBasic || state.hasFullRadioEvidence) {
+                            requestRunNotificationPermission { startRun(fromAutorun = false, modeOverride = effectiveTestMode) }
                         } else {
                             permissionPrompt = RadioPermissionPrompt(
                                 purpose = RadioPermissionPurpose.START_TEST,
@@ -820,6 +834,37 @@ class MainActivity : ComponentActivity() {
                     // Surface 已消费顶部状态栏，Scaffold 不再重复消费系统 Insets。
                     val atRoot = screen is Screen.Home
                     val showMainNav = atRoot || screen is Screen.Servers
+                    BackHandler(
+                        enabled = (screen !is Screen.Home &&
+                            screen !is Screen.ApiProbe &&
+                            screen !is Screen.Testing &&
+                            screen !is Screen.BasicTesting) ||
+                            (screen is Screen.Home && tab != MainTab.Test),
+                    ) {
+                        when (val current = screen) {
+                            is Screen.Share -> screen = current.returnTo
+                            is Screen.Research -> screen = Screen.AppCompanion
+                            is Screen.VideoTheater -> screen = Screen.AppCompanion
+                            is Screen.PrototypeResult -> {
+                                val route = prototypeCampaignResultNavigator.dismiss(
+                                    PrototypeCampaignResultRouteState(
+                                        openCampaignId = openPrototypeResultCampaignId,
+                                        publicationWarning = openPrototypeResultPublicationWarning,
+                                        dismissedFinishedCampaignId = dismissedFinishedCampaignId,
+                                    ),
+                                    current.campaignId,
+                                    PrototypeCampaignService.session.value,
+                                )
+                                openPrototypeResultCampaignId = route.openCampaignId
+                                openPrototypeResultPublicationWarning = route.publicationWarning
+                                dismissedFinishedCampaignId = route.dismissedFinishedCampaignId
+                                prototypeCampaignResultLoadState = null
+                                screen = Screen.PrototypeMode
+                            }
+                            is Screen.Home -> tab = MainTab.Test
+                            else -> screen = Screen.Home
+                        }
+                    }
                     var mainNavigationHeightPx by remember { mutableIntStateOf(0) }
                     val researchBottomInset = with(LocalDensity.current) {
                         if (showMainNav) mainNavigationHeightPx.toDp() else 0.dp
@@ -842,6 +887,7 @@ class MainActivity : ComponentActivity() {
                                     MainTab.Test -> HomeRoute(
                                         running = running,
                                         testMode = testMode,
+                                        voiceHistoryVersion = voiceHistoryVersion,
                                         onTestModeChange = {
                                             testMode = it
                                             settingsStore.saveTestMode(it)
@@ -853,7 +899,7 @@ class MainActivity : ComponentActivity() {
                                             TestEngine.TransportMode.CELLULAR -> "蜂窝网络"
                                         },
                                         nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
-                                        onStart = ::requestManualRun,
+                                        onStart = { requestManualRun() },
                                         onOpenServer = ::openServerScreen,
                                         onOpenPrototype = { screen = Screen.PrototypeMode },
                                         onOpenResult = { runId ->
@@ -863,6 +909,9 @@ class MainActivity : ComponentActivity() {
                                             screen = Screen.BasicResult(runId)
                                         },
                                         onOpenVoice = { screen = Screen.Voice },
+                                        onOpenAppCompanion = { screen = Screen.AppCompanion },
+                                        onOpenProfiles = { screen = Screen.MultimodalTheater },
+                                        onOpenReachBoard = { screen = Screen.ReachBoard },
                                     )
                                     MainTab.Results -> HistoryRoute(
                                         onOpen = { runId ->
@@ -1047,7 +1096,11 @@ class MainActivity : ComponentActivity() {
                                     onCancel = ::cancelManualRun,
                                 )
                                 is Screen.BasicResult -> {
-                                    BasicResultRoute(runId = s.runId, onBack = { screen = Screen.Home })
+                                    BasicResultRoute(
+                                        runId = s.runId,
+                                        onBack = { screen = Screen.Home },
+                                        onOpenAppCompanion = { screen = Screen.AppCompanion },
+                                    )
                                 }
                                 is Screen.Report -> ReportRoute(onBack = { screen = Screen.Home })
                                 is Screen.Result -> ResultRoute(
@@ -1056,6 +1109,8 @@ class MainActivity : ComponentActivity() {
                                     // 回到 Home 哨兵即落回当前 tab 根。
                                     onBack = { screen = Screen.Home },
                                     onOpenShare = { model -> screen = Screen.Share(model, s) },
+                                    onOpenVoice = { screen = Screen.Voice },
+                                    onOpenAppCompanion = { screen = Screen.AppCompanion },
                                 )
                                 is Screen.ApiProbe -> ApiProbeRoute(
                                     // 从设置根下钻而来：回 Home 哨兵即落回设置 tab 根。
@@ -1066,7 +1121,42 @@ class MainActivity : ComponentActivity() {
                                 is Screen.ReachBoard -> ReachBoardRoute(onBack = { screen = Screen.Home })
                                 is Screen.Profiles -> ProfileCatalogRoute(
                                     serverUrl = serverUrl,
+                                    otherRunActive = running,
+                                    onStartTestMode = { targetMode ->
+                                        tab = MainTab.Test
+                                        requestManualRun(targetMode)
+                                    },
+                                    onOpenVoice = { screen = Screen.Voice },
                                     onBack = { screen = Screen.Home },
+                                )
+                                is Screen.MultimodalTheater -> MultimodalTheaterRoute(
+                                    serverUrl = serverUrl,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    otherRunActive = running,
+                                    onOpenCatalog = { screen = Screen.Profiles },
+                                    onBack = { screen = Screen.Home },
+                                )
+                                is Screen.AppCompanion -> AppCompanionRoute(
+                                    running = running,
+                                    voiceHistoryVersion = voiceHistoryVersion,
+                                    onRunTestMode = { targetMode ->
+                                        tab = MainTab.Test
+                                        requestManualRun(targetMode)
+                                    },
+                                    onOpenVoice = { screen = Screen.Voice },
+                                    onOpenReachBoard = { screen = Screen.ReachBoard },
+                                    onOpenResearchRecords = { screen = Screen.Research },
+                                    onOpenVideoTheater = { screen = Screen.VideoTheater },
+                                    onBack = { screen = Screen.Home },
+                                )
+                                is Screen.VideoTheater -> VideoTheaterRoute(
+                                    serverUrl = serverUrl,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    otherRunActive = running,
+                                    onBack = { screen = Screen.AppCompanion },
+                                )
+                                is Screen.Research -> com.aneb.probe.ui.research.ResearchRecordsScreen(
+                                    onBack = { screen = Screen.AppCompanion },
                                 )
                                 is Screen.Voice -> VoiceRoute(
                                     nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
@@ -1192,6 +1282,7 @@ class MainActivity : ComponentActivity() {
     private fun HomeRoute(
         running: Boolean,
         testMode: AnebTestMode,
+        voiceHistoryVersion: Int,
         onTestModeChange: (AnebTestMode) -> Unit,
         notice: String?,
         connectionLabel: String,
@@ -1202,19 +1293,29 @@ class MainActivity : ComponentActivity() {
         onOpenResult: (String) -> Unit,
         onOpenBasicResult: (String) -> Unit,
         onOpenVoice: () -> Unit,
+        onOpenAppCompanion: () -> Unit,
+        onOpenProfiles: () -> Unit,
+        onOpenReachBoard: () -> Unit,
     ) {
         // 最近一次 run（run 结束 running→false 时刷新，带出上次结果 chip）
         val lastRun by produceState<TestRun?>(initialValue = null, running) {
             value = withContext(Dispatchers.IO) {
-                db.testRunDao().all().maxByOrNull { it.startedAtEpochMs }
+                runCatching { db.testRunDao().all().maxByOrNull { it.startedAtEpochMs } }.getOrNull()
             }
         }
         val lastBasicRun by produceState<BasicSpeedResultEntity?>(initialValue = null, running, testMode) {
             value = withContext(Dispatchers.IO) {
-                val profileId = if (testMode == AnebTestMode.NETWORK_RESPONSIVENESS)
-                    com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID
+                runCatching {
+                    val profileId = if (testMode == AnebTestMode.NETWORK_RESPONSIVENESS)
+                        com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID
                     else com.aneb.probe.engine.NetworkSpeedEngine.PROFILE_ID
-                db.basicSpeedResultDao().all().filter { it.profileId == profileId }.maxByOrNull { it.startedAtEpochMs }
+                    db.basicSpeedResultDao().all().filter { it.profileId == profileId }.maxByOrNull { it.startedAtEpochMs }
+                }.getOrNull()
+            }
+        }
+        val lastVoiceRun by produceState<VoiceResultEntity?>(initialValue = null, running, voiceHistoryVersion) {
+            value = withContext(Dispatchers.IO) {
+                runCatching { db.voiceResultDao().recent(1).firstOrNull() }.getOrNull()
             }
         }
         HomeScreen(
@@ -1233,23 +1334,149 @@ class MainActivity : ComponentActivity() {
             onOpenLastBasicResult = onOpenBasicResult,
             onOpenVoice = onOpenVoice,
             showPrototypeEntry = shouldShowPrototypeEntry(),
+            lastVoiceRun = lastVoiceRun,
+            onOpenAppCompanion = onOpenAppCompanion,
+            onOpenProfiles = onOpenProfiles,
+            onOpenReachBoard = onOpenReachBoard,
+        )
+    }
+
+    private data class AppCompanionData(
+        val lastTokenRun: TestRun? = null,
+        val lastTokenScenarios: List<ScenarioResultEntity> = emptyList(),
+        val lastBasicRun: BasicSpeedResultEntity? = null,
+        val lastVoiceRun: VoiceResultEntity? = null,
+    )
+
+    @Composable
+    private fun AppCompanionRoute(
+        running: Boolean,
+        voiceHistoryVersion: Int,
+        onRunTestMode: (AnebTestMode) -> Unit,
+        onOpenVoice: () -> Unit,
+        onOpenReachBoard: () -> Unit,
+        onOpenResearchRecords: () -> Unit,
+        onOpenVideoTheater: () -> Unit,
+        onBack: () -> Unit,
+    ) {
+        val data by produceState(initialValue = AppCompanionData(), running, voiceHistoryVersion) {
+            value = withContext(Dispatchers.IO) {
+                runCatching {
+                    val lastToken = db.testRunDao().all().maxByOrNull { it.startedAtEpochMs }
+                    val tokenScenarios = lastToken?.let { db.scenarioResultDao().forRun(it.runId) }.orEmpty()
+                    val lastBasic = db.basicSpeedResultDao().all()
+                        .filter { it.profileId == NetworkSpeedEngine.PROFILE_ID }
+                        .maxByOrNull { it.startedAtEpochMs }
+                        ?: db.basicSpeedResultDao().all().maxByOrNull { it.startedAtEpochMs }
+                    val lastVoice = db.voiceResultDao().recent(1).firstOrNull()
+                    AppCompanionData(lastToken, tokenScenarios, lastBasic, lastVoice)
+                }.getOrDefault(AppCompanionData())
+            }
+        }
+        AppCompanionScreen(
+            lastTokenRun = data.lastTokenRun,
+            lastTokenScenarios = data.lastTokenScenarios,
+            lastBasicRun = data.lastBasicRun,
+            lastVoiceRun = data.lastVoiceRun,
+            running = running,
+            onRunTestMode = onRunTestMode,
+            onOpenVoice = onOpenVoice,
+            onOpenReachBoard = onOpenReachBoard,
+            onOpenResearchRecords = onOpenResearchRecords,
+            onBack = onBack,
+            onOpenVideoTheater = onOpenVideoTheater,
         )
     }
 
     @Composable
-    private fun BasicResultRoute(runId: String, onBack: () -> Unit) {
+    private fun VideoTheaterRoute(
+        serverUrl: String,
+        nodeLabel: String,
+        otherRunActive: Boolean,
+        onBack: () -> Unit,
+    ) {
+        val scope = rememberCoroutineScope()
+        val engine = remember { VideoStreamingEngine() }
+        var job by remember { mutableStateOf<Job?>(null) }
+        var videoRunning by remember { mutableStateOf(false) }
+        var snapshot by remember { mutableStateOf<VideoStreamingEngine.LiveSnapshot?>(null) }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        VideoStreamingTheaterScreen(
+            nodeLabel = nodeLabel,
+            running = videoRunning,
+            otherRunActive = otherRunActive,
+            snapshot = snapshot,
+            error = error,
+            onStart = {
+                if (!videoRunning && !otherRunActive) {
+                    if (!hasActiveNetwork()) {
+                        error = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                        return@VideoStreamingTheaterScreen
+                    }
+                    job?.cancel()
+                    error = null
+                    snapshot = null
+                    videoRunning = true
+                    job = scope.launch {
+                        try {
+                            val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                            val reach = if (pair == null) null else {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { ReachabilityProbe().probeDual(pair.first, pair.second) }.getOrNull()
+                                }
+                            }
+                            val targetBase = ReachabilityProbe.preferredMeasureBase(serverUrl, reach)
+                            engine.run(
+                                serverBase = targetBase,
+                                runId = "vid-${UUID.randomUUID()}",
+                            ).collect { snap ->
+                                snapshot = snap
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = "短视频流压测失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            videoRunning = false
+                        }
+                    }
+                }
+            },
+            onCancel = { job?.cancel() },
+            onSwipeNext = { engine.requestSwipeNext() },
+            onBack = {
+                job?.cancel()
+                onBack()
+            },
+        )
+    }
+
+    @Composable
+    private fun BasicResultRoute(
+        runId: String,
+        onBack: () -> Unit,
+        onOpenAppCompanion: () -> Unit,
+    ) {
         val result by produceState<com.aneb.probe.engine.BasicSpeedResult?>(initialValue = null, runId) {
             value = withContext(Dispatchers.IO) {
-                db.basicSpeedResultDao().byId(runId)?.toDomain()?.copy(
-                    responsivenessJson = db.reportBodyDao().forRun(runId)?.body?.takeIf {
-                        runCatching { com.aneb.probe.engine.LoadedResponsiveness.decode(it).runId == runId }.getOrDefault(false)
-                    },
-                )
+                runCatching {
+                    val body = runCatching { db.reportBodyDao().forRun(runId)?.body }.getOrNull()
+                    db.basicSpeedResultDao().byId(runId)?.toDomain()?.copy(
+                        responsivenessJson = body?.takeIf {
+                            runCatching { com.aneb.probe.engine.LoadedResponsiveness.decode(it).runId == runId }.getOrDefault(false)
+                        },
+                    )
+                }.getOrNull()
             }
         }
         val loaded = result
         if (loaded != null) {
-            BasicSpeedResultScreen(result = loaded, onBack = onBack)
+            BasicSpeedResultScreen(
+                result = loaded,
+                onBack = onBack,
+                onOpenAppCompanion = onOpenAppCompanion,
+            )
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 Text("未找到基础测速记录", color = AnebTheme.colors.muted)
@@ -1283,7 +1510,8 @@ class MainActivity : ComponentActivity() {
                 val loadedResponsivenessByRunId = basicRuns
                     .filter { it.profileId == NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID }
                     .mapNotNull { run ->
-                        val body = db.reportBodyDao().forRun(run.runId)?.body ?: return@mapNotNull null
+                        val body = runCatching { db.reportBodyDao().forRun(run.runId)?.body }.getOrNull()
+                            ?: return@mapNotNull null
                         runCatching { LoadedResponsiveness.decode(body) }
                             .getOrNull()
                             ?.let { run.runId to it }
@@ -1483,7 +1711,118 @@ class MainActivity : ComponentActivity() {
     )
 
     @Composable
-    private fun ProfileCatalogRoute(serverUrl: String, onBack: () -> Unit) {
+    private fun MultimodalTheaterRoute(
+        serverUrl: String,
+        nodeLabel: String,
+        otherRunActive: Boolean,
+        onOpenCatalog: () -> Unit,
+        onBack: () -> Unit,
+    ) {
+        val scope = rememberCoroutineScope()
+        var quickMode by rememberSaveable { mutableStateOf(true) }
+        var simJob by remember { mutableStateOf<Job?>(null) }
+        var simRunning by remember { mutableStateOf(false) }
+        val simLogs = remember { mutableStateListOf<String>() }
+        var simProgress by remember { mutableStateOf<BehaviorTraceRunner.LiveTraceProgress?>(null) }
+        var simResult by remember { mutableStateOf<BehaviorTraceRunner.BehaviorTraceRunResult?>(null) }
+        var simError by remember { mutableStateOf<String?>(null) }
+
+        MultimodalTheaterScreen(
+            nodeLabel = nodeLabel,
+            quickMode = quickMode,
+            onQuickModeChange = { next ->
+                if (!simRunning) {
+                    quickMode = next
+                    simProgress = null
+                    simResult = null
+                    simError = null
+                }
+            },
+            running = simRunning,
+            otherRunActive = otherRunActive,
+            liveProgress = simProgress,
+            result = simResult,
+            logs = simLogs.toList(),
+            error = simError,
+            onStart = {
+                if (!simRunning && !otherRunActive) {
+                    if (!hasActiveNetwork()) {
+                        simError = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                        return@MultimodalTheaterScreen
+                    }
+                    simJob?.cancel()
+                    simLogs.clear()
+                    simProgress = null
+                    simResult = null
+                    simError = null
+                    simRunning = true
+                    val useQuickMode = quickMode
+                    simJob = scope.launch {
+                        var progressJob: Job? = null
+                        try {
+                            val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                            val reach = if (pair == null) null else {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { ReachabilityProbe().probeDual(pair.first, pair.second) }.getOrNull()
+                                }
+                            }
+                            val targetBase = ReachabilityProbe.preferredMeasureBase(serverUrl, reach)
+                            val repo = ProfileRepository(applicationContext)
+                            val v2Profile = repo.loadV2Profiles().firstOrNull {
+                                it.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION
+                            } ?: error("未找到内置多模态 v2 Profile")
+                            val jsonl = repo.loadV2TraceJsonl(v2Profile.profileId)
+                            val fullPlan = withContext(Dispatchers.Default) {
+                                BehaviorTracePlan.parse(jsonl, v2Profile)
+                            }
+                            val plan = if (useQuickMode) fullPlan.quickMultimodalSample() else fullPlan
+                            val runner = BehaviorTraceRunner()
+                            progressJob = launch {
+                                runner.liveProgress.collect { p -> simProgress = p }
+                            }
+                            runner.run(
+                                BehaviorTraceRunner.Config(
+                                    serverBase = targetBase,
+                                    profile = v2Profile,
+                                    tracePlan = plan,
+                                    runId = "v2-${UUID.randomUUID()}",
+                                ),
+                            ).collect { line ->
+                                simLogs.add(line)
+                            }
+                            simResult = runner.result.value
+                        } catch (e: CancellationException) {
+                            simLogs.add("V2_RUN_CANCELLED")
+                            throw e
+                        } catch (e: Exception) {
+                            simError = "多模态实战失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            progressJob?.cancel()
+                            simRunning = false
+                        }
+                    }
+                }
+            },
+            onCancel = { simJob?.cancel() },
+            onOpenCatalog = {
+                simJob?.cancel()
+                onOpenCatalog()
+            },
+            onBack = {
+                simJob?.cancel()
+                onBack()
+            },
+        )
+    }
+
+    @Composable
+    private fun ProfileCatalogRoute(
+        serverUrl: String,
+        otherRunActive: Boolean,
+        onStartTestMode: (AnebTestMode) -> Unit,
+        onOpenVoice: () -> Unit,
+        onBack: () -> Unit,
+    ) {
         var refreshTick by rememberSaveable { mutableIntStateOf(0) }
         val scope = rememberCoroutineScope()
         var simJob by remember { mutableStateOf<Job?>(null) }
@@ -1554,6 +1893,15 @@ class MainActivity : ComponentActivity() {
             onBack = {
                 simJob?.cancel()
                 onBack()
+            },
+            otherRunActive = otherRunActive,
+            onStartTestMode = { targetMode ->
+                simJob?.cancel()
+                onStartTestMode(targetMode)
+            },
+            onOpenVoice = {
+                simJob?.cancel()
+                onOpenVoice()
             },
             onRunV2Simulation = { profile ->
                 if (!simRunning) {
@@ -1646,7 +1994,11 @@ class MainActivity : ComponentActivity() {
                         putExtra(android.content.Intent.EXTRA_TEXT, body)
                     }
                     android.util.Log.i("AnebProbe", "REPORT_SHARE chars=${body.length}")
-                    startActivity(android.content.Intent.createChooser(send, "分享报告"))
+                    runCatching {
+                        startActivity(android.content.Intent.createChooser(send, "分享报告"))
+                    }.onFailure {
+                        exportStatus = "未找到可分享报告的应用"
+                    }
                 }
             },
             onBack = onBack,
@@ -1685,6 +2037,8 @@ class MainActivity : ComponentActivity() {
         runId: String,
         onBack: () -> Unit,
         onOpenShare: (ShareCard.Model) -> Unit,
+        onOpenVoice: () -> Unit,
+        onOpenAppCompanion: () -> Unit,
     ) {
         val data by produceState(
             initialValue = ResultData(null, emptyList(), null, emptyList(), loaded = false),
@@ -1692,12 +2046,14 @@ class MainActivity : ComponentActivity() {
         ) {
             value = withContext(Dispatchers.IO) {
                 ResultData(
-                    run = db.testRunDao().byId(runId),
-                    scenarios = db.scenarioResultDao().forRun(runId),
-                    reportJson = db.reportBodyDao().forRun(runId)?.body,
-                    trackPoints = db.radioSampleDao().forRun(runId)
-                        .filter { it.lat != null && it.lon != null }
-                        .map { GeoTrack.Point(it.tsNanos, it.lat, it.lon, it.accuracyM) },
+                    run = runCatching { db.testRunDao().byId(runId) }.getOrNull(),
+                    scenarios = runCatching { db.scenarioResultDao().forRun(runId) }.getOrDefault(emptyList()),
+                    reportJson = runCatching { db.reportBodyDao().forRun(runId)?.body }.getOrNull(),
+                    trackPoints = runCatching {
+                        db.radioSampleDao().forRun(runId)
+                            .filter { it.lat != null && it.lon != null }
+                            .map { GeoTrack.Point(it.tsNanos, it.lat, it.lon, it.accuracyM) }
+                    }.getOrDefault(emptyList()),
                     loaded = true,
                 )
             }
@@ -1741,6 +2097,8 @@ class MainActivity : ComponentActivity() {
                 }
             },
             onShare = onOpenShare,
+            onOpenVoice = onOpenVoice,
+            onOpenAppCompanion = onOpenAppCompanion,
         )
     }
 

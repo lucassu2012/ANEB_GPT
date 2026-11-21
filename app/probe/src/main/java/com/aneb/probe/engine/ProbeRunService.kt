@@ -335,7 +335,7 @@ class ProbeRunService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentTitle(getString(R.string.probe_run_notification_title))
             .setContentText(content)
             .setContentIntent(openApp)
@@ -393,11 +393,24 @@ class ProbeRunService : Service() {
                 .putExtra(EXTRA_INJECT, config.inject)
                 .putExtra(EXTRA_DRIVE_TEST, config.driveTest)
                 .putExtra(EXTRA_AUTORUN, autorun)
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: Exception) {
+                Log.w("AnebProbe", "PROBE_SERVICE_START_FAILED error=${e.javaClass.simpleName}: ${e.message}")
+                _session.value = ProbeRunSession.Failed(
+                    autorun = autorun,
+                    message = RunFailureMessage.forError(e),
+                    testMode = config.testMode,
+                )
+            }
         }
 
         internal fun cancel(context: Context) {
-            context.startService(Intent(context, ProbeRunService::class.java).setAction(ACTION_CANCEL))
+            runCatching {
+                context.startService(Intent(context, ProbeRunService::class.java).setAction(ACTION_CANCEL))
+            }.onFailure { e ->
+                Log.w("AnebProbe", "PROBE_SERVICE_CANCEL_FAILED error=${e.javaClass.simpleName}")
+            }
         }
 
         private inline fun <reified T : Enum<T>> enumValueOrDefault(raw: String?, fallback: T): T =

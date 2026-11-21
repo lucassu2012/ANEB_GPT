@@ -145,6 +145,62 @@ class HomeScreenPrototypeEntryTest {
         }
     }
 
+    @Test
+    fun `HomeScreen surfaces and wires all 4 signature AI and app feature cards directly on screen 1`() {
+        val controller = Robolectric.buildActivity(ComponentActivity::class.java)
+        val activity = controller.get()
+
+        var openedVoice = false
+        var openedAppCompanion = false
+        var openedProfiles = false
+        var openedReach = false
+
+        val composeView = ComposeView(activity).apply {
+            setContent {
+                AnebTheme(reducedMotion = true) {
+                    HomeScreen(
+                        lastRun = null,
+                        lastBasicRun = null,
+                        testMode = AnebTestMode.TOKEN_EXPERIENCE,
+                        onTestModeChange = {},
+                        running = false,
+                        notice = null,
+                        connectionLabel = "自动选择网络",
+                        nodeLabel = "阿里云深圳 miw2",
+                        onStart = {},
+                        onOpenServer = {},
+                        onOpenPrototype = {},
+                        onOpenLastResult = {},
+                        onOpenLastBasicResult = {},
+                        onOpenVoice = { openedVoice = true },
+                        showPrototypeEntry = false,
+                        onOpenAppCompanion = { openedAppCompanion = true },
+                        onOpenProfiles = { openedProfiles = true },
+                        onOpenReachBoard = { openedReach = true },
+                    )
+                }
+            }
+        }
+        try {
+            activity.setContentView(composeView)
+            controller.setup()
+            idleMain()
+
+            assertTrue(clickNodeWithText(composeView, "实时 AI 语音"))
+            assertTrue(clickNodeWithText(composeView, "抖音 / 豆包体验"))
+            assertTrue(clickNodeWithText(composeView, "多模态 AI 轨迹"))
+            assertTrue(clickNodeWithText(composeView, "主流 AI 直连测通"))
+            idleMain()
+
+            assertTrue(openedVoice)
+            assertTrue(openedAppCompanion)
+            assertTrue(openedProfiles)
+            assertTrue(openedReach)
+        } finally {
+            controller.destroy()
+        }
+    }
+
     private fun idleMain() {
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(100, TimeUnit.MILLISECONDS)
     }

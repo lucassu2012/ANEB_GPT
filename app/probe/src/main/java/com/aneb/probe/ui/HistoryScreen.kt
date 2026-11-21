@@ -125,7 +125,7 @@ fun HistoryScreen(
     val trend = scored.asReversed().map { (it / 100.0).toFloat().coerceIn(0f, 1f) }
 
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
-        AnebTopBar(showBack = showBack, onBack = onBack, showMenu = !showBack)
+        AnebTopBar(showBack = showBack, onBack = onBack, showMenu = false)
         AnebPageIntro(
             eyebrow = "RESULTS",
             title = "测试历史",

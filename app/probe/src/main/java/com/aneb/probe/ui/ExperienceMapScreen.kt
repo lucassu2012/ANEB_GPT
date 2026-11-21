@@ -48,7 +48,7 @@ fun ExperienceMapScreen(points: List<ExperienceMapPoint>) {
     var layer by rememberSaveable { mutableStateOf(MapLayer.Experience) }
     Box(Modifier.fillMaxSize().background(Color(0xFF080B17))) {
         MapGrid(points = points, layer = layer, modifier = Modifier.fillMaxSize())
-        AnebTopBar(Modifier.padding(horizontal = 12.dp), showMenu = true)
+        AnebTopBar(Modifier.padding(horizontal = 12.dp), showMenu = false)
 
         Column(
             modifier = Modifier.align(Alignment.TopStart).padding(start = 16.dp, top = 66.dp),

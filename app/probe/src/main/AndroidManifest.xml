@@ -17,6 +17,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Android 11+ 包可见性：仅声明“真实 App 伴侣对照”所需的 3 个目标包名，
+         用于一键拉起对照实测，不申请 QUERY_ALL_PACKAGES 或无障碍等高危权限。 -->
+    <queries>
+        <package android:name="com.ss.android.ugc.aweme" />
+        <package android:name="com.larus.nova" />
+        <package android:name="com.moonshot.kimichat" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
