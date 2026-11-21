@@ -1,0 +1,108 @@
+{
+  "schema_version": "aneb-pilot-v0.2-feedback-0.1",
+  "kit_metadata": {
+    "kit_version": "pilot-v0.2",
+    "release_candidate": "",
+    "source_commit": "",
+    "kit_verifier_exit_code": null,
+    "kit_verifier_status": "NOT_RUN"
+  },
+  "session_metadata": {
+    "date_utc": "",
+    "timezone": "",
+    "participant_alias": "",
+    "operator_name": "",
+    "independent_reviewer": "",
+    "windows_os_version": "",
+    "device_model": "",
+    "android_version": "",
+    "network_environment": "UNKNOWN"
+  },
+  "data_custody_agreement": {
+    "custodian": "",
+    "approved_recipients": [],
+    "retention_review_date": "",
+    "pii_and_secrets_redacted": false
+  },
+  "workflow_checks": {
+    "kit_offline_verify": {
+      "status": "NOT_RUN",
+      "assistance": "NOT_RUN",
+      "duration_min": null,
+      "notes": ""
+    },
+    "apk_install_and_switch": {
+      "status": "NOT_RUN",
+      "apk_variant": "",
+      "assistance": "NOT_RUN",
+      "notes": ""
+    },
+    "miw2_basic_and_loaded_responsiveness": {
+      "status": "NOT_RUN",
+      "run_id": "",
+      "loaded_status": "",
+      "assistance": "NOT_RUN",
+      "notes": ""
+    },
+    "miw2_token_aqs_and_paired_compare": {
+      "status": "NOT_RUN",
+      "wifi_run_id": "",
+      "cellular_run_id": "",
+      "export_md_ok": null,
+      "export_png_ok": null,
+      "assistance": "NOT_RUN",
+      "notes": ""
+    },
+    "miw2_profile_v2_trace": {
+      "status": "NOT_RUN",
+      "run_id": "",
+      "tasks_completed": null,
+      "assistance": "NOT_RUN",
+      "notes": ""
+    },
+    "prototype_launcher_ready_and_compatible": {
+      "status": "NOT_RUN",
+      "selected_url_kind": "",
+      "assistance": "NOT_RUN",
+      "notes": ""
+    },
+    "prototype_quick_3": {
+      "status": "NOT_RUN",
+      "campaign_id": "",
+      "campaign_status": "",
+      "evidence_verify_rc": null,
+      "notes": ""
+    },
+    "prototype_acceptance_9": {
+      "status": "NOT_RUN",
+      "campaign_id": "",
+      "campaign_status": "",
+      "evidence_verify_rc": null,
+      "notes": ""
+    },
+    "saved_campaigns_reopen": {
+      "status": "NOT_RUN",
+      "notes": ""
+    },
+    "clean_exit_and_device_cleanup": {
+      "status": "NOT_RUN",
+      "notes": ""
+    }
+  },
+  "usability_and_comprehension": {
+    "hardest_step": "",
+    "verbatim_confusion_quotes": [],
+    "can_explain_verified_vs_success": null,
+    "can_explain_synthetic_vs_real_app": null,
+    "supported_decision": "",
+    "missing_report_information": "",
+    "blocking_issues": [],
+    "minimal_improvement_suggestions": []
+  },
+  "adoption_and_pilot_gate": {
+    "independent_completion_assessment": "NOT_RUN",
+    "budget_owner_role": "",
+    "paid_pilot_barriers": [],
+    "next_action": ""
+  }
+}
