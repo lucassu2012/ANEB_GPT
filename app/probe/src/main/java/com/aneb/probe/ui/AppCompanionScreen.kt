@@ -38,7 +38,9 @@ import com.aneb.probe.data.ScenarioResultEntity
 import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.ui.components.AnebGlyph
 import com.aneb.probe.ui.components.AnebGradientCard
+import com.aneb.probe.ui.components.AnebIcon
 import com.aneb.probe.ui.components.AnebPageIntro
 import com.aneb.probe.ui.components.AnebSectionTitle
 import com.aneb.probe.ui.components.AnebTopBar
@@ -106,6 +108,7 @@ fun AppCompanionScreen(
     onOpenReachBoard: () -> Unit,
     onOpenResearchRecords: () -> Unit,
     onBack: () -> Unit,
+    onOpenVideoTheater: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val colors = AnebTheme.colors
@@ -151,6 +154,51 @@ fun AppCompanionScreen(
             ) {
                 Text(note, fontSize = 11.sp, color = colors.ink)
             }
+        }
+
+        if (onOpenVideoTheater != null) {
+            AnebGradientCard(Modifier.fillMaxWidth(), radius = 18.dp) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            AnebIcon(glyph = AnebGlyph.Video, tint = colors.brand, size = 18.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("短视频流媒体实时播放压测", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                                Text(
+                                    "真 H.264 视频播放 · 实时 ABR 清晰度/首帧/卡顿/速率/抖动",
+                                    fontSize = 9.5.sp,
+                                    color = colors.muted,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(colors.brand.copy(alpha = 0.16f))
+                            .border(1.dp, colors.brand.copy(alpha = 0.50f), RoundedCornerShape(11.dp))
+                            .pressable(onClick = onOpenVideoTheater)
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "进入短视频流媒体实时剧场 ›",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.brand,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
         }
 
         AnebSectionTitle("校准网络体验评估", Modifier.padding(start = 4.dp, bottom = 8.dp))

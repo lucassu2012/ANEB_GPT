@@ -25,6 +25,7 @@ import com.aneb.probe.engine.PlannedToken
 import com.aneb.probe.engine.ResponsivenessByteObservation
 import com.aneb.probe.engine.ResponsivenessEcho
 import com.aneb.probe.engine.ResponsivenessStage
+import com.aneb.probe.engine.VideoStreamingEngine
 import com.aneb.probe.engine.VoiceRunner
 import com.aneb.probe.ui.theme.AnebTheme
 import org.junit.Assert.assertEquals
@@ -200,7 +201,7 @@ class PhaseAVisualTheatersUiTest {
             val texts = collectTexts(composeView)
             assertTrue("expected 22Hz telemetry console: $texts", texts.any { it.contains("22Hz TELEMETRY") })
             assertTrue("expected 250ms fast SSE rate: $texts", texts.any { it.contains("46.8") })
-            assertTrue("expected authentic AI assistant header: $texts", texts.any { it.contains("AI 对话助手 · DeepThink 实时会话") })
+            assertTrue("expected authentic AI assistant header: $texts", texts.any { it.contains("AI 对话助手 · DeepThink-R1") })
             assertTrue("expected live stall badge: $texts", texts.any { it.contains("流式停顿 340 ms") })
             assertTrue("expected realistic executive chat copy: $texts", texts.any { it.contains("高管决策摘要") })
             assertFalse("must not show fake meta-text: $texts", texts.any { it.contains("正在实时监测首字响应") })
@@ -561,6 +562,106 @@ class PhaseAVisualTheatersUiTest {
         assertTrue("expected fast 250ms rate before 250ms 1s floor: $snap", snap.fastRatePerSec != null && snap.fastRatePerSec!! > 20.0)
         assertEquals(8, snap.recentIntervalsMs.size)
         assertEquals(20.0, snap.recentIntervalsMs.first(), 0.5)
+    }
+
+    @Test
+    fun `RealisticScenarioCatalog rotates across diverse business cases and scales full coding diffs`() {
+        val chatPicked = (1..20).map { RealisticScenarioCatalog.pickIndex("run-uuid-$it", RealisticScenarioCatalog.chatCases.size) }.toSet()
+        val codePicked = (1..20).map { RealisticScenarioCatalog.pickIndex("run-uuid-$it", RealisticScenarioCatalog.codingCases.size) }.toSet()
+        val visionPicked = (1..20).map { RealisticScenarioCatalog.pickIndex("run-uuid-$it", RealisticScenarioCatalog.multimodalVisionCases.size) }.toSet()
+        assertTrue("expected multiple rotating chat cases: $chatPicked", chatPicked.size >= 3)
+        assertTrue("expected multiple rotating coding cases: $codePicked", codePicked.size >= 3)
+        assertTrue("expected all 3 real 4K vision cases to rotate: $visionPicked", visionPicked.size == 3)
+        assertTrue(
+            "coding diffs must be deep enough for full SSE stream pacing",
+            RealisticScenarioCatalog.codingCases.all { it.diffLines.size >= 45 && it.totalChars >= 1_400 },
+        )
+    }
+
+    @Test
+    fun `VideoStreamingEngine ABR state machine gates playback rebuffering swipe TTFF and renders Phase B theater`() {
+        val sm = VideoStreamingEngine.AbrBufferStateMachine(VideoStreamingEngine.AbrTier.HD_1080P)
+        assertEquals(VideoStreamingEngine.PlaybackState.COLD_START, sm.state)
+
+        // Feed fast 12 Mbps bytes (~150 KB per 100ms) -> fills 800ms startup buffer and upgrades to 1080P60
+        for (step in 1..20) {
+            sm.step(deltaTimeMs = 100.0, deltaBytes = 150_000L, liveMbps = 12.0, elapsedMs = step * 100L)
+        }
+        assertEquals(VideoStreamingEngine.PlaybackState.PLAYING, sm.state)
+        assertTrue("expected fast cold-start TTFF: ${sm.firstFrameMs}", sm.firstFrameMs != null && sm.firstFrameMs!! <= 500.0)
+        assertEquals(VideoStreamingEngine.AbrTier.UHD_1080P60, sm.tier)
+
+        // Swipe to next video -> flushes buffer and measures fresh cold-start TTFF
+        sm.triggerSwipe(currentElapsedMs = 2_000L)
+        assertEquals(VideoStreamingEngine.PlaybackState.COLD_START, sm.state)
+        assertEquals(0.0, sm.bufferMs, 1e-6)
+        for (step in 1..8) {
+            sm.step(deltaTimeMs = 100.0, deltaBytes = 150_000L, liveMbps = 12.0, elapsedMs = 2_000L + step * 100L)
+        }
+        assertEquals(VideoStreamingEngine.PlaybackState.PLAYING, sm.state)
+        assertTrue("expected swipe TTFF recorded: ${sm.latestSwipeTtffMs}", sm.latestSwipeTtffMs != null)
+
+        // Starve network completely -> buffer empties -> REBUFFERING + stallCount + ABR downgrade
+        for (step in 1..40) {
+            sm.step(deltaTimeMs = 200.0, deltaBytes = 0L, liveMbps = 0.2, elapsedMs = 3_000L + step * 200L)
+        }
+        assertEquals(VideoStreamingEngine.PlaybackState.REBUFFERING, sm.state)
+        assertTrue("expected stall count >= 1: ${sm.stallCount}", sm.stallCount >= 1)
+        assertEquals(VideoStreamingEngine.AbrTier.LOW_480P, sm.tier)
+
+        // Verify Phase B VideoStreamingTheaterScreen renders live HUD cleanly under Robolectric
+        val controller = Robolectric.buildActivity(ComponentActivity::class.java)
+        val activity = controller.get()
+        val snap = VideoStreamingEngine.LiveSnapshot(
+            state = VideoStreamingEngine.PlaybackState.PLAYING,
+            activeTier = VideoStreamingEngine.AbrTier.UHD_1080P60,
+            videoChapterIndex = 0,
+            elapsedMs = 6_400L,
+            plannedDurationMs = 20_000L,
+            liveMbps = 28.4,
+            avgMbps = 25.1,
+            rttMs = 34.0,
+            jitterMs = 2.6,
+            lossRate = 0.0,
+            bufferMs = 5_200.0,
+            firstFrameMs = 280.0,
+            latestSwipeTtffMs = 310.0,
+            swipeCount = 1,
+            stallCount = 0,
+            totalStallMs = 0L,
+            totalBytes = 18_500_000L,
+            speedHistoryMbps = listOf(18.0, 24.5, 29.1, 28.4),
+            rttHistoryMs = listOf(32.0, 35.0, 34.0),
+        )
+        val composeView = ComposeView(activity).apply {
+            setContent {
+                AnebTheme(reducedMotion = true) {
+                    VideoStreamingTheaterScreen(
+                        nodeLabel = "阿里云深圳 miw2",
+                        running = true,
+                        otherRunActive = false,
+                        snapshot = snap,
+                        error = null,
+                        onStart = {},
+                        onCancel = {},
+                        onSwipeNext = {},
+                        onBack = {},
+                    )
+                }
+            }
+        }
+        try {
+            activity.setContentView(composeView)
+            controller.setup()
+            idleMain()
+            val texts = collectTexts(composeView)
+            assertTrue("expected Phase B video theater title: $texts", texts.any { it.contains("短视频流媒体实时压测") })
+            assertTrue("expected 20Hz video stream HUD: $texts", texts.any { it.contains("20Hz VIDEO STREAM TELEMETRY") })
+            assertTrue("expected active 1080P60 ABR pill: $texts", texts.any { it.contains("1080P 60fps 蓝光") })
+            assertTrue("expected swipe button: $texts", texts.any { it.contains("模拟上滑切视频") })
+        } finally {
+            controller.destroy()
+        }
     }
 
     private fun idleMain() {

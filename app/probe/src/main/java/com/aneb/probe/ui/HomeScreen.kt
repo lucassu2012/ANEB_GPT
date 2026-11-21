@@ -238,7 +238,7 @@ fun HomeScreen(
                     accent = colors.brand,
                     title = "抖音 / 豆包体验",
                     badge = appBadge,
-                    subtitle = "实测拐点评估 + 拉起真机对照",
+                    subtitle = "真视频流压测 · 拐点评估 · 真机对照",
                     enabled = onOpenAppCompanion != null,
                     onClick = { onOpenAppCompanion?.invoke() },
                     modifier = Modifier.weight(1f),

@@ -167,6 +167,7 @@ fun TestingScreen(
         // ---- 下半区：严格固定高度（368dp）真实业务场景滚动视窗（大小恒定不跳动）----
         AuthenticWorkloadViewport(
             profileId = activeProfileId,
+            runId = progress.runId,
             telemetry = telemetry,
             instantRate = instantRate,
             phaseName = progress.phaseName,
@@ -516,6 +517,7 @@ private fun LiveHighFreqTelemetryConsole(
 @Composable
 private fun AuthenticWorkloadViewport(
     profileId: String?,
+    runId: String?,
     telemetry: LiveTelemetry,
     instantRate: Double?,
     phaseName: String,
@@ -523,6 +525,17 @@ private fun AuthenticWorkloadViewport(
     val colors = AnebTheme.colors
     val gapMs = telemetry.liveStreamGapMs
     val stallingNow = telemetry.streamActive && gapMs != null && gapMs >= 250.0
+    val chatCase = remember(runId) {
+        RealisticScenarioCatalog.chatCases[RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.chatCases.size)]
+    }
+    val codingCase = remember(runId) {
+        RealisticScenarioCatalog.codingCases[RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.codingCases.size)]
+    }
+    val visionCase = remember(runId) {
+        RealisticScenarioCatalog.multimodalVisionCases[
+            RealisticScenarioCatalog.pickIndex(runId, RealisticScenarioCatalog.multimodalVisionCases.size),
+        ]
+    }
     val stageAccent = when (profileId) {
         "s2_coding_agent" -> colors.brand2
         "s3_multimodal" -> colors.excellent
@@ -534,9 +547,9 @@ private fun AuthenticWorkloadViewport(
         else -> AnebGlyph.Chat
     }
     val headerTitle = when (profileId) {
-        "s2_coding_agent" -> "ConnectionPoolGuard.kt · Coding Agent"
-        "s3_multimodal" -> "机房光路 AI 视觉巡检 · 多模态工作台"
-        else -> "AI 对话助手 · DeepThink 实时会话"
+        "s2_coding_agent" -> "${codingCase.fileName} · Coding Agent (${codingCase.language})"
+        "s3_multimodal" -> visionCase.headerTitle
+        else -> "AI 对话助手 · ${chatCase.headerTitle}"
     }
 
     val statusText = when {
@@ -611,24 +624,28 @@ private fun AuthenticWorkloadViewport(
                 .padding(12.dp),
         ) {
             when (profileId) {
-                "s2_coding_agent" -> CodingWorkspaceBody(telemetry = telemetry)
-                "s3_multimodal" -> MultimodalWorkspaceBody(telemetry = telemetry)
-                else -> ChatWorkspaceBody(telemetry = telemetry)
+                "s2_coding_agent" -> CodingWorkspaceBody(codingCase = codingCase, telemetry = telemetry)
+                "s3_multimodal" -> MultimodalWorkspaceBody(visionCase = visionCase, telemetry = telemetry)
+                else -> ChatWorkspaceBody(chatCase = chatCase, telemetry = telemetry)
             }
         }
     }
 }
 
 @Composable
-private fun ChatWorkspaceBody(telemetry: LiveTelemetry) {
+private fun ChatWorkspaceBody(
+    chatCase: RealisticScenarioCatalog.ChatCase,
+    telemetry: LiveTelemetry,
+) {
     val colors = AnebTheme.colors
     val bodyScroll = rememberScrollState()
-    val revealed = revealedCount(telemetry, REALISTIC_CHAT_ANSWER.length, charsPerEvent = 6)
-    val shown = if (revealed > 0) REALISTIC_CHAT_ANSWER.substring(0, revealed) else ""
+    // 1:1 绑定真实 SSE 到达事件（每事件约 2.1 个汉字），与上方 250ms 瞬时速率曲线完全同速启停
+    val revealed = revealedCountFloat(telemetry, chatCase.answerBody.length, charsPerEvent = 2.1)
+    val shown = if (revealed > 0) chatCase.answerBody.substring(0, revealed) else ""
     val thinkRevealed = when {
-        telemetry.streamActive || revealed > 0 -> REALISTIC_CHAT_THINKING.length
-        telemetry.liveSubPhase == "think" -> (REALISTIC_CHAT_THINKING.length * 0.72f).roundToInt()
-        telemetry.rttMs != null -> (REALISTIC_CHAT_THINKING.length * 0.35f).roundToInt()
+        telemetry.streamActive || revealed > 0 -> chatCase.thinkingBody.length
+        telemetry.liveSubPhase == "think" -> (chatCase.thinkingBody.length * 0.72f).roundToInt()
+        telemetry.rttMs != null -> (chatCase.thinkingBody.length * 0.35f).roundToInt()
         else -> 0
     }
 
@@ -644,7 +661,7 @@ private fun ChatWorkspaceBody(telemetry: LiveTelemetry) {
         // 用户真实业务提问气泡
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Text(
-                "对比深圳前海与新加坡作为东南亚 SaaS 区域总部的三年综合成本、跨境专线时延与合规落地建议，输出可直接上会的结论。",
+                chatCase.prompt,
                 fontSize = 10.5.sp,
                 lineHeight = 15.5.sp,
                 color = colors.ink,
@@ -670,13 +687,13 @@ private fun ChatWorkspaceBody(telemetry: LiveTelemetry) {
                     .padding(horizontal = 10.dp, vertical = 7.dp),
             ) {
                 Text(
-                    if (revealed > 0) "已完成深度推演 · 检索 3 项跨境网络与税制基准" else "深度推演中 · 正在校准跨境海缆与合规模型…",
+                    if (revealed > 0) chatCase.thinkingLabelDone else chatCase.thinkingLabelActive,
                     fontSize = 8.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.brand,
                 )
                 Text(
-                    REALISTIC_CHAT_THINKING.substring(0, thinkRevealed),
+                    chatCase.thinkingBody.substring(0, thinkRevealed),
                     fontSize = 9.sp,
                     lineHeight = 13.5.sp,
                     color = colors.faint,
@@ -686,7 +703,7 @@ private fun ChatWorkspaceBody(telemetry: LiveTelemetry) {
             Spacer(Modifier.height(9.dp))
         }
 
-        // AI 流式回复正文（按真实 SSE 到达推进，自动跟底滚动）
+        // AI 流式回复正文（按真实 SSE 到达逐字推进，自动跟底滚动）
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Box(
                 modifier = Modifier
@@ -734,32 +751,56 @@ private fun ChatWorkspaceBody(telemetry: LiveTelemetry) {
 }
 
 @Composable
-private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
+private fun CodingWorkspaceBody(
+    codingCase: RealisticScenarioCatalog.CodingCase,
+    telemetry: LiveTelemetry,
+) {
     val colors = AnebTheme.colors
     val bodyScroll = rememberScrollState()
-    val totalLines = REALISTIC_CODE_DIFF.size
-    val revealedLines = when {
-        telemetry.liveStreamEvents > 0 -> (telemetry.liveStreamEvents / 2 + 3).coerceIn(3, totalLines)
-        telemetry.tokensReceived > 0 -> (telemetry.tokensReceived / 4 + 3).coerceIn(3, totalLines)
-        telemetry.streamActive -> 4
-        else -> 3
+    // 严格 1:1 按真实 SSE 事件逐字符打字（每 SSE event ~4.2 字符），确保代码生成快慢与上方实时 ev/s 曲线严丝合缝！
+    val totalChars = codingCase.totalChars
+    val charBudget = when {
+        telemetry.liveStreamEvents > 0 ->
+            (telemetry.liveStreamEvents * 4.2).roundToInt().coerceIn(24, totalChars)
+        telemetry.tokensReceived > 0 ->
+            (telemetry.tokensReceived * 2.4).roundToInt().coerceIn(24, totalChars)
+        telemetry.streamActive -> 28
+        else -> 0
     }
+
+    // 把 charBudget 切分为“已完成整行 + 当前正在逐字符敲击的活动行”
+    val visibleLines = remember(codingCase.id, charBudget) {
+        if (charBudget <= 0) {
+            codingCase.diffLines.take(2).mapIndexed { idx, (m, l) -> Triple(idx, m, l) }
+        } else {
+            var remaining = charBudget
+            val out = ArrayList<Triple<Int, Char, String>>()
+            for ((idx, pair) in codingCase.diffLines.withIndex()) {
+                if (remaining <= 0) break
+                val (marker, line) = pair
+                if (remaining >= line.length + 1) {
+                    out.add(Triple(idx, marker, line))
+                    remaining -= (line.length + 1)
+                } else {
+                    out.add(Triple(idx, marker, line.substring(0, remaining.coerceAtMost(line.length))))
+                    remaining = 0
+                }
+            }
+            out
+        }
+    }
+
     val toolRound = telemetry.liveToolRound
-    val toolSteps = listOf(
-        "grep_search(\"QuicSessionPool\") -> 4 处命中",
-        "read_file(\"ConnectionPoolGuard.kt:84-136\")",
-        "apply_patch(ConnectionPoolGuard.kt +14 -2)",
-        "run_tests(\":gateway:testQuicFallback\") -> 14/14 PASS",
-    )
+    val toolSteps = codingCase.toolSteps
     val completedTools = when {
         toolRound > 0 -> toolRound.coerceIn(1, toolSteps.size)
-        revealedLines >= totalLines - 2 -> 3
+        charBudget >= (totalChars * 0.85).roundToInt() -> 3
         telemetry.streamActive -> 2
         telemetry.rttMs != null -> 1
         else -> 0
     }
 
-    LaunchedEffect(revealedLines, completedTools) {
+    LaunchedEffect(charBudget, completedTools) {
         bodyScroll.scrollTo(bodyScroll.maxValue)
     }
 
@@ -785,11 +826,14 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "AGENT TOOL CHAIN · branch fix/quic-0rtt-fallback",
+                    "AGENT TOOL CHAIN · ${codingCase.branch}",
                     fontSize = 8.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.brand2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 Text(
                     "$completedTools/${toolSteps.size}",
@@ -824,7 +868,7 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
             }
         }
 
-        // 真实 IDE 行号 + 语法高亮 Diff 代码窗口
+        // 真实 IDE 行号 + 多语言语法高亮 + 逐字符实时键入 Diff 窗口
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -840,7 +884,7 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "gateway/src/main/kotlin/ConnectionPoolGuard.kt",
+                    codingCase.fullPath,
                     fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace,
                     color = colors.muted,
@@ -849,7 +893,7 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    "+14  -2",
+                    codingCase.diffStat,
                     fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
@@ -858,7 +902,8 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.hairline))
             Spacer(Modifier.height(4.dp))
-            REALISTIC_CODE_DIFF.take(revealedLines).forEachIndexed { idx, (marker, line) ->
+            visibleLines.forEachIndexed { pos, (origIdx, marker, partialLine) ->
+                val isTypingTail = telemetry.streamActive && pos == visibleLines.lastIndex && charBudget < totalChars
                 val bg = when (marker) {
                     '+' -> Color(0x2629D99A)
                     '-' -> Color(0x26FF5B73)
@@ -876,7 +921,7 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
                         .padding(horizontal = 8.dp, vertical = 1.8.dp),
                 ) {
                     Text(
-                        String.format(Locale.ROOT, "%3d", 84 + idx),
+                        String.format(Locale.ROOT, "%3d", codingCase.baseLineNumber + origIdx),
                         fontSize = 8.5.sp,
                         fontFamily = FontFamily.Monospace,
                         color = colors.faint,
@@ -891,7 +936,14 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
                         modifier = Modifier.width(12.dp),
                     )
                     Text(
-                        highlightKotlinLine(line, colors.ink, colors.brand2, colors.brand, colors.fair),
+                        highlightCodeLine(
+                            line = partialLine,
+                            showCursor = isTypingTail,
+                            ink = colors.ink,
+                            kwColor = colors.brand2,
+                            typeColor = colors.brand,
+                            litColor = colors.fair,
+                        ),
                         fontSize = 9.sp,
                         lineHeight = 13.5.sp,
                         fontFamily = FontFamily.Monospace,
@@ -903,7 +955,10 @@ private fun CodingWorkspaceBody(telemetry: LiveTelemetry) {
 }
 
 @Composable
-private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
+private fun MultimodalWorkspaceBody(
+    visionCase: RealisticScenarioCatalog.MultimodalVisionCase,
+    telemetry: LiveTelemetry,
+) {
     val colors = AnebTheme.colors
     val bodyScroll = rememberScrollState()
     val reducedMotion = LocalReducedMotion.current
@@ -913,16 +968,16 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
         else -> 0.12f
     }
     val isUploading = telemetry.liveSubPhase == "upload" || (upFrac < 0.99f && !telemetry.streamActive)
-    val revealed = revealedCount(telemetry, REALISTIC_MULTIMODAL_ANSWER.length, charsPerEvent = 6)
-    val shown = if (revealed > 0) REALISTIC_MULTIMODAL_ANSWER.substring(0, revealed) else ""
+    val revealed = revealedCountFloat(telemetry, visionCase.analysisBody.length, charsPerEvent = 2.2)
+    val shown = if (revealed > 0) visionCase.analysisBody.substring(0, revealed) else ""
 
     val scanPos = if (isUploading && !reducedMotion) {
-        val transition = rememberInfiniteTransition(label = "rack-upload-scan")
+        val transition = rememberInfiniteTransition(label = "vision-upload-scan")
         transition.animateFloat(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse),
-            label = "rack-scan-line",
+            label = "vision-scan-line",
         ).value
     } else {
         upFrac
@@ -938,7 +993,7 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
             .verticalScroll(bodyScroll),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        // 真实 4K 机房光路巡检摄影照片 + AI 视觉识别框 + 激光扫描幕布
+        // 真实 4K 巡检/航拍/AOI 实拍照片 + AI 视觉识别框 + 激光扫描幕布
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -947,12 +1002,11 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                 .border(1.dp, colors.excellent.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
         ) {
             Image(
-                painter = painterResource(id = R.drawable.multimodal_dc_rack),
-                contentDescription = "机房光路巡检现场高清实拍图",
+                painter = painterResource(id = visionCase.imageRes),
+                contentDescription = visionCase.headerTitle,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-            // 上传幕布 & 激光扫描线，上传完成后叠加 AI 视觉检测标注框
             Canvas(Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
@@ -971,34 +1025,25 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                         strokeWidth = 2.dp.toPx(),
                     )
                 } else {
-                    // AI 视觉目标识别检测框（对应照片内真实 SFP28 端口阵列、右侧告警指示灯、OM4/OS2 光纤束）
                     val boxStroke = Stroke(width = 1.5.dp.toPx())
-                    drawRoundRect(
-                        color = colors.excellent,
-                        topLeft = Offset(w * 0.44f, h * 0.43f),
-                        size = Size(w * 0.25f, h * 0.24f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = boxStroke,
-                    )
-                    drawRoundRect(
-                        color = colors.fair,
-                        topLeft = Offset(w * 0.60f, h * 0.44f),
-                        size = Size(w * 0.11f, h * 0.22f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = boxStroke,
-                    )
-                    drawRoundRect(
-                        color = colors.brand,
-                        topLeft = Offset(w * 0.43f, h * 0.65f),
-                        size = Size(w * 0.38f, h * 0.24f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = boxStroke,
-                    )
+                    visionCase.boxes.forEach { b ->
+                        val boxColor = when (b.tone) {
+                            "fair" -> colors.fair
+                            "brand" -> colors.brand
+                            else -> colors.excellent
+                        }
+                        drawRoundRect(
+                            color = boxColor,
+                            topLeft = Offset(w * b.x, h * b.y),
+                            size = Size(w * b.w, h * b.h),
+                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                            style = boxStroke,
+                        )
+                    }
                 }
             }
-            // 左上真实拍摄元信息
             Text(
-                "DC_B04_U28_FIBER_4K.jpg · 4032×2268",
+                "${visionCase.fileName} · ${visionCase.resolutionTag}",
                 fontSize = 8.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.SemiBold,
@@ -1010,13 +1055,12 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                     .background(Color(0xC8050A16))
                     .padding(horizontal = 6.dp, vertical = 2.5.dp),
             )
-            // 右上状态角标
             Text(
                 if (isUploading) {
                     val mbpsTxt = telemetry.upMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty()
                     "上行 ${(upFrac * 100).roundToInt()}%$mbpsTxt"
                 } else {
-                    "视觉检测 3 处目标 · 置信 98.4%"
+                    visionCase.detectionSummary
                 },
                 fontSize = 8.sp,
                 fontFamily = FontFamily.Monospace,
@@ -1029,7 +1073,6 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                     .background(Color(0xCC050A16))
                     .padding(horizontal = 6.dp, vertical = 2.5.dp),
             )
-            // 底部实时进度条
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1056,7 +1099,7 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                 .padding(horizontal = 10.dp, vertical = 9.dp),
         ) {
             Text(
-                "AI Ops 现场光路视觉巡检报告",
+                visionCase.reportTitle,
                 fontSize = 9.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.excellent,
@@ -1066,9 +1109,9 @@ private fun MultimodalWorkspaceBody(telemetry: LiveTelemetry) {
                 if (shown.isNotEmpty()) {
                     shown + if (telemetry.streamActive) " |" else ""
                 } else if (isUploading) {
-                    "正在上传 4K 机柜巡检原图至视觉多模态推理节点，上传完毕自动启动端口状态与光纤理线诊断…"
+                    "正在上传 4K 现场原图至视觉多模态推理节点，上传完毕立即启动结构化视觉识别…"
                 } else {
-                    "原图已送达，正在执行 SFP28 指示灯与光纤弯曲半径视觉分析…"
+                    "原图已送达推理节点，正在执行目标检测与多模态深度诊断…"
                 },
                 fontSize = 10.sp,
                 lineHeight = 15.5.sp,
@@ -1112,15 +1155,24 @@ private fun FooterStatusStrip(
     }
 }
 
-private fun highlightKotlinLine(
+private fun highlightCodeLine(
     line: String,
+    showCursor: Boolean,
     ink: Color,
     kwColor: Color,
     typeColor: Color,
     litColor: Color,
 ) = buildAnnotatedString {
-    val keywords = setOf("override", "fun", "val", "var", "if", "return", "try", "catch", "while", "true", "throw", "private", "suspend")
-    val types = setOf("QuicSession", "IOException", "Duration", "Endpoint", "ConnectionResult")
+    val keywords = setOf(
+        "override", "fun", "val", "var", "if", "else", "return", "try", "catch", "while", "for",
+        "true", "false", "throw", "private", "suspend", "class", "func", "defer", "select", "case",
+        "export", "readonly", "const", "void", "new", "def", "self", "not", "and", "or", "in", "raise", "continue",
+    )
+    val types = setOf(
+        "QuicSession", "IOException", "Endpoint", "ConnectionResult", "AtomicLong",
+        "StreamScheduler", "StreamPlan", "AudioPacket", "PlayoutChunk", "InferenceRequest",
+        "RoutingDecision", "WorkerState", "PrefixHashRing", "ClusterOverloadedError",
+    )
     val tokens = Regex("(\"[^\"]*\")|(\\b[A-Za-z_][A-Za-z0-9_]*\\b)|([^A-Za-z0-9_\"]+)").findAll(line)
     for (m in tokens) {
         val tok = m.value
@@ -1132,16 +1184,19 @@ private fun highlightKotlinLine(
         }
         withStyle(SpanStyle(color = color)) { append(tok) }
     }
+    if (showCursor) {
+        withStyle(SpanStyle(color = typeColor, fontWeight = FontWeight.Bold)) { append("|") }
+    }
 }
 
-private fun revealedCount(telemetry: LiveTelemetry, maxLen: Int, charsPerEvent: Int = 5): Int {
+private fun revealedCountFloat(telemetry: LiveTelemetry, maxLen: Int, charsPerEvent: Double): Int {
     val events = when {
         telemetry.liveStreamEvents > 0 -> telemetry.liveStreamEvents
         telemetry.tokensReceived > 0 -> telemetry.tokensReceived
         else -> 0
     }
     if (events <= 0) return 0
-    return (events * charsPerEvent).coerceAtMost(maxLen)
+    return (events * charsPerEvent).roundToInt().coerceIn(1, maxLen)
 }
 
 @Composable
@@ -1160,59 +1215,6 @@ private fun LivePulseDot(color: Color) {
     }
     Box(Modifier.size(6.dp).clip(CircleShape).background(color.copy(alpha = alpha)))
 }
-
-private const val REALISTIC_CHAT_THINKING =
-    "对比维度拆解：1) 3 年总拥有成本（办公租金 + 研发/商务人力 + 企业所得税 15% vs 17% 阶梯减免）；" +
-        "2) 东南亚主流 POP 节点海缆实测 RTT（前海经香港 IPLC 至新加坡 ~36ms，新加坡本地 <4ms）；" +
-        "3) 跨境数据出境安全评估与 PDPA 合规周期。"
-
-private const val REALISTIC_CHAT_ANSWER =
-    "一、高管决策摘要（推荐「前海研发 + 新加坡结算双核」架构）\n" +
-        "若首年团队 35–60 人且核心研发在国内，纯新加坡总部 3 年综合成本约高出 58%；建议采用「深圳前海承接核心产研与 AI 算法（享 15% 优惠税率）+ 新加坡设立区域商务与数据合规主体」的组合方案。\n\n" +
-        "二、关键指标对比（3 年口径）\n" +
-        "• 综合人力与办公成本：前海约 1,850 万 RMB；新加坡约 2,920 万 RMB（差额主要来自高级工程薪资与核心区租金）。\n" +
-        "• 东南亚客户网络时延：新加坡核心机房直连雅加达/曼谷/吉隆坡 RTT 8–22 ms；前海通过深港 IPLC 专线接入新加坡 POP 实测 RTT 34–39 ms，满足实时 SaaS 与 AI 流式交互要求。\n" +
-        "• 合规与资金通道：新加坡主体直接对接 PDPA 与多币种收单，前海主体通过标准合同完成非敏感脱敏数据回传，首阶段 6 周内即可完成双主体落地。\n\n" +
-        "三、90 天落地里程碑\n" +
-        "1. 第 1–3 周：完成新加坡 ACRA 注册与新加坡 AWS/阿里云边缘 POP 压测；\n" +
-        "2. 第 4–6 周：开通深港双路由 IPLC 专线，配置 AI 网关多活故障切换（目标 RTO < 15 秒）；\n" +
-        "3. 第 7–12 周：上线首个印尼/马来西亚企业客户并固化月度 SLA 巡检报表。"
-
-private val REALISTIC_CODE_DIFF = listOf(
-    ' ' to "suspend fun acquireSession(endpoint: Endpoint): ConnectionResult {",
-    ' ' to "    val cached = quicPool.peekHealthy(endpoint)",
-    '-' to "    if (cached != null) return ConnectionResult.Ready(cached)",
-    '-' to "    return ConnectionResult.Ready(quicPool.openZeroRtt(endpoint))",
-    '+' to "    if (cached != null && !cached.isStalled(maxGapMs = 280L)) {",
-    '+' to "        return ConnectionResult.Ready(cached)",
-    '+' to "    }",
-    '+' to "    var attempt = 0",
-    '+' to "    while (attempt < maxFallbackRetries) {",
-    '+' to "        try {",
-    '+' to "            val session = if (attempt == 0) quicPool.openZeroRtt(endpoint)",
-    '+' to "                else quicPool.openH2Fallback(endpoint)",
-    '+' to "            metrics.recordHandshake(endpoint, attempt, session.rttMs)",
-    '+' to "            return ConnectionResult.Ready(session)",
-    '+' to "        } catch (e: IOException) {",
-    '+' to "            attempt++",
-    '+' to "            metrics.recordFallback(endpoint, attempt, e.javaClass.simpleName)",
-    '+' to "            if (attempt >= maxFallbackRetries) throw e",
-    '+' to "            delay(jitteredBackoffMs(attempt))",
-    '+' to "        }",
-    '+' to "    }",
-    ' ' to "}",
-)
-
-private const val REALISTIC_MULTIMODAL_ANSWER =
-    "1. 端口与光模块状态识别（U28 / U29 核心交换机）\n" +
-        "• 左侧 16 路 SFP28 光模块链路指示灯呈稳定绿色常亮，业务收发正常；\n" +
-        "• 右侧管理与电源状态区检出 2 枚琥珀色告警灯（U28/U29 右端），建议核查冗余电源模块 PSU-2 供电日志与风扇转速阈值。\n\n" +
-        "2. 光纤跳线与物理层风险评估\n" +
-        "• 黄色 OS2 单模尾纤与青色 OM4 多模跳线已通过魔术贴束带分区导入右侧理线架，整体走线规范；\n" +
-        "• 下层交换机前部青色跳线弧度接近最小弯曲半径（约 32mm），存在长期微弯光衰隐患，建议下个维护窗增加 1U 前置水平理线槽。\n\n" +
-        "3. 自动生成运维工单建议\n" +
-        "• 工单号：INC-20261121-0418 · 优先级：P2（预防性巡检）\n" +
-        "• 建议动作：远程读取 U28/U29 光功率收发光 DOM 数值，复核右侧告警灯并安排理线加固。"
 
 /** run 进度派生；只解析既有日志合同，不改测量语义。 */
 object TestProgressParser {

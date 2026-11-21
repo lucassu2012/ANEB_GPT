@@ -100,6 +100,12 @@ fun MultimodalTheaterScreen(
     val view = LocalView.current
     var showRawLogs by remember { mutableStateOf(false) }
     var selectedTaskIndex by remember(quickMode, running) { mutableStateOf<Int?>(null) }
+    var runRotation by remember { mutableStateOf(0) }
+    var prevRunning by remember { mutableStateOf(running) }
+    LaunchedEffect(running) {
+        if (running && !prevRunning) runRotation++
+        prevRunning = running
+    }
 
     DisposableEffect(view, running) {
         val prev = view.keepScreenOn
@@ -262,6 +268,7 @@ fun MultimodalTheaterScreen(
             liveProgress = liveProgress,
             result = result,
             quickMode = quickMode,
+            runRotation = runRotation,
         )
 
         // ---- 执行队列矩阵（支持点击任意已完成项查看完整明细）----
@@ -614,6 +621,7 @@ private fun FixedHeightMultimodalWorkspace(
     liveProgress: BehaviorTraceRunner.LiveTraceProgress?,
     result: BehaviorTraceRunner.BehaviorTraceRunResult?,
     quickMode: Boolean,
+    runRotation: Int,
 ) {
     val colors = AnebTheme.colors
     val kind = when {
@@ -621,10 +629,21 @@ private fun FixedHeightMultimodalWorkspace(
         result != null -> result.tasks.lastOrNull()?.workloadKind ?: "image"
         else -> "image" // 待机时默认预览最震撼的 4K 航拍多模态真实任务画面
     }
-    val (glyph, title, accent, fileLabel) = when (kind) {
-        "image" -> Quad(AnebGlyph.Image, "高清图片多模态分析", colors.excellent, "SZBAY_MAVIC3_4K_0914.jpg")
-        "document" -> Quad(AnebGlyph.Document, "长文档结构化解析", colors.brand2, "2026_Q3_5G_AI_Network_SLA_Report.pdf")
-        else -> Quad(AnebGlyph.Chat, "企业架构知识问答流", colors.brand, "Architecture_Context_v3.md")
+    val taskSlot = liveProgress?.currentTaskIndex ?: 0
+    // 每次重新测试或同批多个同模态任务时自动轮换真实业务样本（默认首轮优先展示深圳湾 4K 航拍图）
+    val visionCase = RealisticScenarioCatalog.multimodalVisionCases[
+        (1 + runRotation + taskSlot / 3) % RealisticScenarioCatalog.multimodalVisionCases.size,
+    ]
+    val docCase = RealisticScenarioCatalog.multimodalDocCases[
+        (runRotation + taskSlot) % RealisticScenarioCatalog.multimodalDocCases.size,
+    ]
+    val textCase = RealisticScenarioCatalog.multimodalTextCases[
+        (runRotation + taskSlot) % RealisticScenarioCatalog.multimodalTextCases.size,
+    ]
+    val (glyph, title, accent) = when (kind) {
+        "image" -> Triple(AnebGlyph.Image, "高清图片多模态分析", colors.excellent)
+        "document" -> Triple(AnebGlyph.Document, "长文档结构化解析", colors.brand2)
+        else -> Triple(AnebGlyph.Chat, "企业架构知识问答流", colors.brand)
     }
 
     val totalUpload = liveProgress?.currentUploadBytes ?: when (kind) {
@@ -642,15 +661,19 @@ private fun FixedHeightMultimodalWorkspace(
     val isStreaming = running && liveProgress?.currentStep == "stream"
 
     val fullCopy = when (kind) {
-        "image" -> MULTIMODAL_IMAGE_STREAM_COPY
-        "document" -> MULTIMODAL_DOC_STREAM_COPY
-        else -> MULTIMODAL_TEXT_STREAM_COPY
+        "image" -> visionCase.analysisBody
+        "document" -> docCase.analysisBody
+        else -> textCase.answerBody
     }
+    // 按真实 streamedTokens / plannedTokens 1:1 比例同步展开，使吐字节奏与上方实时 tok/s 波形严格一致
     val revealedChars = when {
         liveProgress == null && result != null -> fullCopy.length
         liveProgress == null -> 0
-        liveProgress.currentStep == "stream" && liveProgress.streamedTokens > 0 ->
-            (liveProgress.streamedTokens * 6).coerceAtMost(fullCopy.length)
+        liveProgress.currentStep == "stream" && liveProgress.streamedTokens > 0 -> {
+            val planned = liveProgress.plannedTokens.coerceAtLeast(1)
+            val ratio = (liveProgress.streamedTokens.toDouble() / planned).coerceIn(0.0, 1.0)
+            (ratio * fullCopy.length).roundToInt().coerceIn(1, fullCopy.length)
+        }
         liveProgress.currentStep == "download" || liveProgress.currentStep == "done" -> fullCopy.length
         else -> 0
     }
@@ -728,10 +751,10 @@ private fun FixedHeightMultimodalWorkspace(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-            // 1) 真实业务载荷媒体卡（4K 航拍实景图 / 企业 SLA PDF 文档页 / 架构提问卡片）
+            // 1) 真实业务载荷媒体卡（4K 航拍/AOI/机房实拍图 / 企业 PDF 文档页 / 架构提问卡片）
             when (kind) {
-                "image" -> RealDroneImagePayloadCard(
-                    fileName = fileLabel,
+                "image" -> RealVisionImagePayloadCard(
+                    visionCase = visionCase,
                     uploadedBytes = uploaded,
                     totalBytes = totalUpload,
                     uploadFrac = uploadFrac,
@@ -741,7 +764,7 @@ private fun FixedHeightMultimodalWorkspace(
                     accent = accent,
                 )
                 "document" -> RealDocumentPayloadCard(
-                    fileName = fileLabel,
+                    docCase = docCase,
                     uploadedBytes = uploaded,
                     totalBytes = totalUpload,
                     uploadFrac = uploadFrac,
@@ -750,6 +773,7 @@ private fun FixedHeightMultimodalWorkspace(
                     accent = accent,
                 )
                 else -> RealTextPromptCard(
+                    textCase = textCase,
                     uploadedBytes = uploaded,
                     totalBytes = totalUpload,
                     accent = accent,
@@ -772,14 +796,18 @@ private fun FixedHeightMultimodalWorkspace(
                 ) {
                     Text(
                         when (kind) {
-                            "image" -> "4K 无人机航拍多模态视觉解译报告"
-                            "document" -> "48 页 SLA 报告结构化审计结论"
-                            else -> "架构专家多轮流式输出"
+                            "image" -> visionCase.reportTitle
+                            "document" -> docCase.reportTitle
+                            else -> textCase.reportTitle
                         },
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         if (liveProgress != null && liveProgress.plannedTokens > 0) {
                             "${liveProgress.streamedTokens} / ${liveProgress.plannedTokens} tok"
@@ -811,7 +839,7 @@ private fun FixedHeightMultimodalWorkspace(
                 } else {
                     Text(
                         when {
-                            !running -> "点击上方「开始实战」后，本视窗将在固定高度内依次演示：企业问答流 → 1.00 MB 长文档上传解析 → 5.00 MB 深圳湾 4K 航拍图上传与多模态视觉识别。"
+                            !running -> "点击上方「开始实战」后，每次测试自动轮换不同真实业务样本，在固定高度内连续实测：企业架构问答 → 1.00 MB 文档审计 → 5.00 MB 4K 实景多模态视觉分析。"
                             isUploading -> "正在上传真实多模态载荷（已传 ${formatBytes(uploaded)} / ${formatBytes(totalUpload)}），上传完毕立即触发流式视觉/语义解析…"
                             else -> "多模态载荷已送达推理节点，正在等待首字 TTFT 返回…"
                         },
@@ -826,8 +854,8 @@ private fun FixedHeightMultimodalWorkspace(
 }
 
 @Composable
-private fun RealDroneImagePayloadCard(
-    fileName: String,
+private fun RealVisionImagePayloadCard(
+    visionCase: RealisticScenarioCatalog.MultimodalVisionCase,
     uploadedBytes: Long,
     totalBytes: Long,
     uploadFrac: Float,
@@ -839,12 +867,12 @@ private fun RealDroneImagePayloadCard(
     val colors = AnebTheme.colors
     val reducedMotion = LocalReducedMotion.current
     val scanPos = if (isUploading && !reducedMotion) {
-        val t = rememberInfiniteTransition(label = "drone-scan")
+        val t = rememberInfiniteTransition(label = "vision-scan")
         t.animateFloat(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(tween(1150, easing = LinearEasing), RepeatMode.Reverse),
-            label = "drone-scan-y",
+            label = "vision-scan-y",
         ).value
     } else {
         uploadFrac
@@ -859,8 +887,8 @@ private fun RealDroneImagePayloadCard(
                 .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
         ) {
             Image(
-                painter = painterResource(id = R.drawable.multimodal_city_drone),
-                contentDescription = "深圳湾 4K 无人机航拍多模态分析原图",
+                painter = painterResource(id = visionCase.imageRes),
+                contentDescription = visionCase.headerTitle,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -878,34 +906,24 @@ private fun RealDroneImagePayloadCard(
                     drawLine(accent, Offset(0f, laserY), Offset(w, laserY), strokeWidth = 2.dp.toPx())
                 } else if (showVisionOverlay) {
                     val stroke = Stroke(width = 1.5.dp.toPx())
-                    // 标注 1：后海/南山超高层建筑群
-                    drawRoundRect(
-                        color = colors.brand,
-                        topLeft = Offset(w * 0.25f, h * 0.08f),
-                        size = Size(w * 0.24f, h * 0.42f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = stroke,
-                    )
-                    // 标注 2：跨海斜拉桥主通道
-                    drawRoundRect(
-                        color = colors.excellent,
-                        topLeft = Offset(w * 0.56f, h * 0.40f),
-                        size = Size(w * 0.40f, h * 0.54f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = stroke,
-                    )
-                    // 标注 3：滨海生态绿廊与快速路
-                    drawRoundRect(
-                        color = colors.fair,
-                        topLeft = Offset(w * 0.03f, h * 0.50f),
-                        size = Size(w * 0.34f, h * 0.44f),
-                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                        style = stroke,
-                    )
+                    visionCase.boxes.forEach { b ->
+                        val boxColor = when (b.tone) {
+                            "fair" -> colors.fair
+                            "brand" -> colors.brand
+                            else -> colors.excellent
+                        }
+                        drawRoundRect(
+                            color = boxColor,
+                            topLeft = Offset(w * b.x, h * b.y),
+                            size = Size(w * b.w, h * b.h),
+                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                            style = stroke,
+                        )
+                    }
                 }
             }
             Text(
-                "$fileName · ${formatBytes(totalBytes)}",
+                "${visionCase.fileName} · ${formatBytes(totalBytes)}",
                 fontSize = 8.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.SemiBold,
@@ -921,8 +939,8 @@ private fun RealDroneImagePayloadCard(
                 when {
                     isUploading -> "已上传 ${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}" +
                         (liveMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty())
-                    showVisionOverlay -> "检出 3 类空间要素 · 置信 99.1%"
-                    else -> "4K 航拍多模态样本 · 3840×2160"
+                    showVisionOverlay -> visionCase.detectionSummary
+                    else -> "4K 实景多模态样本 · ${visionCase.resolutionTag}"
                 },
                 fontSize = 8.sp,
                 fontFamily = FontFamily.Monospace,
@@ -955,7 +973,7 @@ private fun RealDroneImagePayloadCard(
 
 @Composable
 private fun RealDocumentPayloadCard(
-    fileName: String,
+    docCase: RealisticScenarioCatalog.MultimodalDocCase,
     uploadedBytes: Long,
     totalBytes: Long,
     uploadFrac: Float,
@@ -989,9 +1007,9 @@ private fun RealDocumentPayloadCard(
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(fileName, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(docCase.fileName, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    "48 页 · 含 12 张 SLA 表格与 3 组核心网时延附件 · ${formatBytes(totalBytes)}",
+                    "${docCase.metaSummary} · ${formatBytes(totalBytes)}",
                     fontSize = 8.5.sp,
                     color = colors.muted,
                     modifier = Modifier.padding(top = 2.dp),
@@ -1001,7 +1019,7 @@ private fun RealDocumentPayloadCard(
                         "已上传 ${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)}" +
                             (liveMbps?.let { " · ${String.format(Locale.ROOT, "%.1f", it)} Mbps" }.orEmpty())
                     } else {
-                        "全文切片 184 段落 · 向量索引完成"
+                        docCase.indexedSummary
                     },
                     fontSize = 8.5.sp,
                     fontFamily = FontFamily.Monospace,
@@ -1030,6 +1048,7 @@ private fun RealDocumentPayloadCard(
 
 @Composable
 private fun RealTextPromptCard(
+    textCase: RealisticScenarioCatalog.MultimodalTextCase,
     uploadedBytes: Long,
     totalBytes: Long,
     accent: Color,
@@ -1044,7 +1063,7 @@ private fun RealTextPromptCard(
             .padding(horizontal = 11.dp, vertical = 8.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("企业网络架构师提问", fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold, color = accent)
+            Text(textCase.roleTitle, fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold, color = accent)
             Text(
                 "Prompt ${formatBytes(uploadedBytes.coerceAtLeast(totalBytes))}",
                 fontSize = 8.sp,
@@ -1053,7 +1072,7 @@ private fun RealTextPromptCard(
             )
         }
         Text(
-            "对比 QUIC/HTTP3 与 HTTP/2 在 5% 随机丢包 + 150ms 跨境时延下对大模型 SSE 首字 TTFT 与长回答卡顿的影响，并给出客户端自动降级方案。",
+            textCase.prompt,
             fontSize = 10.sp,
             lineHeight = 14.5.sp,
             color = colors.ink,
@@ -1253,8 +1272,6 @@ private fun ModalityBreakdownCard(tasks: List<BehaviorTraceRunner.TaskExecutionO
     }
 }
 
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
-
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_048_576L -> String.format(Locale.ROOT, "%.2f MB", bytes / 1_048_576.0)
     bytes >= 1_024L -> String.format(Locale.ROOT, "%.0f KB", bytes / 1_024.0)
@@ -1263,26 +1280,3 @@ private fun formatBytes(bytes: Long): String = when {
 
 private val DEFAULT_20_TASK_KINDS =
     List(8) { "text" } + List(6) { "document" } + List(6) { "image" }
-
-private const val MULTIMODAL_TEXT_STREAM_COPY =
-    "一、5% 丢包 + 150ms 时延下的传输层实测差异\n" +
-        "1. HTTP/2 over TCP：单条 TCP 连接在 5% 随机丢包下触发队头阻塞（HOL Blocking），单个丢包即可导致后续 6–12 个 SSE Token 被内核缓存拖住 300–450ms，呈现典型「锯齿状批量吐字」。\n" +
-        "2. QUIC / HTTP3：在单流 SSE 场景下可缩短 1-RTT 建连时间，但若运营商 UDP 限速或中间盒丢弃大 MTU 报文，仍会出现首字超时与连接迁移动荡。\n\n" +
-        "二、生产级客户端自动降级策略\n" +
-        "• 采用 Happy Eyeballs v3 并行竞速（QUIC 优先，250ms 未完成握手立即回退 H2）；\n" +
-        "• 开启流式心跳看门狗：单次 SSE 间隔 > 2.5s 触发无感重连并携带 last_event_id 续传。"
-
-private const val MULTIMODAL_DOC_STREAM_COPY =
-    "一、48 页 SLA 协议风险审计结论（共抽取 3 处高优偏差）\n" +
-        "1. 条款 §4.2.1（AI 对话首字门限）：合同约定峰值期 TTFT P95 ≤ 1,200ms，但华南晚高峰实测在 1,480–1,720ms 区间，存在月度服务费 5% 违约扣减风险。\n" +
-        "2. 条款 §6.3（多模态上行带宽保障）：5MB 图片上行门限未区分 5G 室内弱覆盖场景，建议补充「RSRP < -105 dBm 豁免条款」或接入边缘 POP 就近汇聚。\n" +
-        "3. 条款 §8.1（实时语音口到耳红线）：已明确 400ms 否决线与 M7 长静默门限，与 ANEB Profile 4 实测口径 100% 对齐，可直接作为第三方验收依据。"
-
-private const val MULTIMODAL_IMAGE_STREAM_COPY =
-    "1. 航拍场景空间要素识别（深圳湾 / 后海核心区）\n" +
-        "• 右下主通道：双向多车道跨海斜拉桥（双主塔结构），桥面车流呈中低密度顺畅通行状态，未发现拥堵积压与异常停靠。\n" +
-        "• 左中超高层集群：高密度玻璃幕墙商务塔楼群沿海岸线阶梯分布，黄昏低角度逆光在幕墙与水面形成高反光区域，对低空无人机光学避障构成轻度眩光干扰。\n" +
-        "• 左侧滨海绿廊与快速路：双向快速路与海滨慢行步道隔离清晰，绿化带连续无裸露施工扰动。\n\n" +
-        "2. 5G-A / 低空通感网络覆盖评估建议\n" +
-        "• 跨海桥面与滨海开阔水域具备极佳无线视距（LoS），建议采用波束赋形抑制海面多径反射并防止跨区乒乓切换；\n" +
-        "• 超高层玻璃幕墙背侧易出现 15–22 dB 阴影衰落，建议无人机航线保持距建筑群外立面 ≥ 120m 以确保 4K 图传上行稳定。"

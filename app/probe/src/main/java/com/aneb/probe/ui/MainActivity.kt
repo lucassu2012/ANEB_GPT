@@ -76,6 +76,7 @@ import com.aneb.probe.engine.PrototypeReleaseProbeBoundary
 import com.aneb.probe.engine.ScenarioProfile
 import com.aneb.probe.engine.SpecialRunSession
 import com.aneb.probe.engine.TestEngine
+import com.aneb.probe.engine.VideoStreamingEngine
 import com.aneb.probe.engine.VoiceRunner
 import com.aneb.probe.net.AnebClient
 import com.aneb.probe.net.ReachabilityProbe
@@ -217,6 +218,7 @@ class MainActivity : ComponentActivity() {
         data object MultimodalTheater : Screen
         data object Voice : Screen
         data object AppCompanion : Screen
+        data object VideoTheater : Screen
         data object Research : Screen
         data object Servers : Screen
         data object PrototypeMode : Screen
@@ -842,6 +844,7 @@ class MainActivity : ComponentActivity() {
                         when (val current = screen) {
                             is Screen.Share -> screen = current.returnTo
                             is Screen.Research -> screen = Screen.AppCompanion
+                            is Screen.VideoTheater -> screen = Screen.AppCompanion
                             is Screen.PrototypeResult -> {
                                 val route = prototypeCampaignResultNavigator.dismiss(
                                     PrototypeCampaignResultRouteState(
@@ -1143,7 +1146,14 @@ class MainActivity : ComponentActivity() {
                                     onOpenVoice = { screen = Screen.Voice },
                                     onOpenReachBoard = { screen = Screen.ReachBoard },
                                     onOpenResearchRecords = { screen = Screen.Research },
+                                    onOpenVideoTheater = { screen = Screen.VideoTheater },
                                     onBack = { screen = Screen.Home },
+                                )
+                                is Screen.VideoTheater -> VideoTheaterRoute(
+                                    serverUrl = serverUrl,
+                                    nodeLabel = ProbeNodeCatalog.labelForUrl(serverUrl),
+                                    otherRunActive = running,
+                                    onBack = { screen = Screen.AppCompanion },
                                 )
                                 is Screen.Research -> com.aneb.probe.ui.research.ResearchRecordsScreen(
                                     onBack = { screen = Screen.AppCompanion },
@@ -1346,6 +1356,7 @@ class MainActivity : ComponentActivity() {
         onOpenVoice: () -> Unit,
         onOpenReachBoard: () -> Unit,
         onOpenResearchRecords: () -> Unit,
+        onOpenVideoTheater: () -> Unit,
         onBack: () -> Unit,
     ) {
         val data by produceState(initialValue = AppCompanionData(), running, voiceHistoryVersion) {
@@ -1373,6 +1384,71 @@ class MainActivity : ComponentActivity() {
             onOpenReachBoard = onOpenReachBoard,
             onOpenResearchRecords = onOpenResearchRecords,
             onBack = onBack,
+            onOpenVideoTheater = onOpenVideoTheater,
+        )
+    }
+
+    @Composable
+    private fun VideoTheaterRoute(
+        serverUrl: String,
+        nodeLabel: String,
+        otherRunActive: Boolean,
+        onBack: () -> Unit,
+    ) {
+        val scope = rememberCoroutineScope()
+        val engine = remember { VideoStreamingEngine() }
+        var job by remember { mutableStateOf<Job?>(null) }
+        var videoRunning by remember { mutableStateOf(false) }
+        var snapshot by remember { mutableStateOf<VideoStreamingEngine.LiveSnapshot?>(null) }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        VideoStreamingTheaterScreen(
+            nodeLabel = nodeLabel,
+            running = videoRunning,
+            otherRunActive = otherRunActive,
+            snapshot = snapshot,
+            error = error,
+            onStart = {
+                if (!videoRunning && !otherRunActive) {
+                    if (!hasActiveNetwork()) {
+                        error = "当前没有可用网络。连接 WiFi 或蜂窝网络后再试。"
+                        return@VideoStreamingTheaterScreen
+                    }
+                    job?.cancel()
+                    error = null
+                    snapshot = null
+                    videoRunning = true
+                    job = scope.launch {
+                        try {
+                            val pair = ReachabilityProbe.deriveE01Pair(serverUrl)
+                            val reach = if (pair == null) null else {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { ReachabilityProbe().probeDual(pair.first, pair.second) }.getOrNull()
+                                }
+                            }
+                            val targetBase = ReachabilityProbe.preferredMeasureBase(serverUrl, reach)
+                            engine.run(
+                                serverBase = targetBase,
+                                runId = "vid-${UUID.randomUUID()}",
+                            ).collect { snap ->
+                                snapshot = snap
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = "短视频流压测失败：${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            videoRunning = false
+                        }
+                    }
+                }
+            },
+            onCancel = { job?.cancel() },
+            onSwipeNext = { engine.requestSwipeNext() },
+            onBack = {
+                job?.cancel()
+                onBack()
+            },
         )
     }
 
