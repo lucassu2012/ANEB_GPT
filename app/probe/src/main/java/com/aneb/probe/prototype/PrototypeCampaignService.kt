@@ -79,7 +79,7 @@ internal fun buildPrototypeCampaignNotification(
     cancelLabel: CharSequence = context.getString(R.string.probe_run_cancel),
 ): Notification {
     val builder = NotificationCompat.Builder(context, "prototype_campaign")
-        .setSmallIcon(R.drawable.ic_launcher_foreground)
+        .setSmallIcon(R.drawable.ic_launcher_monochrome)
         .setContentTitle(title)
         .setContentText("Prototype Quick 正在运行")
         .setOngoing(true)
