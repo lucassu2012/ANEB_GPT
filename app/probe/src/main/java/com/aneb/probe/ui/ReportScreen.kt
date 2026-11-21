@@ -95,7 +95,7 @@ fun ReportScreen(
                 item { SectionLabel("敏感度发现") }
                 items(
                     count = analysis.sensitivity.size,
-                    key = { i -> "${analysis.sensitivity[i].driver}-${analysis.sensitivity[i].metric}" },
+                    key = { i -> "sens-${analysis.sensitivity[i].driver}-${analysis.sensitivity[i].metric}-$i" },
                 ) { i ->
                     FindingRow(ReportFormat.findingLine(analysis.sensitivity[i]))
                 }
@@ -103,7 +103,7 @@ fun ReportScreen(
 
             // 其余结论（去头条）
             item { SectionLabel("结论明细") }
-            items(count = analysis.conclusions.size, key = { it }) { i ->
+            items(count = analysis.conclusions.size, key = { i -> "conclusion-$i" }) { i ->
                 ConclusionRow(i + 1, analysis.conclusions[i])
             }
 

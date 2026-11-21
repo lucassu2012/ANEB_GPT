@@ -2,16 +2,13 @@ package com.aneb.probe.ui
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,15 +20,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,21 +37,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aneb.probe.BuildConfig
-import com.aneb.probe.data.TestRun
 import com.aneb.probe.data.BasicSpeedResultEntity
+import com.aneb.probe.data.TestRun
+import com.aneb.probe.data.VoiceResultEntity
 import com.aneb.probe.engine.AnebTestMode
+import com.aneb.probe.ui.components.AnebGradientCard
 import com.aneb.probe.ui.components.AnebWordmark
 import com.aneb.probe.ui.components.pressable
 import com.aneb.probe.ui.theme.AnebPalette
 import com.aneb.probe.ui.theme.AnebTheme
-import com.aneb.probe.ui.theme.AnebType
 import com.aneb.probe.ui.theme.Grade
 import com.aneb.probe.ui.theme.LocalReducedMotion
 import java.text.SimpleDateFormat
@@ -74,7 +69,12 @@ internal fun shouldShowPrototypeEntry(
     isDebug: Boolean = BuildConfig.DEBUG,
 ): Boolean = isPrototypeRelease || isPrototypeEngineering || isDebug
 
-/** 首页：原生复刻 `ANEB_UI/screens/home.html` 的 idle 状态与三档网络抽屉。 */
+/**
+ * 首页：AI 与热门应用网络体验一级工作台。
+ * 首屏直接暴露核心模式（AI 对话/编码 · 抗负载响应 · 基础/抖音）与四大特色直达入口
+ * （实时 AI 语音 Profile 4 · 抖音/豆包体验伴侣 · 多模态 AI 轨迹 v2 · 主流 AI 直连测通），
+ * 摆脱普通 Speedtest 单纯测带宽的局限。
+ */
 @Composable
 fun HomeScreen(
     lastRun: TestRun?,
@@ -92,30 +92,26 @@ fun HomeScreen(
     onOpenLastBasicResult: (String) -> Unit,
     onOpenVoice: (() -> Unit)? = null,
     showPrototypeEntry: Boolean = shouldShowPrototypeEntry(),
+    lastVoiceRun: VoiceResultEntity? = null,
+    onOpenAppCompanion: (() -> Unit)? = null,
+    onOpenProfiles: (() -> Unit)? = null,
+    onOpenReachBoard: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
-    var sheetSnap by remember { mutableStateOf(SheetSnap.Collapsed) }
-    var dragTotal by remember { mutableFloatStateOf(0f) }
-    var dragDeltaDp by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
-    val density = LocalDensity.current
-    val collapsedHeight = 150.dp
-    val halfHeight = 250.dp
-    val expandedHeight = 340.dp
-    val anchorHeight = when (sheetSnap) {
-        SheetSnap.Collapsed -> collapsedHeight
-        SheetSnap.Half -> halfHeight
-        SheetSnap.Expanded -> expandedHeight
+    val voiceBadge = remember(lastVoiceRun) {
+        if (lastVoiceRun == null) {
+            "豆包语音同口径"
+        } else {
+            val (mouthEar, _) = VoiceFormat.primaryMouthEar(lastVoiceRun.mouthEarProxyMs, lastVoiceRun.mouthEarBudgetMs)
+            mouthEar?.takeIf { it.isFinite() }?.let { "口到耳 ${it.roundToInt()}ms" } ?: "已测 Profile 4"
+        }
     }
-    val animatedSheetHeight by animateDpAsState(
-        targetValue = anchorHeight,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = 430f),
-        label = "home-network-sheet",
-    )
-    val sheetHeight = if (isDragging) {
-        (anchorHeight + dragDeltaDp.dp).coerceIn(collapsedHeight, expandedHeight)
-    } else {
-        animatedSheetHeight
+    val appBadge = remember(lastBasicRun, lastRun) {
+        when {
+            lastBasicRun?.downloadMbps != null -> "抖音·${BusinessExperienceEvaluator.evaluateDouyin(lastBasicRun).badge}"
+            lastRun?.aqsScore != null -> "豆包·${BusinessExperienceEvaluator.evaluateDoubaoChat(lastRun).badge}"
+            else -> "校准模型+真机"
+        }
     }
 
     Box(
@@ -123,202 +119,279 @@ fun HomeScreen(
             .fillMaxSize()
             .background(AnebPalette.Dark.DeepBackground),
     ) {
-        AnebWordmark(
-            Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 16.dp),
-        )
-        if (showPrototypeEntry) {
-            Text(
-                "PROTOTYPE",
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp,
-                color = colors.brand,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 14.dp, end = 16.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0x1F32D9F5))
-                    .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
-                    .pressable(onClick = onOpenPrototype)
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-            )
-        }
-
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 92.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(78.dp))
+            // ---- 顶栏 ----
+            Box(Modifier.fillMaxWidth().height(50.dp)) {
+                AnebWordmark(Modifier.align(Alignment.Center))
+                if (showPrototypeEntry) {
+                    Text(
+                        "PROTOTYPE",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = colors.brand,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color(0x1F32D9F5))
+                            .border(1.dp, colors.brand.copy(alpha = 0.35f), RoundedCornerShape(999.dp))
+                            .pressable(onClick = onOpenPrototype)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
             TestModeSwitch(
                 selected = testMode,
                 enabled = !running,
                 onSelect = onTestModeChange,
             )
-            Spacer(Modifier.height(27.dp))
+
+            Spacer(Modifier.height(18.dp))
             IdleStartRing(running = running, onStart = onStart)
+
             Text(
-                if (testMode == AnebTestMode.NETWORK_RESPONSIVENESS) {
-                    "分别测量空闲、下载及上传期间的响应性；不产生综合分"
-                } else if (testMode == AnebTestMode.NETWORK_BASIC) {
-                    "测试下载、上传、Ping、抖动与应用层请求失败"
-                } else {
-                    "评估网络是否适合 AI 对话、编码和文件上传"
+                when (testMode) {
+                    AnebTestMode.NETWORK_RESPONSIVENESS ->
+                        "实测空闲、下载与上传满载时的延迟膨胀（边传边聊 AI 卡不卡）；不产生综合分"
+                    AnebTestMode.NETWORK_BASIC ->
+                        "测下载、上传、Ping、抖动，并按实机校准拐点评估抖音 1080P 与 6 大 AI 场景"
+                    AnebTestMode.TOKEN_EXPERIENCE ->
+                        "评估网络是否适合 AI 对话、编码、豆包流畅吐字和文件上传"
                 },
                 fontSize = 10.5.sp,
                 lineHeight = 16.sp,
                 textAlign = TextAlign.Center,
-                color = colors.faint,
-                modifier = Modifier.padding(top = 13.dp, start = 34.dp, end = 34.dp),
+                color = colors.muted,
+                modifier = Modifier.padding(top = 11.dp, start = 14.dp, end = 14.dp),
             )
-        }
 
-        notice?.let {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(start = 20.dp, end = 20.dp, bottom = sheetHeight + 10.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color(0xF20D121B))
-                    .border(1.dp, colors.hairline, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(colors.fair))
-                Spacer(Modifier.width(8.dp))
-                Text(it, fontSize = 10.sp, color = colors.ink)
+            notice?.let {
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xF2121829))
+                        .border(1.dp, colors.fair.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(colors.fair))
+                    Spacer(Modifier.width(8.dp))
+                    Text(it, fontSize = 10.5.sp, color = colors.ink)
+                }
             }
-        }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(sheetHeight)
-                .padding(horizontal = 8.dp)
-                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF191D39), Color(0xFF0C0F22)),
-                    ),
+            // ---- ANEB 特色体验入口（首屏直达，区别于传统 Speedtest）----
+            Spacer(Modifier.height(18.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "ANEB 特色体验实测",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.ink,
                 )
-                .border(
-                    1.dp,
-                    Color(0x1F9DB4DA),
-                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-                ),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(22.dp)
-                    .pointerInput(sheetSnap) {
-                        detectVerticalDragGestures(
-                            onDragStart = {
-                                dragTotal = 0f
-                                dragDeltaDp = 0f
-                                isDragging = true
-                            },
-                            onVerticalDrag = { change, amount ->
-                                change.consume()
-                                dragTotal += amount
-                                dragDeltaDp = -dragTotal / density.density
-                            },
-                            onDragEnd = {
-                                val releasedHeight = (anchorHeight + dragDeltaDp.dp)
-                                    .coerceIn(collapsedHeight, expandedHeight)
-                                sheetSnap = when {
-                                    releasedHeight < (collapsedHeight + halfHeight) / 2f -> SheetSnap.Collapsed
-                                    releasedHeight < (halfHeight + expandedHeight) / 2f -> SheetSnap.Half
-                                    else -> SheetSnap.Expanded
-                                }
-                                isDragging = false
-                                dragTotal = 0f
-                                dragDeltaDp = 0f
-                            },
-                            onDragCancel = {
-                                isDragging = false
-                                dragTotal = 0f
-                                dragDeltaDp = 0f
-                            },
+                Text(
+                    "AI 语音 · 抖音/豆包 · 多模态",
+                    fontSize = 9.5.sp,
+                    color = colors.faint,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                FeatureQuickCard(
+                    symbol = "◉",
+                    accent = colors.excellent,
+                    title = "实时 AI 语音",
+                    badge = voiceBadge,
+                    subtitle = "Profile 4 · 口到耳 / M7 静默",
+                    enabled = onOpenVoice != null,
+                    onClick = { onOpenVoice?.invoke() },
+                    modifier = Modifier.weight(1f),
+                )
+                FeatureQuickCard(
+                    symbol = "▶",
+                    accent = colors.brand,
+                    title = "抖音 / 豆包体验",
+                    badge = appBadge,
+                    subtitle = "实测拐点评估 + 拉起真机对照",
+                    enabled = onOpenAppCompanion != null,
+                    onClick = { onOpenAppCompanion?.invoke() },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(9.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                FeatureQuickCard(
+                    symbol = "◇",
+                    accent = colors.brand2,
+                    title = "多模态 AI 轨迹",
+                    badge = "v2 20任务",
+                    subtitle = "全方案目录 · 全部可直接发起",
+                    enabled = onOpenProfiles != null,
+                    onClick = { onOpenProfiles?.invoke() },
+                    modifier = Modifier.weight(1f),
+                )
+                FeatureQuickCard(
+                    symbol = "⌁",
+                    accent = colors.fair,
+                    title = "主流 AI 直连测通",
+                    badge = "REACH",
+                    subtitle = "豆包 · DeepSeek · Kimi 握手",
+                    enabled = onOpenReachBoard != null,
+                    onClick = { onOpenReachBoard?.invoke() },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // ---- 节点与上次成绩状态卡 ----
+            Spacer(Modifier.height(12.dp))
+            AnebGradientCard(Modifier.fillMaxWidth(), radius = 18.dp) {
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .pressable(onClick = onOpenServer)
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        NetworkGlyph()
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                connectionLabel,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.ink,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                "$nodeLabel · 真实测试节点",
+                                fontSize = 10.sp,
+                                color = colors.muted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            "更换节点 ›",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.brand,
                         )
                     }
-                    .pressable(onClick = { sheetSnap = sheetSnap.next() }),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(Modifier.width(36.dp).height(3.dp).clip(CircleShape).background(Color(0x52CAD6EA)))
-            }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(53.dp)
-                    .pressable(onClick = { sheetSnap = sheetSnap.next() })
-                    .padding(start = 14.dp, end = 13.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                NetworkGlyph()
-                Spacer(Modifier.width(9.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(connectionLabel, fontSize = 14.sp, fontWeight = FontWeight(450), color = colors.ink, maxLines = 1)
-                    Text("$nodeLabel · 真实测试节点", fontSize = 10.sp, color = colors.muted, maxLines = 1)
-                }
-                Text(if (sheetSnap == SheetSnap.Expanded) "⌄" else "⌃", fontSize = 14.sp, color = colors.muted)
-            }
-
-            if (sheetSnap != SheetSnap.Collapsed) {
-                SheetDetailRow(
-                    symbol = "◎",
-                    label = "测试节点",
-                    value = nodeLabel,
-                    action = "更换",
-                    onAction = onOpenServer,
-                )
-                if (testMode.isBasic && lastBasicRun != null) {
-                    val down = lastBasicRun.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
-                    val up = lastBasicRun.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
-                    SheetDetailRow(
-                        symbol = "↕",
-                        label = if (lastBasicRun.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID)
-                            "上次负载响应性" else "上次基础测速",
-                        value = "↓ $down  ↑ $up Mbps",
-                        action = "查看",
-                        onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
-                    )
-                } else if (lastRun != null && testMode == AnebTestMode.TOKEN_EXPERIENCE) {
-                    val grade = lastRun.aqsScore?.let { Grade.fromAqsScore(it) }
-                    SheetDetailRow(
-                        symbol = "↗",
-                        label = "上次成绩",
-                        value = "${lastRun.aqsScore?.roundToInt() ?: "—"} · ${grade?.labelFriendly ?: "未完成"}",
-                        action = "查看",
-                        onAction = { onOpenLastResult(lastRun.runId) },
-                    )
-                } else if (sheetSnap == SheetSnap.Expanded) {
-                    SheetDetailRow(
-                        symbol = if (testMode == AnebTestMode.NETWORK_BASIC) "↕" else "—",
-                        label = if (testMode == AnebTestMode.NETWORK_BASIC) "测试项目" else "上次成绩",
-                        value = if (testMode == AnebTestMode.NETWORK_BASIC) {
-                            "下载 · 上传 · Ping · 抖动"
-                        } else {
-                            "完成首次测试后显示"
-                        },
-                        action = null,
-                        onAction = {},
-                    )
-                }
-                if (sheetSnap == SheetSnap.Expanded && onOpenVoice != null) {
-                    SheetDetailRow(
-                        symbol = "◉",
-                        label = "实时语音测量（Profile 4）",
-                        value = "口到耳 · 帧抖动 · M7 静默",
-                        action = "进入",
-                        onAction = onOpenVoice,
-                    )
+                    if (testMode.isBasic && lastBasicRun != null) {
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(colors.hairline))
+                        val down = lastBasicRun.downloadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+                        val up = lastBasicRun.uploadMbps?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—"
+                        SheetDetailRow(
+                            symbol = "↕",
+                            label = if (lastBasicRun.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID)
+                                "上次抗负载响应性" else "上次基础 / 抖音测速",
+                            value = "↓ $down  ↑ $up Mbps",
+                            action = "查看",
+                            onAction = { onOpenLastBasicResult(lastBasicRun.runId) },
+                        )
+                    } else if (lastRun != null && testMode == AnebTestMode.TOKEN_EXPERIENCE) {
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(colors.hairline))
+                        val grade = lastRun.aqsScore?.let { Grade.fromAqsScore(it) }
+                        SheetDetailRow(
+                            symbol = "↗",
+                            label = "上次 AI 体验成绩",
+                            value = "${lastRun.aqsScore?.roundToInt() ?: "—"} 分 · ${grade?.labelFriendly ?: "未完成"}",
+                            action = "查看",
+                            onAction = { onOpenLastResult(lastRun.runId) },
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FeatureQuickCard(
+    symbol: String,
+    accent: Color,
+    title: String,
+    badge: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xE0171D38), Color(0xE80C1023)),
+                ),
+            )
+            .border(1.dp, accent.copy(alpha = if (enabled) 0.28f else 0.12f), RoundedCornerShape(16.dp))
+            .pressable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(symbol, fontSize = 13.sp, color = accent)
+            Text(
+                badge,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.13f))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(
+            title,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            subtitle,
+            fontSize = 9.sp,
+            lineHeight = 13.sp,
+            color = colors.muted,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 3.dp),
+        )
     }
 }
 
@@ -329,6 +402,11 @@ private fun TestModeSwitch(
     onSelect: (AnebTestMode) -> Unit,
 ) {
     val colors = AnebTheme.colors
+    val orderedModes = listOf(
+        AnebTestMode.TOKEN_EXPERIENCE to "AI 对话/编码",
+        AnebTestMode.NETWORK_RESPONSIVENESS to "抗负载响应",
+        AnebTestMode.NETWORK_BASIC to "基础/抖音",
+    )
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
@@ -336,10 +414,10 @@ private fun TestModeSwitch(
             .border(1.dp, colors.hairline, RoundedCornerShape(999.dp))
             .padding(3.dp),
     ) {
-        AnebTestMode.entries.forEach { mode ->
+        orderedModes.forEach { (mode, displayLabel) ->
             val active = mode == selected
             Text(
-                mode.label,
+                displayLabel,
                 fontSize = 10.sp,
                 fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (active) colors.ink else colors.muted,
@@ -348,22 +426,14 @@ private fun TestModeSwitch(
                     .background(if (active) colors.brand.copy(alpha = 0.16f) else Color.Transparent)
                     .border(
                         1.dp,
-                        if (active) colors.brand.copy(alpha = 0.28f) else Color.Transparent,
+                        if (active) colors.brand.copy(alpha = 0.30f) else Color.Transparent,
                         RoundedCornerShape(999.dp),
                     )
                     .pressable(enabled = enabled, onClick = { onSelect(mode) })
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = 13.dp, vertical = 7.dp),
             )
         }
     }
-}
-
-private enum class SheetSnap {
-    Collapsed, Half, Expanded;
-
-    fun up() = when (this) { Collapsed -> Half; Half -> Expanded; Expanded -> Expanded }
-    fun down() = when (this) { Expanded -> Half; Half -> Collapsed; Collapsed -> Collapsed }
-    fun next() = when (this) { Collapsed -> Half; Half -> Expanded; Expanded -> Collapsed }
 }
 
 @Composable
@@ -400,13 +470,13 @@ private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
     }
     Box(
         modifier = Modifier
-            .size(198.dp)
+            .size(176.dp)
             .scale(breath)
             .pressable(onClick = onStart, enabled = !running),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
-            val stroke = 1.25.dp.toPx()
+            val stroke = 1.35.dp.toPx()
             drawCircle(
                 color = Color(0xFF43E1E6).copy(alpha = glow),
                 radius = size.minDimension / 2f - stroke,
@@ -425,9 +495,9 @@ private fun IdleStartRing(running: Boolean, onStart: () -> Unit) {
         }
         Text(
             if (running) "进行中" else "开始",
-            fontSize = 33.sp,
+            fontSize = 31.sp,
             fontWeight = FontWeight(320),
-            letterSpacing = (-1.3).sp,
+            letterSpacing = (-1.2).sp,
             color = colors.ink,
         )
     }
@@ -472,7 +542,7 @@ private fun SheetDetailRow(
 ) {
     val colors = AnebTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 7.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -489,13 +559,13 @@ private fun SheetDetailRow(
         if (action != null) {
             Text(
                 action,
-                fontSize = 9.sp,
+                fontSize = 9.5.sp,
                 color = colors.brand,
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .border(1.dp, colors.brand.copy(alpha = 0.2f), RoundedCornerShape(999.dp))
+                    .border(1.dp, colors.brand.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
                     .pressable(onClick = onAction)
-                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
     }

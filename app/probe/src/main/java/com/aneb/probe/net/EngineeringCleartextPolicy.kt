@@ -3,12 +3,19 @@ package com.aneb.probe.net
 import com.aneb.probe.BuildConfig
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
+import java.io.IOException
 
 /** Keeps the build-level cleartext exception scoped to Prototype private-node traffic. */
 internal object EngineeringCleartextPolicy {
     fun interceptor(prototypePrivate: Boolean): Interceptor = Interceptor { chain ->
         val request = chain.request()
-        requireAllowed(request.url, prototypePrivate = prototypePrivate)
+        try {
+            requireAllowed(request.url, prototypePrivate = prototypePrivate)
+        } catch (e: IllegalArgumentException) {
+            // OkHttp async dispatchers require interceptors to throw IOException so failures
+            // propagate cleanly to Callback.onFailure instead of crashing the dispatcher thread.
+            throw IOException(e.message ?: "cleartext network traffic is disabled for this request", e)
+        }
         chain.proceed(request)
     }
 

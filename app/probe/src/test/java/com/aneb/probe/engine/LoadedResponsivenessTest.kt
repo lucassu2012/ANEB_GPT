@@ -1,5 +1,6 @@
 package com.aneb.probe.engine
 
+import com.aneb.probe.net.ThroughputRequestEvidence
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -195,6 +196,91 @@ class LoadedResponsivenessTest {
 
         val encoded = LoadedResponsiveness.encode(raw)
         assertTrue(Json.parseToJsonElement(encoded).jsonObject.containsKey("derived_summary"))
+    }
+
+    @Test
+    fun `compactByteObservations shrinks 10000 chunk observations while preserving exact v2 summary invariants`() {
+        val stageStart = 1_000_000L
+        val stageEnd = 11_000_000L
+        val obs = mutableListOf(ResponsivenessByteObservation(stageStart, 0L, null))
+        val perReqTotals = mutableMapOf<String, Long>()
+        var running = 0L
+        for (i in 0 until 10_000) {
+            val reqId = "download-${i % 4}-0"
+            val atUs = stageStart + 5_000L + i * 990L
+            val delta = 16_384L
+            running += delta
+            perReqTotals[reqId] = (perReqTotals[reqId] ?: 0L) + delta
+            obs += ResponsivenessByteObservation(atUs, running, reqId)
+        }
+        // Add a post-deadline drain observation
+        running += 8_192L
+        perReqTotals["download-0-0"] = (perReqTotals["download-0-0"] ?: 0L) + 8_192L
+        obs += ResponsivenessByteObservation(stageEnd + 500L, running, "download-0-0")
+
+        val inPhase = obs.filter { it.atUs in stageStart..stageEnd }
+        val samples = (0 until 20).map { seq ->
+            val t0 = stageStart + 400_000L + seq * 450_000L
+            val t3 = t0 + 35_000L + (seq % 5) * 2_000L
+            val before = inPhase.lastOrNull { it.atUs < t0 }?.totalBytes ?: 0L
+            val after = inPhase.lastOrNull { it.atUs <= t3 }?.totalBytes ?: before
+            ResponsivenessEcho("download", seq, t0, 4_000_000L, 4_000_000L, t3, 200, null, before, after)
+        }
+        val requests = (0 until 4).map { worker ->
+            val reqId = "download-$worker-0"
+            ThroughputRequestEvidence(
+                requestId = reqId,
+                workerId = worker,
+                direction = "download",
+                requestedBytes = 100_000_000L,
+                startUs = stageStart,
+                headersUs = stageStart + 1_000L,
+                httpCode = 200,
+                bodyStartedUs = stageStart + 2_000L,
+                bodyCompletedUs = null,
+                cancelRequestedUs = stageEnd,
+                cancelCause = "phase_deadline",
+                cancelInvokedUs = stageEnd + 100L,
+                cancelReturnedUs = stageEnd + 200L,
+                callbackFinishedUs = stageEnd + 1_000L,
+                outcome = "cancelled",
+                observedBytes = perReqTotals[reqId] ?: 0L,
+            )
+        }
+        val executionV2 = ResponsivenessExecutionV2(
+            plannedEndUs = stageEnd,
+            stopRequestedUs = stageEnd,
+            stopReason = "phase_deadline",
+            snapshotUs = stageEnd + 2_000L,
+            requests = requests,
+        )
+        val rawStage = ResponsivenessStage(
+            stage = "download",
+            startUs = stageStart,
+            endUs = stageEnd,
+            transferBytes = running,
+            samples = samples,
+            byteObservations = obs,
+            executionV2 = executionV2,
+        )
+        val compactedObs = LoadedResponsiveness.compactByteObservations(stageStart, stageEnd, samples, obs)
+        assertTrue(
+            "expected dramatic compaction from ${obs.size}, got ${compactedObs.size}",
+            compactedObs.size < 250,
+        )
+
+        val rawReport = report(listOf(rawStage)).copy(methodVersion = "loaded-responsiveness-v2")
+        val compactedReport = report(listOf(rawStage.copy(byteObservations = compactedObs)))
+            .copy(methodVersion = "loaded-responsiveness-v2")
+
+        val rawSummary = LoadedResponsiveness.summarize(rawReport)
+        val compactedSummary = LoadedResponsiveness.summarize(compactedReport)
+        assertEquals(rawSummary, compactedSummary)
+        assertNull(compactedSummary.stages.single().missingReason)
+        assertEquals(20, compactedSummary.stages.single().validSampleCount)
+
+        val encodedSize = LoadedResponsiveness.encode(compactedReport).length
+        assertTrue("compacted report JSON should be tiny (<64KB), was $encodedSize bytes", encodedSize < 65_536)
     }
 
     private fun report(stages: List<ResponsivenessStage>) = LoadedResponsivenessReport(

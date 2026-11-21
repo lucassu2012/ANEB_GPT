@@ -15,19 +15,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aneb.probe.engine.AnebTestMode
 import com.aneb.probe.engine.BehaviorTraceRunner
 import com.aneb.probe.engine.ProfileCapability
 import com.aneb.probe.engine.ProfilePhase
@@ -51,6 +55,9 @@ fun ProfileCatalogScreen(
     error: String?,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
+    otherRunActive: Boolean = false,
+    onStartTestMode: ((AnebTestMode) -> Unit)? = null,
+    onOpenVoice: (() -> Unit)? = null,
     onRunV2Simulation: ((ScenarioProfile) -> Unit)? = null,
     onCancelV2Simulation: (() -> Unit)? = null,
     v2SimulationRunning: Boolean = false,
@@ -60,6 +67,8 @@ fun ProfileCatalogScreen(
 ) {
     val colors = AnebTheme.colors
     val view = LocalView.current
+    val listState = rememberLazyListState()
+    val anyBusy = otherRunActive || v2SimulationRunning
     DisposableEffect(view, v2SimulationRunning) {
         val prev = view.keepScreenOn
         if (v2SimulationRunning) {
@@ -67,13 +76,18 @@ fun ProfileCatalogScreen(
         }
         onDispose { view.keepScreenOn = prev }
     }
+    LaunchedEffect(v2SimulationRunning) {
+        if (v2SimulationRunning) {
+            listState.animateScrollToItem(1)
+        }
+    }
     Column(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp)) {
-        AnebTopBar(showBack = true, onBack = onBack, showMenu = true)
+        AnebTopBar(showBack = true, onBack = onBack, showMenu = false)
         Row(verticalAlignment = Alignment.Bottom) {
             AnebPageIntro(
                 eyebrow = "PROFILE REGISTRY",
                 title = "测试方案目录",
-                subtitle = "业务、指标、实时动效与结论策略的版本化合同。",
+                subtitle = "每个可执行 Profile 均可直接发起对应实测或仿真。",
                 modifier = Modifier.weight(1f),
             )
             Text(
@@ -88,45 +102,57 @@ fun ProfileCatalogScreen(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 12.dp, bottom = 34.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
+            item(key = "contract_status") {
                 ContractStatusCard(
                     source = source,
-                    count = profiles.size,
+                    count = profiles.size + if (onOpenVoice != null) 1 else 0,
                     warnings = warnings,
                     loading = loading,
                     error = error,
                 )
             }
-            items(profiles, key = { "${it.profileId}@${it.version}" }) { profile ->
-                ProfileContractCard(
-                    profile = profile,
-                    onRunV2Simulation = onRunV2Simulation,
-                    onCancelV2Simulation = onCancelV2Simulation,
-                    v2SimulationRunning = v2SimulationRunning,
-                )
-            }
             if (v2SimulationRunning || v2SimulationLogs.isNotEmpty() || v2SimulationResult != null || v2SimulationError != null) {
-                item {
+                item(key = "v2_simulation_panel") {
                     V2SimulationPanel(
                         running = v2SimulationRunning,
                         logs = v2SimulationLogs,
                         result = v2SimulationResult,
                         error = v2SimulationError,
+                        onCancel = onCancelV2Simulation,
                     )
                 }
             }
+            if (onOpenVoice != null) {
+                item(key = "profile4_realtime_voice") {
+                    VoiceProfileCard(
+                        enabled = !anyBusy,
+                        onOpenVoice = onOpenVoice,
+                    )
+                }
+            }
+            items(profiles, key = { "${it.profileId}@${it.version}" }) { profile ->
+                ProfileContractCard(
+                    profile = profile,
+                    anyBusy = anyBusy,
+                    onStartTestMode = onStartTestMode,
+                    onRunV2Simulation = onRunV2Simulation,
+                    onCancelV2Simulation = onCancelV2Simulation,
+                    v2SimulationRunning = v2SimulationRunning,
+                )
+            }
             if (!loading && profiles.isEmpty()) {
-                item {
+                item(key = "empty_catalog") {
                     EmptyCatalog(error)
                 }
             }
-            item {
+            item(key = "catalog_footer") {
                 Text(
-                    "执行边界：Token 体验仍按 S1/S2/S3 固定映射生成 AQS；基础测速独立输出下载、上传、RTT、抖动和应用层请求失败率。目录中的兼容状态不改变评分或场景顺序。",
+                    "执行边界：Token 体验仍按 S1/S2/S3 固定映射生成 AQS；基础测速独立输出下载、上传、RTT、抖动与应用层请求失败率；Profile 4 实时语音与 aneb-profile-v2 各自独立出分，不串扰既有 AQS。",
                     fontSize = 9.sp,
                     lineHeight = 14.sp,
                     color = colors.faint,
@@ -190,8 +216,63 @@ private fun ContractStatusCard(
 }
 
 @Composable
+private fun VoiceProfileCard(
+    enabled: Boolean,
+    onOpenVoice: () -> Unit,
+) {
+    val colors = AnebTheme.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0E1426), RoundedCornerShape(18.dp))
+            .border(1.dp, colors.brand.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("实时 AI 语音（Profile 4）", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                Text(
+                    "实时语音双工 · profile4_voice@2.0.0",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.muted,
+                )
+            }
+            StatusPill(executable = true)
+        }
+        Text(
+            "模拟豆包/AI 实时语音双工对话（20ms 帧节奏 + 8 轮含打断 + 受控断连子测），与真机豆包语音秩相关 ρ = +1.000。",
+            fontSize = 10.sp,
+            lineHeight = 15.sp,
+            color = colors.muted,
+            modifier = Modifier.padding(top = 9.dp),
+        )
+        ContractLine(
+            label = "核心指标",
+            value = "口到耳时延 M1' · 帧抖动 M3/M4 · 长静默 M7 · 断连恢复",
+            detail = "独立语音分口径，不混入 Token AQS",
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (enabled) "发起实时语音测试" else "已有测试运行中",
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) colors.brand else colors.faint,
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(if (enabled) colors.brand.copy(alpha = 0.12f) else Color.Transparent)
+                .border(1.dp, if (enabled) colors.brand.copy(alpha = 0.45f) else colors.hairline, CircleShape)
+                .pressable(enabled = enabled, onClick = onOpenVoice)
+                .padding(horizontal = 13.dp, vertical = 7.dp),
+        )
+    }
+}
+
+@Composable
 private fun ProfileContractCard(
     profile: ScenarioProfile,
+    anyBusy: Boolean = false,
+    onStartTestMode: ((AnebTestMode) -> Unit)? = null,
     onRunV2Simulation: ((ScenarioProfile) -> Unit)? = null,
     onCancelV2Simulation: (() -> Unit)? = null,
     v2SimulationRunning: Boolean = false,
@@ -287,30 +368,85 @@ private fun ProfileContractCard(
                 modifier = Modifier.padding(top = 9.dp),
             )
         }
-        if (assessment.executable && isV2 && profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION && onRunV2Simulation != null) {
+        if (assessment.executable) {
             Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (v2SimulationRunning) "仿真运行中…" else "运行行为轨迹仿真",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (v2SimulationRunning) colors.faint else colors.brand,
-                    modifier = Modifier
-                        .border(1.dp, if (v2SimulationRunning) colors.hairline else colors.brand.copy(alpha = 0.4f), CircleShape)
-                        .pressable(enabled = !v2SimulationRunning, onClick = { onRunV2Simulation(profile) })
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                )
-                if (v2SimulationRunning && onCancelV2Simulation != null) {
-                    Text(
-                        "停止",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.poor,
-                        modifier = Modifier
-                            .border(1.dp, colors.poor.copy(alpha = 0.4f), CircleShape)
-                            .pressable(onClick = onCancelV2Simulation)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+            when {
+                isV2 && profile.modeId == ScenarioProfile.MODE_TOKEN_SIMULATION && onRunV2Simulation != null -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (v2SimulationRunning) "仿真运行中…" else if (anyBusy) "已有测试运行中" else "发起多模态行为轨迹仿真",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (anyBusy) colors.faint else colors.brand,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (anyBusy) Color.Transparent else colors.brand.copy(alpha = 0.12f))
+                                .border(1.dp, if (anyBusy) colors.hairline else colors.brand.copy(alpha = 0.45f), CircleShape)
+                                .pressable(enabled = !anyBusy, onClick = { onRunV2Simulation(profile) })
+                                .padding(horizontal = 13.dp, vertical = 7.dp),
+                        )
+                        if (v2SimulationRunning && onCancelV2Simulation != null) {
+                            Text(
+                                "停止",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.poor,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .border(1.dp, colors.poor.copy(alpha = 0.45f), CircleShape)
+                                    .pressable(onClick = onCancelV2Simulation)
+                                    .padding(horizontal = 13.dp, vertical = 7.dp),
+                            )
+                        }
+                    }
+                }
+                profile.modeId == ScenarioProfile.MODE_NETWORK_BASIC && onStartTestMode != null -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (anyBusy) "已有测试运行中" else "发起基础测速",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (anyBusy) colors.faint else colors.brand,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (anyBusy) Color.Transparent else colors.brand.copy(alpha = 0.12f))
+                                .border(1.dp, if (anyBusy) colors.hairline else colors.brand.copy(alpha = 0.45f), CircleShape)
+                                .pressable(enabled = !anyBusy, onClick = { onStartTestMode(AnebTestMode.NETWORK_BASIC) })
+                                .padding(horizontal = 13.dp, vertical = 7.dp),
+                        )
+                        Text(
+                            "抗负载响应性",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (anyBusy) colors.faint else colors.brand2,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .border(1.dp, if (anyBusy) colors.hairline else colors.brand2.copy(alpha = 0.42f), CircleShape)
+                                .pressable(enabled = !anyBusy, onClick = { onStartTestMode(AnebTestMode.NETWORK_RESPONSIVENESS) })
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                        )
+                    }
+                }
+                profile.modeId == ScenarioProfile.MODE_TOKEN_EXPERIENCE && onStartTestMode != null -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            if (anyBusy) "已有测试运行中" else "发起 AI 体验测试（含本场景）",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (anyBusy) colors.faint else colors.brand,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(if (anyBusy) Color.Transparent else colors.brand.copy(alpha = 0.12f))
+                                .border(1.dp, if (anyBusy) colors.hairline else colors.brand.copy(alpha = 0.45f), CircleShape)
+                                .pressable(enabled = !anyBusy, onClick = { onStartTestMode(AnebTestMode.TOKEN_EXPERIENCE) })
+                                .padding(horizontal = 13.dp, vertical = 7.dp),
+                        )
+                        Text(
+                            "按 v1 合同自动编排 S1 对话流 + S2 编码 Agent + S3 多模态并输出完整 AQS。",
+                            fontSize = 8.5.sp,
+                            color = colors.faint,
+                        )
+                    }
                 }
             }
         }
@@ -323,21 +459,41 @@ private fun V2SimulationPanel(
     logs: List<String>,
     result: BehaviorTraceRunner.BehaviorTraceRunResult?,
     error: String?,
+    onCancel: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
     Column(
         Modifier
             .fillMaxWidth()
             .background(Color(0xFF11172B), RoundedCornerShape(18.dp))
-            .border(1.dp, colors.hairline, RoundedCornerShape(18.dp))
+            .border(1.dp, if (running) colors.brand.copy(alpha = 0.45f) else colors.hairline, RoundedCornerShape(18.dp))
             .padding(14.dp),
     ) {
-        Text(
-            if (running) "aneb-profile-v2 仿真执行中" else "aneb-profile-v2 仿真摘要",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.ink,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                if (running) "aneb-profile-v2 仿真执行中…" else "aneb-profile-v2 仿真摘要",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (running) colors.brand else colors.ink,
+            )
+            if (running && onCancel != null) {
+                Text(
+                    "停止",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.poor,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .border(1.dp, colors.poor.copy(alpha = 0.45f), CircleShape)
+                        .pressable(onClick = onCancel)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
         error?.let {
             Text(it, fontSize = 10.sp, color = colors.poor, modifier = Modifier.padding(top = 6.dp))
         }

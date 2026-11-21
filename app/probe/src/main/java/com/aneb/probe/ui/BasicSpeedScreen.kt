@@ -174,7 +174,11 @@ private fun BasicPhaseRow(phase: BasicSpeedPhase) {
 
 /** 基础测速结果页：分离“测量事实”与版本化产品结论。 */
 @Composable
-fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
+fun BasicSpeedResultScreen(
+    result: BasicSpeedResult,
+    onBack: () -> Unit,
+    onOpenAppCompanion: (() -> Unit)? = null,
+) {
     if (result.profileId == com.aneb.probe.engine.NetworkSpeedEngine.RESPONSIVENESS_PROFILE_ID) {
         LoadedResponsivenessScreen(result, onBack)
         return
@@ -228,6 +232,21 @@ fun BasicSpeedResultScreen(result: BasicSpeedResult, onBack: () -> Unit) {
                     }
                 }
             }
+            val douyinVerdict = remember(result.downloadMbps, result.pingMs, result.requestLossRate) {
+                BusinessExperienceEvaluator.evaluateDouyin(result)
+            }
+            Text(
+                "抖音短视频体验评估（P40 Pro 实测拐点校准）",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.ink,
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+            )
+            ExperienceVerdictCard(
+                verdict = douyinVerdict,
+                actionLabel = if (onOpenAppCompanion != null) "打开抖音 / 豆包对照实测 ›" else null,
+                onAction = onOpenAppCompanion,
+            )
             val verdicts = remember(result.downloadMbps, result.uploadMbps, result.pingMs, result.jitterMs) {
                 AiScenarioAdvisor.advise(
                     downMbps = result.downloadMbps,

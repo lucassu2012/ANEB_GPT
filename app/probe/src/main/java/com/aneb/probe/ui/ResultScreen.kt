@@ -107,12 +107,14 @@ fun ResultScreen(
     /** 分享成图：ResultScreen 投影出展示态 Model，实际存图/分享由 Activity 承载（需 Context） */
     onShare: (ShareCard.Model) -> Unit = {},
     reportJson: String? = null,
+    onOpenVoice: (() -> Unit)? = null,
+    onOpenAppCompanion: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
     var viewMode by rememberSaveable { mutableStateOf(ResultViewMode.Simple) }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.background).padding(horizontal = 20.dp)) {
-        AnebTopBar(showBack = true, onBack = onBack, showMenu = true)
+        AnebTopBar(showBack = true, onBack = onBack, showMenu = false)
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             AnebPageIntro(
                 eyebrow = "RESULT",
@@ -136,7 +138,12 @@ fun ResultScreen(
         // 内容层 + 底部玻璃操作区（§4.3/§4.4 chrome-bot）：内容从玻璃条下方滚过，操作区常驻底部。
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when (viewMode) {
-                ResultViewMode.Simple -> SimpleResultView(run = run, scenarios = scenarios)
+                ResultViewMode.Simple -> SimpleResultView(
+                    run = run,
+                    scenarios = scenarios,
+                    onOpenVoice = onOpenVoice,
+                    onOpenAppCompanion = onOpenAppCompanion,
+                )
                 ResultViewMode.Detailed -> DetailedResultView(
                     run = run,
                     scenarios = scenarios,
@@ -239,6 +246,8 @@ private fun ActionButton(
 private fun SimpleResultView(
     run: TestRun,
     scenarios: List<ScenarioResultEntity>,
+    onOpenVoice: (() -> Unit)? = null,
+    onOpenAppCompanion: (() -> Unit)? = null,
 ) {
     val colors = AnebTheme.colors
     val score = run.aqsScore
@@ -325,6 +334,34 @@ private fun SimpleResultView(
 
         Spacer(Modifier.height(18.dp))
         OutcomeConclusionBlock(conclusions)
+
+        val doubaoVerdict = remember(run, scenarios) {
+            BusinessExperienceEvaluator.evaluateDoubaoChat(run, scenarios)
+        }
+        Spacer(Modifier.height(14.dp))
+        ExperienceVerdictCard(
+            verdict = doubaoVerdict,
+            actionLabel = if (onOpenAppCompanion != null) "打开豆包 / 抖音对照实测 ›" else null,
+            onAction = onOpenAppCompanion,
+        )
+        if (onOpenVoice != null) {
+            Spacer(Modifier.height(10.dp))
+            AnebGradientCard(Modifier.fillMaxWidth(), radius = 14.dp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pressable(onClick = onOpenVoice)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("再测一次实时 AI 语音（Profile 4）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.ink)
+                        Text("文字流式好不代表实时语音一定稳，补测口到耳时延与 M7 静默", fontSize = 9.5.sp, color = colors.muted, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    Text("去测 ›", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colors.brand)
+                }
+            }
+        }
     }
 }
 

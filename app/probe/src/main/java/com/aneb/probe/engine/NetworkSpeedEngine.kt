@@ -635,6 +635,12 @@ class NetworkSpeedEngine internal constructor(
                             sample.copy(bytesBefore = before, bytesAfter = after)
                         }
                     }
+                    val compactedByteObs = LoadedResponsiveness.compactByteObservations(
+                        stageStartUs = stageStartUs,
+                        stageEndUs = plannedEndUs,
+                        samples = reconciledSamples,
+                        observations = frozenByteObs,
+                    )
                     onResponsivenessStage(ResponsivenessStage(
                         stage = stageName,
                         startUs = stageStartUs,
@@ -642,7 +648,7 @@ class NetworkSpeedEngine internal constructor(
                         transferBytes = totalBytes.sum(),
                         errors = errors.toList(),
                         samples = reconciledSamples,
-                        byteObservations = frozenByteObs,
+                        byteObservations = compactedByteObs,
                         executionV2 = ResponsivenessExecutionV2(
                             plannedEndUs = plannedEndUs,
                             stopRequestedUs = stopRequestedUs,
